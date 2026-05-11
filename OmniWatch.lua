@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.0'
+_addon.version  = '1.1.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2847,9 +2847,9 @@ local PW_COMMANDS_HELP = {
     {'position [on|off]',     'Toggle panel-drag mode (forces panels visible '
                               .. 'with mock data so you can move them).'},
     {'set <path>',            'Report a literal gearswap set path (called by '
-                              .. 'gearswap include on equip()).'},
+                              .. 'Wormfood-Globals on equip()).'},
     {'state <string>',        'Report fallback state string (called by '
-                              .. 'gearswap include heartbeat).'},
+                              .. 'Wormfood-Globals heartbeat).'},
     {'testcast',              'Emit a synthetic CAST_START event on yourself '
                               .. '(verifies the cast pipe works end-to-end).'},
     {'lock [on|off]',         'Toggle panel lock. When locked, panels can\'t '
@@ -2936,6 +2936,15 @@ ow_safe_register('addon command', function(command, ...)
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
         windower.add_to_chat(207, string.format('[OW] buff_debug = %s',
             tostring(_ow_buff_debug)))
+    elseif command == 'buffts' then
+        -- Toggle 0x063 sub-9 timestamp diagnostic logging. When on,
+        -- prints raw and computed expiry timestamps for active buffs
+        -- so we can empirically determine the right epoch formula.
+        -- Used to develop/verify the server-pushed buff duration system.
+        _ow_buffts_debug = not _ow_buffts_debug
+        windower.add_to_chat(207, string.format(
+            '[OW] buffts_debug = %s. Cast a buff and watch for [OW buffts] '
+            .. 'lines.', tostring(_ow_buffts_debug)))
     elseif command == 'dumpcfg' then
         -- Diagnostic: dump current in-memory ow_user_config to chat.
         -- Useful when the wizard isn't showing expected values — this
@@ -6454,6 +6463,70 @@ ow_safe_register('incoming chunk', function(id, data)
     -- expires_at as nil here and let the reconcile loop compute durations
     -- from buff_gain events (which fire on each cast and carry the
     -- gear-aware spell.duration). See the loop in the timers emit block.
+    -- ── 0x063 sub-9 timestamp diagnostic ────────────────────────────────
+    -- Log the raw and decoded buff expiry data from the packet so we can
+    -- empirically determine the right epoch offset for current FFXI.
+    -- The classic GearSwap formula is:
+    --   t = data:unpack('I', i*4 + 0x45) / 60 + 501079520 + 1009810800
+    -- but our previous attempts gave nonsensical durations like
+    -- rem=-214,748,054.9s (close to int32 overflow / 10), suggesting the
+    -- formula is wrong on current FFXI.
+    --
+    -- Toggle with //ow buffts on — when enabled, prints up to 3 buff
+    -- timestamp samples per packet, comparing 3 epoch interpretations.
+    -- The one that gives sensible "seconds remaining" values (positive
+    -- and reasonable, e.g. 0-3600) is the right formula.
+    if id == 0x063 and (data:byte(0x05) or 0) == 0x09 and _ow_buffts_debug then
+        local sample_count = 0
+        local now_unix = os.time()
+        for i = 1, 32 do
+            -- Buff IDs at offset 7 + i*2 (16-bit unsigned LE).
+            local b1_id = data:byte(i*2 + 7 + 0)
+            local b2_id = data:byte(i*2 + 7 + 1)
+            if not b1_id then break end
+            local buff_id = (b1_id or 0) + (b2_id or 0) * 256
+            -- Skip empty slots.
+            if buff_id ~= 0 and buff_id ~= 255 and buff_id ~= 0xFFFF then
+                -- Read the 32-bit timestamp value byte-by-byte, building
+                -- an UNSIGNED integer manually. Lua 5.1's data:unpack('I')
+                -- returns a SIGNED int that wraps when the high bit is
+                -- set — which is exactly when FFXI's encoded values land,
+                -- producing nonsensical negative results. Manual reads
+                -- via data:byte() and arithmetic stay in float64 land
+                -- which represents up to 2^53 exactly, no sign issues.
+                local off = i*4 + 0x45
+                local r1 = data:byte(off + 0) or 0
+                local r2 = data:byte(off + 1) or 0
+                local r3 = data:byte(off + 2) or 0
+                local r4 = data:byte(off + 3) or 0
+                local raw_uint = r1 + r2 * 256 + r3 * 65536 + r4 * 16777216
+                -- Try the classic formula and a few alternates.
+                local t_classic = raw_uint / 60 + 501079520 + 1009810800
+                local t_direct  = raw_uint
+                local t_no_div  = raw_uint + 501079520 + 1009810800
+                -- HYPOTHESIS v2 (2026): empirical reverse-math from
+                -- Double-Up Chance (exactly 45s duration, no variability)
+                -- pins the FFXI epoch at 1,725,638,684.
+                -- Formula: expiry_unix = raw/60 + 1725638684.
+                local t_new     = raw_uint / 60 + 1725638684
+                local d_classic = t_classic - now_unix
+                local d_direct  = t_direct - now_unix
+                local d_no_div  = t_no_div - now_unix
+                local d_new     = t_new - now_unix
+                local bname = (res.buffs[buff_id] and res.buffs[buff_id].en)
+                              or ('id=' .. buff_id)
+                windower.add_to_chat(207, string.format(
+                    '[OW buffts] i=%d bid=%d (%s) raw=%u new=%+ds classic=%+ds direct=%+ds no_div=%+ds',
+                    i, buff_id, bname, raw_uint,
+                    math.floor(d_new),
+                    math.floor(d_classic), math.floor(d_direct),
+                    math.floor(d_no_div)))
+                sample_count = sample_count + 1
+                if sample_count >= 3 then break end
+            end
+        end
+    end
+
     if id == 0x063 and (data:byte(0x05) or 0) == 0x09 then
         local now_clock = os.clock()
         local now_unix  = os.time()
@@ -6463,6 +6536,57 @@ ow_safe_register('incoming chunk', function(id, data)
         end
         _ow_buff_slots = {}
         _ow_buff_slot_expires_at = {}
+
+        -- ── Server-truth expiry timestamps ──────────────────────────────
+        -- Read 0x063 sub-9 directly to get authoritative buff expiry
+        -- times for each slot. The packet carries 32 (buff_id, raw_ts)
+        -- pairs at fixed offsets:
+        --   buff_id: 16-bit LE at offset 7 + i*2 (i = 1..32)
+        --   raw_ts:  32-bit LE at offset 0x45 + i*4
+        --
+        -- Formula (verified empirically against in-game timers May 2026):
+        --   expiry_unix = raw_ts / 60 + 1725638684
+        --
+        -- The constant 1,725,638,684 is the current FFXI server epoch
+        -- (≈ Sept 2024 update). The /60 reflects FFXI's 60Hz tick.
+        -- Anchor: Double-Up Chance is exactly 45 seconds. From a
+        -- captured raw value + os.time() at capture, the epoch can be
+        -- derived directly — see the //ow buffts diagnostic.
+        --
+        -- We convert expiry_unix → expiry as os.clock()-equivalent and
+        -- store in _ow_buff_slot_expires_at[i-1]. The slot numbering is
+        -- 0-indexed downstream, matching get_player().buffs which uses
+        -- 0..31. The packet loop is 1-indexed for byte-offset clarity.
+        --
+        -- Slots with buff_id = 0 or 255 are empty (no buff) — we skip.
+        local FFXI_EPOCH_2026 = 1725638684
+        for i = 1, 32 do
+            local b1 = data:byte(i*2 + 7 + 0) or 0
+            local b2 = data:byte(i*2 + 7 + 1) or 0
+            local buff_id = b1 + b2 * 256
+            if buff_id ~= 0 and buff_id ~= 255 and buff_id ~= 0xFFFF then
+                local off = i*4 + 0x45
+                local r1 = data:byte(off + 0) or 0
+                local r2 = data:byte(off + 1) or 0
+                local r3 = data:byte(off + 2) or 0
+                local r4 = data:byte(off + 3) or 0
+                local raw_uint = r1 + r2 * 256 + r3 * 65536 + r4 * 16777216
+                local expiry_unix = raw_uint / 60 + FFXI_EPOCH_2026
+                local secs_remaining = expiry_unix - now_unix
+                -- Convert to os.clock() basis since the rest of the
+                -- buff-timer system uses monotonic clock, not wall time.
+                local expires_at_clock = now_clock + secs_remaining
+                -- Only record sane values: positive remaining, reasonable
+                -- upper bound (a week — well above any real buff). This
+                -- defends against single corrupted packets without losing
+                -- the long-duration cases (Reraise = 1hr, food = 3hr).
+                if secs_remaining > 0 and secs_remaining < 604800 then
+                    -- Slot index is 0-based downstream (player.buffs is
+                    -- 0..31); packet loop is 1-based for byte clarity.
+                    _ow_buff_slot_expires_at[i - 1] = expires_at_clock
+                end
+            end
+        end
         -- Identity-based tracking across packets. Each song instance is
         -- uniquely identified by (bid, gi_time) — gi_time is the server-
         -- assigned gain-instant timestamp, a fingerprint that survives
@@ -6743,9 +6867,11 @@ ow_safe_register('incoming chunk', function(id, data)
                     end
                 end
             end
-            -- Per-packet summary, always-on. Helps catch decisions
-            -- where the identity-tracker mis-attributes songs.
-            if _id_fresh_count > 0 or _id_moved_count > 0 then
+            -- Per-packet summary. Gated behind _ow_buff_debug since
+            -- this was diagnostic-only — useful when we were debugging
+            -- the song-attribution identity-tracker, but noisy for
+            -- normal play (fires every time anyone in range casts).
+            if _ow_buff_debug and (_id_fresh_count > 0 or _id_moved_count > 0) then
                 windower.add_to_chat(207, string.format(
                     '[OW] 0x063 ident: kept=%d moved=%d fresh=%d total=%d',
                     _id_kept_count, _id_moved_count,
@@ -7605,11 +7731,16 @@ local function _ow_track_buff(slot, buff_id, name, duration_sec, source, opts)
     else
         expires_at = now + duration_sec
     end
+    -- Use caller-supplied started_at when available (slot migration case:
+    -- the buff was in another slot last packet and we're carrying over
+    -- the original start time so the fullness bar stays proportional).
+    -- Otherwise start fresh from now.
+    local started_at = opts.started_at or now
     _ow_buff_timers[slot] = {
         slot       = slot,
         buff_id    = buff_id,
         name       = name,
-        started_at = now,
+        started_at = started_at,
         expires_at = expires_at,
         duration   = duration_sec,
         source     = source,
@@ -12166,6 +12297,31 @@ ow_safe_register('prerender', function()
                 end
             end
             local slot_seen = {}
+            -- Build prev-packet (buff_id, expires_at) → slot map for
+            -- migration detection. When a buff wears off in an earlier
+            -- slot, FFXI compacts the slot list — buffs in higher slots
+            -- shift down to fill gaps. Without migration tracking we'd
+            -- treat the shifted buff as "new in this slot", resetting
+            -- started_at and making its fullness bar jump back to 100%.
+            --
+            -- We match on (buff_id, expires_at) rather than buff_id
+            -- alone so we don't accidentally migrate one Refresh's
+            -- timer to another Refresh in a different slot (rare but
+            -- possible — e.g. two casters refreshing the same target).
+            -- Expires_at is a stable identity per buff instance.
+            -- Tolerance of 1s handles minor server-side jitter.
+            local prev_buff_instances = {}
+            for prev_slot, prev_entry in pairs(_ow_buff_timers) do
+                if prev_entry and prev_entry.buff_id and prev_entry.expires_at then
+                    prev_buff_instances[#prev_buff_instances + 1] = {
+                        slot       = prev_slot,
+                        buff_id    = prev_entry.buff_id,
+                        expires_at = prev_entry.expires_at,
+                        started_at = prev_entry.started_at,
+                        duration   = prev_entry.duration,
+                    }
+                end
+            end
             for slot, bid in pairs(effective_slots) do
                 slot_seen[slot] = true
                 local existing = _ow_buff_timers[slot]
@@ -12286,15 +12442,19 @@ ow_safe_register('prerender', function()
                         _ow_buff_timers[slot] = nil
                     elseif need_update or pkt_expires then
                         -- Compute duration. Three tiers of accuracy:
-                        --   1) pkt_expires (precise from 0x063) -- BROKEN
-                        --      on current FFXI; we leave the path here so
-                        --      that if it ever gets fixed it works again,
-                        --      but currently pkt_expires is always nil.
+                        --   1) pkt_expires (precise from 0x063 sub-9):
+                        --      server-pushed expiry timestamp, the
+                        --      authoritative source. Includes any procs
+                        --      and other modifiers we'd miss with
+                        --      client-side math. Updated whenever the
+                        --      server pushes a fresh sub-9 packet (on
+                        --      buff gain, loss, zone change, login).
                         --   2) meta.duration (gear-aware, computed at
                         --      cast time from spell base × multiplier).
-                        --      This is what bard songs / cor rolls /
-                        --      enhancing spells use. Anchor to meta.ts so
-                        --      the displayed remaining matches reality.
+                        --      Used as a fallback in the small window
+                        --      between cast and the server pushing
+                        --      sub-9. Also covers cases where the
+                        --      server hasn't pushed for some reason.
                         --   3) source-keyed estimate (last-resort default
                         --      when no cast info: 2m for songs, 5m rolls,
                         --      30m food, 3m other).
@@ -12305,6 +12465,32 @@ ow_safe_register('prerender', function()
                             opts.precise    = true
                             duration_sec    = math.max(0.1,
                                                        pkt_expires - now_clock)
+                            -- Migration check: if THIS slot is new (need_update),
+                            -- but the same (buff_id, expires_at) was in a different
+                            -- slot in the previous packet, we're seeing a slot
+                            -- compaction. Carry over the original started_at and
+                            -- duration so the fullness bar stays proportional.
+                            -- Without this the bar visibly jumps to 100% every
+                            -- time another buff wears off.
+                            if need_update then
+                                for _, prev in ipairs(prev_buff_instances) do
+                                    if prev.buff_id == bid
+                                       and prev.slot ~= slot
+                                       and math.abs(prev.expires_at - pkt_expires) < 1.0
+                                    then
+                                        opts.started_at = prev.started_at
+                                        -- Keep the original full-bar duration too;
+                                        -- otherwise the bar would still be proportional
+                                        -- to (now - started_at) / duration, where
+                                        -- duration was just recomputed as
+                                        -- (expires_at - now), shrinking it.
+                                        if prev.duration and prev.duration > 0 then
+                                            duration_sec = prev.duration
+                                        end
+                                        break
+                                    end
+                                end
+                            end
                         elseif meta and meta.duration and meta.duration > 0
                                and meta.ts then
                             -- Anchor expiry to the cast-time moment, not
@@ -12382,13 +12568,31 @@ ow_safe_register('prerender', function()
                 else
                     local rem_display = rem > 0 and rem or 0
                     if rem_display >= min_secs or t.estimated then
-                        -- Wire format (slot-aware, version 2):
-                        --   buff\tslot\tbuff_id\tname\tseconds_remaining\tsource
-                        -- Python reads len(fields) to detect old vs new.
+                        -- Wire format (slot-aware, version 3):
+                        --   buff\tslot\tbuff_id\tname\tseconds_remaining\tsource\texpires_at_unix\tstarted_at_unix
+                        -- Python reads len(fields) to detect format:
+                        --   6 = legacy v2, no expires_at
+                        --   7+ = v3, has expires_at and started_at as
+                        --        absolute Unix timestamps for persistence.
+                        -- The absolute timestamps let Python reconstruct
+                        -- the full duration (expires - started) after a
+                        -- Python reload, so the fullness bar starts at
+                        -- the correct ratio rather than always 100%.
+                        -- We convert os.clock() values back to wall-time
+                        -- via the offset (now_unix - now_clock). This is
+                        -- a one-frame approximation; perfectly accurate
+                        -- for our purposes (sub-second drift is fine for
+                        -- buff timer display).
+                        local clock_to_unix = os.time() - now_clock
+                        local expires_unix  = t.expires_at + clock_to_unix
+                        local started_unix  = (t.started_at or now_clock)
+                                              + clock_to_unix
                         lines[#lines + 1] = string.format(
-                            'buff\t%d\t%d\t%s\t%.1f\t%s',
+                            'buff\t%d\t%d\t%s\t%.1f\t%s\t%d\t%d',
                             slot, t.buff_id, t.name, rem_display,
-                            t.source or 'self')
+                            t.source or 'self',
+                            math.floor(expires_unix),
+                            math.floor(started_unix))
                     end
                 end
             end

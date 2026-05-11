@@ -632,6 +632,22 @@ sim_window_open      = False
 sim_window_drag      = None          # (mouse_offset_x, mouse_offset_y) while dragging
 sim_window_resize    = None          # (start_w, start_h, start_mx, start_my) while resizing
 sim_window_scroll    = 0             # vertical content scroll when h < natural
+
+# Borderless-window drag state. None when not dragging. While dragging,
+# holds {"hwnd","anchor_x","anchor_y","win_x","win_y"}: HWND of our
+# window, the mouse screen-coords at drag start, and the window's
+# screen-coords at drag start. MOUSEMOTION compares current cursor pos
+# against anchor and translates the window accordingly via SetWindowPos.
+_borderless_drag = None
+
+# When toggling borderless ON from a maximized window, we restore the
+# window first (un-maximize) so the style change can take effect, then
+# manually size it to fill the work area. The window is no longer in
+# the OS's "maximized" state at this point — it's a normal window
+# sized to fill the screen. We remember this so the next toggle OFF
+# can re-apply maximize and the title bar's [□] button shows the
+# correct restore icon.
+_borderless_was_fullscreen = False
 sim_state = {
     # Legacy fields (main_job/sub_job/merits/jp_spent/gifts) are kept in
     # Sim job/sub/JP/merits/master_level: drive the synthetic compute
@@ -1014,6 +1030,126 @@ recast_sort_order = "asc"
 # is in use; it iterates values and uses 'buff_id' / 'name' / 'secs' fields.
 buff_state = {}
 buff_sort_order = "asc"
+
+# Buff state persistence (Option B from the "across-reload" plan).
+# Periodically write the current buff_state (with absolute Unix
+# expires_at + started_at timestamps) to BUFF_STATE_SNAPSHOT so we
+# can restore timer bars correctly across Python reloads when the
+# Lua side hasn't yet sent a fresh BUFF_BATCH (e.g. Python restarted
+# but Lua addon isn't running). The Lua side ALSO resends every
+# 250ms when running, so this is a belt-and-suspenders fallback.
+#
+# Throttled writes: at most once per 5s, only when buff_state has
+# actually changed. Reduces disk wear and the perf cost on slow
+# storage (network drives, etc.).
+_buff_snapshot_last_write_at = 0.0
+_buff_snapshot_last_signature = None
+_BUFF_SNAPSHOT_MIN_INTERVAL = 5.0     # seconds
+_BUFF_SNAPSHOT_MAX_AGE_AT_LOAD = 86400  # 1 day — old snapshots discarded
+
+
+def _save_buff_state_snapshot(force=False):
+    """Write the current buff_state to disk if it has changed since the
+    last write and at least _BUFF_SNAPSHOT_MIN_INTERVAL has elapsed.
+    Called from the main loop.
+
+    Skips entries without an absolute expires_at_unix — we can't
+    meaningfully restore those because we wouldn't know when they end.
+    """
+    global _buff_snapshot_last_write_at, _buff_snapshot_last_signature
+    now = time.time()
+    if not force and now - _buff_snapshot_last_write_at < _BUFF_SNAPSHOT_MIN_INTERVAL:
+        return
+    # Build a serializable snapshot. Only include entries with absolute
+    # timestamps — that's the whole point of persisting.
+    snap = []
+    for _k, v in buff_state.items():
+        if not isinstance(v, dict):
+            continue
+        eu = v.get("expires_at_unix")
+        if not eu or eu <= 0:
+            continue
+        snap.append({
+            "buff_id":         v.get("buff_id"),
+            "name":            v.get("name", ""),
+            "source":          v.get("source", "self"),
+            "slot":            v.get("slot"),
+            "expires_at_unix": eu,
+            "started_at_unix": v.get("started_at_unix"),
+            "full_duration":   v.get("full_duration"),
+        })
+    sig = (len(snap),
+           tuple(sorted((e["buff_id"], int(e["expires_at_unix"]))
+                        for e in snap if e.get("buff_id") is not None)))
+    if not force and sig == _buff_snapshot_last_signature:
+        return
+    _buff_snapshot_last_signature = sig
+    _buff_snapshot_last_write_at = now
+    try:
+        tmp = BUFF_STATE_SNAPSHOT + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"written_at": now, "buffs": snap}, f, indent=2)
+        os.replace(tmp, BUFF_STATE_SNAPSHOT)
+    except Exception as e:
+        print(f"[OmniWatch] buff snapshot write failed: {e!r}")
+
+
+def _load_buff_state_snapshot():
+    """Read the saved buff state snapshot from disk and populate
+    buff_state for any entries whose expires_at_unix is still in the
+    future. Called at startup.
+
+    Returns the number of buffs restored, or 0 on miss / parse failure.
+    The next BUFF_BATCH from Lua (within 250ms when Lua is running)
+    overwrites these — so a stale snapshot is self-healing.
+    """
+    if not os.path.exists(BUFF_STATE_SNAPSHOT):
+        return 0
+    try:
+        with open(BUFF_STATE_SNAPSHOT, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[OmniWatch] buff snapshot read failed: {e!r}")
+        return 0
+    written_at = data.get("written_at", 0)
+    snap = data.get("buffs", [])
+    now = time.time()
+    # Discard wholesale if the file is super stale (laptop sleep, etc.)
+    if now - written_at > _BUFF_SNAPSHOT_MAX_AGE_AT_LOAD:
+        return 0
+    restored = 0
+    for e in snap:
+        eu = e.get("expires_at_unix", 0)
+        if not eu or eu <= now:
+            continue   # already expired
+        # Compute current seconds remaining from the absolute expiry.
+        secs = eu - now
+        if secs <= 0:
+            continue
+        slot = e.get("slot")
+        bid  = e.get("buff_id")
+        if bid is None:
+            continue
+        # Key by slot if known, else bid. The next BUFF_BATCH from Lua
+        # uses the same scheme so we'll smoothly overwrite.
+        key = slot if slot is not None else bid
+        buff_state[key] = {
+            "buff_id":         bid,
+            "name":            e.get("name", "?"),
+            "secs":            secs,
+            "source":          e.get("source", "self"),
+            "slot":            slot,
+            "updated_at":      now,
+            "expires_at_unix": eu,
+            "started_at_unix": e.get("started_at_unix"),
+            "full_duration":   e.get("full_duration"),
+        }
+        restored += 1
+    if restored > 0:
+        print(f"[OmniWatch] restored {restored} buff timer(s) from snapshot "
+              f"(age {now - written_at:.0f}s)")
+    return restored
+
 
 # ── DPS panel (port 5010) ─────────────────────────────────────────────────
 # Rolling 5-min combat metrics from the lua addon. Each batch is a
@@ -1711,6 +1847,7 @@ def _rebuild_path_constants():
     this point pick up the new paths automatically."""
     global LAYOUT_FILE, BUFF_CFG, MOBS_FILE, ZONES_FILE, BUTTONS_FILE
     global SETTINGS_FILE, GEARSWAP_PATH_FILE, BUFF_TIMER_CFG, RECAST_TIMER_CFG
+    global BUFF_STATE_SNAPSHOT
     cd = _chardir(active_view_char)
     LAYOUT_FILE        = os.path.join(cd, "omniwatch_layout.json")
     BUFF_CFG           = os.path.join(cd, "omniwatch_buffs.json")
@@ -1721,6 +1858,12 @@ def _rebuild_path_constants():
     GEARSWAP_PATH_FILE = os.path.join(cd, "omniwatch_gearswap_path.json")
     BUFF_TIMER_CFG     = os.path.join(cd, "omniwatch_buff_timer.json")
     RECAST_TIMER_CFG   = os.path.join(cd, "omniwatch_recast.json")
+    # Snapshot of currently-active buffs with absolute Unix timestamps.
+    # Written periodically while buffs are active and read at startup to
+    # restore timer state across Python reloads when the lua side hasn't
+    # sent a fresh BUFF_BATCH yet (or isn't running). Entries with an
+    # expires_at_unix < now are filtered out on load.
+    BUFF_STATE_SNAPSHOT = os.path.join(cd, "omniwatch_buff_state.json")
 
 # Initial bind. These point to USER_DIR (no char) until the first
 # PLAYER packet fires — _rebuild_path_constants() runs again then.
@@ -1741,6 +1884,7 @@ GEARSWAP_PATH_FILE = os.path.join(USER_DIR, "omniwatch_gearswap_path.json")
 # so users can edit the JSON without touching the .lua file.
 BUFF_TIMER_CFG   = os.path.join(USER_DIR, "omniwatch_buff_timer.json")
 RECAST_TIMER_CFG = os.path.join(USER_DIR, "omniwatch_recast.json")
+BUFF_STATE_SNAPSHOT = os.path.join(USER_DIR, "omniwatch_buff_state.json")
 # DPS encounter logs stay GLOBAL (not per-char). JSON: one record per
 # line, each a full encounter dict. CSV: one summary row per encounter.
 # Both append-only and character-agnostic for now.
@@ -3034,6 +3178,19 @@ SETTINGS_SCHEMA = [
                    "Windows only.",
     },
     {
+        "key":     "borderless_window",
+        "label":   "Borderless window",
+        "kind":    "bool",
+        "default": False,
+        "section": "General",
+        "applies": "python",
+        "help":    "Hide the OS title bar and frame around the OmniWatch "
+                   "window. With borderless on, hold SHIFT and drag "
+                   "anywhere in the window to move it. The OmniWatch app "
+                   "icon in the Windows taskbar still works normally for "
+                   "minimize/restore.",
+    },
+    {
         "key":     "window_opacity",
         "label":   "Window opacity %",
         "kind":    "int",
@@ -3122,6 +3279,17 @@ SETTINGS_SCHEMA = [
     },
 
     # ── Party ───────────────────────────────────────────────────────
+    {
+        "key":     "show_party",
+        "label":   "Show party",
+        "kind":    "bool",
+        "default": True,
+        "section": "Party",
+        "applies": "python",
+        "help":    "Show the main party panel (your character + up to "
+                   "5 party members). Off = hide all party rows. Useful "
+                   "for solo play when you only need stats / buffs / DPS.",
+    },
     {
         "key":     "show_alliance",
         "label":   "Show alliance",
@@ -3805,6 +3973,331 @@ def _apply_always_on_top(enabled):
         print(f"[OmniWatch] always-on-top toggle failed: {e!r}")
 
 
+def _apply_borderless_window(enabled):
+    """Recreate the pygame display surface with or without a native frame.
+
+    Pygame doesn't support toggling the frame on an existing window — we
+    have to call set_mode() again with the new flags. The old surface
+    becomes invalid, so `screen` is rebound to the new one. Window size,
+    position, and maximized state are preserved across the rebuild.
+
+    When borderless is ON:
+    - No OS title bar, no resize handles, no min/max/close buttons
+    - Window position can't be dragged via the (now-absent) title bar;
+      users hold Shift and drag anywhere in the window to move it
+    - Always-on-top still works (it's a Windows z-order flag, not a
+      frame flag)
+    - If the window was maximized when toggling on, the borderless
+      window also fills the monitor work area
+
+    When borderless is OFF:
+    - Normal title bar with "OmniWatch" caption, frame, resize edges,
+      and the X/min/max buttons
+    - Standard window drag from the title bar
+    - Maximized state preserved across the toggle
+
+    Multi-monitor: queries the work area of the monitor the window is
+    currently on, so toggling borderless on a window placed on a
+    secondary monitor fills THAT monitor (not the primary).
+    """
+    global screen
+    if not pygame.get_init() or not pygame.display.get_init():
+        # set_mode hasn't run yet — startup will pick up the setting
+        # via setting("borderless_window") at first set_mode().
+        return
+    try:
+        # Capture current state. On Windows we use GetWindowPlacement for
+        # the show-state (normal/maximized) and the "normal" rect (size
+        # the window had before being maximized). For multi-monitor
+        # support, we also query MonitorFromWindow + GetMonitorInfo to
+        # find the work area of the monitor the window is currently on.
+        old_x, old_y = None, None
+        old_w, old_h = None, None
+        was_maximized = False
+        work_w, work_h = None, None      # work area of current monitor
+        work_x, work_y = None, None      # top-left of that work area
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                info = pygame.display.get_wm_info()
+                hwnd = info.get("window") or info.get("hwnd") or 0
+                if hwnd:
+                    class WINDOWPLACEMENT(ctypes.Structure):
+                        _fields_ = [
+                            ("length",           wintypes.UINT),
+                            ("flags",            wintypes.UINT),
+                            ("showCmd",          wintypes.UINT),
+                            ("ptMinPosition",    wintypes.POINT),
+                            ("ptMaxPosition",    wintypes.POINT),
+                            ("rcNormalPosition", wintypes.RECT),
+                        ]
+                    wp = WINDOWPLACEMENT()
+                    wp.length = ctypes.sizeof(WINDOWPLACEMENT)
+                    if ctypes.windll.user32.GetWindowPlacement(
+                            wintypes.HWND(hwnd), ctypes.byref(wp)):
+                        # showCmd: 1=normal, 2=minimized, 3=maximized
+                        was_maximized = (wp.showCmd == 3)
+                        old_x = wp.rcNormalPosition.left
+                        old_y = wp.rcNormalPosition.top
+                        old_w = wp.rcNormalPosition.right - wp.rcNormalPosition.left
+                        old_h = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top
+
+                    # Query the monitor this window is currently on, so
+                    # toggling borderless on a secondary-monitor window
+                    # fills THAT monitor's work area (not the primary's).
+                    # MonitorFromWindow flag MONITOR_DEFAULTTONEAREST = 2.
+                    class MONITORINFO(ctypes.Structure):
+                        _fields_ = [
+                            ("cbSize",    wintypes.DWORD),
+                            ("rcMonitor", wintypes.RECT),
+                            ("rcWork",    wintypes.RECT),
+                            ("dwFlags",   wintypes.DWORD),
+                        ]
+                    hmon = ctypes.windll.user32.MonitorFromWindow(
+                        wintypes.HWND(hwnd), 2)
+                    if hmon:
+                        mi = MONITORINFO()
+                        mi.cbSize = ctypes.sizeof(MONITORINFO)
+                        if ctypes.windll.user32.GetMonitorInfoW(
+                                hmon, ctypes.byref(mi)):
+                            work_x = mi.rcWork.left
+                            work_y = mi.rcWork.top
+                            work_w = mi.rcWork.right - mi.rcWork.left
+                            work_h = mi.rcWork.bottom - mi.rcWork.top
+            except Exception:
+                pass
+
+        # Decide the new pygame surface size and where the window should
+        # land. Three cases:
+        #   1) Was maximized → use work area size, place at work-area origin
+        #   2) Was normal → use the saved normal size, place at saved origin
+        #   3) No info captured (non-Windows or query failed) → keep current
+        cur_w, cur_h = screen.get_size()
+        target_w, target_h = cur_w, cur_h
+        target_x, target_y = None, None
+
+        # When toggling OFF, check if we previously entered borderless
+        # from maximized. If so, treat this transition AS IF the window
+        # were maximized — fill the work area with the framed window,
+        # then explicitly re-apply maximize state. This preserves the
+        # "fullscreen" appearance across the toggle round-trip.
+        global _borderless_was_fullscreen
+        effective_max = was_maximized
+        if not enabled and _borderless_was_fullscreen:
+            # Treat as coming out of fullscreen-borderless mode.
+            effective_max = True
+            # Force a fresh work-area query if we don't already have one.
+            if (work_w is None or work_h is None) and sys.platform == "win32":
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    info = pygame.display.get_wm_info()
+                    hwnd_q = info.get("window") or info.get("hwnd") or 0
+                    if hwnd_q:
+                        class MONITORINFO(ctypes.Structure):
+                            _fields_ = [
+                                ("cbSize",    wintypes.DWORD),
+                                ("rcMonitor", wintypes.RECT),
+                                ("rcWork",    wintypes.RECT),
+                                ("dwFlags",   wintypes.DWORD),
+                            ]
+                        hmon = ctypes.windll.user32.MonitorFromWindow(
+                            wintypes.HWND(hwnd_q), 2)
+                        if hmon:
+                            mi = MONITORINFO()
+                            mi.cbSize = ctypes.sizeof(MONITORINFO)
+                            if ctypes.windll.user32.GetMonitorInfoW(
+                                    hmon, ctypes.byref(mi)):
+                                work_x = mi.rcWork.left
+                                work_y = mi.rcWork.top
+                                work_w = mi.rcWork.right - mi.rcWork.left
+                                work_h = mi.rcWork.bottom - mi.rcWork.top
+                except Exception:
+                    pass
+
+        if effective_max and work_w and work_h:
+            # When maximized (or coming out of fullscreen-borderless),
+            # the pygame surface must match work area OUTRIGHT so there's
+            # no gap at the bottom. We size + position the window manually
+            # rather than relying on ShowWindow(MAX) to do the right thing
+            # — that proved unreliable across DPI settings + monitor
+            # configs.
+            target_w, target_h = work_w, work_h
+            target_x, target_y = work_x, work_y
+        elif old_w and old_h:
+            target_w, target_h = old_w, old_h
+            if old_x is not None:
+                target_x, target_y = old_x, old_y
+
+        # If toggling FROM maximized, restore the window first. Windows
+        # treats maximized windows specially — style changes via
+        # SetWindowLongPtr don't fully apply until the window is in the
+        # "normal" state. Without this restore step, toggling borderless
+        # on a maximized window leaves the title bar visible because
+        # the WS_CAPTION bit clearing didn't take effect.
+        # We restore here BEFORE set_mode so the new pygame window is
+        # created in normal state. We re-apply the work-area size and
+        # position manually below to recreate the "maximized" feel
+        # without actually being in the OS's maximized state.
+        if was_maximized and sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                info = pygame.display.get_wm_info()
+                hwnd_pre = info.get("window") or info.get("hwnd") or 0
+                if hwnd_pre:
+                    # SW_RESTORE = 9: activates and displays a window.
+                    # If minimized or maximized, restores to original
+                    # size and position. Critical for the style change
+                    # that follows to actually take effect.
+                    ctypes.windll.user32.ShowWindow(
+                        wintypes.HWND(hwnd_pre), 9)
+            except Exception:
+                pass
+
+        # Recreate pygame surface with the right size + flags.
+        if enabled:
+            flags = pygame.NOFRAME
+        else:
+            flags = pygame.RESIZABLE
+        screen = pygame.display.set_mode((target_w, target_h), flags)
+        pygame.display.set_caption("OmniWatch")
+
+        # Force a Windows-level frame style refresh. SDL/pygame's
+        # set_mode reuses the existing HWND with updated styles via
+        # SetWindowLongPtr, but the recomputation of the non-client
+        # area (the frame, title bar) doesn't always happen on the
+        # first call — without an explicit FRAMECHANGED notification,
+        # toggling borderless on a maximized window sometimes shows
+        # the new size with the old border, requiring a second toggle
+        # to clear. We fix this by re-setting the window style bits
+        # explicitly and calling SetWindowPos with SWP_FRAMECHANGED.
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                info = pygame.display.get_wm_info()
+                hwnd = info.get("window") or info.get("hwnd") or 0
+                if hwnd:
+                    GWL_STYLE = -16
+                    WS_CAPTION     = 0x00C00000
+                    WS_THICKFRAME  = 0x00040000
+                    WS_MINIMIZEBOX = 0x00020000
+                    WS_MAXIMIZEBOX = 0x00010000
+                    WS_SYSMENU     = 0x00080000
+                    WS_BORDER      = 0x00800000
+                    WS_DLGFRAME    = 0x00400000
+                    FRAME_BITS = (WS_CAPTION | WS_THICKFRAME |
+                                  WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
+                                  WS_SYSMENU | WS_BORDER | WS_DLGFRAME)
+                    # CRITICAL: LONG_PTR is pointer-sized — 64-bit on
+                    # 64-bit Python, 32-bit on 32-bit Python. ctypes
+                    # c_long is ALWAYS 32-bit, so using it as the
+                    # return type truncates the upper 32 bits on 64-bit
+                    # builds and the resulting style value is garbage.
+                    # We use c_ssize_t (signed pointer-sized) for both
+                    # argtypes and restype so the value round-trips
+                    # correctly. Also set HWND argtype explicitly.
+                    GetWindowLongPtrW = ctypes.windll.user32.GetWindowLongPtrW
+                    GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+                    GetWindowLongPtrW.restype  = ctypes.c_ssize_t
+                    SetWindowLongPtrW = ctypes.windll.user32.SetWindowLongPtrW
+                    SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int,
+                                                  ctypes.c_ssize_t]
+                    SetWindowLongPtrW.restype  = ctypes.c_ssize_t
+                    style = GetWindowLongPtrW(wintypes.HWND(hwnd), GWL_STYLE)
+                    if enabled:
+                        # Clear frame bits for borderless.
+                        new_style = style & ~FRAME_BITS
+                    else:
+                        # Set all frame bits for framed mode.
+                        new_style = style | FRAME_BITS
+                    SetWindowLongPtrW(wintypes.HWND(hwnd), GWL_STYLE,
+                                      new_style)
+            except Exception as e:
+                # Style update failure is non-fatal; the later
+                # SetWindowPos call with FRAMECHANGED may still do the
+                # right thing on some Windows builds.
+                print(f"[OmniWatch] window style update failed: {e!r}")
+
+        # Position the new window. Two distinct paths:
+        #   - Maximized-mode toggle: explicitly place at work-area origin
+        #     and size to work-area dimensions via SetWindowPos. Then
+        #     mark the window as maximized via GetWindowPlacement +
+        #     SetWindowPlacement so OS treats it as a real maximize
+        #     (matters for the X/restore behavior after toggling back).
+        #   - Normal-mode toggle: just position it.
+        if sys.platform == "win32" and target_x is not None:
+            try:
+                import ctypes
+                from ctypes import wintypes
+                info = pygame.display.get_wm_info()
+                hwnd = info.get("window") or info.get("hwnd") or 0
+                if hwnd:
+                    SetWindowPos = ctypes.windll.user32.SetWindowPos
+                    SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                             ctypes.c_int, ctypes.c_int,
+                                             ctypes.c_int, ctypes.c_int,
+                                             wintypes.UINT]
+                    SetWindowPos.restype = wintypes.BOOL
+                    SWP_NOZORDER     = 0x0004
+                    SWP_NOACTIVATE   = 0x0010
+                    SWP_FRAMECHANGED = 0x0020
+                    # SWP_FRAMECHANGED is the critical flag — tells
+                    # Windows to recompute the window's non-client area
+                    # (frame, title bar, borders) based on the current
+                    # style. Without it, the old frame can persist for
+                    # a frame after the style bits are updated, causing
+                    # the "toggle on, border remains, toggle on again
+                    # to clear" bug.
+                    SetWindowPos(
+                        wintypes.HWND(hwnd), wintypes.HWND(0),
+                        target_x, target_y, target_w, target_h,
+                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+
+                    # When we end up framed and we're targeting work-area
+                    # size, re-apply maximize so the OS treats it as a
+                    # proper maximized window (title bar shows the
+                    # "restore down" icon instead of "maximize", and
+                    # the [□] button toggles correctly). When borderless,
+                    # we skip this since there's no frame to show a max
+                    # icon — and Windows would re-add the title bar if
+                    # we maximized a borderless window.
+                    if effective_max and not enabled:
+                        ctypes.windll.user32.ShowWindow(
+                            wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE = 3
+            except Exception:
+                pass
+
+        # Update tracking: set True when we just entered fullscreen-
+        # borderless (so the next toggle OFF knows to re-maximize).
+        # Cleared when we leave borderless OR when we toggle borderless
+        # on from a non-maximized window (regular small borderless).
+        if enabled and effective_max:
+            _borderless_was_fullscreen = True
+        else:
+            _borderless_was_fullscreen = False
+
+        # Re-apply persistent window state (always-on-top, opacity)
+        # since recreating the window clears those flags.
+        if setting("always_on_top"):
+            _apply_always_on_top(True)
+        try:
+            op = int(setting("window_opacity"))
+        except (TypeError, ValueError):
+            op = 100
+        if op != 100:
+            _apply_window_opacity(op)
+
+        print(f"[OmniWatch] borderless window → "
+              f"{'ON' if enabled else 'OFF'} "
+              f"(target {target_w}x{target_h}"
+              f"{' maximized' if was_maximized else ''})")
+    except Exception as e:
+        print(f"[OmniWatch] borderless window toggle failed: {e!r}")
+
+
 def _apply_window_opacity(percent):
     """Set the OmniWatch window's whole-window alpha.
 
@@ -4304,6 +4797,8 @@ def apply_setting_side_effects(key, value):
         buttons_panel_visible = bool(value)
     elif key == "always_on_top":
         _apply_always_on_top(bool(value))
+    elif key == "borderless_window":
+        _apply_borderless_window(bool(value))
     elif key == "window_opacity":
         _apply_window_opacity(value)
         # Re-apply transparent_bg state so colorkey survives the new alpha
@@ -5767,6 +6262,16 @@ load_layout()
 # saved icons/labels don't appear after a restart.
 buttons_config = load_buttons_config()
 
+# Restore buff timer state from the on-disk snapshot if present. The
+# next BUFF_BATCH from Lua will overwrite anything stale within 250ms,
+# so this is purely a hedge against the case where Python comes up
+# before Lua does — without it, buff bars would start at the wrong
+# fullness ratio after a Python reload.
+try:
+    _load_buff_state_snapshot()
+except Exception as _e:
+    print(f"[OmniWatch] initial buff snapshot load failed: {_e!r}")
+
 # After layout loads, force the panel-visibility globals to match the
 # Settings menu values. Settings is the user-facing control; layout
 # persists position/scale. Without this sync, a Settings toggle from
@@ -5781,6 +6286,19 @@ buttons_panel_visible = bool(setting("show_hotbar"))
 # because the latter isn't called for the initial dict population.
 if setting("always_on_top"):
     _apply_always_on_top(True)
+
+# Apply persisted borderless-window state. Recreates the pygame window
+# Note: borderless_window setting is NOT auto-applied at startup.
+# Unlike always_on_top and opacity, this setting needs the user to
+# explicitly toggle it each session — that way the window always opens
+# framed and maximize-able, then the user toggles borderless ON to
+# snap to fullscreen. We also reset the persisted value to False on
+# startup so the settings toggle starts in the "off" state visually.
+if setting("borderless_window"):
+    try:
+        set_setting("borderless_window", False)
+    except Exception:
+        pass
 
 # Apply persisted window opacity. Same reasoning as always_on_top:
 # the side-effect dispatcher isn't fired on initial load, so we apply
@@ -6474,6 +6992,11 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
     # Update peak duration tracking. When we first see a buff_id, the
     # current secs IS the max (it can only count down from here). If we
     # see a higher value later it's because the buff was re-cast.
+    # NOTE: when the wire provides an absolute full_duration (v3 wire,
+    # built from expires_at - started_at), we use that DIRECTLY since
+    # it's authoritative — survives Python reloads, etc. The peak
+    # heuristic remains as a fallback for legacy wire and for buffs
+    # without a known start time.
     seen_ids = set()
     for e in entries:
         if e.get("flash"):
@@ -6483,9 +7006,16 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
             continue
         seen_ids.add(bid)
         secs = e.get("secs", 0.0)
-        peak = _buff_durations.get(bid)
-        if peak is None or secs > peak:
-            _buff_durations[bid] = max(secs, 0.1)
+        full_dur = e.get("full_duration")
+        if full_dur and full_dur > 0:
+            # Authoritative — use this as the peak. Clamp against secs
+            # in case full_dur < secs (e.g. clock drift), which would
+            # display a > 100% ratio.
+            _buff_durations[bid] = max(full_dur, secs, 0.1)
+        else:
+            peak = _buff_durations.get(bid)
+            if peak is None or secs > peak:
+                _buff_durations[bid] = max(secs, 0.1)
     # Prune durations for buffs that left the panel.
     stale = [k for k in _buff_durations if k not in seen_ids
                                             and not any(
@@ -14267,7 +14797,7 @@ while running:
                         continue
                     fields = ln.split("\t")
                     if len(fields) >= 6:
-                        # v2: slot-aware
+                        # v2: slot-aware, possibly v3 if fields >= 8.
                         try:
                             slot = int(fields[1])
                             bid  = int(fields[2])
@@ -14279,11 +14809,34 @@ while running:
                         except ValueError:
                             continue
                         src = fields[5]
+                        # v3 (8+ fields): absolute Unix timestamps for
+                        # expires_at and started_at. Let us compute the
+                        # buff's TRUE full duration (= expires - started)
+                        # rather than guessing it from "first secs we saw"
+                        # — which is wrong after a Python reload where we
+                        # come up mid-buff. Without expires_at we'd treat
+                        # whatever's remaining (e.g. 234s) as the full
+                        # duration, so the bar would draw at 100% even
+                        # though the buff is half-elapsed.
+                        expires_unix = None
+                        started_unix = None
+                        full_dur     = None
+                        if len(fields) >= 8:
+                            try:
+                                expires_unix = float(fields[6])
+                                started_unix = float(fields[7])
+                                if expires_unix > started_unix:
+                                    full_dur = expires_unix - started_unix
+                            except ValueError:
+                                pass
                         # Key by slot to support buff stacking (March x2)
                         new_buffs[slot] = {
                             "slot": slot, "buff_id": bid,
                             "name": nm, "secs": secs, "source": src,
                             "updated_at": _now,
+                            "expires_at_unix": expires_unix,
+                            "started_at_unix": started_unix,
+                            "full_duration":   full_dur,
                         }
                     elif len(fields) >= 5:
                         # v1: legacy (lua addon not yet updated)
@@ -15015,7 +15568,12 @@ while running:
             return nm  # local player keeps name-based key
         return "p%d" % slot_idx
     default_y = START_Y
-    for slot_idx, m in enumerate(party_data):
+    # Hide entire main party panel when "show_party" setting is off.
+    # We skip the iteration entirely rather than render and clip — saves
+    # the work of resolving anchors, building panels, and drawing for
+    # nothing. Alliance panels still render below per show_alliance.
+    _show_party = setting("show_party") if "show_party" in settings else True
+    for slot_idx, m in enumerate(party_data if _show_party else []):
         nm = m["name"]
         akey = _anchor_key(slot_idx, nm)
         if nm not in panel_scales:
@@ -15181,7 +15739,18 @@ while running:
         if nm not in panel_order:
             panel_order.append(nm)
 
-    for name in panel_order:
+    # Honor the "Show party" setting: skip drawing the entire party panel
+    # (your own row included) when off. Alliance panels below have their
+    # own show_alliance gate. The position loop above also skips when
+    # off — both gates needed because the position loop builds anchors
+    # while THIS loop does the actual drawing.
+    # We use a local iteration variable instead of mutating panel_order
+    # so toggling show_party back on restores the prior draw order
+    # rather than starting from a cleared list.
+    _show_party_draw = setting("show_party") if "show_party" in settings else True
+    _party_draw_order = panel_order if _show_party_draw else []
+
+    for name in _party_draw_order:
         m      = members_by_name[name]
         px, py = panel_positions[name]
         scale  = panel_scales.get(name, 1.0)
@@ -15645,10 +16214,14 @@ while running:
     # Mirrors the recast panel pipeline. buff_state is replaced wholesale
     # by BUFF_BATCH packets from lua. We sort, append wear-off flashes,
     # inject setup-mode mocks if the panel would otherwise be empty.
+    # buff_state is keyed by SLOT in v2/v3 wire (multi-instance support
+    # for same-named buffs like multiple Marches) and by BUFF_ID in v1
+    # legacy wire. Either way, v["buff_id"] holds the actual id.
     _buff_all = [
-        {"buff_id": bid, "name": v["name"], "secs": v["secs"],
-         "source": v.get("source", "self")}
-        for bid, v in buff_state.items()
+        {"buff_id": v["buff_id"], "name": v["name"], "secs": v["secs"],
+         "source": v.get("source", "self"),
+         "full_duration": v.get("full_duration")}
+        for _k, v in buff_state.items()
     ]
     if buff_sort_order == "desc":
         _buff_entries = sorted(_buff_all, key=lambda e: -e["secs"])
@@ -16038,6 +16611,16 @@ while running:
     pygame.display.flip()
     clock.tick(60)
 
+    # Persist buff state snapshot to disk (throttled to 5s and only
+    # when buff_state changed). See _save_buff_state_snapshot() for
+    # details — purpose is to survive Python reloads with correct
+    # timer fullness even before Lua sends a fresh BUFF_BATCH.
+    try:
+        _save_buff_state_snapshot()
+    except Exception as _e:
+        # Never let snapshot save take down the main loop.
+        pass
+
     # ── Events ───────────────────────────────────────────────────────────────
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -16208,6 +16791,43 @@ while running:
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mx, my = event.pos
+
+            # Borderless window drag: Shift+LMB anywhere in the window
+            # initiates a "drag-to-move". We record the starting mouse
+            # position (in screen coords) and the starting window
+            # position; MOUSEMOTION events with `_borderless_drag` set
+            # call SetWindowPos to keep the window under the cursor.
+            # Disabled when the window is framed (the OS title bar
+            # provides standard drag-to-move in that case).
+            if (setting("borderless_window")
+                    and (pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    and sys.platform == "win32"):
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    info = pygame.display.get_wm_info()
+                    hwnd = info.get("window") or info.get("hwnd") or 0
+                    if hwnd:
+                        # Cursor pos in screen coords (NOT window coords —
+                        # we need to track the cursor as the window moves
+                        # under it, and pygame's event.pos is window-relative
+                        # which would create feedback).
+                        pt = wintypes.POINT()
+                        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                        rect = wintypes.RECT()
+                        ctypes.windll.user32.GetWindowRect(
+                            wintypes.HWND(hwnd), ctypes.byref(rect))
+                        _borderless_drag = {
+                            "hwnd":      hwnd,
+                            "anchor_x":  pt.x,
+                            "anchor_y":  pt.y,
+                            "win_x":     rect.left,
+                            "win_y":     rect.top,
+                        }
+                        continue
+                except Exception as e:
+                    print(f"[OmniWatch] borderless drag start failed: {e!r}")
+                    # Fall through to normal click handling
 
             # Highest priority: config wizard modal. When visible, it
             # eats every left-click — either as a control hit (+/- or
@@ -16740,6 +17360,10 @@ while running:
                     continue
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            # End borderless window drag (if active).
+            if _borderless_drag is not None:
+                _borderless_drag = None
+                continue
             # Sim window drag-release. Done first since dragging_key checks
             # below assume a panel drag, not a free-floating window.
             if sim_window_drag is not None:
@@ -16915,6 +17539,39 @@ while running:
             nh = max(SIM_WIN_HDR_H + 60, sh + (my - smy))
             sim_window_size[0] = nw
             sim_window_size[1] = nh
+
+        elif event.type == pygame.MOUSEMOTION and _borderless_drag is not None:
+            # Move the borderless window with the mouse. We use SCREEN
+            # coordinates (not the event.pos which is window-relative)
+            # because moving the window causes its origin to shift, and
+            # window-relative coords would create a feedback loop.
+            try:
+                import ctypes
+                from ctypes import wintypes
+                pt = wintypes.POINT()
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                dx = pt.x - _borderless_drag["anchor_x"]
+                dy = pt.y - _borderless_drag["anchor_y"]
+                new_x = _borderless_drag["win_x"] + dx
+                new_y = _borderless_drag["win_y"] + dy
+                SetWindowPos = ctypes.windll.user32.SetWindowPos
+                SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                         ctypes.c_int, ctypes.c_int,
+                                         ctypes.c_int, ctypes.c_int,
+                                         wintypes.UINT]
+                SetWindowPos.restype = wintypes.BOOL
+                SWP_NOSIZE     = 0x0001
+                SWP_NOZORDER   = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                SetWindowPos(wintypes.HWND(_borderless_drag["hwnd"]),
+                             wintypes.HWND(0),
+                             new_x, new_y, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+            except Exception as e:
+                # If the move fails for any reason, abort the drag so we
+                # don't keep retrying every frame.
+                print(f"[OmniWatch] borderless drag motion failed: {e!r}")
+                _borderless_drag = None
 
         elif event.type == pygame.MOUSEMOTION and sim_window_drag is not None:
             # Move the sim window with the mouse, preserving the grip
@@ -17092,4 +17749,10 @@ while running:
 
 # Save on quit too, in case the window was closed mid-drag.
 save_layout()
+# Force a final buff snapshot write so we capture the most recent state
+# regardless of the 5s throttle (skipped only if buff_state is empty).
+try:
+    _save_buff_state_snapshot(force=True)
+except Exception:
+    pass
 pygame.quit()

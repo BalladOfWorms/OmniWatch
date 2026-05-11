@@ -241,7 +241,7 @@ Full character stat grid in `/checkparam` style. Each cell is computed from skil
 - Caster: Fast Cast, Quick Magic, MAcc, MAB, Regen, Refresh, Regain
 - Elemental affinity: Fire, Ice, Wind, Earth, Lightning, Water, Light, Dark
 
-**Server-pushed stat updates**: OmniWatch passively listens for server-side stat packets (0x061, 0x063) that fire on roll cast, gear change, and buff change. When captured, these refresh the Attack and Accuracy values to match what the server says they are — including most roll bonuses. **Caveat**: there's no reliable way to detect every variant of these packets, so certain proc-style effects (most notably the Lanun gear set's chance to boost a roll's accuracy bonus) may not always be reflected immediately. Att/Def usually update; Acc updates are best-effort. Run `/checkparam <me>` if you want a guaranteed-correct snapshot.
+**Server-pushed stat updates**: OmniWatch passively listens for server-side stat packets (0x061, 0x063) that fire on roll cast, gear change, and buff change. When captured, these refresh the Attack and Accuracy values to match what the server says they are — including most roll bonuses. **Caveat**: there's no reliable way to detect every variant of these packets, so certain proc-style effects (most notably the Lanun gear set's chance to boost a roll's accuracy bonus) may not always be reflected immediately. Att/Def usually update; Acc updates are best-effort.
 
 **BLU spell-trait math**: when you're on BLU, the panel resolves your equipped set spells against canonical bluguide data and computes:
 - Trait points per category (DW, Fast Cast, MAB, Acc Bonus, MDB, Store TP, Conserve MP, etc.)
@@ -250,7 +250,7 @@ Full character stat grid in `/checkparam` style. Each cell is computed from skil
 
 `//ow blu` prints the full diagnostic — equipped spells, points per category, tier reached, gift bonus applied.
 
-### Sim mode (In progress)
+### Sim mode
 
 What-if calculator that runs alongside the overlay. Open via the settings menu or `//ow sim`. Pick:
 
@@ -258,7 +258,7 @@ What-if calculator that runs alongside the overlay. Open via the settings menu o
 - **Master Level** (0-50)
 - **Job Points spent** (0-2100, single total) — applies all the JP gift thresholds + linear bonuses
 - **Merits** for the chosen job (per-job merit lists; e.g. BRD shows Lullaby Duration, Minne Effect, Minuet Effect, Madrigal Effect, Nightingale Recast)
-- **Equipment** in all 16 slots — pick by name or item id, augments included and can be renamed (Tp cape, WS belt, etc.)
+- **Equipment** in all 16 slots — pick by name or item id, augments included
 - **Food** — pick from a catalog
 - **Active buffs** — add as many as you want from a two-stage picker:
   - **BRD songs**: Honor March, Victory March, Advancing March, Minuet I-V, Valor Madrigal, Blade Madrigal. Each with a +/- on the song-tier ("Plus" — instrument level), and side-by-side checkboxes for **Soul Voice** and **Marcato** boosts
@@ -333,7 +333,6 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 - `//ow events` — list event-bus subscriber counts
 - `//ow dumpgear [slot]` — print equipped-item details
 - `//ow dumpstats` — force a stats recompute and print summary
-- `//ow dumpcheckparam` — show last-scraped /checkparam values + age
 - `//ow dumpbuffs` — print every active buff with id and name
 - `//ow dumpcharstats` — print player.stats (gear+buffs delta) and totals
 - `//ow dumpdesc` — print raw description text of each equipped item
@@ -356,6 +355,7 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 ├── OmniWatch_Sim.lua             # sim-mode buff math
 ├── Server_Stats.lua              # passive server-pushed stat listener
 ├── icon_extractor.lua            # icon extraction utility (Windower lib)
+├── PythonUpdate.bat              # helper for running from source (advanced)
 ├── Readme.md                     # this file
 ├── data\                         # canonical data tables + per-mob caches
 │   ├── blu_spell_traits.lua      # BLU spell → trait points
@@ -370,6 +370,7 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 │   ├── mob_individuals.json      # per-mob overrides (image, abilities)
 │   └── mobdata\
 │       └── mobicons\             # per-mob image cache + PC race icons
+├── DataScrape\                   # web-scrape helpers (BG-wiki, etc.)
 ├── gearinfo\                     # vendored gear-stat parser
 ├── icons\
 │   ├── equipment\                # auto-extracted on first run
@@ -421,9 +422,9 @@ The python overlay binds these ports, accumulates state, and renders each panel 
 
 ## Known issues and limitations
 
-- **Lanun roll-proc accuracy** — when COR's Lanun gear set procs a bonus on a Phantom Roll's accuracy effect, OmniWatch may not always reflect the boosted value. The server doesn't reliably push the relevant stat packet for this case, and there's no clean way to detect the proc client-side. Run `/checkparam <me>` after a roll to anchor a definitive number.
-- **BLU spell-trait coverage** handles the major categories (DW, Fast Cast, MAB, Acc Bonus, Atk Bonus, Def Bonus, MDB, Store TP, Conserve MP, Counter, Auto Refresh, Auto Regen, MAcc Bonus, MEv Bonus, Magic Burst Bonus, Skillchain Bonus, Crit Atk Bonus, Inquartata, Tenacity, Max HP, Max MP, Zanshin, Resist Silence/Gravity/Sleep/Slow, Killer traits, DA/TA, Gilfinder/TH, Rapid Shot) sourced from the canonical bluguide tables. JP-category linear bonuses for MAB/MAcc are not yet wired separately — they flow through `/checkparam` instead.
-- **Multi-boxing on the same machine is not supported** (UDP port collision).
+- **Lanun roll-proc accuracy** — when COR's Lanun gear set procs a bonus on a Phantom Roll's accuracy effect, OmniWatch may not always reflect the boosted value. The server doesn't reliably push the relevant stat packet for this case, and there's no clean way to detect the proc client-side.
+- **BLU spell-trait coverage** handles the major categories (DW, Fast Cast, MAB, Acc Bonus, Atk Bonus, Def Bonus, MDB, Store TP, Conserve MP, Counter, Auto Refresh, Auto Regen, MAcc Bonus, MEv Bonus, Magic Burst Bonus, Skillchain Bonus, Crit Atk Bonus, Inquartata, Tenacity, Max HP, Max MP, Zanshin, Resist Silence/Gravity/Sleep/Slow, Killer traits, DA/TA, Gilfinder/TH, Rapid Shot) sourced from the canonical bluguide tables. JP-category linear bonuses for MAB/MAcc are not yet wired separately.
+- **Running multiple FFXI clients with OmniWatch on the same machine is not supported** (UDP port collision — only one instance per machine can bind the addon's ports). Single-client multi-character config support via the character dropdown in the header works normally — you can pre-tweak layout, settings, and blacklists for any of your characters while logged in on a different one.
 - **Mog Wardrobes 5-8** require an active subscription to populate.
 
 ## Development
