@@ -20,6 +20,7 @@ OmniWatch puts the live state of your character and party in one place:
 - **Recast tracker** — magic and ability recasts with timer bars, custom aliases, and auto-hide when nothing's recasting
 - **Buff timer panel** — duration bars for active buffs that color-shift as they're about to wear off
 - **DPS tracker** — rolling-window damage tracking with sparklines, per-encounter logging to CSV/JSONL, optional party-member damage tracking
+- **Chat panel** — floating, resizable chat log with tabs (World, LS1/LS2, Party, Battle, Buffs, Debuffs, Mob, two user-customizable tabs, System, Gearswap), unread badges per tab, scrollback, and a built-in composer for sending say/tell/reply/shout/yell/linkshell messages without opening the game's chat field. Per-job routing rules let you decide which combat events land in which tab.
 - **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB, elemental affinity, fast cast, store TP, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses
 - **Hotbar** — customizable button panel for slash commands, items, gearswap calls, and macros
 - **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection
@@ -229,6 +230,41 @@ Rolling-window damage tracker. Per encounter:
 
 Slash commands: `//ow dps`, `//ow dps reset`, `//ow dps window <seconds>`, `//ow dps party`, `//ow dps status`.
 
+### Chat panel
+
+Floating chat log that sits inside the overlay. Useful when you want a second chat view that survives FFXI's own chat log resets, has independent scrollback, and can be styled / filtered separately from the in-game window.
+
+**Tabs**:
+- **World** — say, shout, yell, emote, NPC speech
+- **LS1 / LS2** — linkshell 1 and 2
+- **Party** — party chat and tells
+- **Battle** — combat actions (your hits, mob hits, weapon skills, magic)
+- **Buffs** — status effects landing on you or party members
+- **Debuffs** — debuffs landing on you or party members
+- **Mob** — buffs and debuffs landing on mobs
+- **Custom 1 / Custom 2** — user-relabeled and user-routed; pick any combination of event types to land here
+- **System** — system messages
+- **Gearswap** — gearswap log output (lights, set swaps, equip warnings)
+
+Each tab tracks its own unread count and shows a red badge in the tab header when new messages arrive while you're on a different tab. Click a tab to switch; the badge clears when you read it. Scroll the body with the mouse wheel; a "jump to bottom" badge appears when you scroll up so it's a single click back to live.
+
+**Composer** (optional row at the bottom of the panel — togglable via the "Show chat composer" setting):
+- Channel picker: **say / tell / reply / shout / yell / ls1 / ls2** — click the channel label or use the `<` / `>` arrows to cycle
+- **Tell target** field appears next to the channel when "tell" is selected
+- Click the body to focus, type, **Enter** to send, **Esc** to cancel. Sends go through Windower as if you'd typed them in the game's chat field
+
+**Routing config** (gear icon in the panel header):
+Opens `omniwatch_routing_gui.exe` — a standalone editor for the routing rules that decide which combat events appear on which tab. Rules are stored per-job, with a global fallback and baked-in defaults. Each event type (melee hits, weapon skills, magic, buffs, debuffs, etc.) can be:
+- **Default** — emit to the canonical tab (e.g. melee → Battle)
+- **Hidden** — don't show in the chat panel at all
+- **Routed** — emit to one or more tabs of your choice, including the two custom tabs
+
+Routing JSON lives in `%APPDATA%\OmniWatch\<charname>\`:
+- `omniwatch_chat_routing.json` — global config (fallback)
+- `omniwatch_chat_routing-<JOB>.json` — per-job override
+
+The panel is resizable via the bottom-right corner grip (pixel-precise, not a uniform scale — you set the width and height independently). Position is draggable in setup mode.
+
 ### Stats panel
 
 Full character stat grid in `/checkparam` style. Each cell is computed from skill caps + base attributes + gear + food + buffs + merits + traits + master level bonuses, using formulas documented on BG-wiki.
@@ -351,6 +387,7 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 ```
 <Windower>\addons\OmniWatch\
 ├── OmniWatch.exe                 # the overlay (run this)
+├── omniwatch_routing_gui.exe     # chat routing rule editor (launched from chat panel gear)
 ├── OmniWatch.lua                 # the addon (Windower auto-loads)
 ├── OmniWatch_Sim.lua             # sim-mode buff math
 ├── Server_Stats.lua              # passive server-pushed stat listener
@@ -391,6 +428,8 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
     ├── omniwatch_buff_timer.json # buff-duration overrides
     ├── omniwatch_recast.json     # recast-tracker config
     ├── omniwatch_buttons.json    # user button bindings
+    ├── omniwatch_chat_routing.json         # chat panel routing rules (global fallback)
+    ├── omniwatch_chat_routing-<JOB>.json   #   per-job override (e.g. -COR.json)
     ├── omniwatch_mobs.json       # learned mob abilities
     ├── omniwatch_zones.json      # zone → region mapping
     └── omniwatch_gearswap_path.json

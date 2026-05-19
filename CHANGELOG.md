@@ -3,6 +3,15 @@
 All notable changes to OmniWatch will be documented in this file.
 
 
+## [1.4.1] - 2026-05-19
+
+### Fixed
+- **Statistics panel jumped between top and bottom alignment when dragged**: dropping the panel anywhere on screen would re-anchor it to whichever corner (top or bottom) the panel's midpoint was closer to. With a bottom anchor, the panel's height varies with setup mode (tray + save-as button appear) and with hidden cells, so the visible top would shift up/down whenever the size changed. The combined effect was a panel that appeared to "snap somewhere else" after release. The stats panel now always anchors to its top-left regardless of where it's dropped, matching the recast / buff / DPS panels — visible top-left stays exactly where it was placed, and size changes grow/shrink downward from a fixed point. Existing saved layouts with the old `bl` / `br` / `tr` anchors are migrated to `tl` on first load, preserving the panel's last visual position.
+
+### Changed
+- Readme now documents the chat panel (tabs, unread badges, scrollback, composer with say/tell/reply/shout/yell/ls1/ls2 channels, and the routing-config gear button that launches `omniwatch_routing_gui.exe`). File-layout section adds the routing GUI executable alongside `OmniWatch.exe` and the `omniwatch_chat_routing.json` + per-job `omniwatch_chat_routing-<JOB>.json` files in the per-character config block.
+
+
 ## [1.4.0] - 2026-05-18
 
 ### Added
