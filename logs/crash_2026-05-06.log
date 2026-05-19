@@ -1,0 +1,6 @@
+2026-05-06 14:08:12 [event:addon command] .../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:2867: attempt to index global '_PW_GIFT_STAT_MAP' (a nil value)
+    stack traceback:
+    	.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:2867: in function <.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:2761>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:202: in function <.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:196>

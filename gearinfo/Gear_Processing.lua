@@ -1,3 +1,116 @@
+-- ── parse_augment_line ──────────────────────────────────────────────────
+-- Parser for single augment strings as they appear in Misc_augments.lua
+-- (JSE necks) and Unity_rank[id].augments (HQ Unity variants). Each
+-- input is ONE augment line like "STR+15", "Magic Acc.+20", "Double
+-- Attack+5", "Damage taken-5%", "Pet: Double Attack+15", etc. The
+-- function PARSES the line and ADDS the resulting stats into
+-- target_item — which is the edited_item table being built up by
+-- find_all_values.
+--
+-- Why a dedicated parser instead of desypher_description?
+--   • desypher_description's patterns use the bare stat name as anchor:
+--     "(Attack):?%s?([+-]?%d+)". Feeding "Double Attack+5" to that
+--     produces a SPURIOUS Attack=+5 match (the substring "Attack+5"
+--     inside "Double Attack+5"). That's harmless for full description
+--     text where surrounding context disambiguates, but ruinous when
+--     parsing standalone augment lines.
+--   • desypher_description's valid_strings list is incomplete for the
+--     stat names that JSE necks use: 'Double Attack', 'Triple Attack',
+--     'Critical Hit Rate', 'Store TP' (without quotes), 'Magic Damage',
+--     'Magic Attack Bonus', 'Magic Burst Damage', etc. The matcher
+--     drops these silently.
+--
+-- The parser here uses ANCHORED matching (^name±N$) so substrings
+-- don't false-positive, and has its own explicit name → stat_key map
+-- so JSE-specific stat names are recognized and routed to the right
+-- key in edited_item.
+--
+-- Stats not in the recognized list ARE silently dropped, same as
+-- desypher_description. Most unrecognized augments are panel-display
+-- stats (Kick Attacks, Physical Damage Limit, Pet: X, Avatar: X,
+-- Wyvern: X) that aren't tracked by get_equip_stats's stat_table
+-- anyway — dropping them at this stage is no worse than the previous
+-- state where they didn't reach Gear_info at all.
+local _AUGMENT_NAME_TO_KEY = {
+	-- Primary stats
+	['STR']  = 'STR', ['DEX'] = 'DEX', ['VIT'] = 'VIT',
+	['AGI']  = 'AGI', ['INT'] = 'INT', ['MND'] = 'MND',
+	['CHR']  = 'CHR',
+	-- Vitals
+	['HP']   = 'HP',  ['MP']  = 'MP',
+	-- Combat
+	['Accuracy']        = 'Accuracy',
+	['Attack']          = 'Attack',
+	['Ranged Accuracy'] = 'Ranged Accuracy',
+	['Ranged Attack']   = 'Ranged Attack',
+	['Evasion']         = 'Evasion',
+	['Magic Accuracy']  = 'Magic Accuracy',
+	['Mag. Acc.']       = 'Magic Accuracy',
+	['Magic Atk. Bonus']     = 'Magic Atk. Bonus',
+	['Mag. Atk. Bns.']       = 'Magic Atk. Bonus',
+	['Magic Attack Bonus']   = 'Magic Atk. Bonus',
+	['Magic Evasion']        = 'Magic Evasion',
+	['Magic Def. Bonus']     = 'Magic Def. Bonus',
+	['DEF']    = 'DEF',
+	-- Multi-hit modifiers (the false-positive prone ones — anchored
+	-- match means "Double Attack" only matches the whole augment name,
+	-- not "Attack" inside it)
+	['Double Attack']     = 'Double Attack',
+	['Triple Attack']     = 'Triple Attack',
+	['Quadruple Attack']  = 'Quadruple Attack',
+	['Critical Hit Rate'] = 'Critical hit rate',
+	['Critical Hit Damage'] = 'Critical hit damage',
+	['Subtle Blow']       = 'Subtle Blow',
+	-- TP/casting modifiers
+	['Store TP']  = 'Store TP',
+	['Fast Cast'] = 'Fast Cast',
+	['Dual Wield'] = 'Dual Wield',
+	-- DT family
+	['Damage taken']           = 'DT',
+	['Physical damage taken']  = 'PDT',
+	['Magic damage taken']     = 'MDT',
+	['Breath damage taken']    = 'BDT',
+}
+
+function parse_augment_line(target_item, line)
+	if not line or line == '' then return end
+	-- Strip "Pet: " / "Wyvern: " / "Avatar: " / "Luopan: " prefixes —
+	-- those are pet stats and shouldn't roll into the player's
+	-- edited_item. (We could route them to a sub-table later, but for
+	-- now they're dropped, same as the original Pet:-stripping in
+	-- check_for_augments.)
+	if line:contains('Pet:') or line:contains('Wyvern:')
+	   or line:contains('Avatar:') or line:contains('Luopan:')
+	   or line:contains('Automaton:') then
+		return
+	end
+	-- Match: anchored start, allow whitespace, name, optional colon,
+	-- optional whitespace, signed integer, optional % suffix, then
+	-- end-or-whitespace. The anchored ^ prevents "Attack" matching
+	-- inside "Double Attack".
+	for name, stat_key in pairs(_AUGMENT_NAME_TO_KEY) do
+		-- Lua pattern: ^<name>:? ?[+-]?N%?$ — escape pattern magic
+		-- chars in name with a manual gsub (only "." is magic in our
+		-- stat names; brackets/parens don't appear).
+		local pat_name = name:gsub('([%.%-%+%*%?%[%]%(%)%%])', '%%%1')
+		local match_val = line:match('^%s*' .. pat_name .. '%s*:?%s*([+%-]?%d+)%%?%s*$')
+		if match_val then
+			local n = tonumber(match_val)
+			if n then
+				if target_item[stat_key] then
+					target_item[stat_key] = target_item[stat_key] + n
+				else
+					target_item[stat_key] = n
+				end
+			end
+			return  -- found a match; don't try other names
+		end
+	end
+	-- No recognized stat name. Silently drop — same as desypher_description
+	-- does for unknown lines. The line might be a pet/avatar prefix we
+	-- didn't catch, an unrecognized stat name, or whitespace.
+end
+
 function find_all_values(item)
 	-- notice(item.id)
 	local temp = check_for_augments(item)
@@ -64,6 +177,41 @@ function find_all_values(item)
 					edited_item[v['Unity Ranking']] = value
 					edited_item['Unity Ranking Bonus Applied'] = v['Unity Ranking'] .. ' + ' ..tostring(value)
 				end 
+				
+				-- OmniWatch patch (2026-05-16): Unity_rank[id].augments is the
+				-- ADDITIONAL static augment list that the +1/HQ variants of
+				-- Unity items carry on top of the rank-scaled main stat
+				-- (e.g. Comeuppances +1 has the Accuracy roll above PLUS a
+				-- fixed "DEX+20, Accuracy+40, ..." block). The original
+				-- GearInfo code reads only v['Unity Ranking'] (the main
+				-- stat handled above) and silently ignores v['augments'],
+				-- which meant the HQ variants were under-applied. Walk the
+				-- augment list through parse_augment_line so the stats
+				-- land in the same edited_item table; from there they flow
+				-- through get_equip_stats into Gear_info naturally.
+				if v.augments then
+					for _, aug_line in ipairs(v.augments) do
+						parse_augment_line(edited_item, aug_line)
+					end
+				end
+			end
+		end
+		
+		-- OmniWatch patch (2026-05-16): JSE neck augments (Reisenjima/
+		-- Sortie pieces in Misc_augments.lua / ow_unity_augments). These
+		-- are items whose max-rank augments aren't carried in the in-game
+		-- item description text, so desypher_description on item.discription
+		-- doesn't catch them. The Misc_augments.lua table holds the literal
+		-- "Stat+N" strings per item_id; we feed each one through
+		-- parse_augment_line and merge into edited_item the same way
+		-- extdata augments do (see check_for_augments path above).
+		--
+		-- ow_unity_augments is loaded by gearinfo/_loader.lua from
+		-- res/Misc_augments.lua. If load failed it's an empty table, so
+		-- the pairs() walk below is a no-op — safe.
+		if ow_unity_augments and ow_unity_augments[item.id] then
+			for _, aug_line in ipairs(ow_unity_augments[item.id]) do
+				parse_augment_line(edited_item, aug_line)
 			end
 		end
 		
@@ -111,16 +259,56 @@ function check_for_augments(item)
 	local item_t = res.items:with('id', item.id)
 	local temp = T{}
 	if augs then
+		-- OmniWatch patch: REMA / Dynamis Divergence weapons return opaque
+		-- strings like "Path: A", "Rank: 15", "Damage: 0", etc. via
+		-- extdata.decode. desypher_description can't extract stats from
+		-- these — "Path" is not a valid stat name and the line silently
+		-- drops. We detect path strings (case-insensitive "path: X") and
+		-- redirect through OmniWatch's ow_path_augments table, which
+		-- holds the R15 max-rank stat list per item_id × path key (loaded
+		-- from gearinfo/res/DREMA_augments.lua via the OmniWatch loader).
+		-- Each resolved stat line is then fed through desypher_description
+		-- the same way a normal augment string would be.
+		--
+		-- Failure mode: if ow_path_augments lacks an entry for this
+		-- (item_id, path), the path string falls through untouched —
+		-- desypher_description discards it, no stats added. The behavior
+		-- matches the pre-patch state for unrecognized REMA, so adding
+		-- entries to DREMA_augments.lua is purely additive.
 		for k,v in pairs(augs) do
 			
 			if v:contains('Pet:') or v:contains('Wyvern:') or v:contains('Avatar:') then
 			
 			else
-				for i, j in pairs(desypher_description(v, item_t)) do
-					if temp[i] then
-						temp[i] = temp[i] + j
-					else
-						temp[i] = j
+				local resolved_lines = nil
+				local path_match = v:lower():match('^%s*path:%s*([a-z])%s*$')
+				if path_match and ow_path_augments
+				   and ow_path_augments[item.id] then
+					local lookup_key = 'path: ' .. path_match
+					resolved_lines = ow_path_augments[item.id][lookup_key]
+				end
+				
+				if resolved_lines then
+					-- Walk the resolved stat list through the same
+					-- desypher_description pipeline so all the normal
+					-- abbreviation rewrites (Ranged Acc / Mag. Acc /
+					-- Magic Atk. Bonus / etc.) apply.
+					for _, line in ipairs(resolved_lines) do
+						for i, j in pairs(desypher_description(line, item_t)) do
+							if temp[i] then
+								temp[i] = temp[i] + j
+							else
+								temp[i] = j
+							end
+						end
+					end
+				else
+					for i, j in pairs(desypher_description(v, item_t)) do
+						if temp[i] then
+							temp[i] = temp[i] + j
+						else
+							temp[i] = j
+						end
 					end
 				end
 			end
@@ -134,15 +322,119 @@ end
 
 function desypher_description(discription_string, item_t)
 	
+	-- Diagnostic: trace every call. _ow_gear_trace toggled via
+	-- //ow geartrace. Prints first 100 chars of the input so we can
+	-- correlate which item we're parsing. Item name resolved from
+	-- item_t when available.
+	if _ow_gear_trace then
+		local item_name = '?'
+		if item_t then
+			item_name = item_t.en or item_t.enl
+			           or ('id:' .. tostring(item_t.id))
+		end
+		local preview = tostring(discription_string or ''):sub(1, 100)
+		windower.add_to_chat(207, string.format(
+			'[OW gear-trace] desypher: %s | %s', item_name, preview))
+	end
+	
+	-- Citizen of <Nation>: conditional clauses. Items like Republican
+	-- Platinum Medal carry stats gated on conquest allegiance:
+	--   Citizen of Bastok: "Regain"+2
+	-- Apply the bonus only when player.nation matches the clause's
+	-- nation. Otherwise strip the whole clause so the stat doesn't
+	-- get credited.
+	--
+	-- windower.ffxi.get_player().nation values:
+	--   0 = San d'Oria
+	--   1 = Bastok
+	--   2 = Windurst
+	local player_nation = nil
+	if windower and windower.ffxi and windower.ffxi.get_player then
+		local _p = windower.ffxi.get_player()
+		player_nation = _p and _p.nation
+	end
+	local NATION_NAME = {
+		[0] = "San d'Oria",
+		[1] = "Bastok",
+		[2] = "Windurst",
+	}
+	-- Each clause typically ends at a newline. Match the literal
+	-- "Citizen of <nation>:" then capture everything up to newline
+	-- (or end of string if last line). Process each nation in turn.
+	for nation_id, nation_name in pairs(NATION_NAME) do
+		-- Build the pattern carefully — San d'Oria contains an
+		-- apostrophe; Lua patterns treat ' as literal so this works.
+		local prefix = "Citizen of " .. nation_name .. ":%s*"
+		if player_nation == nation_id then
+			-- Player is citizen of this nation — strip just the prefix
+			-- so the stat (which follows it on the same line) parses
+			-- through the normal pipeline.
+			discription_string = string.gsub(discription_string, prefix, "")
+		else
+			-- Not this nation — strip the prefix AND the rest of the
+			-- line so the stat is excluded. The "[^\n]*" captures
+			-- everything up to but not including the next newline.
+			discription_string = string.gsub(discription_string,
+				prefix .. "[^\n]*", "")
+		end
+	end
+
 	-- string that need modifying to stop clashing
 	discription_string = string.gsub(discription_string, 'Ranged Accuracy%s?', 'Ranged_accuracy') 
 	discription_string = string.gsub(discription_string, 'Rng.%s?Acc.%s?', 'Ranged_accuracy')  
+	-- R. Acc. / R. Accuracy abbreviation. Used on Raetic series and
+	-- some other newer ilvl pieces. Order matters: longer first so
+	-- "R. Accuracy" matches before just "R. Acc."
+	local _n_racc_full
+	discription_string, _n_racc_full = string.gsub(discription_string, 'R%.%s?Accuracy%s?', 'Ranged_accuracy')
+	if _n_racc_full > 0 and _ow_gear_trace then
+		windower.add_to_chat(207, string.format(
+			'[OW gear-trace] R. Accuracy → Ranged_accuracy fired %d time(s)', _n_racc_full))
+	end
+	discription_string = string.gsub(discription_string, 'R%.%s?Acc%.%s?', 'Ranged_accuracy')
 	discription_string = string.gsub(discription_string, 'Ranged Attack%s?', 'Ranged_attack') 
 	discription_string = string.gsub(discription_string, 'Rng.%s?Atk.%s?', 'Ranged_attack') 
+	discription_string = string.gsub(discription_string, 'R%.%s?Attack%s?', 'Ranged_attack')
+	discription_string = string.gsub(discription_string, 'R%.%s?Atk%.%s?', 'Ranged_attack')
 	
 	discription_string = string.gsub(discription_string, 'Magic Accuracy%s?', 'Magic_accuracy')
 	discription_string = string.gsub(discription_string, 'Mag.%s?Acc.%s?', 'Magic_accuracy') 	
 	discription_string = string.gsub(discription_string, 'Magic Acc.%s?', 'Magic_accuracy') 
+	-- M. Acc. / M. Accuracy abbreviation. Used on Raetic series and
+	-- similar newer ilvl pieces. Parallel to the R. Accuracy patterns
+	-- above. Longer pattern first so "M. Accuracy" matches before just
+	-- "M. Acc."
+	discription_string = string.gsub(discription_string, 'M%.%s?Accuracy%s?', 'Magic_accuracy')
+	discription_string = string.gsub(discription_string, 'M%.%s?Acc%.%s?', 'Magic_accuracy')
+	-- M. Atk. / M. Attack — parallel for Magic Attack Bonus.
+	discription_string = string.gsub(discription_string, 'M%.%s?Atk%.?%s?Bns%.%s?', 'Magic Atk. Bonus')
+	discription_string = string.gsub(discription_string, 'M%.%s?Atk%.%s?', 'Magic Atk. Bonus')
+	
+	-- OmniWatch patch: 'Weapon Skill Accuracy', 'Weapon Skill Damage',
+	-- 'Weapon Skill Attack' etc. need rewriting BEFORE the bare
+	-- 'Accuracy' / 'Attack' patterns run below. Otherwise the unanchored
+	-- gmatch in the main loop picks up the "Accuracy+10" substring of
+	-- "Weapon Skill Accuracy+10" and adds +10 to Accuracy, which is
+	-- wrong (WS Accuracy applies only during weapon skills, not to the
+	-- general acc total). Without these rewrites Cooper saw a +10 WS
+	-- Accuracy ring inflating his idle Accuracy by 10.
+	--
+	-- We rewrite to underscore variants so the bare-stat pattern
+	-- doesn't match them. The rewritten name is then not in
+	-- valid_strings, so it's silently dropped (same outcome as if
+	-- desypher hadn't picked it up at all — which is the correct
+	-- behavior for now, since panel stat_table doesn't track WS-
+	-- conditional stats separately). If we ever want to display
+	-- "WS Acc +N" or feed it into a weapon-skill-specific accuracy
+	-- helper, add 'Weapon_skill_accuracy' to valid_strings + a
+	-- temp_key mapping, and the parse will resume populating it.
+	--
+	-- Same family: Weapon Skill DEX is already handled below (line
+	-- ~372 in the original layout) via WS_dex. These rewrites
+	-- extend that pattern to the other WS-conditional augments.
+	discription_string = string.gsub(discription_string, 'Weapon [Ss]kill Accuracy%s?', 'WS_accuracy_aug')
+	discription_string = string.gsub(discription_string, 'Weapon [Ss]kill Damage%s?',   'WS_damage_aug')
+	discription_string = string.gsub(discription_string, 'Weapon [Ss]kill Attack%s?',   'WS_attack_aug')
 	
 	discription_string = string.gsub(discription_string, '\"Magic Atk. Bonus\"', 'Magic Atk. Bonus' )
 	discription_string = string.gsub(discription_string, '\"Mag.%s?Atk.%s?Bns.\"', 'Magic Atk. Bonus' ) 
@@ -214,6 +506,7 @@ function desypher_description(discription_string, item_t)
 								'Ranged_accuracy', 'Ranged_attack',
 								'Magic_accuracy', 'Magic Atk. Bonus',
 								'Haste','\"Slow\"','\"Store TP\"','\"Dual Wield\"','\"Fast Cast\"','\"Martial Arts\"',
+								'\"Regain\"',
 								'DMG','PDT','MDT','BDT','D_T','MDT_2','PDT_2',
 								'Evasion',
 								'Critical hit damage' ,'Critical hit rate', 
@@ -233,6 +526,7 @@ function desypher_description(discription_string, item_t)
 		['\"Store TP\"'] = 'Store TP', 
 		['\"Dual Wield\"'] = 'Dual Wield' ,
 		['\"Fast Cast\"'] = 'Fast Cast' ,
+		['\"Regain\"'] = 'Regain',
 		['Magic_accuracy'] = 'Magic Accuracy' , 
 		['Ranged_accuracy'] =  'Ranged Accuracy' ,
 		['Ranged_attack'] =  'Ranged Attack' ,
@@ -268,11 +562,35 @@ function desypher_description(discription_string, item_t)
 			-- end
 		end
 	end
+	-- Diagnostic: dump the parsed temp_table for items whose preview
+	-- string contained R. or Ranged. Lets us see whether the main
+	-- gmatch loop above actually pulled "Ranged Accuracy" out of the
+	-- substituted string, or if it fell through silently.
+	if _ow_gear_trace and (discription_string:find('Ranged_')
+	                       or discription_string:find('R%. ')) then
+		local parts = {}
+		for k_, v_ in pairs(temp_table) do
+			parts[#parts + 1] = string.format('%s=%s', tostring(k_), tostring(v_))
+		end
+		windower.add_to_chat(207, '[OW gear-trace] temp_table: '
+		                          .. table.concat(parts, ', '))
+	end
 	return temp_table
 end
 
 function get_equip_stats(equipment_table)
 
+	-- OmniWatch patch (2026-05-18): the stock GearInfo init was missing
+	-- several stat keys. The gate at line ~520 (`if stat_table[key]`)
+	-- treats uninitialized keys as falsy and SILENTLY DROPS any
+	-- equipped contribution. So an item with "Magic Accuracy+40"
+	-- (e.g. Cooper's Ternion Dagger +1's Unity augment) had its
+	-- Magic Accuracy contribution discarded entirely — the
+	-- find_all_values pipeline parsed it correctly into the slot,
+	-- but get_equip_stats then dropped it because the key was nil.
+	-- Adding initial zero values for all stats the parser can
+	-- produce (per _AUGMENT_NAME_TO_KEY at top of file) ensures the
+	-- gate sees them as truthy.
 	local stat_table = { ['Haste'] = 0, ['Slow'] = 0, ['Dual Wield'] = 0, ['Store TP'] = 0, ['Accuracy'] = 0, ['Attack'] = 0, ['Ranged Accuracy'] = 0, ['Ranged Attack'] = 0,
 									['Evasion'] = 0,
 
@@ -285,7 +603,26 @@ function get_equip_stats(equipment_table)
 									["Katana skill"]=0, ["Great Katana skill"]=0,["Club skill"]=0,["Staff skill"]=0,["Archery skill"]=0,["Marksmanship skill"]=0,["Throwing skill"]=0,['Combat skills']=0,
 									
 									['Evasion skill'] = 0,
-									
+
+									-- OmniWatch additions: previously missing — see comment
+									-- above. Keys must match _AUGMENT_NAME_TO_KEY's stat_key
+									-- values so parsed augments land in cells the get_equip_stats
+									-- loop will recognize.
+									['Magic Accuracy']   = 0,
+									['Magic Atk. Bonus'] = 0,
+									['Magic Evasion']    = 0,
+									['Magic Def. Bonus'] = 0,
+									['HP']               = 0,
+									['MP']               = 0,
+									['Double Attack']    = 0,
+									['Triple Attack']    = 0,
+									['Quadruple Attack'] = 0,
+									['Critical hit rate']   = 0,
+									['Critical hit damage'] = 0,
+									['Subtle Blow']      = 0,
+									['Fast Cast']        = 0,
+									['Regain']           = 0,
+
 									['main'] = {['skill'] = '', value = 0}, ['sub'] = {['skill'] = '', value = 0}, ['range'] = {['skill'] = '', value = 0}, ['ammo'] = {['skill'] = '', value = 0},
 								}
 								
@@ -388,9 +725,9 @@ function get_equip_stats(equipment_table)
 	stat_table['Haste'] = stat_table['Haste'] + manual_ghaste
 	stat_table['Dual Wield'] = stat_table['Dual Wield'] + manual_dw
 	stat_table['Store TP'] = stat_table['Store TP'] + manual_stp
-	
+
 	return stat_table
-	
+
 end
 
 function get_player_acc(stat_table)
@@ -440,7 +777,16 @@ function get_player_acc(stat_table)
 	end
 
 	
-	stat_table = get_blue_mage_stats_from_equipped_spells(stat_table)
+	-- BLU spell-derived stat bonuses. The helper iterates the equipped
+	-- mainjob spell list and looks each ID up in Blu_spells. On non-BLU
+	-- jobs that list contains job-specific spells (ninjutsu IDs, white
+	-- magic IDs, etc.) that aren't in Blu_spells — pairs(nil) then
+	-- crashes the function and acc/att/eva/def fail upstream. Gate the
+	-- call to BLU only. Same pattern that get_player_att / _evasion /
+	-- _defence already use (they have the same line commented out).
+	if player and (player.main_job == 'BLU' or player.sub_job == 'BLU') then
+		stat_table = get_blue_mage_stats_from_equipped_spells(stat_table)
+	end
 	
 	local Total_acc = {main = 0, sub = 0, range = 0, ammo = 0, dex = 0, agi = 0}
 	local main_acc_skill = acc_from_skill(stat_table['main'].value)
@@ -641,9 +987,15 @@ function get_blue_mage_stats_from_equipped_spells(stat_table)
 	local spells_set = T(windower.ffxi.get_mjob_data().spells):filter(function(id) return id ~= 512 end):map(function(id) return id end)
 	
 	for key, spell_id in pairs(spells_set) do
-		for stat, value in pairs(Blu_spells[spell_id]) do
-			if stat_table[stat] then 
-				stat_table[stat] = stat_table[stat] + value 
+		-- Guard against spell IDs not present in Blu_spells (e.g. spells
+		-- added in patches after our Blu_spells table was generated).
+		-- Without this, pairs(nil) crashes the helper, which crashes
+		-- get_player_acc, which makes the panel show no stats at all.
+		if Blu_spells[spell_id] then
+			for stat, value in pairs(Blu_spells[spell_id]) do
+				if stat_table[stat] then 
+					stat_table[stat] = stat_table[stat] + value 
+				end
 			end
 		end
 	end
@@ -807,7 +1159,8 @@ function get_player_acc_from_job()
 		local spells_set = T(windower.ffxi.get_mjob_data().spells):filter(function(id) return id ~= 512 end):map(function(id) return id end)
 		local spell_value = 0
 		for key, spell_id in pairs(spells_set) do
-			if Blu_spells[spell_id].trait == 'Accuracy' then
+			-- Guard against post-patch BLU spell IDs not yet in Blu_spells.
+			if Blu_spells[spell_id] and Blu_spells[spell_id].trait == 'Accuracy' then
 				spell_value = spell_value + Blu_spells[spell_id]['points']
 			end
 		end
@@ -918,7 +1271,8 @@ function get_player_eva_from_job()
 		local spells_set = T(windower.ffxi.get_mjob_data().spells):filter(function(id) return id ~= 512 end):map(function(id) return id end)
 		local spell_value = 0
 		for key, spell_id in pairs(spells_set) do
-			if Blu_spells[spell_id].trait == 'Evasion' then
+			-- Guard against post-patch BLU spell IDs not yet in Blu_spells.
+			if Blu_spells[spell_id] and Blu_spells[spell_id].trait == 'Evasion' then
 				spell_value = spell_value + Blu_spells[spell_id]['points']
 			end
 		end
@@ -1018,7 +1372,8 @@ function get_player_att_from_job()
 		local spells_set = T(windower.ffxi.get_mjob_data().spells):filter(function(id) return id ~= 512 end):map(function(id) return id end)
 		local spell_value = 0
 		for key, spell_id in pairs(spells_set) do
-			if Blu_spells[spell_id].trait == 'Attack' then
+			-- Guard against post-patch BLU spell IDs not yet in Blu_spells.
+			if Blu_spells[spell_id] and Blu_spells[spell_id].trait == 'Attack' then
 				spell_value = spell_value + Blu_spells[spell_id]['points']
 			end
 		end
@@ -1118,7 +1473,8 @@ function get_player_def_from_job()
 		local spells_set = T(windower.ffxi.get_mjob_data().spells):filter(function(id) return id ~= 512 end):map(function(id) return id end)
 		local spell_value = 0
 		for key, spell_id in pairs(spells_set) do
-			if Blu_spells[spell_id].trait == 'Defense Bonus' then
+			-- Guard against post-patch BLU spell IDs not yet in Blu_spells.
+			if Blu_spells[spell_id] and Blu_spells[spell_id].trait == 'Defense Bonus' then
 				spell_value = spell_value + Blu_spells[spell_id]['points']
 			end
 		end

@@ -113,7 +113,8 @@ return {
         ["rank"]={
             ["min"]=10,
             ["max"]=15
-        }
+        },
+        ["augments"]={ 'Dmg+17', 'Accuracy+40', 'Magic Accuracy+40', 'Weapon Skill Damage+5%' }
     },
     [20606]={
         ["id"]=20606,

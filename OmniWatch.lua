@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.1.0'
+_addon.version  = '1.4.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -125,6 +125,40 @@ do
     else
         windower.add_to_chat(207, string.format(
             '[OmniWatch] GearInfo backend not loaded (%s)', tostring(load_err)))
+    end
+end
+
+-- ── Chat panel module (optional) ──────────────────────────────────────────
+-- Loads chat/_loader.lua at startup if present. Provides the entity
+-- classifier and (in later steps) chat event emission, ring buffers,
+-- and UDP drain helpers. The module exposes:
+--   _chat.classify_entity(id) → (category, name, party_slot)
+--
+-- Failure is non-fatal: _chat stays nil and OmniWatch continues without
+-- the chat panel. The pygame overlay will show no chat panel either
+-- (no UDP traffic on 5013/5014).
+--
+-- Same loadfile-with-absolute-path pattern as gearinfo and sim loaders.
+local _chat = nil
+do
+    local base = windower.addon_path or ''
+    if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+        base = base .. '/'
+    end
+    local loader_path = base .. 'chat/_loader.lua'
+    local chunk, load_err = loadfile(loader_path)
+    if chunk then
+        local ok_run, mod_or_err = pcall(chunk)
+        if ok_run and type(mod_or_err) == 'table' then
+            _chat = mod_or_err
+        else
+            windower.add_to_chat(123, string.format(
+                '[OmniWatch] chat module failed to initialize: %s',
+                tostring(mod_or_err)))
+        end
+    else
+        windower.add_to_chat(207, string.format(
+            '[OmniWatch] chat module not loaded (%s)', tostring(load_err)))
     end
 end
 
@@ -718,6 +752,24 @@ local OW_BLU_SPELLS       = {}
 local OW_BLU_SPELLS_LC    = {}
 local OW_BLU_SPELLS_BY_ID = {}
 
+-- Forward declaration: ow_parse_desc_line is the shared description
+-- parser used by gear, augments, food, and several other consumers.
+-- It's DEFINED (as `local function`) further down at ~line 8400, but
+-- multiple register_event closures above that point reference it via
+-- upvalue capture. Without this forward declaration the upvalue
+-- wouldn't exist at the time those closures are created, so they'd
+-- look it up as a global at runtime and find nil — causing
+-- "attempt to call global 'ow_parse_desc_line' (a nil value)" when
+-- the handler fires (e.g. when the player eats food).
+--
+-- `local function f() ... end` is sugar for `local f; f = function...
+-- end`, which is why writing the definition with that sugar AFTER the
+-- closures doesn't help — it creates a new local at line 8400 that
+-- shadows what the closures might have wanted. By declaring the
+-- local up here FIRST, the closures and the later definition share
+-- the same slot.
+local ow_parse_desc_line
+
 -- Trait → in-game effect threshold tables (auto-generated). Each:
 --   points: trait-point thresholds for each tier (sorted ascending)
 --   pct:    in-game effect at that tier (numeric flat or % depending on
@@ -837,9 +889,17 @@ local function ow_resolve_blu_set(spell_ids, jp_summary)
                     for sk, sv in pairs(v) do
                         out_stats[sk] = (out_stats[sk] or 0) + sv
                     end
-                else
+                elseif k == 'vitals' or k == 'id' or k == 'level' then
+                    -- Metadata fields, not trait points. `vitals` holds
+                    -- per-spell HP/MP modifiers (a table — would crash
+                    -- the arithmetic below). `id` and `level` are
+                    -- numbers but reference data, not contributions to
+                    -- trait totals. Skip all three explicitly.
+                elseif type(v) == 'number' then
                     trait_pts[k] = (trait_pts[k] or 0) + v
                 end
+                -- Any other non-number value silently ignored —
+                -- protects against future schema additions.
             end
         end
     end
@@ -1038,7 +1098,7 @@ do
             else
                 windower.add_to_chat(123,
                     '[OmniWatch] user_config.lua exists but didn\'t '
-                    .. 'return a table — keeping defaults. Error: '
+                    .. 'return a table -- keeping defaults. Error: '
                     .. tostring(data))
                 ow_user_config = {}
             end
@@ -1211,7 +1271,7 @@ do
 
     if song_count == 0 then
         windower.add_to_chat(123,
-            '[OmniWatch] BardSongs adapter: Bard_Songs global empty — '
+            '[OmniWatch] BardSongs adapter: Bard_Songs global empty -- '
             .. 'gearinfo/_loader may not have loaded gearinfo/res/Bard_Songs.lua.')
     end
 end
@@ -1991,6 +2051,15 @@ udp_dps:setpeername("127.0.0.1", 5010)
 local udp_inv = socket.udp()
 udp_inv:setpeername("127.0.0.1", 5012)
 
+-- ── Chat stream (port 5013) ───────────────────────────────────────────────
+-- Carries chat-text events (say/party/tell/LS/yell/system) and synthesized
+-- battle events (combat actions, buff/debuff applications, /checkparam)
+-- to the Python overlay's chat panel. Drained at 10 Hz from the prerender
+-- tick via _chat.drain_text(udp_chat). Wire format documented in
+-- chat/drain.lua header.
+local udp_chat = socket.udp()
+udp_chat:setpeername("127.0.0.1", 5013)
+
 -- ── Bags-at-top inventory snapshot (port 5012) ──────────────────────────
 -- Separate stream from SIM_INV. Walks every bag and emits one packet per
 -- bag plus an INV_END sentinel so the python "bags at top" widget can
@@ -2588,6 +2657,7 @@ _ow_cast_debug = false
 -- expiry seconds). Separate from _ow_cast_debug so you can troubleshoot
 -- buff timers without the gear-walk / gifts-applied noise.
 _ow_buff_debug = false
+_ow_gear_trace = false
 
 _ow_gs_debug   = false
 
@@ -2853,7 +2923,7 @@ local PW_COMMANDS_HELP = {
     {'testcast',              'Emit a synthetic CAST_START event on yourself '
                               .. '(verifies the cast pipe works end-to-end).'},
     {'lock [on|off]',         'Toggle panel lock. When locked, panels can\'t '
-                              .. 'be dragged or resized — accidental clicks '
+                              .. 'be dragged or resized -- accidental clicks '
                               .. 'pass through to hyperlinks. Setup mode '
                               .. 'auto-unlocks while it\'s on.'},
     {'events',                'List event-bus subscriber counts. Diagnostic '
@@ -2877,6 +2947,25 @@ local PW_COMMANDS_HELP = {
     {'dumpstats',             'Force a stats recompute and print summary; '
                               .. 'also writes data/omniwatch_stats.lua for '
                               .. 'gearswap to require.'},
+    {'chatclass <id>',        'Classify a mob id for the chat panel (debug). '
+                              .. 'Prints category (self/party/alliance/'
+                              .. 'pet/party_pet/mob/npc/other), display name, '
+                              .. 'and party slot.'},
+    {'chatdump [N]',          'Peek at the chat ring buffer (last N events, '
+                              .. 'default 20). Shows whether incoming chat '
+                              .. 'is reaching the Lua side, before the '
+                              .. 'Python overlay is involved.'},
+    {'chatreset',             'Clear the chat history rings without '
+                              .. 'disturbing the live drain. Use between '
+                              .. 'test scenarios to start with a clean dump.'},
+    {'chatdebug [on|off]',    'Toggle per-emit chat echo. Every chat event '
+                              .. 'prints to FFXI chat as it lands in the ring. '
+                              .. 'Useful for live-verifying emits.'},
+    {'chathex [on|off]',      'Toggle raw-byte hex dumps to FFXI chat for any '
+                              .. 'chat line containing non-ASCII bytes. Shows '
+                              .. 'what Windower passes us BEFORE stripping. Use '
+                              .. 'to diagnose Japanese / autotranslate / accented '
+                              .. 'name byte sequences. Turn OFF when done.'},
     {'blu',                   'BLU set-spell diagnostic: lists equipped set '
                               .. 'spells, their per-spell trait points and '
                               .. 'stat bonuses, and the resolved DW% from '
@@ -2889,7 +2978,7 @@ local PW_COMMANDS_HELP = {
     {'dps reset',             'Clear the DPS rolling 5-min window.'},
     {'dps party',             'Toggle whether party-member damage is '
                               .. 'tracked alongside your own.'},
-    {'dps window',            '<seconds> — set the DPS rolling window length '
+    {'dps window',            '<seconds> -- set the DPS rolling window length '
                               .. '(default 300). Pass 0 to keep all events '
                               .. 'since the last reset (no rolling).'},
     {'dps status',            'Print DPS tracker diagnostics: how many '
@@ -2936,6 +3025,85 @@ ow_safe_register('addon command', function(command, ...)
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
         windower.add_to_chat(207, string.format('[OW] buff_debug = %s',
             tostring(_ow_buff_debug)))
+    elseif command == 'geartrace' then
+        -- Toggle a one-shot tracer in Gear_Processing.lua's
+        -- description-substitution pipeline. When on, prints when the
+        -- "R. Accuracy" → Ranged_accuracy substitution fires. Lets us
+        -- verify the new Gear_Processing.lua is actually loaded: if a
+        -- piece of gear in the equipment has "R. Accuracy" and no
+        -- [OW gear-trace] line prints, the file isn't being picked up.
+        _ow_gear_trace = not _ow_gear_trace
+        windower.add_to_chat(207, string.format('[OW] gear_trace = %s',
+            tostring(_ow_gear_trace)))
+    elseif command == 'dumpgi' then
+        -- Print the aggregated Gear_info table. This is the output of
+        -- get_equip_stats — the sum of all equipped item stats, prior
+        -- to compute_player_stats and the lowercase-key copy into the
+        -- `stats` table that gets sent to Python. Use when a stat
+        -- shows correctly in temp_table (per geartrace) but doesn't
+        -- appear in the panel: if Gear_info has it, the loss is in
+        -- compute or wire emission. If Gear_info doesn't, the loss
+        -- is in get_equip_stats's aggregation.
+        if not Gear_info then
+            windower.add_to_chat(207, '[OW] dumpgi: Gear_info is nil — '
+                .. 'run refresh_all first')
+            return
+        end
+        -- Force a refresh so we see the current state.
+        if _gi and _gi.refresh_all then pcall(_gi.refresh_all) end
+        local keys = {}
+        for k in pairs(Gear_info) do keys[#keys+1] = k end
+        table.sort(keys)
+        windower.add_to_chat(207, '[OW] Gear_info contents:')
+        for _, k in ipairs(keys) do
+            local v = Gear_info[k]
+            local vstr
+            if type(v) == 'table' then
+                vstr = '{skill=' .. tostring(v.skill or '?')
+                       .. ' value=' .. tostring(v.value or '?') .. '}'
+            else
+                vstr = tostring(v)
+            end
+            -- Only print non-zero/non-empty for brevity.
+            if v ~= 0 and v ~= '' and v ~= nil then
+                windower.add_to_chat(207, string.format(
+                    '  %s = %s', k, vstr))
+            end
+        end
+    elseif command == 'gearcache_clear' or command == 'cachebust' then
+        -- Nuke the persisted gearinfo cache and rebuild it from
+        -- scratch. Needed after parser changes in Gear_Processing.lua:
+        -- owned items get parsed once and persisted; subsequent loads
+        -- restore from cache rather than re-parsing, so new
+        -- substitution rules / validity gates / etc. don't reach
+        -- already-known items.
+        --
+        -- The cache lives at data/<player>_gearinfo_cache.lua and is
+        -- managed by GearInfo's save/load helpers in _loader.lua.
+        local p = windower.ffxi.get_player()
+        local pname = (p and p.name) or ''
+        if pname == '' then
+            windower.add_to_chat(207,
+                '[OW] gearcache_clear: no player name available')
+            return
+        end
+        local path = windower.addon_path
+                     .. 'data/' .. pname .. '_gearinfo_cache.lua'
+        -- Lua doesn't have a built-in os.remove guard, but it returns
+        -- nil + err on failure. Either outcome is fine — if the file
+        -- doesn't exist there's nothing to clear; if it does and the
+        -- delete fails, we still try to rebuild.
+        os.remove(path)
+        full_gear_table_from_file = T{}
+        local ok, err = pcall(parse_inventory)
+        if ok then
+            windower.add_to_chat(207, string.format(
+                '[OW] gearcache cleared and rebuilt from %s', path))
+        else
+            windower.add_to_chat(207, string.format(
+                '[OW] gearcache cleared but parse_inventory failed: %s',
+                tostring(err)))
+        end
     elseif command == 'buffts' then
         -- Toggle 0x063 sub-9 timestamp diagnostic logging. When on,
         -- prints raw and computed expiry timestamps for active buffs
@@ -3046,7 +3214,7 @@ ow_safe_register('addon command', function(command, ...)
                         local bj  = rd.bonus['Main job']
                         local eff = tonumber(rd.bonus.effect) or 0
                         windower.add_to_chat(207, string.format(
-                            '[OW] %s — if %s in party (+%d):',
+                            '[OW] %s -- if %s in party (+%d):',
                             nm, bj, eff))
                         local pct_info = PCT_ROLLS[nm]
                         if pct_info then
@@ -3165,7 +3333,7 @@ ow_safe_register('addon command', function(command, ...)
             jp_spent = p.job_points[mjob:lower()].jp_spent or 0
         end
         windower.add_to_chat(207, string.format(
-            '[OW] dumpgifts %s — jp_spent=%d', mjob, jp_spent))
+            '[OW] dumpgifts %s -- jp_spent=%d', mjob, jp_spent))
         local gifts = ow_Gifts[mjob]['Gifts'] or {}
         -- Sort thresholds for readable output.
         local thresholds = {}
@@ -3182,7 +3350,7 @@ ow_safe_register('addon command', function(command, ...)
                     windower.add_to_chat(207, string.format(
                         '  [%s] = %s  →  %s',
                         tostring(bn), tostring(bv),
-                        mapped or '(NOT IN MAP — dropped)'))
+                        mapped or '(NOT IN MAP -- dropped)'))
                 end
             else
                 windower.add_to_chat(207, string.format(
@@ -3475,6 +3643,247 @@ ow_safe_register('addon command', function(command, ...)
                     '[OW]   %s = %+d', k, v))
             end
         end
+    elseif command == 'chatclass' and #args > 0 then
+        -- Diagnostic: classify a mob id and print the result. Used to
+        -- verify the chat panel's entity classifier is returning the
+        -- right (category, name, slot) for known players, party
+        -- members, pets, trusts, mobs.
+        -- Usage: //ow chatclass <numeric id>
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local id = tonumber(args[1])
+            if not id then
+                windower.add_to_chat(123,
+                    '[OW] usage: //ow chatclass <numeric id>')
+            else
+                local cat, name, slot = _chat.classify_entity(id)
+                windower.add_to_chat(207, string.format(
+                    '[OW] id=%d → category=%s name=%s slot=%s',
+                    id, tostring(cat), tostring(name), tostring(slot)))
+            end
+        end
+    elseif command == 'chatdump' then
+        -- Diagnostic: show the most recent N events from chat history.
+        --
+        -- We read from the *history* rings (200/500 entries, populated
+        -- by drain.lua's tee callback) rather than the live rings —
+        -- which would be empty almost always since drain runs at 10Hz
+        -- and pulls everything out within 100ms of arrival.
+        --
+        -- Live ring stats are still shown ("size=A/B (dropped=N)") for
+        -- "is the pipeline alive" context: if dropped > 0 we have an
+        -- overflow problem, if size > 0 right after activity the drain
+        -- is stalled.
+        --
+        -- Usage: //ow chatdump [N]   (default 20)
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local n = tonumber(args[1]) or 20
+            windower.add_to_chat(207, string.format(
+                '[OW] live ring: text=%d/%d (dropped=%d)',
+                _chat.text_ring.size(),   _chat.text_ring.capacity(),
+                _chat.text_ring.dropped()))
+            windower.add_to_chat(207, string.format(
+                '[OW] history: text=%d/%d',
+                _chat.text_history.size(),   _chat.text_history.capacity()))
+            -- Show most-recent N text events from history. The peek()
+            -- returns chronological (oldest first), so we slice the tail.
+            local snap = _chat.text_history.peek()
+            local start = math.max(1, #snap - n + 1)
+            if #snap == 0 then
+                windower.add_to_chat(207,
+                    '[OW]   (history empty -- say something or wait for chat)')
+            else
+                for i = start, #snap do
+                    local ev = snap[i]
+                    windower.add_to_chat(207, string.format(
+                        '[OW]   #%d mode=%d %s [%s]: %s',
+                        i, ev.mode or 0,
+                        (ev.actor_name ~= '' and ev.actor_name) or '?',
+                        ev.actor_class or '?',
+                        (ev.text or ''):sub(1, 80)))
+                end
+            end
+        end
+    elseif command == 'chatreset' then
+        -- Clear chat history ring. Useful between test scenarios to
+        -- avoid noise from earlier sessions cluttering up the next
+        -- //ow chatdump. Doesn't touch the live ring -- it's drained
+        -- on next prerender tick anyway.
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            _chat.reset_history()
+            windower.add_to_chat(207, '[OW] chat history cleared.')
+        end
+    elseif command == 'chatdebug' then
+        -- Toggle per-emit chat echo. When on, every chat event prints
+        -- to FFXI chat as it's pushed to the ring. Useful for verifying
+        -- emits fire in real-time without waiting for chatdump.
+        -- Usage: //ow chatdebug [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_debug()
+            end
+            _chat.set_debug(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] chat debug = %s', tostring(target)))
+        end
+    elseif command == 'chathex' then
+        -- Toggle raw-byte hex dumps. Prints two FFXI chat lines per
+        -- non-ASCII chat event: [hex mode=N] <hex bytes> and
+        -- [hex mode=N] text: <decoded text>. Use to identify Japanese
+        -- byte sequences, autotranslate marker bytes, and any other
+        -- byte-level patterns that the strip might be mishandling.
+        -- Auto-stops after a few minutes if user forgets to turn off?
+        -- No — keep it manual. The mode-byte filter prevents recursion
+        -- via the 207 add_to_chat call, but it's still noisy.
+        -- Usage: //ow chathex [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_hex_capture()
+            end
+            _chat.set_hex_capture(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] chat hex capture = %s', tostring(target)))
+        end
+    elseif command == 'chatcpdebug' then
+        -- Toggle checkparam packet diagnostic. When on, every 0x0DD
+        -- packet that arrives dumps its parsed field/value list to
+        -- chat so we can see exactly what fields Windower's packets
+        -- library populates on this install. Use this if /checkparam
+        -- output isn't landing in the System tab — the dump will show
+        -- whether parse succeeded and which field names are available.
+        -- Usage: //ow chatcpdebug [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_cp_debug()
+            end
+            _chat.set_cp_debug(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] checkparam packet debug = %s', tostring(target)))
+        end
+    elseif command == 'chatpktdebug' then
+        -- Toggle 0x017 chat packet diagnostic. When on, every 0x017
+        -- packet that arrives dumps its parsed mode/sender/message
+        -- to chat. Useful for diagnosing missing chat (mode byte
+        -- mismatch, dropped tells, etc.).
+        -- Usage: //ow chatpktdebug [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_chat_pkt_debug()
+            end
+            _chat.set_chat_pkt_debug(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] chat packet debug = %s', tostring(target)))
+        end
+    elseif command == 'chatpkttrace' then
+        -- Toggle comprehensive 0x017 packet trace. When on, EVERY
+        -- chat packet (any mode, including NPC dialog and system)
+        -- is logged to data/chat_packet_log.txt with timestamp,
+        -- mode, sender, message, and hex dump. Compact one-liner
+        -- also goes to FFXI chat for live observation.
+        -- Used to nail down empirical mode → channel mappings.
+        -- Usage: //ow chatpkttrace [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_chat_pkt_trace()
+            end
+            _chat.set_chat_pkt_trace(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] chat packet trace = %s (log: data/chat_packet_log.txt)',
+                tostring(target)))
+        end
+    elseif command == 'droppedmodes' then
+        -- Toggle the high-mode-filter dropped-line telemetry. Off by
+        -- default. Useful when a chat line isn't appearing: turn this
+        -- on, reproduce the missing line, and the console will show
+        -- the mode byte. That mode can then be added to REAL_HIGH_MODES
+        -- in emit.lua.
+        -- Usage: //ow droppedmodes [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_dropped_mode_log()
+            end
+            _chat.set_dropped_mode_log(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] dropped-mode telemetry = %s',
+                tostring(target)))
+        end
+    elseif command == 'buffwearprobe' then
+        -- Toggle the buff_events action-message diagnostic. When on,
+        -- every action message reaching buff_events.process is logged
+        -- with its msg_id, status param, target, and our classification.
+        -- Used for finding msg_ids that should be in STATUS_WEAR_MSGS
+        -- but aren't (so "X is no longer asleep" doesn't fire as a
+        -- chat event today).
+        -- Usage: //ow buffwearprobe [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_buff_wear_probe()
+            end
+            _chat.set_buff_wear_probe(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] buff_events action-message probe = %s',
+                tostring(target)))
+        end
+    elseif command == 'condense' then
+        -- Toggle condensed multi-hit display. When on, e.g. a 3-hit
+        -- melee round shows as "Wormfood strikes Wasp x3 (770/766/592)
+        -- damage" instead of three separate lines. WS and spells are
+        -- unaffected (single-hit usually).
+        -- Usage: //ow condense [on|off]
+        if not _chat then
+            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        else
+            local target
+            if args[1] == 'on' or args[1] == 'off' then
+                target = args[1] == 'on'
+            else
+                target = not _chat.is_condense_melee()
+            end
+            _chat.set_condense_melee(target)
+            windower.add_to_chat(207, string.format(
+                '[OW] condense multi-hit melee/ranged = %s',
+                tostring(target)))
+        end
     elseif command == 'dumpgear' then
         -- Walk each equipped slot and dump the raw data we use to build
         -- stats: item id/name, description text, real augments, ow_enhanced
@@ -3598,7 +4007,7 @@ ow_safe_register('addon command', function(command, ...)
             return
         end
         windower.add_to_chat(207,
-            '[OW] player.stats (delta — gear + merits + JP + buffs):')
+            '[OW] player.stats (delta -- gear + merits + JP + buffs):')
         if p.stats then
             for _, k in ipairs({'str','dex','vit','agi','int','mnd','chr'}) do
                 windower.add_to_chat(207, string.format(
@@ -3739,8 +4148,15 @@ ow_safe_register('addon command', function(command, ...)
             local sub = (args[1] or 'status'):lower()
             if sub == 'on' or sub == 'enable' then
                 OW_ServerStats.enable()
+                windower.add_to_chat(207,
+                    '[OW] serverstats: ENABLED (server-authoritative '
+                    .. 'pAtt/def/pAcc will override local compute when '
+                    .. 'a roll is active)')
             elseif sub == 'off' or sub == 'disable' then
                 OW_ServerStats.disable()
+                windower.add_to_chat(207,
+                    '[OW] serverstats: DISABLED (panel will show '
+                    .. 'locally-computed values only)')
             elseif sub == 'debug' then
                 local v = (args[2] or ''):lower()
                 if v == 'on' or v == '1' or v == 'true' then
@@ -3799,7 +4215,7 @@ ow_safe_register('addon command', function(command, ...)
                         s.cached_patt, s.cached_def, s.cache_age_s))
                 else
                     windower.add_to_chat(207,
-                        '[OW] serverstats: no sample yet — cast a roll '
+                        '[OW] serverstats: no sample yet -- cast a roll '
                         .. 'or change buffs to trigger a server push')
                 end
             else
@@ -4243,6 +4659,22 @@ ow_safe_register('incoming chunk', function(id, original)
     -- kill this incoming chunk handler.
     if (id == 0x061 or id == 0x063) and OW_ServerStats then
         pcall(function() OW_ServerStats.on_incoming_chunk(id, original) end)
+    end
+
+    -- ── Chat packets 0x017 / 0x0CC → colored chat panel events ────────
+    -- 0x017: real chat (say/tell/yell/shout/party/LS) — replaces the
+    --        incoming-text capture (which can be mangled by BattleMod).
+    -- 0x0CC: Linkshell Message (/lsmes, /ls2mes responses). NOT carried
+    --        on incoming text, has to come from this packet.
+    -- See chat/chat_packets.lua. Wrapped in pcall — a malformed chat
+    -- packet must never crash the chunk handler.
+    if (id == 0x017 or id == 0x0CC)
+       and _chat and _chat.process_chat_packet then
+        local ok, err = pcall(_chat.process_chat_packet, id, original)
+        if not ok then
+            windower.add_to_chat(123,
+                '[OW chat_pkt] handler error: ' .. tostring(err))
+        end
     end
 end)
 
@@ -5311,14 +5743,19 @@ local function _ow_dps_emit()
                           + b.magic_total + b.ws_total
         local dps = total_dmg / _ow_dps_window_s
         table.insert(lines, string.format(
-            'DPS|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%.1f|%.1f|%.1f|%.1f|%d|%d|%.1f',
+            'DPS|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%.1f|%.1f|%.1f|%.1f|%d|%d|%.1f|%d|%d|%d',
             src, scope,
             _ow_dps_window_s,
             b.white_total, b.magic_total, b.ws_total,
             b.hits, b.misses, b.crits,
             b.spells_landed, b.spells_resisted,
             melee_acc, mag_acc, crit_pct, evasion,
-            b.longest_hit, total_dmg, dps))
+            b.longest_hit, total_dmg, dps,
+            -- Tail fields (optional, older Python ignores; older Lua emits 0):
+            -- 19: sc_total (skillchain damage), 20: skillchains (count),
+            -- 21: ranged_total (white-damage subtype, broken out from white).
+            -- sc/skillchains aren't tracked in this aggregator yet — emit 0.
+            0, 0, b.ranged_total))
 
         local ws = ws_per_src[src] or {}
         for name, w in pairs(ws) do
@@ -5350,6 +5787,18 @@ local function handle_incoming_action(act)
     -- panel. pcall'd so a malformed packet can't kill the rest of the
     -- handler chain.
     pcall(_ow_dps_record_action, act)
+
+    -- Chat panel buff/debuff event hook. Synthesizes "X gains 'Buff'"
+    -- and "X loses 'Buff'" chat events from action-packet status
+    -- messages for the Buffs and Debuffs tabs. pcall'd so a malformed
+    -- packet can't kill the rest of the handler chain. _chat may be
+    -- nil if the chat module failed to load — guard before calling.
+    if _chat and _chat.process_action then
+        pcall(_chat.process_action, act)
+    end
+    if _chat and _chat.process_battle_action then
+        pcall(_chat.process_battle_action, act)
+    end
 
     local tgt     = act.targets[1]
     local action  = tgt.actions and tgt.actions[1]
@@ -5665,15 +6114,8 @@ local function handle_incoming_action(act)
             local _in_march_tbl = PW_SONG_HASTE and PW_SONG_HASTE[probe_id] or false
             -- Log when EITHER the probe is a march OR the spell is type=BardSong
             -- so we can see what's coming through and why it's being missed.
-            if _in_march_tbl or _stype == 'BardSong' then
-                local _sname = (_sd and (_sd.enl or _sd.en)) or '<missing>'
-                local actor = windower.ffxi.get_mob_by_id(act.actor_id or 0)
-                local actor_name = (actor and actor.name) or '?'
-                windower.add_to_chat(207, string.format(
-                    '[OW] song cast (cat=%d): id=%s name=%s type=[%s] in_march_tbl=%s actor=%s',
-                    cat, tostring(probe_id), tostring(_sname),
-                    tostring(_stype), tostring(_in_march_tbl), actor_name))
-            end
+            -- (Diagnostic print removed — was leaking into chat as
+            -- '[OW] song cast (cat=N)...' on every BardSong cast.)
         end
     end
 
@@ -5820,12 +6262,9 @@ local function handle_incoming_action(act)
                                 })
                                 -- WIRE: ALWAYS fires (no debug flag).
                                 -- This is the single most useful line
-                                -- for diagnosing duration issues — shows
-                                -- the exact bid/dur sent to the timer
-                                -- panel for every song cast we capture.
-                                windower.add_to_chat(207, string.format(
-                                    '[OW] WIRE: %s bid=%d dur=%.1fs (cast_capture, -1s adj)',
-                                    _sname, sbid, emit_dur))
+                                -- (Diagnostic print removed — was leaking
+                                -- '[OW] WIRE: <song> bid=N dur=Ns...' into
+                                -- FFXI chat on every cast capture.)
 
                                 -- Write to _ow_buff_sources so the stat
                                 -- injection block (post-/checkparam) can
@@ -6391,9 +6830,31 @@ ow_safe_register('incoming chunk', function(id, data)
         local arr = {
             target_id  = u32(data, 0x09),
             param_1    = u32(data, 0x0D),
+            param_2    = u32(data, 0x11),
             message_id = u16(data, 0x19) % 32768,
         }
         pcall(handle_incoming_action_message, arr)
+
+        -- Chat panel checkparam hook. Recognizes specific message IDs
+        -- (712-715, 731, 733) that constitute /checkparam output and
+        -- synthesizes chat events into the System tab. Non-matching
+        -- message IDs are ignored, so this is a cheap no-op for
+        -- regular combat messages. pcall'd to keep any module-side
+        -- error from breaking the handler chain.
+        if _chat and _chat.process_action_message then
+            pcall(_chat.process_action_message,
+                  arr.message_id, arr.target_id, arr.param_1, arr.param_2)
+        end
+
+        -- Chat panel status wear-off hook. Recognizes the wear-off
+        -- message IDs (64, 204, 206, 350, 531) and synthesizes a
+        -- colored chat event for the Buffs/Debuffs/Mob tab. Without
+        -- this, "The X is no longer Y" never reaches the chat panel
+        -- (natural debuff wear-offs don't fire action packets).
+        if _chat and _chat.process_status_message then
+            pcall(_chat.process_status_message,
+                  arr.message_id, arr.target_id, arr.param_1)
+        end
     elseif id == 0x061 then
         -- Char Stats packet. Use Windower's packets.parse so we get the
         -- documented field names from fields.lua instead of relying on
@@ -8035,6 +8496,25 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
     -- Remove any byte < 0x20 except newline and tab.
     text = text:gsub('[%z\1-\8\11-\31]', '')
 
+    -- ── Chat panel capture ──────────────────────────────────────────────
+    -- Push every incoming text line into the chat ring. This runs BEFORE
+    -- the cast-begin patterns below (which `return` early on match), so
+    -- lines like "Goblin Leecher starts casting Firaga III" still land
+    -- in the chat panel — they're system messages users want to see.
+    --
+    -- We don't try to extract a sender name from the raw text here; that's
+    -- mode-specific (tells look like "<<Name>>", party like "(Name) text",
+    -- etc.) and will be added in step 8 when segment tokenization lands.
+    -- For step 2, sender_name is left empty — Python falls back to '?'.
+    if _chat and _chat.emit_chat then
+        local ok_emit, err_emit = pcall(_chat.emit_chat,
+                                        original_mode or 0, '', text)
+        if not ok_emit and _ow_chat_debug then
+            windower.add_to_chat(123,
+                '[OW] chat emit failed: ' .. tostring(err_emit))
+        end
+    end
+
     -- Diagnostic: if the raw text contains the keywords we care about, print
     -- it so we can inspect what the actual format is.
     if _ow_cast_debug and (text:find('casting') or text:find('readies')) then
@@ -8253,7 +8733,7 @@ do
         end
     else
         windower.add_to_chat(123, string.format(
-            '[OmniWatch] Misc_augments.lua not loaded (%s) — JSE neck augments inactive.',
+            '[OmniWatch] Misc_augments.lua not loaded (%s) -- JSE neck augments inactive.',
             tostring(load_err)))
     end
 end
@@ -8280,6 +8760,13 @@ OW_ServerStats = nil
 -- Prerender checks this and triggers a stats recompute so the panel
 -- reflects the freshly captured server-truth pAtt/def.
 _ow_serverstats_dirty = false
+-- Job-change tracker: previous tick's main/sub job names. Used to
+-- detect job swaps in the prerender loop and invalidate the
+-- Server_Stats cache so stale per-job stats don't bleed across the
+-- swap. Nil on first tick; gets initialized lazily so we don't
+-- trigger an invalidate on the very first call.
+_ow_last_main_job = nil
+_ow_last_sub_job  = nil
 do
     local base = windower.addon_path or ''
     if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
@@ -8383,7 +8870,11 @@ end
 -- Parse a single line of description text and push each "key:value" or
 -- "key+value" pair into the stats dict (summing if already present).
 -- prefix: optional (e.g. 'pet: ') prepended to each key for pet-stat blocks.
-local function ow_parse_desc_line(tbl, text, prefix)
+--
+-- NOTE: assigns to a previously forward-declared local (see header
+-- near line 720). Don't change this to `local function` — the
+-- forward decl makes the closures registered above this point work.
+ow_parse_desc_line = function(tbl, text, prefix)
     if not text or text == '' then return end
     -- Pattern mirrors checkparam: capture a non-digit key, optional colon,
     -- then a signed integer, optional % and trailing whitespace.
@@ -9267,15 +9758,20 @@ function ow_compute_stats()
                     -- stubs in Unity_Gear.lua) — we explicitly guard for
                     -- that, and fall through to the legacy table only if
                     -- the new path produced no augments.
-                    local _ua_list = nil
-                    if Unity_rank and Unity_rank[id] and Unity_rank[id].augments then
-                        _ua_list = Unity_rank[id].augments
-                    elseif ow_unity_augments[id] then
-                        _ua_list = ow_unity_augments[id]
-                    end
-                    if _ua_list then
-                        for _, aug_str in ipairs(_ua_list) do
-                            ow_parse_desc_line(unity_aug_overlay, aug_str)
+                    --
+                    -- OmniWatch patch (2026-05-18): only feed the overlay
+                    -- when the item is in ow_unity_augments (JSE pieces
+                    -- that aren't in GI's pipeline). Unity_rank items
+                    -- already get their augments applied inside
+                    -- find_all_values → Gear_info, so feeding the
+                    -- overlay from there would double-count (e.g. Ternion
+                    -- Dagger +1's Accuracy+40 was being added once via
+                    -- Gear_info and again via this overlay restamp).
+                    if not (Unity_rank and Unity_rank[id]) then
+                        if ow_unity_augments[id] then
+                            for _, aug_str in ipairs(ow_unity_augments[id]) do
+                                ow_parse_desc_line(unity_aug_overlay, aug_str)
+                            end
                         end
                     end
 
@@ -9656,23 +10152,74 @@ function ow_compute_stats()
                     if acc.main  then stats['accuracy']        = acc.main  end
                     if acc.sub   then stats['accuracy2']       = acc.sub   end
                     -- Ranged uses range slot when populated, else ammo.
+                    -- Final fallback: gear-only Ranged Accuracy from
+                    -- Gear_info. get_player_acc returns 0 for range/ammo
+                    -- when no ranged weapon is equipped (it gates on
+                    -- player.equipment.range.category == 'Weapon' with
+                    -- damage > 0). Without the fallback the panel would
+                    -- show 0 even when the player has substantial ranged-
+                    -- accuracy gear on — defeats the purpose of the
+                    -- panel as a gear-debug aid.
                     if acc.range and acc.range > 0 then
                         stats['ranged accuracy'] = acc.range
                     elseif acc.ammo and acc.ammo > 0 then
                         stats['ranged accuracy'] = acc.ammo
+                    elseif Gear_info and type(Gear_info['Ranged Accuracy']) == 'number'
+                           and Gear_info['Ranged Accuracy'] > 0 then
+                        stats['ranged accuracy'] = Gear_info['Ranged Accuracy']
                     end
                 end
                 if att then
                     if att.main  then stats['attack']          = att.main  end
                     if att.sub   then stats['attack2']         = att.sub   end
+                    -- Same gear-only fallback for ranged attack.
                     if att.range and att.range > 0 then
                         stats['ranged attack'] = att.range
                     elseif att.ammo and att.ammo > 0 then
                         stats['ranged attack'] = att.ammo
+                    elseif Gear_info and type(Gear_info['Ranged Attack']) == 'number'
+                           and Gear_info['Ranged Attack'] > 0 then
+                        stats['ranged attack'] = Gear_info['Ranged Attack']
                     end
                 end
                 if result.eva then stats['evasion'] = result.eva end
                 if result.def then stats['defense'] = result.def end
+
+                -- OmniWatch patch (2026-05-18): compute_player_stats
+                -- only returns physical totals (acc/att/eva/def). The
+                -- gear-derived Magic Accuracy and Magic Atk. Bonus
+                -- accumulate into stat_table but never flow out — so
+                -- the panel's Magic Accuracy was rendering as just
+                -- INT/2 with no gear contribution. Copy them through
+                -- here, before the INT-based add at the end of this
+                -- function, so the panel reads gear + INT/2 as
+                -- expected.
+                if Gear_info then
+                    if type(Gear_info['Magic Accuracy']) == 'number' then
+                        stats['magic accuracy'] = (stats['magic accuracy'] or 0)
+                                                + Gear_info['Magic Accuracy']
+                    end
+                    if type(Gear_info['Magic Atk. Bonus']) == 'number' then
+                        stats['magic attack bonus'] = (stats['magic attack bonus'] or 0)
+                                                    + Gear_info['Magic Atk. Bonus']
+                    end
+                    if type(Gear_info['Magic Evasion']) == 'number' then
+                        stats['magic evasion'] = (stats['magic evasion'] or 0)
+                                               + Gear_info['Magic Evasion']
+                    end
+                    if type(Gear_info['Magic Def. Bonus']) == 'number' then
+                        stats['magic def. bonus'] = (stats['magic def. bonus'] or 0)
+                                                  + Gear_info['Magic Def. Bonus']
+                    end
+                    -- Regain from gear (e.g. Republican Platinum Medal's
+                    -- Citizen of Bastok: "Regain"+2 when player is Bastok-
+                    -- aligned). Adds on top of any roll-supplied regain
+                    -- already in stats['regain'].
+                    if type(Gear_info['Regain']) == 'number' then
+                        stats['regain'] = (stats['regain'] or 0)
+                                        + Gear_info['Regain']
+                    end
+                end
 
                 -- Diagnostic: dump GI return vs Buffs_inform raw values
                 -- so we can see whether GI is folding Chaos's "Attack perc"
@@ -10135,6 +10682,27 @@ function ow_send_stats(stats)
         end
     end
 
+    -- OmniWatch patch (2026-05-18): the player.stats copy above writes
+    -- raw base stats (no gear). But Gear_info already adds player.stats
+    -- to its primary-stat cells inside get_player_acc (see Gear_Processing.lua
+    -- around line 744), so Gear_info['AGI'] is player_base + gear_total.
+    -- Without overriding, the panel showed AGI=148 (base only) instead
+    -- of AGI=162 (base 148 + Ternion Unity bonus 14). Override here.
+    --
+    -- Gear_info uses uppercase keys ('STR', 'DEX', ...); stats uses
+    -- lowercase. Map between the two.
+    if Gear_info then
+        local _PRIMARY_KEY_MAP = {
+            str = 'STR', dex = 'DEX', vit = 'VIT', agi = 'AGI',
+            ['int'] = 'INT', mnd = 'MND', chr = 'CHR',
+        }
+        for lower_k, upper_k in pairs(_PRIMARY_KEY_MAP) do
+            if type(Gear_info[upper_k]) == 'number' then
+                stats[lower_k] = Gear_info[upper_k]
+            end
+        end
+    end
+
     -- Merge food bonuses (parsed from the eaten food's description) into
     -- the stat dict. We skip the 7 primary attributes since player.stats
     -- already includes food's stat contribution as part of the gear+buff
@@ -10343,12 +10911,32 @@ function ow_send_stats(stats)
         end
     end
 
-    -- ── Movement speed: gear + buff contributions ───────────────────────────
-    -- checkparam parser puts gear mods under 'movement speed' (from the
-    -- "Movement Speed+X%" item description text).
+    -- ── Movement speed: read from game state (authoritative) ────────────────
+    -- The mob struct's movement_speed field is the actual speed value the
+    -- game is using to move the character. Base = 5; current = 5 *
+    -- (1 + bonus_pct/100). This reflects gear + ALL active abilities,
+    -- buffs, and debuffs (Flee, Bolter's, Mazurka, Bolt Storm, Weight,
+    -- etc.) without any client-side reimplementation of FFXI's stacking
+    -- formula. Same approach used by Windower's official SpeedChecker
+    -- addon.
+    --
+    -- Falls back to the manual compute path (ow_compute_speed) only when
+    -- the mob struct isn't available — happens briefly during zoning or
+    -- login. The fallback also runs in setup-mode for the panel preview.
     do
         local gear_speed = stats['movement speed'] or 0
-        stats['movement speed'] = ow_compute_speed(gear_speed, stats)
+        local me = windower.ffxi.get_mob_by_target('me')
+        if me and me.movement_speed and me.movement_speed > 0 then
+            -- Game-reported value. Convert to "bonus over base" (i.e. 0 =
+            -- normal, +25 = +25%, -50 = halved). Rounded to int since the
+            -- panel displays whole percent.
+            local bonus = math.floor(100 * (me.movement_speed / 5 - 1) + 0.5)
+            stats['movement speed'] = bonus
+        else
+            -- Fallback: manual compute from gear + buff IDs. Used when
+            -- me isn't yet available (zoning).
+            stats['movement speed'] = ow_compute_speed(gear_speed, stats)
+        end
     end
 
     -- ── Job Point Gifts ─────────────────────────────────────────────────────
@@ -10418,7 +11006,7 @@ function ow_send_stats(stats)
                 end
             elseif _ow_cast_debug then
                 windower.add_to_chat(207, string.format(
-                    '[OW] gifts applied: 0 — Gifts.lua may be missing or '..
+                    '[OW] gifts applied: 0 -- Gifts.lua may be missing or '..
                     'jp_spent=%d below first threshold for %s', jp_spent, mjob))
             end
         end
@@ -11005,6 +11593,18 @@ function ow_send_stats(stats)
     -- ranged stay at client values (which are correct for flat-bonus
     -- effects like songs, food, gear).
     --
+    -- GATING: this override is ONLY useful while a COR roll is
+    -- actually active on the player. Without a live roll, the client
+    -- compute is correct and Server_Stats has nothing to add — but
+    -- can ACTIVELY HURT us by overriding correct values with stale
+    -- cached numbers from a previous job or previous roll session.
+    -- Symptoms when ungated: acc1 stuck across job changes, att1
+    -- frozen at 0 when cache is uninitialized, BLU/BRD/NIN/etc.
+    -- (jobs that never have rolls) silently broken.
+    --
+    -- We check player.buffs for any roll-class buff_id from
+    -- OW_ROLL_BUFF_IDS. If none → skip the entire override block.
+    --
     -- Caveat: if client is wrong for some OTHER reason (missing gear
     -- stat, etc.), the ratio carries that error into aux/ranged. For
     -- the proc/multiplier uncertainty case this is correct.
@@ -11012,15 +11612,36 @@ function ow_send_stats(stats)
     -- Placement: AFTER the sim_on/buff_stats compute block. Last
     -- writer to attack/attack2/ranged attack/accuracy/accuracy2/ranged
     -- accuracy. Runs in both sim and normal mode.
-    if OW_ServerStats then
+    local _roll_active = false
+    do
+        local p = windower.ffxi.get_player()
+        if p and p.buffs and OW_ROLL_BUFF_IDS then
+            for _, bid in ipairs(p.buffs) do
+                if OW_ROLL_BUFF_IDS[bid] and bid ~= 309 then
+                    -- Skip bust state (309) — it's a debuff state not
+                    -- an active roll, so the Lanun-proc question
+                    -- doesn't apply. Only "real" rolls trigger override.
+                    _roll_active = true
+                    break
+                end
+            end
+        end
+    end
+    if OW_ServerStats and _roll_active then
         local ok_ss, ss = pcall(OW_ServerStats.get)
         if ok_ss and ss then
-            -- Attack ratio + def
-            if ss.patt then
+            -- Attack ratio + def. Guard against ss.patt == 0 — Lua's
+            -- `if ss.patt then` treats 0 as truthy, which would write
+            -- 0 over a correctly-computed client value and freeze the
+            -- panel at 0 until the next non-zero packet arrives. Same
+            -- guard pattern applies to def, pacc below. The valid
+            -- range for these values is always > 0 in any real game
+            -- state; a 0 is the cache reporting "never populated yet".
+            if ss.patt and ss.patt > 0 then
                 local client_patt = stats['attack'] or 0
                 local server_patt = ss.patt
                 stats['attack'] = server_patt
-                if ss.def then stats['defense'] = ss.def end
+                if ss.def and ss.def > 0 then stats['defense'] = ss.def end
                 if client_patt > 0 and server_patt ~= client_patt then
                     local ratio = server_patt / client_patt
                     local cur_atk2 = stats['attack2']       or 0
@@ -11045,8 +11666,12 @@ function ow_send_stats(stats)
                 end
             end
 
-            -- Accuracy ratio
-            if ss.pacc then
+            -- Accuracy ratio. Same zero-guard rationale as attack
+            -- above. Server_Stats returns 0 when the cache hasn't been
+            -- populated yet (e.g. just after a job change before the
+            -- next 0x063 sub-type 384 arrives). Skipping the override
+            -- in that case lets the client-computed value stand.
+            if ss.pacc and ss.pacc > 0 then
                 local client_pacc = stats['accuracy'] or 0
                 local server_pacc = ss.pacc
                 stats['accuracy'] = server_pacc
@@ -11176,6 +11801,43 @@ ow_safe_register('prerender', function()
     -- elapsed. Cheap when nothing's queued (just a clock comparison).
     if OW_ServerStats then
         pcall(OW_ServerStats.tick)
+    end
+
+    -- ── Job-change detection ─────────────────────────────────────────────
+    -- Server_Stats caches the most recent server-truth pAtt/pAcc/def
+    -- values from incoming 0x061 / 0x063 packets. When the player
+    -- changes job, those cached values reflect the OLD job's gear and
+    -- traits — and the server doesn't always push a fresh packet
+    -- immediately. Without invalidation, the panel shows stale acc/att
+    -- for the new job until the next packet arrives (could be many
+    -- seconds, or until you take an action). Symptom: stats stuck at
+    -- the previous job's numbers across job changes.
+    --
+    -- Detect job change by polling get_player() once per tick and
+    -- comparing main/sub against last-seen. On any change, invalidate
+    -- the Server_Stats cache so the next ow_compute_stats falls back
+    -- to client math until a fresh packet arrives.
+    do
+        local p = windower.ffxi.get_player()
+        if p then
+            local cur_main = p.main_job or ''
+            local cur_sub  = p.sub_job  or ''
+            if (_ow_last_main_job ~= nil and cur_main ~= _ow_last_main_job)
+               or (_ow_last_sub_job ~= nil and cur_sub ~= _ow_last_sub_job) then
+                if OW_ServerStats and OW_ServerStats.invalidate then
+                    pcall(function()
+                        OW_ServerStats.invalidate('job_change:'
+                            .. _ow_last_main_job .. '/' .. _ow_last_sub_job
+                            .. '->' .. cur_main .. '/' .. cur_sub)
+                    end)
+                end
+                -- Force a stats recompute next tick so the panel
+                -- refreshes immediately with the new job's data.
+                _ow_serverstats_dirty = true
+            end
+            _ow_last_main_job = cur_main
+            _ow_last_sub_job  = cur_sub
+        end
     end
 
     -- ── Server_Stats dirty flag ───────────────────────────────────────
@@ -11595,7 +12257,19 @@ ow_safe_register('prerender', function()
                 table.sort(bs)
                 buffs_sig_fast = table.concat(bs, ',')
             end
-            if buffs_sig_fast ~= _ow_stats_last_buffsig then
+            -- Also detect movement_speed changes — Flee, Sprint, Bolter's
+            -- Roll, gear-with-movement-speed swap, Weight debuff, etc.
+            -- Some of these are tied to buff IDs (already detected by
+            -- buffs_sig_fast above), but the actual *value* applied to
+            -- movement_speed can change at sub-buff granularity (e.g.
+            -- Flee's potency ramping up at activation, or a roll's
+            -- value changing on double-up). The mob struct has the
+            -- live value, so we just diff it against the last poll.
+            local me_fast = windower.ffxi.get_mob_by_target('me')
+            local speed_now = (me_fast and me_fast.movement_speed) or 0
+            local speed_changed = (_ow_last_speed_poll ~= speed_now)
+            _ow_last_speed_poll = speed_now
+            if buffs_sig_fast ~= _ow_stats_last_buffsig or speed_changed then
                 _ow_stats_last_buffsig = buffs_sig_fast
                 local ok_st, err_st = pcall(function()
                     local stats = ow_compute_stats()
@@ -12319,16 +12993,30 @@ ow_safe_register('prerender', function()
                         expires_at = prev_entry.expires_at,
                         started_at = prev_entry.started_at,
                         duration   = prev_entry.duration,
+                        name       = prev_entry.name,
+                        source     = prev_entry.source,
                     }
                 end
             end
             for slot, bid in pairs(effective_slots) do
                 slot_seen[slot] = true
                 local existing = _ow_buff_timers[slot]
-                local need_update = (not existing) or (existing.buff_id ~= bid)
-
                 -- Expiry from the 0x063 packet (precise) if available.
                 local pkt_expires = (_ow_buff_slot_expires_at or {})[slot]
+                -- need_update fires when the slot is empty, the bid
+                -- changed, OR the same bid landed but with a different
+                -- expires_at (different instance — slot was reused
+                -- after another buff wore off and freed it).
+                -- Tolerance matches existing_same_instance below — both
+                -- check the same pair, so the threshold must be the
+                -- same or a slot can land in a contradictory state.
+                local need_update = (not existing)
+                                    or (existing.buff_id ~= bid)
+                if (not need_update) and existing and pkt_expires
+                   and existing.expires_at
+                   and math.abs(existing.expires_at - pkt_expires) >= 2.5 then
+                    need_update = true
+                end
 
                 -- Source-classification + gear-aware refinement.
                 -- Default: classify as self (slot poller doesn't carry
@@ -12383,28 +13071,40 @@ ow_safe_register('prerender', function()
                 -- pending_meta by (bid, actor_id) AND register cat=4
                 -- from any actor whose target is us. TODO.
                 local meta = nil
-                local existing_name = existing and existing.buff_id == bid
-                                       and existing.name or nil
+                -- existing_name only valid if this is the SAME buff
+                -- instance still occupying the slot. Identity = (bid,
+                -- expires_at). Without the expires_at check, when a
+                -- slot empties and another buff with the same bid
+                -- migrates in (Honor March wears, Victory March slides
+                -- into Honor's old slot), the slot's "existing.name"
+                -- would point at the buff that just left, not the
+                -- one that just arrived. expires_at is stable per
+                -- buff instance — server-pushed timestamps; if it
+                -- changes the slot has a different cast.
+                local existing_name = nil
+                local existing_same_instance = false
+                if existing and existing.buff_id == bid then
+                    if pkt_expires and existing.expires_at
+                       and math.abs(existing.expires_at - pkt_expires) < 2.5 then
+                        existing_same_instance = true
+                        existing_name = existing.name
+                    elseif not pkt_expires then
+                        -- No precise timestamp available — best-effort
+                        -- match by bid alone. Same as old behavior.
+                        existing_same_instance = true
+                        existing_name = existing.name
+                    end
+                end
                 local pending = (_ow_buff_pending_meta or {})[bid]
                 local pending_fresh = pending
                                       and (now_clock - (pending.ts or 0)) < 30
                                       or false
                 if existing_name and existing_name ~= '' then
-                    -- Slot already has a label. Keep it. Pending_meta
-                    -- might have a newer entry for this bid (e.g.
-                    -- second-tier cast), but that's destined for some
-                    -- OTHER slot — we leave the new slot to pick it up.
-                    --
-                    -- This handles three cases at once:
-                    --   (1) Stable existing slot, no new cast: kept ✓
-                    --   (2) Tier 2 cast while tier 1 still active in
-                    --       this slot: tier 1's slot keeps its label;
-                    --       tier 2's new slot finds pending_meta and
-                    --       binds to it ✓
-                    --   (3) Re-cast of same song to refresh: gi_time
-                    --       changes, the slot-population code clears
-                    --       _ow_buff_timers[slot], so this branch isn't
-                    --       hit — falls through to "take pending" below ✓
+                    -- Slot already has a label for this same instance.
+                    -- Keep it. Pending_meta might have a newer entry
+                    -- for this bid (e.g. second-tier cast), but that's
+                    -- destined for some OTHER slot — we leave the new
+                    -- slot to pick it up.
                     nm = existing_name
                     if existing.source then source = existing.source end
                 elseif pending_fresh then
@@ -12476,7 +13176,7 @@ ow_safe_register('prerender', function()
                                 for _, prev in ipairs(prev_buff_instances) do
                                     if prev.buff_id == bid
                                        and prev.slot ~= slot
-                                       and math.abs(prev.expires_at - pkt_expires) < 1.0
+                                       and math.abs(prev.expires_at - pkt_expires) < 2.5
                                     then
                                         opts.started_at = prev.started_at
                                         -- Keep the original full-bar duration too;
@@ -12486,6 +13186,20 @@ ow_safe_register('prerender', function()
                                         -- (expires_at - now), shrinking it.
                                         if prev.duration and prev.duration > 0 then
                                             duration_sec = prev.duration
+                                        end
+                                        -- Carry over the specific tier name and
+                                        -- source. The buff that just shifted slots
+                                        -- is the same buff instance — its label
+                                        -- shouldn't change just because the slot
+                                        -- index changed. Without this, the reconciler
+                                        -- would fall to pending_meta and pick up
+                                        -- whichever tier was cast last for this
+                                        -- buff_id (wrong when both tiers were sung).
+                                        if prev.name and prev.name ~= '' then
+                                            nm = prev.name
+                                        end
+                                        if prev.source then
+                                            source = prev.source
                                         end
                                         break
                                     end
@@ -12605,6 +13319,25 @@ ow_safe_register('prerender', function()
     if _ow_dps_emit_acc >= 5 then
         _ow_dps_emit_acc = 0
         pcall(_ow_dps_emit)
+    end
+
+    -- ── Chat panel drain (10 Hz) ─────────────────────────────────────────
+    -- Pull queued chat events out of the ring buffer and send them as
+    -- CHAT_BATCH packets to the Python overlay. Two independent rings,
+    -- two independent ports — backpressure on one can't stall the other.
+    -- The drain itself is cheap when rings are empty (early return on
+    -- count == 0). pcall wraps both to keep one bad event from killing
+    -- the prerender loop.
+    --
+    -- Own accumulator (not piggybacking on last_send) so a stalled 10Hz
+    -- party-data block can't delay chat — Python should keep getting
+    -- events even during heavy load that backs the party emit up.
+    _ow_chat_drain_acc = (_ow_chat_drain_acc or 0) + 1
+    if _ow_chat_drain_acc >= 6 then    -- prerender fires ~60Hz → drain at ~10Hz
+        _ow_chat_drain_acc = 0
+        if _chat then
+            pcall(_chat.drain_text,   udp_chat)
+        end
     end
 end)
 

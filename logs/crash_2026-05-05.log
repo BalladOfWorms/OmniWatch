@@ -1,0 +1,7 @@
+2026-05-05 12:49:26 [event:addon command] .../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:1561: attempt to index global 'udp_gs' (a nil value)
+    stack traceback:
+    	.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:1561: in function '_ow_cfgwiz_open'
+    	.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:2770: in function <.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:2607>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:202: in function <.../SquareEnix/Windower//addons/omniwatch/omniwatch.lua:196>

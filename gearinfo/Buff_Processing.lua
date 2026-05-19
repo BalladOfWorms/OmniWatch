@@ -98,6 +98,8 @@ function check_buffs()
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
 			elseif player.equipment.hands.en:lower() == "wakido kote +3" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 40
+			elseif player.equipment.hands.en:lower() == "wakido kote +4" then	
+				this_buff['ja_haste'] = this_buff['ja_haste'] + 40
 			end
 			if player.equipment.legs.en:lower() == "unkai haidate +1" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 15
@@ -107,10 +109,16 @@ function check_buffs()
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 25
 			elseif player.equipment.legs.en:lower() == "kasuga haidate +1" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
+			elseif player.equipment.legs.en:lower() == "kasuga haidate +2" then	
+				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
+			elseif player.equipment.legs.en:lower() == "kasuga haidate +3" then	
+				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
 			end
 			if player.equipment.feet.en:lower() == "wakido sune. +2" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 10
 			elseif player.equipment.feet.en:lower() == "wakido sune. +3" then	
+				this_buff['ja_haste'] = this_buff['ja_haste'] + 20
+			elseif player.equipment.feet.en:lower() == "wakido sune. +4" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 20
 			end
 		elseif buff.id == 604 then -- mighty guard
