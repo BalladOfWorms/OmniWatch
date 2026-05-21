@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.4.0'
+_addon.version  = '1.5.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2496,7 +2496,30 @@ local function _ow_drain_inbound()
                 _sim.set_value(p1, p2, p3)
             end
         elseif head == 'SETTING' then
-            -- Future use: schema settings pushed from python. No-op for now.
+            -- Forwarded from Python's settings menu via the
+            -- apply_setting_side_effects path (any setting flagged
+            -- applies="lua" or "both" lands here). Wire form:
+            --   SETTING|<key>|<value>
+            -- value arrives as "true" / "false" for bool settings or
+            -- a stringified value for others.
+            local sep2 = rest:find('|', 1, true)
+            local skey = sep2 and rest:sub(1, sep2 - 1) or rest
+            local sval = sep2 and rest:sub(sep2 + 1) or ''
+            if skey:sub(1, 3) == 'sc_' and OW_Skillchains
+                    and OW_Skillchains.set_setting then
+                -- Strip the sc_ prefix — the Skillchains module's
+                -- internal keys are 'track_sc', 'show_props', etc.
+                -- (no namespace prefix; that's only on the python side
+                -- to avoid colliding with other settings). Boolean
+                -- conversion: anything that isn't literally 'true' is
+                -- treated as false.
+                local internal_key = skey:sub(4)
+                local lv = (sval or ''):lower()
+                local bool_val = (lv == 'true' or lv == '1')
+                pcall(OW_Skillchains.set_setting, internal_key, bool_val)
+            end
+            -- Other SETTING keys: no handler yet. Left for future
+            -- schema-pushed settings.
         elseif head == 'CFGWIZ' then
             -- Config wizard messages from the pygame overlay. rest is
             -- one of:
@@ -2651,6 +2674,39 @@ end
 --   //omniwatch state <string>  - report fallback state string
 --   //omniwatch debug           - toggle diagnostic printing in console/chat
 _ow_cast_debug = false
+-- Recent-action-name cache for fixing the native client's "?"
+-- placeholder. The game client renders "<Actor> uses ?" / "readies ?"
+-- when it can't resolve an ability/item ID to a name (newer content
+-- than the client's DAT files, custom server abilities, etc.). The
+-- action PACKET still carries the numeric ID, and Windower's resource
+-- tables (res.monster_abilities / res.job_abilities / res.items /
+-- res.spells) can usually resolve it. So when the action handler
+-- resolves a name, we stash it keyed by actor_id; when a "?" text line
+-- arrives for that actor shortly after, we substitute the real name.
+--   _ow_recent_action_name[actor_id] = {name=<str>, ts=<os.clock>}
+_ow_recent_action_name = {}
+-- _ow_th_table: detected Treasure Hunter level per mob, keyed by mob
+-- id → {level=<int>, ts=<os.clock>}. Populated when a TH proc fires
+-- (Added Effect Message 603 on melee/ranged/spell damage, or message
+-- 608 on weaponskills). The target card reads this to show "TH - N".
+-- FFXI only sends the proc message when TH first procs or increases a
+-- level, so this reflects the highest level seen on that mob so far.
+-- Requires the player to be on a TH-capable job (THF main, or /THF) —
+-- otherwise no proc messages are ever sent and the table stays empty.
+_ow_th_table = {}
+-- TTL for a TH entry (seconds). Guards against a reused mob id showing
+-- a stale TH from a previous mob. Refreshed on each proc.
+local _OW_TH_TTL = 600
+-- How long (seconds) a cached action name stays valid for "?"
+-- substitution. The text line follows the action packet within a
+-- frame or two, so a short window avoids substituting a stale name
+-- onto an unrelated later "?" line.
+local _OW_ACTION_NAME_TTL = 3.0
+-- _ow_text_capture: temporary diagnostic flag for inspecting raw
+-- incoming-text events (mode byte, length, first 100 chars, first
+-- 40 hex bytes). Toggled via //ow textcapture. Off by default to
+-- avoid console spam during normal use.
+_ow_text_capture = false
 
 -- Buff-timer parser debug. Turn on with //ow buffdebug to see the 0x063
 -- packet contents printed to chat (one line per parsed slot, with computed
@@ -3759,6 +3815,22 @@ ow_safe_register('addon command', function(command, ...)
             windower.add_to_chat(207, string.format(
                 '[OW] chat hex capture = %s', tostring(target)))
         end
+    elseif command == 'textcapture' then
+        -- Toggle the raw incoming-text capture. Prints mode + length +
+        -- first 100 chars + first 40 hex bytes for every text event.
+        -- Use to identify what mode /check, NPC dialog, bazaar sales,
+        -- etc. actually arrive on so we can build correct routing
+        -- patterns. NOISY — turn off when done.
+        -- Usage: //ow textcapture [on|off]
+        local target
+        if args[1] == 'on' or args[1] == 'off' then
+            target = args[1] == 'on'
+        else
+            target = not _ow_text_capture
+        end
+        _ow_text_capture = target
+        windower.add_to_chat(207, string.format(
+            '[OW] text capture = %s', tostring(target)))
     elseif command == 'chatcpdebug' then
         -- Toggle checkparam packet diagnostic. When on, every 0x0DD
         -- packet that arrives dumps its parsed field/value list to
@@ -4497,6 +4569,63 @@ ow_safe_register('addon command', function(command, ...)
             windower.add_to_chat(207, string.format(
                 '[OW] unknown dps subcommand: %s', sub))
         end
+    elseif command == 'sc' then
+        -- Skillchain panel control. Subcommands mirror Ivaar's
+        -- Skillchains addon surface for muscle-memory compatibility:
+        --   bare 'sc'      → toggle main panel visibility
+        --   sc burst       → toggle magic-burst window display
+        --   sc weapon      → toggle WS suggestion list
+        --   sc spell       → toggle spell suggestion list (SCH/BLU)
+        --   sc pet         → toggle pet ability suggestion list (BST/SMN)
+        --   sc props       → toggle resonating properties row
+        --   sc timer       → toggle SC window countdown bar
+        --   sc step        → toggle current chain-step row
+        --   sc track       → toggle the whole "track sc" master
+        --   sc dump        → print diagnostic state
+        if not OW_Skillchains then
+            windower.add_to_chat(123,
+                '[OW] Skillchains module not loaded. Place '
+                .. 'Skillchains.lua next to OmniWatch.lua and reload.')
+            return
+        end
+        local sub = (args[1] or ''):lower()
+        local sub_map = {
+            burst  = 'track_magic_burst',
+            weapon = 'show_weapon',
+            spell  = 'show_spell',
+            pet    = 'show_pet',
+            props  = 'show_props',
+            timer  = 'show_timer',
+            step   = 'show_step',
+            track  = 'track_sc',
+        }
+        if sub == '' then
+            local cur = OW_Skillchains.get_setting('show_panel')
+            OW_Skillchains.set_setting('show_panel', not cur)
+            windower.add_to_chat(207, string.format(
+                '[OW] SC panel: %s', cur and 'OFF' or 'ON'))
+        elseif sub_map[sub] then
+            local key = sub_map[sub]
+            local cur = OW_Skillchains.get_setting(key)
+            OW_Skillchains.set_setting(key, not cur)
+            windower.add_to_chat(207, string.format(
+                '[OW] SC %s: %s', sub, cur and 'OFF' or 'ON'))
+        elseif sub == 'dump' then
+            local st = OW_Skillchains.status()
+            windower.add_to_chat(207, '[OW] === Skillchains status ===')
+            windower.add_to_chat(207, string.format(
+                '[OW] job=%s  aeonic=%s  resonating=%d',
+                tostring(st.main_job), tostring(st.aeonic_flavor),
+                st.resonating_count))
+            for k, v in pairs(st.settings) do
+                windower.add_to_chat(207, string.format(
+                    '[OW]   %s = %s', k, tostring(v)))
+            end
+        else
+            windower.add_to_chat(207,
+                '[OW] usage: //ow sc [burst|weapon|spell|pet|props|'
+                .. 'timer|step|track|dump]')
+        end
     end
 end)
 
@@ -4675,6 +4804,14 @@ ow_safe_register('incoming chunk', function(id, original)
             windower.add_to_chat(123,
                 '[OW chat_pkt] handler error: ' .. tostring(err))
         end
+    end
+
+    -- Skillchains sub-module: needs to see 0x050 (equipment change,
+    -- for aeonic-weapon detection) and 0x063 sub-9 (buff list, for
+    -- Aftermath / Chainbound buff tracking). Both are no-ops in the
+    -- module when the packet doesn't match.
+    if OW_Skillchains and OW_Skillchains.handle_chunk then
+        pcall(OW_Skillchains.handle_chunk, id, original)
     end
 end)
 
@@ -5779,6 +5916,62 @@ local function _ow_dps_emit()
     end
 end
 
+-- Populate the recent-action-name cache from any action, resolving
+-- the name from the correct Windower resource table by category. This
+-- is what lets the text-path "?" resolver replace the client's
+-- unresolved "<Actor> uses ?" / "readies ?" with the real name —
+-- extended here to cover not just mob abilities but player/trust
+-- weaponskills, job abilities, item uses, and spells. All lookups hit
+-- the live res tables, so they stay correct as content is added.
+-- Category map (Windower action categories):
+--   3  = weapon skill   → res.weapon_skills
+--   4  = spell finish    → res.spells
+--   6  = job ability / item use → res.job_abilities, then res.items
+--   8  = spell begin     → res.spells (action.param holds the id)
+--   11 = mob TP begin    → res.monster_abilities (handled inline too)
+--   13 = mob TP finish    → res.monster_abilities (handled inline too)
+local function _ow_cache_action_name(act)
+    if not act or not act.actor_id then return end
+    local cat = act.category
+    if not cat then return end
+    local tgt    = act.targets and act.targets[1]
+    local action = tgt and tgt.actions and tgt.actions[1]
+    local name
+
+    if cat == 3 then
+        local ws = act.param and res.weapon_skills
+                   and res.weapon_skills[act.param]
+        name = ws and (ws.en or ws.name)
+    elseif cat == 4 then
+        local sp = act.param and res.spells and res.spells[act.param]
+        name = sp and (sp.en or sp.name)
+    elseif cat == 8 then
+        -- Spell begin: id is in the per-target action param, not
+        -- act.param (which is a cast-animation id).
+        local sid = (action and action.param) or act.param
+        local sp = sid and res.spells and res.spells[sid]
+        name = sp and (sp.en or sp.name)
+    elseif cat == 6 then
+        -- Job ability OR item use (both arrive on cat 6). Try job
+        -- abilities first, then items.
+        local ja = act.param and res.job_abilities
+                   and res.job_abilities[act.param]
+        name = ja and (ja.en or ja.name)
+        if not name then
+            local it = act.param and res.items and res.items[act.param]
+            name = it and (it.en or it.english)
+        end
+    elseif cat == 11 or cat == 13 then
+        local ab = act.param and res.monster_abilities
+                   and res.monster_abilities[act.param]
+        name = ab and (ab.en or ab.name)
+    end
+
+    if name and name ~= '' then
+        _ow_recent_action_name[act.actor_id] = {name = name, ts = os.clock()}
+    end
+end
+
 local function handle_incoming_action(act)
     if not act or not act.targets or not act.targets[1] then return end
 
@@ -5787,6 +5980,10 @@ local function handle_incoming_action(act)
     -- panel. pcall'd so a malformed packet can't kill the rest of the
     -- handler chain.
     pcall(_ow_dps_record_action, act)
+
+    -- Recent-action-name cache for the "?" text fix. pcall'd so a
+    -- malformed packet can't disrupt the handler chain.
+    pcall(_ow_cache_action_name, act)
 
     -- Chat panel buff/debuff event hook. Synthesizes "X gains 'Buff'"
     -- and "X loses 'Buff'" chat events from action-packet status
@@ -5798,6 +5995,13 @@ local function handle_incoming_action(act)
     end
     if _chat and _chat.process_battle_action then
         pcall(_chat.process_battle_action, act)
+    end
+
+    -- Skillchains sub-module: extract SC opens/closes from this action
+    -- and update its resonating state. No-op when the module isn't
+    -- loaded.
+    if OW_Skillchains and OW_Skillchains.handle_action then
+        pcall(OW_Skillchains.handle_action, act)
     end
 
     local tgt     = act.targets[1]
@@ -6652,11 +6856,30 @@ local function handle_incoming_action(act)
         end
         return
     elseif cat == CAT_MOB_TP_BEGIN then
-        -- Monster ability wind-up. Same pattern: ability id is likely in
-        -- action.param for the target.
-        local aid = (action and action.param) or act.param
-        local ab = res.monster_abilities and res.monster_abilities[aid]
-        local n_ = (ab and (ab.en or ab.name)) or ('Ability #' .. tostring(aid))
+        -- Monster ability wind-up ("<Mob> readies <Ability>.").
+        -- Per BattleMod's parse_action_packet.lua, categories 11 and
+        -- 13 carry the ability ID in act.param — NOT the per-target
+        -- actions[1].param (that's only for categories 7/8/9). Reading
+        -- the per-target param here produced wrong names (e.g. the
+        -- nonexistent "Chameleon Skin") because that field holds
+        -- unrelated animation/status data for a category-11 wind-up.
+        local aid = act.param
+        local ab = aid and res.monster_abilities
+                   and res.monster_abilities[aid]
+        if not ab then
+            -- No valid ability resolved — don't fabricate a name.
+            -- A missing readies line is better than a wrong one.
+            if _ow_cast_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OW] MOB_TP_BEGIN: no ability for act.param=%s '
+                    .. '(action.param=%s)',
+                    tostring(aid),
+                    tostring(action and action.param)))
+            end
+            return
+        end
+        local n_ = ab.en or ab.name or ('Ability #' .. tostring(aid))
+        _ow_recent_action_name[actor_id or 0] = {name = n_, ts = os.clock()}
         udp_cast:send(string.format('CAST_START|%d|ability|%s', actor_id or 0, n_))
         ow_events.emit('cast_begin', {
             actor_id = actor_id, kind = 'ability',
@@ -6686,8 +6909,21 @@ local function handle_incoming_action(act)
             end
         end
     elseif cat == CAT_MOB_TP_FINISH then
-        local ab = res.monster_abilities and res.monster_abilities[act.param]
-        local n_ = (ab and (ab.en or ab.name)) or ('Ability #' .. tostring(act.param))
+        -- Monster TP move landing. act.param holds the ability ID
+        -- (category 13, same as 11 per BattleMod). Don't fabricate a
+        -- name if the lookup fails.
+        local ab = act.param and res.monster_abilities
+                   and res.monster_abilities[act.param]
+        if not ab then
+            if _ow_cast_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OW] MOB_TP_FINISH: no ability for act.param=%s',
+                    tostring(act.param)))
+            end
+            return
+        end
+        local n_ = ab.en or ab.name or ('Ability #' .. tostring(act.param))
+        _ow_recent_action_name[actor_id or 0] = {name = n_, ts = os.clock()}
         udp_cast:send(string.format('CAST_DONE|%d|ability|%s', actor_id or 0, n_))
         ow_events.emit('cast_complete', {
             actor_id = actor_id, kind = 'ability',
@@ -6805,6 +7041,50 @@ ow_safe_register('incoming chunk', function(id, data)
                     windower.add_to_chat(123, string.format(
                         '[OW] _gi action handler error: %s',
                         tostring(err_gi)))
+                end
+            end
+
+            -- ── Treasure Hunter proc detection ──────────────────────
+            -- parse_action (above) doesn't expose the Added-Effect
+            -- fields, so we do a parallel string-keyed parse just for
+            -- TH. Based on Krizz's THTracker (BSD-2, credited),
+            -- expanded: Krizz handled only cat 1 (melee) + cat 3 (WS).
+            -- TH also procs on cat 2 (ranged) and cat 4 (damage spell);
+            -- the "Added Effect Message == 603" signature is the same
+            -- on melee/ranged/spell, while WS report TH via the primary
+            -- action Message == 608. We record the highest level seen
+            -- per mob. Note: the server only sends a proc message when
+            -- TH first procs or increases a level, so this is event-
+            -- driven, not per-hit. No procs ever arrive unless the
+            -- player is THF main or /THF.
+            local ok_th, pth = pcall(packets.parse, 'incoming', data)
+            if ok_th and pth then
+                local tgt_id = pth['Target 1 ID']
+                local cat    = pth.Category
+                if tgt_id and tgt_id ~= 0 then
+                    local lvl
+                    if (cat == 1 or cat == 2 or cat == 4)
+                       and pth['Target 1 Action 1 Has Added Effect']
+                       and pth['Target 1 Action 1 Added Effect Message'] == 603 then
+                        lvl = pth['Target 1 Action 1 Added Effect Param']
+                    elseif cat == 3
+                           and pth['Target 1 Action 1 Message'] == 608 then
+                        lvl = pth['Target 1 Action 1 Param']
+                    end
+                    if lvl and lvl > 0 then
+                        local prev = _ow_th_table[tgt_id]
+                        -- Keep the highest level observed (TH climbs as
+                        -- it re-procs; we never want to show a lower
+                        -- value than already seen on this mob).
+                        local newlvl = (prev and prev.level and prev.level > lvl)
+                                       and prev.level or lvl
+                        _ow_th_table[tgt_id] = {level = newlvl, ts = os.clock()}
+                        if _ow_cast_debug then
+                            windower.add_to_chat(207, string.format(
+                                '[OW TH] mob=%d TH=%d (cat=%d)',
+                                tgt_id, newlvl, cat))
+                        end
+                    end
                 end
             end
         end
@@ -8434,6 +8714,97 @@ end)
 -- look up the food's known duration from OW_FOOD_DURATION_MIN.
 
 ow_safe_register('outgoing chunk', function(id, data)
+    -- ── 0x0B6: outgoing /tell ───────────────────────────────────────
+    -- Captured BEFORE FFXI builds the display string, so we have
+    -- access to structured autotranslate phrase IDs. The text-event
+    -- path receives only the post-display string where phrases have
+    -- been substituted with display glyphs we can't decode back.
+    -- Resolving phrases here means outgoing tells render correctly
+    -- even when they contain {Auto-translate Phrases}.
+    --
+    -- Packet structure (per Windower fields.lua):
+    --   offset 4: unsigned short _unknown1 (0x0003)
+    --   offset 6: char[15] Target Name (SJIS, null-padded)
+    --   offset 21 (0x15): char* Message (SJIS, FD-wrapped autotranslate
+    --     phrases embedded: FD <unused> <lang_start> <id_hi> <id_lo> FD)
+    if id == 0x0B6 then
+        local ok_ot, err_ot = pcall(function()
+            -- Target name: bytes 7-21 (1-indexed in lua = offset 6 in
+            -- 0-indexed packet). Null-trimmed.
+            local target_sjis = data:sub(7, 21):gsub('%z+$', '')
+            -- Message: byte 22 to end (1-indexed = offset 21 in 0-indexed).
+            local msg_sjis = data:sub(22) or ''
+            -- Strip any trailing null padding.
+            msg_sjis = msg_sjis:gsub('%z+$', '')
+            if msg_sjis == '' and target_sjis == '' then return end
+
+            -- Walk the message bytes, replacing FD ... FD sequences
+            -- with {english_phrase}. Per the Windower wiki:
+            --   FD <lang_end> <lang_start> <id_hi> <id_lo> FD
+            -- The phrase ID is a big-endian 16-bit value in bytes 4,5.
+            -- We use res.auto_translates[id] to resolve to the English
+            -- phrase (or fall back to the Japanese if no English entry).
+            local out = {}
+            local i = 1
+            local n = #msg_sjis
+            while i <= n do
+                local b = msg_sjis:byte(i)
+                if b == 0xFD and i + 5 <= n
+                        and msg_sjis:byte(i + 5) == 0xFD then
+                    -- 6-byte autotranslate sequence.
+                    local id_hi = msg_sjis:byte(i + 3) or 0
+                    local id_lo = msg_sjis:byte(i + 4) or 0
+                    local phrase_id = id_hi * 256 + id_lo
+                    local phrase = res.auto_translates
+                                   and res.auto_translates[phrase_id]
+                    local text = phrase and (phrase.en or phrase.ja)
+                                       or string.format('?phrase:%d?', phrase_id)
+                    -- Wrap in literal braces matching FFXI's UI convention.
+                    out[#out + 1] = '{' .. text .. '}'
+                    i = i + 6
+                else
+                    out[#out + 1] = string.char(b)
+                    i = i + 1
+                end
+            end
+            local msg_assembled_sjis = table.concat(out)
+
+            -- SJIS → UTF-8. The target name and the non-AT portions
+            -- of the message both need this conversion; the phrase
+            -- text we substituted was already UTF-8 from res.auto_translates.
+            -- A mixed approach (convert per-segment) would be cleanest
+            -- but more complex; instead we convert the whole thing and
+            -- accept that the brace-wrapped phrase text passes through
+            -- from_shift_jis as ASCII (no SJIS-special bytes), which is
+            -- a no-op for plain English.
+            local function to_utf8(s)
+                if not s or s == '' then return '' end
+                local ok, conv = pcall(windower.from_shift_jis, s)
+                if ok and conv then return conv end
+                return s
+            end
+            local target_utf8 = to_utf8(target_sjis)
+            local msg_utf8    = to_utf8(msg_assembled_sjis)
+
+            -- Build the line in FFXI's outgoing-tell wire form:
+            -- "<Target>>> <message>". The chat module's segmenter
+            -- (chat_packets.lua) usually adds spans for the sender
+            -- region and the body; calling emit_chat with just a
+            -- text payload lets it apply standard handling.
+            local line = target_utf8 .. '>> ' .. msg_utf8
+            if _chat and _chat.emit_chat then
+                pcall(_chat.emit_chat, 12, '', line)
+            end
+        end)
+        if not ok_ot and _ow_chat_debug then
+            windower.add_to_chat(123,
+                '[OW] outgoing tell capture failed: ' .. tostring(err_ot))
+        end
+        -- Continue to other handlers below (don't return; 0x037 path
+        -- is independent).
+    end
+
+    -- ── 0x037: item use (existing food-buff capture) ────────────────
     if id ~= 0x037 then return end
     -- Bag at offset 0x05, Slot at offset 0x04 in the packet body.
     -- (Windower's parsed packet has 'Bag' and 'Inventory Index' fields,
@@ -8476,6 +8847,12 @@ ow_safe_register('zone change', function()
     _ow_food_item_id = 0
     pcall(_ow_dps_reset)         -- DPS rolling window doesn't span zones
     pcall(_ow_save_buff_state)
+    -- Skillchains: drop all resonating state. Mobs in the new zone
+    -- share ids with the old zone's mobs, so leaving stale entries
+    -- would render bogus SC info on the wrong target.
+    if OW_Skillchains and OW_Skillchains.handle_zone_change then
+        pcall(OW_Skillchains.handle_zone_change)
+    end
     -- Notify subscribers (e.g. recast timer panel may want to flush state).
     local info = windower.ffxi.get_info() or {}
     ow_events.emit('zone_change', {zone_id = info.zone or 0})
@@ -8486,8 +8863,62 @@ end)
 -- "<Mob> readies <Ability>." for TP moves. The packet-based CAST_START is
 -- the primary source, but this catches cases where packet category numbers
 -- differ from what we expected.
+
+-- Modes whose lines are already captured by the 0x017 / 0x0CC packet
+-- handler (registered on `incoming chunk` above) OR by the 0x0B6
+-- outgoing chunk handler (registered on `outgoing chunk` below). The
+-- incoming-text handler skips these to avoid double-emitting the
+-- same line.
+--   mode 4  = /tell received → captured by 0x017
+--   mode 12 = /tell sent     → captured by 0x0B6 (with proper
+--             autotranslate phrase resolution); the text-path mirror
+--             receives only the post-display string where {phrases}
+--             have been substituted with display glyphs we can't
+--             decode, so skipping it here removes that broken
+--             rendering in favor of the chunk-path version.
+-- Other player-chat modes (say, shout, yell, emote, /party,
+-- linkshells) come through one path or the other but not both —
+-- skipping them would erase the line entirely. Add a mode here
+-- only after confirming it actually duplicates.
+-- Module-scope so it's allocated once, not per call.
+local _OW_TEXT_PATH_SKIP_MODES = {
+    [4]  = true,   -- /tell received (also captured by 0x017)
+    [12] = true,   -- /tell sent     (now captured by 0x0B6)
+}
+
 ow_safe_register('incoming text', function(original, modified, original_mode, modified_mode, blocked)
     if not original then return end
+
+    -- When _ow_text_capture is on, print every incoming text event
+    -- with its mode byte and content. Use to identify what mode /check
+    -- and NPC dialog actually arrive on so we can route them
+    -- correctly. Toggle with //ow textcapture [on|off].
+    if _ow_text_capture then
+        -- Spam filter: only print lines relevant to the Warp Ring /
+        -- "uses error" investigation. Matches (case-insensitive) any of
+        -- uses / warp / ring / error so the one line we care about is
+        -- isolated instead of dumping every incoming text event.
+        local _lc = (original or ''):lower()
+        if _lc:find('uses') or _lc:find('warp') or _lc:find('ring')
+           or _lc:find('error') then
+        local snippet = (original or ''):sub(1, 100)
+        -- Print printable form first; mode + text length for context.
+        windower.add_to_chat(207, string.format(
+            '[OW capture] mode=%s len=%d blocked=%s text=%q',
+            tostring(original_mode), #(original or ''),
+            tostring(blocked), snippet))
+        -- Also print the first 40 raw bytes in hex so we can see
+        -- any control codes / SJIS markers / autotranslate bytes.
+        local hex = {}
+        for i = 1, math.min(40, #(original or '')) do
+            hex[#hex + 1] = string.format('%02X', (original or ''):byte(i))
+        end
+        if #hex > 0 then
+            windower.add_to_chat(207, string.format(
+                '[OW capture] hex: %s', table.concat(hex, ' ')))
+        end
+        end
+    end
 
     -- Strip common FFXI control characters before pattern matching. The game
     -- uses various bytes in the 0x00-0x1F range as formatting / autotranslate
@@ -8502,11 +8933,45 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
     -- lines like "Goblin Leecher starts casting Firaga III" still land
     -- in the chat panel — they're system messages users want to see.
     --
-    -- We don't try to extract a sender name from the raw text here; that's
-    -- mode-specific (tells look like "<<Name>>", party like "(Name) text",
-    -- etc.) and will be added in step 8 when segment tokenization lands.
-    -- For step 2, sender_name is left empty — Python falls back to '?'.
-    if _chat and _chat.emit_chat then
+    -- IMPORTANT: skip modes that 0x017 / 0x0CC packet handler already
+    -- captures (player chat — say/tell/yell/shout/party/LS/emote). The
+    -- packet handler at the top of the chunk callback is the canonical
+    -- source for those modes; emitting them here too would duplicate
+    -- every player-chat line (most visibly: self-tells showing twice
+    -- ── Fix the client's "?" placeholder ───────────────────────────────
+    -- The game client renders "<Actor> uses ?" / "<Actor> readies ?"
+    -- when it can't resolve an ability/item ID to a name. OmniWatch's
+    -- action handler already resolved that ID via Windower's resources
+    -- and cached it by actor_id (_ow_recent_action_name). If this text
+    -- line is a "?" action line, swap in the real name. Leaves the line
+    -- untouched when we have no cached name (so worst case = unchanged).
+    if text:find('%?') then
+        -- Match "<Actor> uses ?" or "<Actor> readies ?" (the ? may be
+        -- followed by punctuation/period). Capture the actor portion.
+        local actor_txt = text:match('^(.-) uses %?')
+                       or text:match('^(.-) readies %?')
+                       or text:match('^(.-) uses an? %?')
+        if actor_txt and actor_txt ~= '' then
+            local clean = actor_txt:gsub('^The ', '')
+            local mob = windower.ffxi.get_mob_by_name(clean)
+            local rec = mob and mob.id and _ow_recent_action_name[mob.id]
+            if rec and (os.clock() - rec.ts) <= _OW_ACTION_NAME_TTL then
+                -- Replace the first standalone "?" with the real name.
+                text = text:gsub('%?', rec.name, 1)
+                if _ow_cast_debug then
+                    windower.add_to_chat(207, string.format(
+                        '[OW] resolved "?" -> %s for %s',
+                        rec.name, clean))
+                end
+            end
+        end
+    end
+
+    -- because in and out arrive on different modes through different
+    -- code paths). System messages, errors, kills, drops, RoE etc. are
+    -- not carried on 0x017, so they still come through here.
+    if _chat and _chat.emit_chat
+            and not _OW_TEXT_PATH_SKIP_MODES[original_mode or -1] then
         local ok_emit, err_emit = pcall(_chat.emit_chat,
                                         original_mode or 0, '', text)
         if not ok_emit and _ow_chat_debug then
@@ -8738,6 +9203,71 @@ do
     end
 end
 
+-- ── DREMA path-augment overlay loader ────────────────────────────────────
+-- REMA / Dynamis-Divergence Su4/Su5 weapons return opaque "Path: A/B/C"
+-- extdata strings carrying NO readable augment stats. The file
+-- gearinfo/res/DREMA_Augments.lua maps item_id → { ['path: a'] = {...},
+-- ['path: b'] = {...}, ['path: c'] = {...} } with the R15 augment lines
+-- per path. The gear walk resolves these via ow_path_augments[id][path].
+--
+-- Without this load, ow_path_augments held only the small inline set
+-- defined above, so REMA / Dyna-D weapons like Gandring (item 21575,
+-- Evasion+100 on 'path: c') never resolved their augments. gearinfo's
+-- _loader loads a fixed res/ list that does NOT include this file, and
+-- nothing else loaded it either — so it was effectively dead data.
+--
+-- Loaded via loadfile (same pattern as Misc_augments) so gearinfo's
+-- vendored loader stays unmodified. Merge is PER-PATH: for each item,
+-- the file's path entries override/extend the inline ow_path_augments
+-- paths for the same item, rather than replacing the whole item — so an
+-- inline path the file doesn't define is preserved.
+--
+-- Failure mode: missing/malformed file → ow_path_augments keeps just the
+-- inline set, REMA/Dyna-D path augments inactive, red chat warning fires.
+do
+    local base = windower.addon_path or ''
+    if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+        base = base .. '/'
+    end
+    local path = base .. 'gearinfo/res/DREMA_augments.lua'
+    local chunk, load_err = loadfile(path)
+    if chunk then
+        local ok_run, ret = pcall(chunk)
+        if ok_run and type(ret) == 'table' then
+            local items, paths = 0, 0
+            for item_id, path_tbl in pairs(ret) do
+                if type(path_tbl) == 'table' then
+                    -- Per-path merge: preserve any inline paths for this
+                    -- item that the file doesn't define.
+                    local dst = ow_path_augments[item_id]
+                    if type(dst) ~= 'table' then
+                        dst = {}
+                        ow_path_augments[item_id] = dst
+                    end
+                    for path_key, lines in pairs(path_tbl) do
+                        dst[path_key] = lines
+                        paths = paths + 1
+                    end
+                    items = items + 1
+                end
+            end
+            if _ow_buff_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OmniWatch] DREMA_Augments loaded: %d items, %d paths',
+                    items, paths))
+            end
+        else
+            windower.add_to_chat(123, string.format(
+                '[OmniWatch] DREMA_Augments.lua ran but returned no table: %s',
+                tostring(ret)))
+        end
+    else
+        windower.add_to_chat(123, string.format(
+            '[OmniWatch] DREMA_augments.lua not loaded (%s) -- REMA path augments inactive.',
+            tostring(load_err)))
+    end
+end
+
 -- ── Server_Stats module loader ───────────────────────────────────────────
 -- Optional, opt-in feature. Loads Server_Stats.lua from the addon root.
 -- If the file is missing, OmniWatch runs normally — the feature is a
@@ -8811,6 +9341,58 @@ do
         if _ow_buff_debug then
             windower.add_to_chat(207, string.format(
                 '[OmniWatch] Server_Stats.lua not loaded: %s',
+                tostring(load_err)))
+        end
+    end
+end
+
+-- ── Skillchains module loader ───────────────────────────────────────────
+-- Optional sub-module mirroring Server_Stats's pattern. Watches action
+-- packets (0x028) for SC opens/closes, tracks resonating properties
+-- per mob, and emits a UDP stream on port 5015 carrying current state
+-- + WS suggestions. Python's skillchain panel renders that stream.
+--
+-- The module exposes:
+--   OW_Skillchains.handle_action(act)       — called per parsed action
+--   OW_Skillchains.handle_chunk(id, data)   — for 0x050 / 0x063
+--   OW_Skillchains.tick(now)                — called from prerender
+--   OW_Skillchains.handle_job_change()      — called on job change
+--   OW_Skillchains.handle_zone_change()     — called on zone change
+--   OW_Skillchains.set_setting(key, value)  — toggles from slash cmd
+--   OW_Skillchains.get_setting(key)
+--   OW_Skillchains.status()                 — for //ow sc dump
+--   OW_Skillchains.init()                   — one-time setup
+--
+-- If the load fails OW_Skillchains stays nil; every call site uses
+-- guard `if OW_Skillchains then` so a missing module is harmless.
+OW_Skillchains = nil
+do
+    local base = windower.addon_path or ''
+    if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+        base = base .. '/'
+    end
+    local path = base .. 'Skillchains.lua'
+    local chunk, load_err = loadfile(path)
+    if chunk then
+        local ok_run, ret = pcall(chunk)
+        if ok_run and type(ret) == 'table' then
+            OW_Skillchains = ret
+            if OW_Skillchains.init then
+                pcall(OW_Skillchains.init)
+            end
+            if _ow_buff_debug then
+                windower.add_to_chat(207,
+                    '[OmniWatch] Skillchains module loaded.')
+            end
+        else
+            windower.add_to_chat(123, string.format(
+                '[OmniWatch] Skillchains.lua ran but returned no table: %s',
+                tostring(ret)))
+        end
+    else
+        if _ow_buff_debug then
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] Skillchains.lua not loaded: %s',
                 tostring(load_err)))
         end
     end
@@ -9534,6 +10116,13 @@ function ow_compute_stats()
     local sim_on = (_sim and _sim.is_active and _sim.is_active()) or false
 
     local stats = {}
+    -- Path-augment delta accumulator. Holds ONLY stats resolved from
+    -- opaque "Path: A/B/C" augments (via ow_path_augments). GearInfo's
+    -- compute_player_stats can't see these, so we re-add the relevant
+    -- ones after it overwrites stats below. Flat keys cover eva/def
+    -- (not slot-split); _by_slot[slot_name] holds per-slot copies so
+    -- acc/att route to main/sub/ranged fields correctly.
+    local _ow_path_aug_stats = { _by_slot = {} }
 
     -- ── Sim mode is now a layered DELTA on top of the live compute ─────
     -- The starting stats table is built from the same live merges as
@@ -9681,9 +10270,30 @@ function ow_compute_stats()
                                 local resolved = ow_path_augments
                                                  and ow_path_augments[id]
                                                  and ow_path_augments[id][lower]
+                                if _ow_cast_debug then
+                                    windower.add_to_chat(207, string.format(
+                                        '[OW pathaug] id=%d raw="%s" lower="%s" inTable=%s resolved=%s',
+                                        id, astr, lower,
+                                        (ow_path_augments and ow_path_augments[id]) and 'Y' or 'N',
+                                        resolved and ('Y('..#resolved..')') or 'N'))
+                                end
                                 if resolved then
                                     for _, line in ipairs(resolved) do
                                         ow_parse_desc_line(stats, line)
+                                        -- Also record into the path-aug
+                                        -- delta table so eva/def/etc. can
+                                        -- be re-added after GearInfo (which
+                                        -- can't see opaque path augments)
+                                        -- overwrites them below. Flat copy
+                                        -- handles eva/def (not slot-split);
+                                        -- the per-slot copy lets acc/att
+                                        -- route to main/sub/ranged fields.
+                                        ow_parse_desc_line(_ow_path_aug_stats, line)
+                                        local _slot = entry.slot_name or '?'
+                                        _ow_path_aug_stats._by_slot[_slot] =
+                                            _ow_path_aug_stats._by_slot[_slot] or {}
+                                        ow_parse_desc_line(
+                                            _ow_path_aug_stats._by_slot[_slot], line)
                                     end
                                 else
                                     ow_parse_desc_line(stats, astr)
@@ -10184,6 +10794,64 @@ function ow_compute_stats()
                 end
                 if result.eva then stats['evasion'] = result.eva end
                 if result.def then stats['defense'] = result.def end
+                -- Re-add path-augment stats that GearInfo's compute
+                -- couldn't see. GearInfo decodes augments itself but has
+                -- no knowledge of our DREMA path table, so opaque
+                -- "Path: A/B/C" augments (e.g. Gandring Evasion+100 /
+                -- Accuracy / Attack on a path) are missing from the
+                -- result.acc/att/eva/def values it just wrote above. Add
+                -- the separately-tracked path-aug deltas back here. No
+                -- double-count: these stats are precisely the ones
+                -- GearInfo structurally cannot resolve from "Path: X".
+                --
+                -- acc/att are slot-split by GearInfo (main/sub/ranged),
+                -- so route each weapon slot's path-aug contribution to
+                -- the matching field. eva/def aren't slot-split.
+                local _by_slot = _ow_path_aug_stats._by_slot or {}
+                local _slot_main = _by_slot['main'] or {}
+                local _slot_sub  = _by_slot['sub']  or {}
+                local _slot_rng  = _by_slot['range'] or {}
+                local _slot_ammo = _by_slot['ammo'] or {}
+                -- Helper: add v to stats[key] if nonzero.
+                local function _pa_add(key, v)
+                    if v and v ~= 0 then
+                        stats[key] = (stats[key] or 0) + v
+                    end
+                end
+                -- DREMA path-augment acc/att. Per in-game /checkparam,
+                -- the augment accuracy/attack appears on BOTH primary and
+                -- auxiliary for this gear, so apply the main weapon's
+                -- path-aug acc/att to both hands (and the sub weapon's
+                -- own to sub). _slot_main/_slot_sub are populated only
+                -- from ow_path_augments (DREMA_augments.lua) resolution,
+                -- so non-DREMA weapons are never affected by this.
+                _pa_add('accuracy',  _slot_main['accuracy'])
+                _pa_add('attack',    _slot_main['attack'])
+                _pa_add('accuracy2', (_slot_main['accuracy'] or 0) + (_slot_sub['accuracy'] or 0))
+                _pa_add('attack2',   (_slot_main['attack'] or 0) + (_slot_sub['attack'] or 0))
+                -- Ranged weapon + ammo → ranged accuracy / ranged attack.
+                _pa_add('ranged accuracy',
+                        (_slot_rng['ranged accuracy'] or _slot_rng['accuracy'] or 0)
+                        + (_slot_ammo['ranged accuracy'] or _slot_ammo['accuracy'] or 0))
+                _pa_add('ranged attack',
+                        (_slot_rng['ranged attack'] or _slot_rng['attack'] or 0)
+                        + (_slot_ammo['ranged attack'] or _slot_ammo['attack'] or 0))
+                -- eva / def — flat (any slot contributes; not split).
+                _pa_add('evasion', _ow_path_aug_stats['evasion'])
+                _pa_add('defense', _ow_path_aug_stats['defense'])
+                if _ow_cast_debug then
+                    local function _nz(t)
+                        local out = {}
+                        for k, v in pairs(t) do
+                            if k ~= '_by_slot' and type(v) == 'number' and v ~= 0 then
+                                out[#out+1] = k .. '+' .. v
+                            end
+                        end
+                        return #out > 0 and table.concat(out, ' ') or 'none'
+                    end
+                    windower.add_to_chat(207,
+                        '[OW pathaug] re-added after GearInfo: ' .. _nz(_ow_path_aug_stats))
+                end
 
                 -- OmniWatch patch (2026-05-18): compute_player_stats
                 -- only returns physical totals (acc/att/eva/def). The
@@ -10618,8 +11286,32 @@ function ow_compute_stats()
 end
 
 -- Encode stats dict to the UDP wire format and send.
+-- Tracks the last DW-needed value pushed to GearSwap so we only send on
+-- change (mirrors HasteInfo's event-driven reporting). nil = nothing sent yet.
+_ow_last_dw_sent = nil
+
+-- Push the current real-gear "DW needed" value to GearSwap so engaged sets
+-- can swap with haste buffs (the role the HasteInfo addon fills). Sends
+-- 'gs c owdw <N>', caught by the user's GearSwap self-command handler. Only
+-- fires for real (non-sim) state and only when the integer value changes;
+-- sim_on is passed so sim what-ifs never trigger a real gear swap.
+local function _ow_push_dw_to_gearswap(stats, sim_on)
+    if sim_on then return end
+    if not stats then return end
+    local n = tonumber(stats['dw needed'])
+    if not n then return end
+    n = math.max(0, math.floor(n + 0.5))   -- integer DW% still needed
+    if n == _ow_last_dw_sent then return end
+    _ow_last_dw_sent = n
+    windower.send_command('gs c owdw ' .. tostring(n))
+end
+
 function ow_send_stats(stats)
     local sim_on = (_sim and _sim.is_active and _sim.is_active()) or false
+
+    -- Drive GearSwap's DW/haste-group logic from OmniWatch's computed
+    -- "dw needed" (replaces the HasteInfo addon). Real-gear only, on-change.
+    _ow_push_dw_to_gearswap(stats, sim_on)
 
     -- Helper: get the equipment table with sim overrides layered on top.
     -- ow_send_stats has its own scope (no `equipment` local from
@@ -12649,6 +13341,18 @@ ow_safe_register('prerender', function()
                 local function ne(s)
                     return (s == '' or s == nil) and '~' or s
                 end
+                -- TH (Treasure Hunter) level on this mob. Looked up from
+                -- the proc-detection table with a freshness check. 0 when
+                -- no TH has procced, the entry is stale, or this isn't a
+                -- mob. Python hides the "TH - N" readout when 0.
+                local th_level = 0
+                if kind == 'mob' then
+                    local th = _ow_th_table[id]
+                    if th and th.level and th.ts
+                       and (os.clock() - th.ts) <= _OW_TH_TTL then
+                        th_level = th.level
+                    end
+                end
                 return
                     ne(tostring(name))    .. '|' ..
                     tostring(id)          .. '|' ..
@@ -12664,7 +13368,8 @@ ow_safe_register('prerender', function()
                     ne(main_job_str)      .. '|' ..
                     ne(sub_job_str)       .. '|' ..
                     ne(title_str)         .. '|' ..
-                    ne(race_key)
+                    ne(race_key)          .. '|' ..
+                    tostring(th_level)
             end
 
             local main_mob = windower.ffxi.get_mob_by_target('t')
@@ -13337,6 +14042,25 @@ ow_safe_register('prerender', function()
         _ow_chat_drain_acc = 0
         if _chat then
             pcall(_chat.drain_text,   udp_chat)
+        end
+    end
+
+    -- ── Skillchains panel emit (10 Hz) ───────────────────────────────────
+    -- Push current resonating state + suggestions to the Python overlay
+    -- on port 5015. The module dedupes internally so the wire stays
+    -- quiet when nothing has changed. No-op without the module.
+    _ow_sc_tick_acc = (_ow_sc_tick_acc or 0) + 1
+    if _ow_sc_tick_acc >= 6 then
+        _ow_sc_tick_acc = 0
+        if OW_Skillchains and OW_Skillchains.tick then
+            pcall(OW_Skillchains.tick, os.clock())
+        end
+        -- Job-change poll. Cheap (string compare); only takes action
+        -- if main_job has actually changed since the last check. Done
+        -- on the same cadence as the tick so per-job toggles reload
+        -- without a separate timer.
+        if OW_Skillchains and OW_Skillchains.handle_job_change then
+            pcall(OW_Skillchains.handle_job_change)
         end
     end
 end)

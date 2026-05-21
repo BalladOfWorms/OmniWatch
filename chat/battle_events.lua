@@ -125,6 +125,18 @@ local SPELL_MISS   = T{85, 284, 653, 654}
 local SPELL_DRAIN  = T{132, 161, 227, 281}
 local SPELL_ABSORB = T{572, 642}
 
+-- TP-move status-application messages. When a TP move (cat 11) carries
+-- one of these message IDs, it APPLIES A STATUS rather than dealing
+-- damage — action.param is a status/effect value, not a damage number.
+-- Without this, the cat-11 physical path renders e.g. "Apex Crab uses
+-- Metallic Body -> Apex Crab for 37 damage" (msg 117 = "Defense is
+-- enhanced but attacks weaken"; the 37 is the effect value). These IDs
+-- are the enhance/fortify/"gains the effect of" templates from
+-- action_messages.lua.
+local TP_BUFF_MSGS = T{117, 118, 120, 121, 131, 134, 148, 149, 150,
+                       151, 166, 186, 194, 205, 230, 266, 280, 286,
+                       287, 319}
+
 local function _spell_result(msg)
     if SPELL_DAMAGE:contains(msg) then return 'damage' end
     if SPELL_HEAL:contains(msg)   then return 'heal'   end
@@ -370,6 +382,10 @@ local function emit_physical(kind, actor_id, actor_name, actor_class,
         table.insert(segs, S(' (guarded)', 'default'))
     elseif result == 'no_damage' then
         table.insert(segs, S(' for no damage', 'default'))
+    elseif result == 'tp_use' then
+        -- Status-applying TP move (self-buff / enfeeble): no damage
+        -- trailer. Line reads "Actor uses 'Move' → Target" and stops.
+        -- (Nothing appended — the param is a status value, not damage.)
     elseif result == 'crit' then
         table.insert(segs, S(' for ', 'default'))
         table.insert(segs, S(tostring(damage), 'damage_number'))
@@ -880,10 +896,20 @@ function M.process(act)
                             action, _physical_result(action),
                             _ws_name(primary_id))
                     elseif cat == 11 then
+                        -- Status-applying TP moves (self-buffs like
+                        -- Metallic Body, enfeebles, etc.) carry a
+                        -- status-effect message, not a damage one — the
+                        -- param is an effect value, not damage. Render
+                        -- those as a plain "uses" with no damage trailer
+                        -- so we don't claim "X for N damage" on a buff.
+                        local tp_res = _physical_result(action)
+                        if TP_BUFF_MSGS:contains(action.message) then
+                            tp_res = 'tp_use'
+                        end
                         emit_physical('tp_move',
                             actor_id, actor_name, actor_class,
                             target_id, target_name, target_class,
-                            action, _physical_result(action),
+                            action, tp_res,
                             nil, _monster_tp_name(primary_id))
                     elseif cat == 4 then
                         emit_spell(
@@ -908,10 +934,19 @@ function M.process(act)
                                 _ja_result(action.message, action.param))
                         end
                     elseif cat == 9 then
+                        -- Item use. The resolvable item ID is in the
+                        -- per-target action.param (e.g. Warp Ring = 28540),
+                        -- NOT the packet-level act.param/primary_id (which
+                        -- holds a non-item value like 24931 that resolves
+                        -- to '?'). Diagnostic confirmed _item_name(
+                        -- action.param) = 'Warp Ring'. Prefer action.param;
+                        -- fall back to primary_id if it doesn't resolve.
+                        local it_nm = _item_name(action.param)
+                        if it_nm == '?' then it_nm = _item_name(primary_id) end
                         emit_item(
                             actor_id, actor_name, actor_class,
                             target_id, target_name, target_class,
-                            _item_name(primary_id))
+                            it_nm)
                     elseif cat == 13 then
                         emit_cast_start(
                             actor_id, actor_name, actor_class,

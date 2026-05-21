@@ -11540,7 +11540,7 @@ return {
         ["id"]=28135, 
         ["category"]="Armor", 
         ["Haste"]=5, 
-        ["MP"]=49, 
+        ["MP"]=29, 
         ["VIT"]=12, 
         ["STR"]=25, 
         ["INT"]=36, 
@@ -12598,7 +12598,7 @@ return {
         ["Magic Accuracy"]=7
     }, 
     [388]={
-        ["Evasion"]=110, 
+        ["Evasion"]=90, 
         ["MND"]=19, 
         ["slots"]={
             [8]="Feet"
@@ -13227,22 +13227,21 @@ return {
             [6]="THF", 
             [11]="RNG"
         }, 
-        ["DEX"]=26, 
-        ["AGI"]=52, 
+        ["DEX"]=11, 
+        ["AGI"]=37, 
         ["item_level"]=119, 
         ["discription"]="DEF:63 HP+13 MP+14 STR+10 DEX+11 VIT+10 AGI+37 INT+17 MND+19 CHR+34 Evasion+55 Magic Evasion+107 \"Magic Def. Bonus\"+5 Haste+3% \"Resist Gravity\"+20 Movement speed +18% Unity Ranking: Evasion+1～10", 
         ["DEF"]=63, 
         ["HP"]=13, 
-        ["Magic Evasion"]=30, 
-        ["VIT"]=10, 
-        ["STR"]=10, 
+        ["id"]=28276, 
+        ["category"]="Armor", 
         ["Haste"]=3, 
         ["MP"]=14, 
-        ["id"]=28276, 
+        ["VIT"]=10, 
+        ["STR"]=10, 
+        ["INT"]=17, 
         ["Unity Ranking Bonus Applied"]="Evasion + 9", 
         ["CHR"]=34, 
-        ["INT"]=17, 
-        ["category"]="Armor", 
         ["en"]="Jute Boots +1"
     }, 
     [405]={
@@ -16987,11 +16986,6 @@ return {
     }, 
     [531]={
         ["discription"]="DEF:14 Accuracy+14 \"Double Attack\"+3% Unity Ranking: \"Store TP\"+1～5", 
-        ["category"]="Armor", 
-        ["DEX"]=10, 
-        ["en"]="Kentarch Belt +1", 
-        ["Store TP"]=4, 
-        ["STR"]=10, 
         ["jobs"]={
             [1]="WAR", 
             [5]="RDM", 
@@ -17009,12 +17003,15 @@ return {
             [19]="DNC", 
             [22]="RUN"
         }, 
-        ["DEF"]=14, 
+        ["category"]="Armor", 
+        ["en"]="Kentarch Belt +1", 
+        ["Store TP"]=4, 
         ["slots"]={
             [10]="Waist"
         }, 
-        ["Accuracy"]=14, 
         ["id"]=28413, 
+        ["DEF"]=14, 
+        ["Accuracy"]=14, 
         ["Unity Ranking Bonus Applied"]="Store TP + 4"
     }, 
     [532]={

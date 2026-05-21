@@ -128,6 +128,27 @@ end
 -- them.
 local function _pre_strip_byte_markers(text)
     if not text or text == '' then return text end
+    -- Leading format-prefix byte. Some high-mode broadcasts begin with
+    -- a single byte in 0x80-0xFF that is NOT part of the message text
+    -- (observed: 0xA1 on Kupofried "ancient magic" / "Page N of the
+    -- tome flares up!" lines, 0xD0 on "<Name> examines you."). It
+    -- renders as a stray leading glyph. Strip it ONLY when the next
+    -- byte is printable ASCII — that signature distinguishes a format
+    -- prefix on an ASCII line from the lead byte of a real multibyte
+    -- Shift-JIS character (which is followed by another high byte, not
+    -- ASCII), so legitimate Japanese text is left intact.
+    local b1 = text:byte(1)
+    if b1 and b1 >= 0x80 then
+        local b2 = text:byte(2)
+        -- Strip when the next byte is printable ASCII (0x20-0x7E) OR the
+        -- 0x7F marker byte that opens FFXI's name-wrapper (e.g. examine
+        -- lines are "D0 7F FC <name> ..."). A genuine multibyte
+        -- Shift-JIS char has a high (>=0x80) second byte, so this never
+        -- eats real Japanese text.
+        if b2 and ((b2 >= 0x20 and b2 <= 0x7E) or b2 == 0x7F) then
+            text = text:sub(2)
+        end
+    end
     -- Order matters. Strip \x7F<digit> end-marker first (two-byte
     -- sequence) before the bare \x7F gets caught by the FC/FB pair
     -- strip below. The digit would otherwise be left orphan.
@@ -144,6 +165,16 @@ local function _pre_strip_byte_markers(text)
     -- "Koru-Moru" rendered as "京oru-Moru", "Ilmia" as "弒lmia", etc.
     text = text:gsub('\252', '')          -- bare \xFC
     text = text:gsub('\251', '')          -- bare \xFB
+    -- Stray \x8D marker before ASCII. Observed on the job-change
+    -- Moogle's emote: "Moogle : \x8DChaaange...job!". The lone \x8D is
+    -- an FFXI format/emote marker, but \x8D is also a Shift-JIS lead
+    -- byte, so from_shift_jis pairs it with the following 'C' (0x43)
+    -- and decodes the pair to the kanji 垢 — eating the C and rendering
+    -- "垢haaange". Strip \x8D only when the next byte is printable ASCII
+    -- (0x20-0x7E); a genuine \x8D-led Shift-JIS character has a trail
+    -- byte that forms a real kanji in Japanese text, so this leaves
+    -- legitimate SJIS intact.
+    text = text:gsub('\141([\32-\126])', '%1')
     return text
 end
 
@@ -624,12 +655,14 @@ function M.emit_chat(mode, sender_name, text)
     -- trace, with [TXT] source tag to distinguish from [PKT].
     -- See chat/chat_packets.lua _trace_log_line for file path.
     --
-    -- We DO skip addon-injected modes (>= MAX_REAL_CHAT_MODE) even
-    -- in trace, because those are our own chat outputs (debug, OW
-    -- info lines, etc.) — they're not real FFXI chat and capturing
-    -- them creates feedback loops (the trace echoes a line, the
-    -- echo arrives via incoming text, the trace logs it again, etc).
-    if M.trace and mode < MAX_REAL_CHAT_MODE then
+    -- We log high modes too (so dropped server announcements like the
+    -- Ambuscade-tome / Kupofried / Besieged broadcasts show their mode
+    -- number — otherwise they'd never appear here and we couldn't tell
+    -- which mode to whitelist). We DO skip our OWN injected lines
+    -- (prefixed "[OW") to avoid the feedback loop where the trace
+    -- echoes a line, the echo re-enters via incoming text, and logs
+    -- again.
+    if M.trace and text:sub(1, 3) ~= '[OW' then
         local now = os.date('*t')
         local timestamp = string.format(
             '%02d:%02d:%02d', now.hour, now.min, now.sec)
@@ -664,20 +697,37 @@ function M.emit_chat(mode, sender_name, text)
     -- being dropped on that mode and we've confirmed it's not an
     -- addon source.
     --
-    -- Currently whitelisted:
     --   151 — server announcement (Voidwatch / Campaign / Besieged
-    --         world-event broadcasts: "Word has been received of an
-    --         undead threat in <zone>." — observed by user in May
-    --         2026 Voidwatch broadcasts).
+    --         world-event broadcasts) + home-point / system info.
+    --   150 — NPC dialog / conversation ("Jeggim : Without a
+    --         watercraft..."). The same line also arrives on mode 152
+    --         (twice) — a duplicate framing we deliberately leave
+    --         dropped so the NPC line shows once, not three times.
+    --   161 — periodic world announcements: King Kupofried's "ancient
+    --         magic" buff broadcast, and "Page N of the tome flares
+    --         up!" (Ambuscade tome progress). Confirmed via trace.
     --   205 — LS message-of-the-day (login banner / /lsmes output)
+    --   208 — /check examine line ("<Name> examines you."). Confirmed
+    --         via trace. Python's _EXAMINE_PATTERN_R then routes it to
+    --         the examine channel → System tab.
+    --
+    -- NOT whitelisted (intentionally):
+    --   152 — duplicate framing of mode-150 NPC dialog (fires 2x for
+    --         the same line). Dropping it avoids triplicate NPC lines.
+    --   160 — a third-party /checkparam addon's GearSwap-style stat
+    --         readout that runs alongside /check. User wants it
+    --         ignored, so it stays dropped.
     --
     -- When a user reports a missing system message, check their
     -- session log for the "[OW] dropped chat mode=N" telemetry
     -- line below; the mode that produced the dropped text snippet
     -- can then be added here.
     local REAL_HIGH_MODES = {
+        [150] = true,
         [151] = true,
+        [161] = true,
         [205] = true,
+        [208] = true,
     }
     if mode >= MAX_REAL_CHAT_MODE and not REAL_HIGH_MODES[mode] then
         -- Silently drop. Previously this printed a one-line preview of
@@ -713,6 +763,14 @@ function M.emit_chat(mode, sender_name, text)
         local is_gearswap = false
         if text:sub(1, 10) == '[GearSwap]' or text:sub(1, 6) == '[CHAR]' then
             is_gearswap = true
+        elseif text:sub(1, 2) == '$[' then
+            -- GearSwap macro-set echoes: "$[Macro Set: WAR] Book: 1
+            -- Page: 3". Fired on mode 1 (same as /say) with no color,
+            -- so they look like chat but are addon output. Confirmed
+            -- via trace. Strip the leading "$" marker so the line
+            -- displays as "[Macro Set: WAR] Book: 1 Page: 3".
+            is_gearswap = true
+            text = text:sub(2)
         elseif text:match("^[A-Za-z][A-Za-z0-9 ]-%s+is now%s+[A-Za-z0-9_]+%.$") then
             is_gearswap = true
         end

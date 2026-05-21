@@ -344,6 +344,72 @@ Run `//ow setup` in-game to drop into setup mode — every panel becomes draggab
 
 Settings menu → **Inventory → Gearswap folder** → click PICK. Choose the folder containing your gearswap `.lua` files. Items referenced anywhere in those files get a ✓ in the inventory dropdown.
 
+### Driving GearSwap dual-wield sets from OmniWatch
+
+OmniWatch can tell GearSwap how much Dual Wield you still need to hit the delay cap, so your engaged sets can swap automatically as your haste buffs change — the same job the HasteInfo addon does. OmniWatch computes this from your real gear, traits, JP gifts, and active haste buffs, and pushes the value to GearSwap whenever it changes. If you already wire HasteInfo into your GearSwap, the command is identical, so you can drop HasteInfo and let OmniWatch drive it instead.
+
+OmniWatch sends GearSwap the self-command `gs c owdw <N>`, where `<N>` is the integer Dual Wield percent you still need (0 = you're capped, no DW gear required). It only sends when the number changes, and never while OmniWatch sim mode is active (sim is a what-if; it won't trigger a real set swap).
+
+To use it, add a handler to your GearSwap job file (or your shared character-globals include) that catches that command and stores the value. With Mote's library:
+
+```lua
+-- Initialize the variable when you change main/sub jobs (user_setup in Mote,
+-- job_setup in Selindrile).
+function user_setup()
+    dw_needed = 0
+end
+
+-- Route the self-command to the handler. In Mote this is job_self_command;
+-- in Selindrile it is user_self_command.
+function job_self_command(cmdParams, eventArgs)
+    process_owdw(cmdParams, eventArgs)
+end
+
+-- The handler: read the value OmniWatch sends and re-evaluate gear.
+function process_owdw(cmdParams, eventArgs)
+    if cmdParams[1] == 'owdw' then
+        if tonumber(cmdParams[2]) then
+            dw_needed = tonumber(cmdParams[2])
+            -- If your set-selection logic lives in a shared globals include
+            -- (e.g. a determine_haste_group() that reads uppercase vars),
+            -- set those here too. Drop these two lines if your setup only
+            -- uses the lowercase dw_needed below.
+            DW_needed = dw_needed
+            DW = DW_needed > 0
+        end
+        if not midaction() then
+            job_update()
+        end
+    end
+end
+```
+
+`tonumber` guards against a malformed value, and `job_update()` re-runs your gear logic so the new DW requirement takes effect immediately (when you're not mid-action).
+
+Then use the value to pick your set — for example, set a CombatForm or a custom melee group based on thresholds:
+
+```lua
+function update_combat_form()
+    if dw_needed <= 0 then
+        state.CombatForm:reset()           -- capped: no DW set
+    elseif dw_needed <= 11 then
+        state.CombatForm:set('LowDW')
+    elseif dw_needed <= 18 then
+        state.CombatForm:set('MidDW')
+    elseif dw_needed <= 31 then
+        state.CombatForm:set('HighDW')
+    else
+        state.CombatForm:set('MaxDW')
+    end
+end
+```
+
+The thresholds and set names are yours to define — adjust them to match how you've split your DW gear sets. If you're migrating from the HasteInfo addon, the wiring is nearly identical: point your self-command handler at `process_owdw` (catching `owdw`) instead of HasteInfo's handler, and stop loading HasteInfo (remove or comment out its `lua load hasteinfo` line) so the two don't both push a value and fight over it.
+
+Notes:
+- The value arrives on OmniWatch's first stats compute after you log in or change jobs, and on every change after that. To force a refresh, run `//ow dumpstats` (it recomputes and re-sends).
+- `//ow dumpstats` prints the current `dw needed` value, which is exactly what's being sent — handy for confirming the set your job picks matches what you expect.
+
 ### User config (advanced)
 
 `OmniWatch\data\user_config.lua` holds settings the lua side reads at addon load:
@@ -464,7 +530,7 @@ The python overlay binds these ports, accumulates state, and renders each panel 
 - **Lanun roll-proc accuracy** — when COR's Lanun gear set procs a bonus on a Phantom Roll's accuracy effect, OmniWatch may not always reflect the boosted value. The server doesn't reliably push the relevant stat packet for this case, and there's no clean way to detect the proc client-side.
 - **BLU spell-trait coverage** handles the major categories (DW, Fast Cast, MAB, Acc Bonus, Atk Bonus, Def Bonus, MDB, Store TP, Conserve MP, Counter, Auto Refresh, Auto Regen, MAcc Bonus, MEv Bonus, Magic Burst Bonus, Skillchain Bonus, Crit Atk Bonus, Inquartata, Tenacity, Max HP, Max MP, Zanshin, Resist Silence/Gravity/Sleep/Slow, Killer traits, DA/TA, Gilfinder/TH, Rapid Shot) sourced from the canonical bluguide tables. JP-category linear bonuses for MAB/MAcc are not yet wired separately.
 - **Running multiple FFXI clients with OmniWatch on the same machine is not supported** (UDP port collision — only one instance per machine can bind the addon's ports). Single-client multi-character config support via the character dropdown in the header works normally — you can pre-tweak layout, settings, and blacklists for any of your characters while logged in on a different one.
-- **Mog Wardrobes 5-8** require an active subscription to populate.
+- **Mog Wardrobes 5-8** require an active FFXI client subscription to populate.
 
 ## Development
 
