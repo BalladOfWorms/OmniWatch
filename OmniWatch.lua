@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.5.0'
+_addon.version  = '1.5.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -8713,6 +8713,110 @@ end)
 -- if food buff (251) is active in player.buffs but not in our timer dict,
 -- look up the food's known duration from OW_FOOD_DURATION_MIN.
 
+-- ── Own outgoing chat: resolve auto-translate from the INTACT source ──
+-- FFXI's 'outgoing text' event delivers the command you type (e.g.
+-- "/p {test}") with auto-translate phrases as INTACT 6-byte FD sequences:
+--   FD <type> <lang> <id_hi> <id_lo> FD     (id = id_hi*256 + id_lo)
+-- The incoming-text ECHO of your own message, by contrast, arrives
+-- pre-mangled by Windower as "FD <id_lo> FD" — the id_hi byte is lost —
+-- so phrases like "test" (id 7801 = 0x1E79) render as the stray low byte
+-- (0x79 = "y"). Tells resolve via the 0x0B6 outgoing packet and yells
+-- round-trip as inbound 0x017, so both are fine; party/say/linkshell/
+-- shout/emote have NO intact source EXCEPT this event. So we resolve the
+-- phrase here from the intact bytes, emit a clean line, and suppress the
+-- mangled echo (see _ow_own_outgoing_suppress, checked in emit.lua).
+
+-- Resolve all 6-byte FD auto-translate sequences in s to {English}.
+-- Mirrors the 0x0B6 tell handler's resolver.
+function _ow_resolve_outgoing_at(s)
+    if not s or s == '' then return s end
+    if not s:find(string.char(0xFD), 1, true) then return s end
+    local out, i, n = {}, 1, #s
+    while i <= n do
+        local b = s:byte(i)
+        if b == 0xFD and i + 5 <= n and s:byte(i + 5) == 0xFD then
+            local id = (s:byte(i + 3) or 0) * 256 + (s:byte(i + 4) or 0)
+            local phrase = res.auto_translates and res.auto_translates[id]
+            local txt = phrase and (phrase.en or phrase.ja)
+            out[#out + 1] = '{' .. (txt or string.format('?phrase:%d?', id)) .. '}'
+            i = i + 6
+        else
+            out[#out + 1] = string.char(b)
+            i = i + 1
+        end
+    end
+    return table.concat(out)
+end
+
+-- Map an outgoing chat command to (emit_mode, channel_label). Returns nil
+-- for commands we DON'T handle here (tell → 0x0B6; yell → inbound 0x017;
+-- non-chat commands). emit_mode matches the FFXI incoming-text mode codes
+-- emit.lua/Python expect, so the clean line routes to the right tab/color.
+_OW_OUT_CHAT_CMDS = {
+    ['p']         = 5,  ['party']      = 5,
+    ['s']         = 1,  ['say']        = 1,
+    ['l']         = 6,  ['linkshell']  = 6,  ['ls']  = 6,
+    ['l2']        = 27, ['linkshell2'] = 27, ['ls2'] = 27,
+    ['sh']        = 3,  ['shout']      = 3,
+    ['em']        = 9,  ['emote']      = 9,
+}
+
+-- Substitution store: the outgoing-text handler records the resolved AT
+-- phrase body keyed by mode. emit.lua's own-echo path swaps the mangled
+-- echo body for this resolved text (then lets the echo display normally).
+-- Short TTL so an unrelated later line with the same mode isn't affected.
+_ow_own_outgoing_suppress = _ow_own_outgoing_suppress or {}
+
+ow_safe_register('outgoing text', function(mode, text, blocked)
+    -- DIAGNOSTIC echo (only when chatdebug is on).
+    if _chat and _chat.is_debug and _chat.is_debug() then
+        local hexparts = {}
+        for k = 1, math.min(48, #(text or '')) do
+            hexparts[#hexparts + 1] = string.format('%02X', text:byte(k))
+        end
+        windower.add_to_chat(207, string.format(
+            '[OW otext] text=%q', (text or ''):sub(1, 50)))
+        if #hexparts > 0 then
+            windower.add_to_chat(207, '[OW otext] hex: ' .. table.concat(hexparts, ' '))
+        end
+    end
+
+    if blocked then return end
+    if not text or text == '' then return end
+    -- Only act on chat phrases that actually contain an AT sequence — a
+    -- plain "/p hello" needs no resolution and flows through the normal
+    -- echo path unharmed.
+    if not text:find(string.char(0xFD), 1, true) then return end
+
+    -- Parse leading command. Accept "/p", "/party", "/l2", etc.
+    -- (case-insensitive, alphanumeric so /l2 and /ls2 match).
+    local cmd, rest = text:match('^/(%w+)%s+(.+)$')
+    if not cmd then return end
+    local emit_mode = _OW_OUT_CHAT_CMDS[cmd:lower()]
+    if not emit_mode then return end   -- tell/yell/non-chat: not ours
+
+    local ok, err = pcall(function()
+        local resolved = _ow_resolve_outgoing_at(rest)
+        -- SJIS → UTF-8 for any non-AT, non-ASCII portion. The resolved
+        -- {phrase} text is already UTF-8 ASCII so it passes through.
+        local ok_c, conv = pcall(windower.from_shift_jis, resolved)
+        if ok_c and conv then resolved = conv end
+
+        -- Store the resolved body for in-place substitution. emit.lua's
+        -- own-echo path will swap the mangled echo body for this and let
+        -- the echo display normally (it already passes the own-echo
+        -- gate). We do NOT emit our own line here — routing it back
+        -- through emit_chat would hit the DROPPED_CHAT_MODES gate and be
+        -- dropped, since the sender is in the sender arg, not the text.
+        _ow_own_outgoing_suppress[emit_mode] = {
+            resolved = resolved, ts = os.clock(),
+        }
+    end)
+    if not ok and _chat and _chat.is_debug and _chat.is_debug() then
+        windower.add_to_chat(123, '[OW otext] resolve failed: ' .. tostring(err))
+    end
+end)
+
 ow_safe_register('outgoing chunk', function(id, data)
     -- ── 0x0B6: outgoing /tell ───────────────────────────────────────
     -- Captured BEFORE FFXI builds the display string, so we have
@@ -8803,6 +8907,7 @@ ow_safe_register('outgoing chunk', function(id, data)
         -- Continue to other handlers below (don't return; 0x037 path
         -- is independent).
     end
+
 
     -- ── 0x037: item use (existing food-buff capture) ────────────────
     if id ~= 0x037 then return end

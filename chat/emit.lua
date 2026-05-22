@@ -490,7 +490,7 @@ end
 -- before encoding normalization by _pre_strip_byte_markers, since
 -- those byte sequences would interfere with the SJIS-detection
 -- step in _normalize_to_utf8.
-local function _strip_ffxi_markers(text)
+local function _strip_ffxi_markers(text, mode)
     if not text or text == '' then return text end
     -- (Pre-strip byte markers — \x7F+digit, \x7F\xFC, \x7F\xFB —
     -- handled earlier in the pipeline via _pre_strip_byte_markers.
@@ -574,6 +574,17 @@ local function _strip_ffxi_markers(text)
     --     must be uppercase, and only the very first character is
     --     considered.
     text = text:gsub('^([yzw])(%u)', '%2')
+    -- 4b. FFXI leading-brace prefix on certain SYSTEM modes. Modes like
+    --     123 ("{There are no party members.") prepend a literal '{'
+    --     (0x7B) byte that the native client hides during rendering but
+    --     we receive verbatim. We strip a leading '{' or '}' followed by
+    --     an uppercase letter ONLY on these known system modes — never on
+    --     real chat, where '{' is meaningful auto-translate punctuation
+    --     (e.g. a "{Hello!}" greeting would start the same way).
+    local BRACE_PREFIX_MODES = {[121]=true, [122]=true, [123]=true, [124]=true}
+    if mode and BRACE_PREFIX_MODES[mode] then
+        text = text:gsub('^([{}])(%u)', '%2')
+    end
     -- 5. Collapse runs of whitespace from the strips, trim ends.
     text = text:gsub('%s+', ' ')
     text = text:gsub('^%s*(.-)%s*$', '%1')
@@ -791,6 +802,33 @@ function M.emit_chat(mode, sender_name, text)
             end
         end
 
+        -- Repair the MANGLED echo of our own outgoing auto-translate
+        -- chat. Windower's incoming-text echo drops the AT id's high
+        -- byte, so a phrase like {test} (id 7801) renders as a stray
+        -- char ("y"). OmniWatch's 'outgoing text' hook captured the
+        -- phrase from the INTACT typed command and stored the resolved
+        -- body keyed by mode. Here we swap the mangled body for the
+        -- resolved text, then let the echo display normally (it already
+        -- passes the own-echo gate). Consume the flag; short TTL guards
+        -- against repairing an unrelated later line.
+        if is_own_echo and _G._ow_own_outgoing_suppress then
+            local sup = _G._ow_own_outgoing_suppress[mode]
+            if sup and sup.resolved and (os.clock() - (sup.ts or 0)) < 1.0 then
+                _G._ow_own_outgoing_suppress[mode] = nil
+                -- The echo is "<sender-prefix><mangled body>". Preserve
+                -- the prefix (everything up to and including the first
+                -- ") " or "> " that FFXI uses to separate sender from
+                -- body) and replace the body with the resolved text.
+                local prefix = text:match('^(.-[%)>]%s)')
+                if prefix then
+                    text = prefix .. sup.resolved
+                else
+                    -- No recognizable sender prefix — replace whole body.
+                    text = sup.resolved
+                end
+            end
+        end
+
         if not is_gearswap and not is_own_echo then return end
     end
 
@@ -842,7 +880,7 @@ function M.emit_chat(mode, sender_name, text)
     -- work with.
     text = _normalize_to_utf8(text)
 
-    text = _strip_ffxi_markers(text)
+    text = _strip_ffxi_markers(text, mode)
 
     -- Resolve sender → mob id → classification. Most chat senders
     -- won't be findable by name (different zones, LS chatter etc.),
