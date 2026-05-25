@@ -87,6 +87,20 @@ files   = files   or require('files')
 packets = packets or require('packets')
 chat    = chat    or require('chat')
 
+-- ── Silence GearInfo's in-chat announcements ────────────────────────────────
+-- The bundled GearInfo modules (Buff_Processing, Action_Processing,
+-- Packet_parsing, GearInfo.lua) call the logger lib's global `notice()` to
+-- print things like:
+--   "① Ulmia → \"Sword Madrigal\": Accuracy +45, ..., Potency = 1, Song bonus +0"
+--   "Bolster detected, Boosting ...", "Lost <spell>", version-change notices
+-- Those run INSIDE OmniWatch (we load these modules below), so they leak
+-- into the player's game chat even though OmniWatch never wants them — the
+-- user only wants the data tables and compute helpers, not GearInfo's
+-- chatter. Override `notice` to a no-op for the rest of this load so every
+-- GearInfo notice() call is silently swallowed. OmniWatch's own output uses
+-- windower.add_to_chat (prefixed [OW]/[OmniWatch]) and is unaffected.
+notice = function() end
+
 -- ── Phase 1: Statics ────────────────────────────────────────────────────────
 -- Sets player.equipment, player.stats, Buffs_inform, Gear_info,
 -- member_table, settings defaults, etc. as GLOBALS.

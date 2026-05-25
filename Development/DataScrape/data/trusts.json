@@ -1,0 +1,4535 @@
+{
+  "_meta": {
+    "category": "Category:Trust",
+    "rate_sec": 3.0,
+    "source": "https://ffxiclopedia.fandom.com",
+    "total_trusts": 122,
+    "with_abilities": 111,
+    "with_data": 122,
+    "with_portraits": 122
+  },
+  "trusts": {
+    "aaev": {
+      "alter_ego": "Ark Angel EV",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Grgl......",
+        "dismiss": "...",
+        "summon": "You shall be overwhelmed by the arrogance that disfigures you..."
+      },
+      "display": "Trust: AAEV",
+      "intro_text": "",
+      "job": "PLD/WHM",
+      "job_abilities": [
+        "Sentinel",
+        "Chivalry",
+        "Divine Emblem",
+        "Palisade"
+      ],
+      "job_traits": [
+        "High Cure Potency"
+      ],
+      "main_job": "PLD",
+      "name": "AAEV",
+      "notable": "",
+      "obtained": "Records of Eminence: Temper Your Arrogance",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c2/ArkEV.PNG/revision/latest?cb=20170420012452",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Cure I-IV",
+        "Flash",
+        "Holy I-II",
+        "Reprisal",
+        "Phalanx",
+        "Enlight"
+      ],
+      "spells_raw": "Cure I-IV, Flash, Holy I-II, Reprisal, Phalanx, Enlight.",
+      "sub_job": "WHM",
+      "weapon": "Sword/Shield",
+      "weapon_skills": [
+        "Arrogance Incarnate",
+        "Vorpal Blade",
+        "Dominion Slash",
+        "Chant du Cygne"
+      ],
+      "weapon_skills_raw": "**Arrogance Incarnate (renamed Spirits Within)\n**Vorpal Blade\n**Dominion Slash (AoE Silence)\n**Chant du Cygne"
+    },
+    "aagk": {
+      "alter_ego": "Ark Angel GK",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Mmph...",
+        "dismiss": "...",
+        "summon": "You shall be burned by the rage that controls you..."
+      },
+      "display": "Trust: AAGK",
+      "intro_text": "",
+      "job": "SAM/DRG",
+      "job_abilities": [
+        "Jump",
+        "Hasso",
+        "Meditate",
+        "High Jump",
+        "Sekkanoki",
+        "Konzen-ittai",
+        "Hagakure"
+      ],
+      "job_traits": [],
+      "main_job": "SAM",
+      "name": "AAGK",
+      "notable": "",
+      "obtained": "Records of Eminence: Quell Your Rage",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/0/0c/ArkGK.PNG/revision/latest?cb=20170420012046",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "DRG",
+      "weapon": "Great Katana",
+      "weapon_skills": [
+        "Tachi: Yukikaze",
+        "Tachi: Gekko",
+        "Tachi: Kasha",
+        "Tachi: Fudo",
+        "Dragonfall"
+      ],
+      "weapon_skills_raw": "**Tachi: Yukikaze\n**Tachi: Gekko\n**Tachi: Kasha\n**Tachi: Fudo (at level 71)\n**Dragonfall (ability used as a weapon skill)"
+    },
+    "aahm": {
+      "alter_ego": "Ark Angel HM",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk...",
+        "dismiss": "...",
+        "summon": "You shall be defeated by the apathy that plagues you..."
+      },
+      "display": "Trust: AAHM",
+      "intro_text": "",
+      "job": "NIN/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Warcry",
+        "Yonin"
+      ],
+      "job_traits": [],
+      "main_job": "NIN",
+      "name": "AAHM",
+      "notable": "",
+      "obtained": "Record of Eminence Eliminate Your Apathy",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/d/d5/TrustAAHM.png/revision/latest?cb=20171017013602",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Utsusemi: Ni",
+        "Migawari: Ichi",
+        "Kurayami: Ni",
+        "Hojo: Ni"
+      ],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Cross Reaver",
+        "Swift Blade",
+        "Chant du Cygne"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "aamr": {
+      "alter_ego": "Ark Angel MR",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Fwa...",
+        "dismiss": "...",
+        "summon": "You shall be twisted by the envy that drives you..."
+      },
+      "display": "Trust: AAMR",
+      "intro_text": "",
+      "job": "BST/THF",
+      "job_abilities": [
+        "Sneak Attack",
+        "Trick Attack"
+      ],
+      "job_traits": [
+        "Treasure Hunter",
+        "Triple Attack",
+        "Beast Killer",
+        "Killer Effects",
+        "BST"
+      ],
+      "main_job": "BST",
+      "name": "AAMR",
+      "notable": "",
+      "obtained": "Records of Eminence Stifle Your Envy",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/74/ArkMR.PNG/revision/latest?cb=20170420012645",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "THF",
+      "weapon": "Axe",
+      "weapon_skills": [
+        "Rampage",
+        "Calamity",
+        "Cloudsplitter",
+        "Havoc Spiral"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "aatt": {
+      "alter_ego": "Ark Angel TT",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Graaa...",
+        "dismiss": "...",
+        "summon": "You shall be consumed by the cowardice that binds you..."
+      },
+      "display": "Trust: AATT",
+      "intro_text": "",
+      "job": "BLM/DRK",
+      "job_abilities": [
+        "Elemental Seal",
+        "Last Resort",
+        "Souleater"
+      ],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "AATT",
+      "notable": "",
+      "obtained": "Record of Eminence Overcome Your Cowardice",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/83/Trustarktt.png/revision/latest?cb=20220530004736",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Poison",
+        "Bio",
+        "Aspir",
+        "Stun",
+        "Sleepga",
+        "Elemental Magic"
+      ],
+      "spells_raw": "",
+      "sub_job": "DRK",
+      "weapon": "Scythe",
+      "weapon_skills": [
+        "Guillotine",
+        "Amon Drive"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "abenzio": {
+      "alter_ego": "Abenzio",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Oh, no...I fell down...",
+        "dismiss": "It's always nice...to have such soft...glossy skin...",
+        "summon": "Where are...we going?"
+      },
+      "display": "Trust: Abenzio",
+      "intro_text": "",
+      "job": "Monster (Monk)",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "Monster (Monk)",
+      "name": "Abenzio",
+      "notable": "",
+      "obtained": "Trade Cipher: Abenzio to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/2/2c/Trust_Abenzio.png/revision/latest?cb=20141125004549",
+      "race": "Goobbue",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [
+        "Antiphase: AoE Silence",
+        "Blow: Single Target Damage",
+        "Blank Gaze",
+        "Uppercut"
+      ],
+      "weapon_skills_raw": "**Antiphase: AoE Silence.\n**Blow: Single Target Damage.\n**Blank Gaze: Conal Paralyze if Target is facing Abenzio.\n**Uppercut: Single Target Damage."
+    },
+    "abquhbah": {
+      "alter_ego": "Abquhbah",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I will of course take... f-full resposibility...",
+        "dismiss": "Are we...are we done?",
+        "summon": "R-right away! Abquhbah, reporting for duty!"
+      },
+      "display": "Trust: Abquhbah",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Berserk",
+        "Warcry",
+        "Restraint"
+      ],
+      "job_traits": [
+        "Double Attack"
+      ],
+      "main_job": "WAR",
+      "name": "Abquhbah",
+      "notable": "**He is a WAR using H2H. No Guard, no Counter, no Focus, no Chakra.\n**He takes less damage than a 171 VIT, 847 DEF BST/DNC.\n**Has decent evasion.\n**Usually uses Berserk and Warcry before a weapon skill.",
+      "obtained": "Talk to Abquhbah after completing the Missions President Salaheem and Ever Forward",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/ee/Trust_Abquhbah.png/revision/latest?cb=20151029064744",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Bare Hands",
+      "weapon_skills": [
+        "Combo",
+        "Backhand Blow",
+        "Salaheem Spirit"
+      ],
+      "weapon_skills_raw": "Combo, Backhand Blow, Salaheem Spirit (+23 to all base stats @ 99)."
+    },
+    "adelheid": {
+      "alter_ego": "Adelheid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Never, ever...let your guard down.",
+        "dismiss": "Good luck!",
+        "summon": "Ah, but my favorite assistant detective here wouldn't let me down. Just refrain from engaging in conduct that may hinder my--er, group progress."
+      },
+      "display": "Trust: Adelheid",
+      "intro_text": "",
+      "job": "SCH/BLM",
+      "job_abilities": [
+        "Dark Arts",
+        "Light Arts"
+      ],
+      "job_traits": [],
+      "main_job": "SCH",
+      "name": "Adelheid",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza, or Records of Eminence: Alter Ego: Tenzen",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/51/Trust_Adelheid.png/revision/latest?cb=20150402152720",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Cure spells",
+        "Helices",
+        "Storm Spells",
+        "Stun"
+      ],
+      "spells_raw": "Cure spells, Helices, Storm Spells, Stun, and Elemental Magic up to tier V.\nPer the December 10, 2015 update:\n* Behavior for casting Cure in emergency situations has been added.\n* Casting priority of Cure has been lowered.",
+      "sub_job": "BLM",
+      "weapon": "Seveneyes",
+      "weapon_skills": [
+        "All deal magic damage",
+        "Paralyzing Microtube",
+        "Silencing Microtube",
+        "Binding Microtube",
+        "Twirling Dervish"
+      ],
+      "weapon_skills_raw": "Paralyzing Microtube, Silencing Microtube, Binding Microtube, Twirling Dervish (all AOE).\n** All deal magic damage, but microtubes also debuff the enemy."
+    },
+    "ajido-marujido": {
+      "alter_ego": "Ajido-Marujido",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I've...failed.",
+        "dismiss": "Genius-wenius is never understood in its own time.",
+        "summon": "Come! Together we will discover the truthy-wuth!"
+      },
+      "display": "Trust: Ajido-Marujido",
+      "intro_text": "",
+      "job": "BLM/RDM",
+      "job_abilities": [],
+      "job_traits": [
+        "Magic Burst Bonus"
+      ],
+      "main_job": "BLM",
+      "name": "Ajido-Marujido",
+      "notable": "**Possesses the same auto-attack as the Mammet family: if the enemy is nearby, he shoots ranged invisible magic projectiles from his hand.\n**Nukes based on target's HP (lower HP = weaker spell).\n**Prioritizes Dispel.\n**Casts Cure spells up to Cure IV in emergencies (red HP).\n**Casts spell that's related to the Bard's Threnody (if wind, casts Aero, if ice, casts Blizzard, etc.).\n**Quickly depletes his MP, but becomes more conservative with spell tiers when the enemy's HP is low.\n***Outside of bat...",
+      "obtained": "Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/1/1c/Trust_Ajido-Marujido.png/revision/latest?cb=20140129020800",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Cure IV",
+        "Paralyze",
+        "Slow",
+        "Dispel",
+        "Elemental Magic"
+      ],
+      "spells_raw": "**Healing: Up to Cure IV.\n**Enfeebling: Paralyze, Slow, Dispel.\n**Elemental: Single-target (up to Tier V) Elemental Magic nukes in rapid succession, with a focus on high-power nukes.",
+      "sub_job": "RDM",
+      "weapon": "Mammet battle stance",
+      "weapon_skills": [],
+      "weapon_skills_raw": "None."
+    },
+    "aldo": {
+      "alter_ego": "Aldo",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "We can't...let them get away with it.",
+        "dismiss": "Good luck on your journeys, and may fortune smile upon you always!",
+        "summon": "I'll show them what this so-called incomplete Hume is made of!"
+      },
+      "display": "Trust: Aldo",
+      "intro_text": "",
+      "job": "THF",
+      "job_abilities": [
+        "Sneak Attack",
+        "Assassin's Charge",
+        "Bully"
+      ],
+      "job_traits": [],
+      "main_job": "THF",
+      "name": "Aldo",
+      "notable": "** Melees Dual Wielding 2 different daggers, but also has Marksmanship ranged skill with a gun which uses the Coffinmaker model.\n** Uses Sneak Attack, after the enemy is positioned so he's facing the enemy's back. At higher levels, he appears to be able to do extra damage regardless of positioning.",
+      "obtained": "Trade Cipher: Aldo from Adventurer Appreciation Campaigns to a Trust Initiative NPC",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/ef/TrustAldo.png/revision/latest?cb=20140615031536",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Two daggers and a gun",
+      "weapon_skills": [
+        "Iniquitous Stab",
+        "Shockstorm Edge",
+        "Choreographed Carnage",
+        "Lock and Load"
+      ],
+      "weapon_skills_raw": "** Dagger: Iniquitous Stab, Shockstorm Edge (AOE, Detonation and Impaction attributes), Choreographed Carnage. \n** Gun: Lock and Load (Light attribute)."
+    },
+    "aldo (uc)": {
+      "alter_ego": "Aldo",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Hmph.",
+        "dismiss": "What if this is all just a dream posed to us by the mothercrystal?",
+        "summon": "What do you require of the Tenshodo?"
+      },
+      "display": "Trust: Aldo (UC)",
+      "intro_text": "",
+      "job": "THF",
+      "job_abilities": [
+        "Bully",
+        "Sneak Attack"
+      ],
+      "job_traits": [
+        "Triple Attack"
+      ],
+      "main_job": "THF",
+      "name": "Aldo (UC)",
+      "notable": "",
+      "obtained": "Join Aldo's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/1/11/Trust_Aldo_%28UC%29.png/revision/latest?cb=20150721163204",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Two Daggers",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "amchuchu": {
+      "alter_ego": "Amchuchu",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk... Was there a hole in my plans-wans?",
+        "dismiss": "A researcher's work is never over!",
+        "summon": "Making your life better--one tomato-wato at a time!"
+      },
+      "display": "Trust: Amchuchu",
+      "intro_text": "",
+      "job": "RUN/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Rune Enchantment",
+        "Swordplay",
+        "Tellus",
+        "Vallation",
+        "Berserk",
+        "Lunge",
+        "Valiance",
+        "Embolden"
+      ],
+      "job_traits": [
+        "Inspiration effect for Vallation",
+        "Valiance"
+      ],
+      "main_job": "RUN",
+      "name": "Amchuchu",
+      "notable": "**Sometimes uses Lunge when a skill chain is triggered.\n**Uses the elemental runes that are strong against the current day. Ignores weather (natural or SCH-caused).",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Amchuchu to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/59/Trust_Amchuchu.jpg/revision/latest?cb=20150402232321",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Protect IV",
+        "Regen IV",
+        "Phalanx",
+        "Refresh",
+        "Flash",
+        "Foil"
+      ],
+      "spells_raw": "Protect IV, Regen IV, Phalanx, Refresh, Flash, Foil.",
+      "sub_job": "WAR",
+      "weapon": "Great Sword",
+      "weapon_skills": [
+        "Power Slash",
+        "Sickle Moon",
+        "Dimidiation"
+      ],
+      "weapon_skills_raw": "Power Slash, Sickle Moon, Dimidiation."
+    },
+    "apururu (uc)": {
+      "alter_ego": "Apururu",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk...if only I had...tried harder...",
+        "dismiss": "Goodbye for now!",
+        "summon": "Apururu of the Manustery here!"
+      },
+      "display": "Trust: Apururu (UC)",
+      "intro_text": "",
+      "job": "WHM/RDM",
+      "job_abilities": [
+        "Devotion",
+        "Martyr",
+        "Convert"
+      ],
+      "job_traits": [],
+      "main_job": "WHM",
+      "name": "Apururu (UC)",
+      "notable": "",
+      "obtained": "Join Apururu's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/71/Trust_Apururu_UC.png/revision/latest?cb=20150810195938",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Cure",
+        "Protect",
+        "Shell",
+        "Haste",
+        "Erase"
+      ],
+      "spells_raw": "",
+      "sub_job": "RDM",
+      "weapon": "Club",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "arciela": {
+      "alter_ego": "Arciela",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Ygnas...I came so far, only to...?",
+        "dismiss": "Don't think I've forgotten to tell you all about my favorite desserts!",
+        "summon": "Even though we are all weak, we become stronger to protect those we love."
+      },
+      "display": "Trust: Arciela",
+      "intro_text": "",
+      "job": "Special (Red Mage)",
+      "job_abilities": [
+        "Switches between light",
+        "Bellatrix of Shadows"
+      ],
+      "job_traits": [],
+      "main_job": "Special (Red Mage)",
+      "name": "Arciela",
+      "notable": "Per the December 11, 2018 update: \"The following alter egos are now considered to wield great swords because of the addition of the Damage Limit+ job trait.\n::::Arciela / Balamor / August / Rosulatia / Teodor / Darrcuiln\"",
+      "obtained": "After completing Seekers of Adoulin Missions, talk with Ploh Trishbahk, then check Sandy Overlook at J-10 Ceizak Battlegrounds",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/3e/Trust_Arciela.png/revision/latest?cb=20150309110545",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [
+        "Protect V",
+        "Shell V",
+        "Haste II",
+        "Refresh II",
+        "Slow II",
+        "Paralyze II"
+      ],
+      "spells_raw": "**Up to Protect V, Shell V, Haste II, and Refresh II when Bellatrix of Light is active.\n**Slow II and Paralyze II when Bellatrix of Shadows is active.",
+      "sub_job": "",
+      "weapon": "Bellatrix",
+      "weapon_skills": [
+        "Dynastic Gravitas",
+        "Amnesia",
+        "Guiding Light",
+        "Illustrious Aid"
+      ],
+      "weapon_skills_raw": "**Dynastic Gravitas, an AoE weapon skill which may inflict Amnesia on targets.\n**Guiding Light, granting Attack Bonus, Defense Bonus, Magic Attack Bonus, and Magic Defense Bonus to the party.\n**Illustrious Aid (rarely), which is a fairly strong AoE HP restore (can heal for upwards of 800 HP)."
+    },
+    "arciela ii": {
+      "alter_ego": "Arciela",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "dismiss": "I promise that I'll never stop striving for greater heights!",
+        "summon": "For the founder king!"
+      },
+      "display": "Trust: Arciela II",
+      "intro_text": "",
+      "job": "Special (Red Mage)",
+      "job_abilities": [
+        "Ascension",
+        "Elemental Magic",
+        "Enhancing Magic",
+        "Ascension for Enhancing Magic",
+        "Descension for Enfeebling Magic"
+      ],
+      "job_traits": [],
+      "main_job": "Special (Red Mage)",
+      "name": "Arciela II",
+      "notable": "**Despite her classification as Support, Arciela II might be more accurately described as an offensive caster.\n**Unlike Trust: Arciela's Bellatrix of Light/Shadows, Arciela II's two casting modes will also deal magic damage to the enemy when used.\n**Attempts to magic burst off of skillchains.\n**Possesses increased duration for Enhancing Magic.\n**She casts no Cures at all.",
+      "obtained": "What He Left Behind",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c7/Trust_Arciela_II.jpg/revision/latest?cb=20160416015547",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [
+        "Protect I-V",
+        "Shell I-V",
+        "Haste I-II",
+        "Refresh I-II",
+        "Flurry I-II",
+        "Slow I-II",
+        "Paralyze I-II",
+        "Addle",
+        "Dispel"
+      ],
+      "spells_raw": "Protect I-V, Shell I-V, Haste I-II, Refresh I-II, Flurry I-II, Slow I-II, Paralyze I-II, Addle, Dispel, up to Tier V Elemental Magic.",
+      "sub_job": "",
+      "weapon": "Hand-to-hand",
+      "weapon_skills": [
+        "Dignified Awe",
+        "Unceasing Dread",
+        "Expunge Magic",
+        "Sight Unseen",
+        "Harmonic Displacement",
+        "Darkest Hour",
+        "Naakual's Vengeance"
+      ],
+      "weapon_skills_raw": "**Dignified Awe: Inflicts Amnesia\n**Unceasing Dread: Inflicts Paralysis\n**Expunge Magic: Distortion/Scission skillchain properties\n**Sight Unseen: Fragmentation/Compression skillchain properties\n**Harmonic Displacement: Fusion/Reverberation skillchain properties\n**Darkest Hour: Gravitation/Liquefaction skillchain properties\n**Naakual's Vengeance: Light/Fusion skillchain properties and AoE damage; uses it at low health and it also fully heals her."
+    },
+    "areuhat": {
+      "alter_ego": "Areuhat",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Slumber...is not altogether unwelcome...",
+        "dismiss": "Let us bring true peace to this land once more.",
+        "summon": "It is not without reason that I choose to join your side."
+      },
+      "display": "Trust: Areuhat",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Berserk",
+        "Blood Rage",
+        "Seraph Blade",
+        "Savage Blade",
+        "Vorpal Blade",
+        "Hurricane Wing",
+        "Dragon Breath"
+      ],
+      "job_traits": [],
+      "main_job": "WAR",
+      "name": "Areuhat",
+      "notable": "",
+      "obtained": "Trade Cipher: Areuhat from Login Campaign to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/e8/Trust_Areuhat.jpg/revision/latest?cb=20150403000240",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Sword",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "august": {
+      "alter_ego": "August",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "You, the lucky...the living... Your fates are not yet bound...carry on without me!",
+        "dismiss": "Before time itself ceases to flow...may we meet again.",
+        "summon": "Well met, friend. Let us begin."
+      },
+      "display": "Trust: August",
+      "intro_text": "",
+      "job": "PLD/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Sentinel",
+        "Divine Emblem"
+      ],
+      "job_traits": [],
+      "main_job": "PLD",
+      "name": "August",
+      "notable": "** Uses numerous Alluvion Skirmish weapons in both regular hits and weapon skills. Despite animations, all standard hits count as one. This include:\n*** Sword slash and shield bash.\n*** Five hits with knuckles.\n*** Wide slash with dagger and axe\n*** Arching shot with bow. Despite the animation, it only hits the engaged target.\n::::Arciela / Balamor / August / Rosulatia / Teodor / Darrcuiln\"\n:::August's Magic Accuracy now scales with the item level of the party leader.\n*As of the November 2021 Up...",
+      "obtained": "Sinister Reign, Records of Eminence: Way Over Capacity",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/3d/Trust_August.png/revision/latest?cb=20150807230637",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Flash",
+        "Reprisal"
+      ],
+      "spells_raw": "Cure spells on both himself and others, Flash, Reprisal.",
+      "sub_job": "WAR",
+      "weapon": "Sword, shield, swaps to 10+ others",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "ayame": {
+      "alter_ego": "Ayame",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "There are no shortcuts to perfection.",
+        "dismiss": "Remember to hold your family close. They will be your rock in times of need.",
+        "summon": "Refining one's technique requires one to be their own harshest critic."
+      },
+      "display": "Trust: Ayame",
+      "intro_text": "",
+      "job": "SAM",
+      "job_abilities": [
+        "Hasso",
+        "Third Eye",
+        "Meditate"
+      ],
+      "job_traits": [
+        "Zanshin"
+      ],
+      "main_job": "SAM",
+      "name": "Ayame",
+      "notable": "",
+      "obtained": "Trust: Bastok (mission rank 3 required)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/b/b5/Trust_Ayame.png/revision/latest?cb=20131231204226",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Great Katana",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "ayame (uc)": {
+      "alter_ego": "Ayame",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "This burden...is too much to bear.",
+        "dismiss": "I know you will do what is right.",
+        "summon": "A better companion than me you will never find."
+      },
+      "display": "Trust: Ayame (UC)",
+      "intro_text": "",
+      "job": "SAM",
+      "job_abilities": [
+        "Hasso",
+        "Seigan",
+        "Third Eye"
+      ],
+      "job_traits": [],
+      "main_job": "SAM",
+      "name": "Ayame (UC)",
+      "notable": "",
+      "obtained": "Join Ayame's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/48/Ayame_%28UC%29_Trust.png/revision/latest?cb=20150624040947",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Great Katana",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "babban": {
+      "alter_ego": "Babban Ny Mheillea",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Eeeeeeeeep!",
+        "dismiss": "I'm lucky to have three beautiful sproutlings!",
+        "summon": "Oh boy! Where're we going?"
+      },
+      "display": "Trust: Babban",
+      "intro_text": "",
+      "job": "Monster (Monk)",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "Monster (Monk)",
+      "name": "Babban",
+      "notable": "",
+      "obtained": "Sunshine Seekers",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/33/Trust_Babban.jpg/revision/latest?cb=20150101003342",
+      "race": "Mandragora",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "balamor": {
+      "alter_ego": "Balamor",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "What? No. Balamor cannot...fail!",
+        "dismiss": "I'm bored. Goodbye.",
+        "summon": "The curtain is up, boys and girls. It's time to play!"
+      },
+      "display": "Trust: Balamor",
+      "intro_text": "",
+      "job": "Special (DRK)",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "Special (DRK)",
+      "name": "Balamor",
+      "notable": "** Classed as undead:\n***Cannot be healed, but does self heal with Last Laugh.\n** Auto attacks are non-physical, dark element.\n::::Arciela / Balamor / August / Rosulatia / Teodor / Darrcuiln\"",
+      "obtained": "Cipher: Balamor from the mission Pretender to the Throne",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/a4/Trust_Balamor.png/revision/latest?cb=20150814234307",
+      "race": "Defiant",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Absorb Spells",
+        "Absorb-ACC",
+        "Absorb-Attri"
+      ],
+      "spells_raw": "Absorb Spells, except Absorb-TP, Absorb-ACC, and Absorb-Attri.",
+      "sub_job": "",
+      "weapon": "\"Great Sword\"",
+      "weapon_skills": [
+        "Feast of Arrows",
+        "Last Laugh",
+        "Regurgitated Swarm",
+        "Setting the Stage"
+      ],
+      "weapon_skills_raw": "**Feast of Arrows: Gravitation/Transfixion skillchain properties.\n**Last Laugh: Gravitation skillchain property and HP Drain.\n**Regurgitated Swarm: Fusion/Compression skillchain properties.\n**Setting the Stage: Induration skillchain property."
+    },
+    "brygid": {
+      "alter_ego": "Brygid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "N/A (due to her non-interactive status, she cannot die)",
+        "dismiss": "True fashion waits for no one!",
+        "summon": "Don't tell me you're still wearing that robe. I mean, it is so last Firesday!"
+      },
+      "display": "Trust: Brygid",
+      "intro_text": "",
+      "job": "Passive (Geomancer)",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "Passive (Geomancer)",
+      "name": "Brygid",
+      "notable": "",
+      "obtained": "Repeat Login Campaign (trade Cipher: Brygid to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/99/Trust_Brygid.png/revision/latest?cb=20150414163016",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Passive Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "chacharoon": {
+      "alter_ego": "Chacharoon",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I sad... no use.",
+        "dismiss": "I promise always cheer you on!",
+        "summon": "No jingly, no tingly!"
+      },
+      "display": "Trust: Chacharoon",
+      "intro_text": "",
+      "job": "Special (THF)",
+      "job_abilities": [
+        "Pocket Sand",
+        "Blind",
+        "Tripe Gripe",
+        "Amnesia",
+        "Sharp Eye",
+        "Defense Down",
+        "Weight"
+      ],
+      "job_traits": [
+        "Triple Attack"
+      ],
+      "main_job": "Special (THF)",
+      "name": "Chacharoon",
+      "notable": "",
+      "obtained": "Trial of the Chacharoon",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/41/Trust_Chacharoon.jpg/revision/latest?cb=20150403001348",
+      "race": "Qiqirn",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "A stick and rocks",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "cherukiki": {
+      "alter_ego": "Cherukiki",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urgh... At least it beats getting smacked around by Prishe...",
+        "dismiss": "Next time on the Cherukiki Show--death by tickling!",
+        "summon": "Come on! Let me at 'em! A good punch is nothing without a couple black eyes!"
+      },
+      "display": "Trust: Cherukiki",
+      "intro_text": "",
+      "job": "WHM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "WHM",
+      "name": "Cherukiki",
+      "notable": "**Does not melee.\n**Runs back and forth frequently. After drawing Hate, this can result in aggro from a wider radius than where the fight started.\n**Often performs emotes when not casting. This may only happen if her siblings are present.\n**\"Enhanced 'Regen' potency\" property has been added.\n**Fifth tier upgraded \"Regen Effect\" merit point category has been added.",
+      "obtained": "Complete Chains and Bonds and then speak to Taillegeas in Ru'Lude Gardens (I-7)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/fd/Cherukiki_Trust.jpg/revision/latest?cb=20140403015232",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Protectra",
+        "Shellra",
+        "Regen IV",
+        "Haste",
+        "Alter Egos",
+        "Slow",
+        "Paralyze",
+        "Silence"
+      ],
+      "spells_raw": "**Protectra/Shellra V spells.\n**Cures at yellow HP, and up to Regen IV regardless of HP. Favors Player regardless of tank.\n**Haste I on her summoner and other Alter Egos.\n**Slow, Paralyze, and Silence.\n**Does not cast status recovery (-na) spells.",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "cid": {
+      "alter_ego": "Cid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "You don't go and overwork yourself...hear?",
+        "dismiss": "I leave it all in your hands, kids!",
+        "summon": "To think...in the Great War I was always on the backlines, creating implements of destruction..."
+      },
+      "display": "Trust: Cid",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Berserk",
+        "Double Attack"
+      ],
+      "job_traits": [],
+      "main_job": "WAR",
+      "name": "Cid",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Cid to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/6/61/Cid.jpg/revision/latest?cb=20141001124757",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Club / Gun",
+      "weapon_skills": [
+        "True Strike"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "cornelia": {
+      "alter_ego": "Cornelia",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "dismiss": "Remember: never give up!",
+        "summon": "Cornelia, at your service."
+      },
+      "display": "Trust: Cornelia",
+      "intro_text": "",
+      "job": "GEO/???",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "GEO",
+      "name": "Cornelia",
+      "notable": "",
+      "obtained": "Automatically appears in the Trust magic list during limited time events",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/e9/Trust_Cornelia.png/revision/latest?cb=20170911084718",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Passive Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "???",
+      "weapon": "none",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "curilla": {
+      "alter_ego": "Curilla",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "There is no excuse for my failure...I have sullied my own honor.",
+        "dismiss": "Was this...what it feels like to be on a rite of courtship?",
+        "summon": "Even the mightiest birds give their all when hunting the smallest of prey!"
+      },
+      "display": "Trust: Curilla",
+      "intro_text": "",
+      "job": "PLD",
+      "job_abilities": [],
+      "job_traits": [
+        "Guardian"
+      ],
+      "main_job": "PLD",
+      "name": "Curilla",
+      "notable": "Casts healing magic on herself, on her summoner, and other Alter Egos when HP gets to yellow.\n**\"The attribute \"Enhanced 'Cure' potency\" has been added.\n**The attribute \"Reduced healing magic cast time\" has been added.\n**The fifth tier of the merit point category \"Sentinel Recast\" has been added.\n**The fifth tier of the merit point category \"Guardian\" has been added.\n*As of the November 2021 Update her shield has higher stats if the player who called her is item level 100 or higher.",
+      "obtained": "Trust: San d'Oria (mission rank 3 required)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/f1/TrustCurilla.png/revision/latest?cb=20131226211707",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Up to Cure IV",
+        "Flash"
+      ],
+      "spells_raw": "Up to Cure IV, Flash.",
+      "sub_job": "",
+      "weapon": "Sword and Shield",
+      "weapon_skills": [
+        "Red Lotus Blade",
+        "Seraph Blade",
+        "Swift Blade"
+      ],
+      "weapon_skills_raw": "Red Lotus Blade, Seraph Blade, and Swift Blade."
+    },
+    "d. shantotto": {
+      "alter_ego": "Domina Shantotto",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Those who backstab our empire and leave us to rot; shall face my swift justice, whether they like it or not!",
+        "dismiss": "Ohohoho! A curse upon you and this forsaken land; I'll leave my mark here like a hot iron brand!",
+        "summon": "A perfect world order shall arise; one that exists solely for our pleasure, all the way to the skies!"
+      },
+      "display": "Trust: D. Shantotto",
+      "intro_text": "",
+      "job": "BLM/DRK",
+      "job_abilities": [],
+      "job_traits": [
+        "Arcana Killer",
+        "Has very high INT",
+        "Physical Accuracy",
+        "Magic Accuracy"
+      ],
+      "main_job": "BLM",
+      "name": "D. Shantotto",
+      "notable": "",
+      "obtained": "Trade Cipher: D",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/31/Trust_D._Shantotto.png/revision/latest?cb=20140615183145",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Elemental Magic"
+      ],
+      "spells_raw": "*Single-target Elemental Magic nukes in rapid succession, with a focus on high-power nukes. Notably odd Spell-choice: She's prioritizing Blizzard and Water vs. Mandragora, when Blizzard/Fire seem the more likely choices re:resistance. Occasionally throws a Stone spell.\n**Does not cast Ancient Magic, Dark Magic, Enfeebling Magic, Enhancing Magic, or Area of Effect spells.",
+      "sub_job": "DRK",
+      "weapon": "Scythe",
+      "weapon_skills": [
+        "Shadow of Death",
+        "Guillotine",
+        "Cross Reaper",
+        "Salvation Scythe",
+        "Poison",
+        "Paralyze",
+        "Slow",
+        "Bio"
+      ],
+      "weapon_skills_raw": "*Shadow of Death, Guillotine, Cross Reaper\n*Unique weapon skill, Salvation Scythe: AoE Darkness damage. Additional Effect: Poison, Paralysis, Slow and Bio."
+    },
+    "darrcuiln": {
+      "alter_ego": "Darrcuiln",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "(Forgive me. The prey...is strong.)",
+        "dismiss": "(Your strength is all we were led to believe.)",
+        "summon": "(I am Darrcuiln, bearer of Terrcualn's bloodline. Lead me to your prey.)"
+      },
+      "display": "Trust: Darrcuiln",
+      "intro_text": "",
+      "job": "Special",
+      "job_abilities": [],
+      "job_traits": [
+        "Lizard Killer"
+      ],
+      "main_job": "Special",
+      "name": "Darrcuiln",
+      "notable": "**Has a TON of HP, similar to MNK Trusts.\n**At least one of its regular attacks is AoE.\n**Switches between physical and non-elemental magic damage (damages PLD during Invincible). \n***Does not benefit from Sambas, so attacks likely aren't considered normal, physical attacks.\n**Can parry.\n**Appears to have quite low evasion.\nPer the December 11, 2018 update:\n* \"The following alter egos are now considered to wield great swords because of the addition of the Damage Limit+ job trait.\n::Arciela / Bal...",
+      "obtained": "Trade Cipher: Darrcuiln to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c2/Trust_Darrcuiln.png/revision/latest?cb=20151230192709",
+      "race": "Beast",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Teeth and Claws (\"Great Sword\")",
+      "weapon_skills": [
+        "Aurous Charge",
+        "Howling Gust",
+        "Righteous Rasp",
+        "Stalking Prey",
+        "Starward Yowl"
+      ],
+      "weapon_skills_raw": "**Aurous Charge: Liquefaction/Transfixion skillchain properties.\n**Howling Gust: Fragmentation/Compression skillchain properties and deals Wind damage.\n**Righteous Rasp: Fusion/Transfixion skillchain properties.\n**Stalking Prey: Light/Fragmentation skillchain properties and AoE damage.\n**Starward Yowl: Gravitation/Reverberation skillchain properties."
+    },
+    "elivira": {
+      "alter_ego": "Elivira",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "A swift end is the only mercy you will receive from me, fiends!",
+        "dismiss": "Who shall knit my father's scarf if not me?",
+        "summon": "Elivira of the First Gold Musketeers, reporting in!"
+      },
+      "display": "Trust: Elivira",
+      "intro_text": "",
+      "job": "RNG/WAR",
+      "job_abilities": [
+        "Berserk",
+        "Barrage",
+        "Double Shot",
+        "Decoy Shot"
+      ],
+      "job_traits": [],
+      "main_job": "RNG",
+      "name": "Elivira",
+      "notable": "",
+      "obtained": "Trade Cipher: Elivira from Alter Ego Extravaganza to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/b/b3/Trust_Elivira.PNG/revision/latest?cb=20140630210156",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Ranged Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Sword / Annihilator",
+      "weapon_skills": [
+        "Split Shot",
+        "Slug Shot",
+        "Heavy Shot",
+        "Coronach"
+      ],
+      "weapon_skills_raw": "**Split Shot\n**Slug Shot\n**Heavy Shot\n**Coronach"
+    },
+    "excenmille": {
+      "alter_ego": "Excenmille",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "A fate wholly undeserving of one blessed with fifth prize in the latest mog bonanza...",
+        "dismiss": "Tonight we dine and drink to tales of valor!",
+        "summon": "Excenmille M Aurchiat, ready at your side!"
+      },
+      "display": "Trust: Excenmille",
+      "intro_text": "",
+      "job": "PLD",
+      "job_abilities": [
+        "Double Thrust",
+        "Leg Sweep",
+        "Penta Thrust",
+        "Sentinel"
+      ],
+      "job_traits": [
+        "Store TP",
+        "Undead Killer"
+      ],
+      "main_job": "PLD",
+      "name": "Excenmille",
+      "notable": "",
+      "obtained": "Trust: San d'Oria",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/6/69/TrustExcenmille.png/revision/latest?cb=20131215032235",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Flash",
+        "Cure IV"
+      ],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Polearm",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "excenmille (s)": {
+      "alter_ego": "Excenmille (S)",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "You must succeed...where I have failed.",
+        "dismiss": "I desire the strength, courage, and wisdom to stand against even the fiercest enemies!",
+        "summon": "A knight is one who stays true to himself, even in the face of overwhelming adversity."
+      },
+      "display": "Trust: Excenmille (S)",
+      "intro_text": "",
+      "job": "",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "",
+      "name": "Excenmille (S)",
+      "notable": "",
+      "obtained": "Bundle of half-inscribed scrolls: Speak to Rholont in Southern San d'Oria (S) (E-7) after completing the quest Face of the Future",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/d/db/TrustExcenmilleS.png/revision/latest?cb=20140813000540",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Great Sword",
+      "weapon_skills": [
+        "Regain",
+        "Gyre Strike",
+        "Orcsbane",
+        "Songbird Swoop",
+        "Stag's Call",
+        "Stag's Charge"
+      ],
+      "weapon_skills_raw": "Gyre Strike, Orcsbane, Songbird Swoop, Stag's Call, Stag's Charge\n*Possess a form of Regain"
+    },
+    "fablinix": {
+      "alter_ego": "Fablinix",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Moblina...Verena...and my Mandragons friends...",
+        "dismiss": "N where should I go ofta next?",
+        "summon": "Yo, it's the Duke of Fab! Ready for another fun journey!"
+      },
+      "display": "Trust: Fablinix",
+      "intro_text": "",
+      "job": "Thief - Black Mage/RDM",
+      "job_abilities": [],
+      "job_traits": [
+        "Gilfinder",
+        "Treasure Hunter I",
+        "Triple Attack"
+      ],
+      "main_job": "Thief - Black Mage",
+      "name": "Fablinix",
+      "notable": "**Fablinix has dual main jobs of Thief and Black Mage.\n***Subjob is Red Mage. He does not use Cure until 8 and Cure II until 28. He casts up to Cure IV and keeps Enwater up full time.\n** Compared to other healers like Trust: Ajido-Marujido and Trust: Prishe, Fablinix is more generous, sometimes curing you while you are in yellow HP.\n** Uses ranged attacks with a crossbow every couple of swings.",
+      "obtained": "Adventurer Appreciation Campaign 2014 (trade Cipher: Fablinix to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/a7/Trust_Fablinix.png/revision/latest?cb=20140517060957",
+      "race": "Goblin",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Up to Cure IV",
+        "Enwater",
+        "Stun"
+      ],
+      "spells_raw": "Up to Cure IV, Enwater, Stun (starting at level 45).",
+      "sub_job": "RDM",
+      "weapon": "Dagger, Crossbow",
+      "weapon_skills": [
+        "Goblin Rush"
+      ],
+      "weapon_skills_raw": "Bomb Toss (Area of Effect, Liquefaction property), Goblin Rush (Fusion property)."
+    },
+    "ferreous coffin": {
+      "alter_ego": "Ferreous Coffin",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I fear not death, for the Goddess awaits us with open arms.",
+        "dismiss": "Perhaps the time has come to return to the fray and do my part for the greater good.",
+        "summon": "Be strong, for the Goddess is with you, always."
+      },
+      "display": "Trust: Ferreous Coffin",
+      "intro_text": "",
+      "job": "WHM/WAR",
+      "job_abilities": [],
+      "job_traits": [
+        "Auto Refresh II",
+        "Double Attack"
+      ],
+      "main_job": "WHM",
+      "name": "Ferreous Coffin",
+      "notable": "Seems to only cure tank's ailments, but does not cure ailments on others. Does not use Protect nor Shell spells.",
+      "obtained": "Summer Alter Ego Extravaganza 2014 (trade Cipher: Ferreous Coffin to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/9b/Trust_Ferrous_Coffin.PNG/revision/latest?cb=20140630192256",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Raise III",
+        "Up to Cure VI",
+        "Erase",
+        "Haste"
+      ],
+      "spells_raw": "Up to Cure VI, -Na Spells,Erase, Haste, and up to Raise III.\n**Uses Raise III on party members at level 70-99. Cannot cast on his summoner, since Ferreous, as one of his summons, would be dismissed. He is also The only Trust to cast it.",
+      "sub_job": "WAR",
+      "weapon": "Mjollnir",
+      "weapon_skills": [
+        "Randgrith exclusively"
+      ],
+      "weapon_skills_raw": "Randgrith exclusively."
+    },
+    "flaviria (uc)": {
+      "alter_ego": "Flaviria",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Well, this is...less than ideal...",
+        "dismiss": "Let's see what the Civic Arboretum has cooked up this time!",
+        "summon": "Flaviria, head of the Order of Thurandaut and maester of the Mummers' Coalition, ready to serve!"
+      },
+      "display": "Trust: Flaviria (UC)",
+      "intro_text": "",
+      "job": "DRG/WAR",
+      "job_abilities": [
+        "Berserk",
+        "Angon",
+        "Jump",
+        "High Jump",
+        "Super Jump",
+        "Skewer",
+        "Impulse Drive",
+        "Celidon's Torment"
+      ],
+      "job_traits": [
+        "Double Attack"
+      ],
+      "main_job": "DRG",
+      "name": "Flaviria (UC)",
+      "notable": "",
+      "obtained": "Join Flaviria's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c7/Trust_Flaviria.png/revision/latest?cb=20150824172547",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Polearm",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "gadalar": {
+      "alter_ego": "Gadalar",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "What a load of... How could they possibly defeat me!?",
+        "dismiss": "Stop bumbling about and keep your nose to the grindstone!",
+        "summon": "Get outta the way or get burned!"
+      },
+      "display": "Trust: Gadalar",
+      "intro_text": "",
+      "job": "BLM",
+      "job_abilities": [
+        "Spinning Scythe",
+        "Vorpal Scythe",
+        "Spiral Hell",
+        "Salamander Flame"
+      ],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "Gadalar",
+      "notable": "",
+      "obtained": "Embers of His Past",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/9e/Gadalar_Trust.jpg/revision/latest?cb=20140403014818",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Blaze Spikes"
+      ],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Scythe",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "gessho": {
+      "alter_ego": "Gessho",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Though my sword may break and lilies may grow on my grave, my spirit continues to live on.",
+        "dismiss": "I must take my leave.",
+        "summon": "Blades up and ready for battle!"
+      },
+      "display": "Trust: Gessho",
+      "intro_text": "",
+      "job": "Monster (Ninja/Warrior)",
+      "job_abilities": [
+        "Provoke",
+        "Yonin"
+      ],
+      "job_traits": [],
+      "main_job": "Monster (Ninja",
+      "name": "Gessho",
+      "notable": "Does not use ordinary Yagudo monster skills or katana weapon skills. Instead, he uses modified Yagudo skills as well as his (and Kazan the Peerless) special skill, Shibaraku.\n\n==Feb. 10, 2017 Update==\n\"All magic skills have been increased.\nThe potencies of the following weapon skills have been increased.\n\n Hane Fubuki / Shibaraku / Happobarai\n\nThe effects of Stoneskin and Issekigan have been added to the weapon skill Shiko no Mitate.\n\nThe value of the enhance attack effect of the weapon skill Ri...",
+      "obtained": "After finishing Passing Glory, click on the cushion in the Shararat Teahouse at",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/9e/TrustGessho.png/revision/latest?cb=20140526004616",
+      "race": "Yagudo",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "Warrior)",
+      "weapon": "Katana (single)",
+      "weapon_skills": [
+        "Hane Fubuki",
+        "Happobarai",
+        "Rinpyotosha",
+        "Shiko no Mitate",
+        "Stoneskin",
+        "Issekigan",
+        "Shibaraku"
+      ],
+      "weapon_skills_raw": "**Hane Fubuki (Feather Storm): Sends a barrage of feathers to a single target. Additional effect: Poison.\n**Happobarai (Sweep): Damages enemies in an area of effect. Additional effect: Stun.\n**Rinpyotosha (Howl): Grants Warcry to party members within area of effect.\n**Shiko no Mitate (Parry): Defense boost, Stoneskin, Issekigan (increased parrying with enmity).\n**Shibaraku: Heavily damages enemies in an area of effect. Additional effect: Stun and knockback."
+    },
+    "gilgamesh": {
+      "alter_ego": "Gilgamesh",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Th' one that got plundr'd..was me.",
+        "dismiss": "Times may change, but 'twixt it all, people remain strong as th' sea!",
+        "summon": "Bwaha! Ye've got the same look as my daughter!"
+      },
+      "display": "Trust: Gilgamesh",
+      "intro_text": "",
+      "job": "SAM",
+      "job_abilities": [
+        "Third Eye",
+        "Hasso",
+        "Sekkanoki",
+        "Hagakure"
+      ],
+      "job_traits": [],
+      "main_job": "SAM",
+      "name": "Gilgamesh",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Gilgamesh to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/d/db/Trust_Gilgamesh.jpg/revision/latest?cb=20141231205831",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Great Katana",
+      "weapon_skills": [
+        "Tachi: Goten",
+        "Tachi: Kasha",
+        "Tachi: Kamai"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "halver": {
+      "alter_ego": "Halver",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Would that I never falter...",
+        "dismiss": "May the next time we meet be another occasion for joy.",
+        "summon": "My fealty to the cause knows no bounds."
+      },
+      "display": "Trust: Halver",
+      "intro_text": "",
+      "job": "PLD/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Berserk",
+        "Sentinel",
+        "Rampart"
+      ],
+      "job_traits": [
+        "Double Attack"
+      ],
+      "main_job": "PLD",
+      "name": "Halver",
+      "notable": "** Classed as Melee Fighter (not a true Paladin Tank).\n*** Uses Provoke, Sentinel and Rampart when party members have low HP, like an emergency backup tank.\n** Cures party members at low HP.\n** Cures sleeping party members to awaken them.",
+      "obtained": "Talk to Halver in Chateau d'Oraguille (I-9) after completing The Path Untraveled to receive Cipher: Halver",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/72/Trust-Halver.png/revision/latest?cb=20150712050232",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Cure IV",
+        "Flash"
+      ],
+      "spells_raw": "** Up to Cure IV\n** Flash",
+      "sub_job": "WAR",
+      "weapon": "Polearm",
+      "weapon_skills": [
+        "Raiden Thrust",
+        "Penta Thrust",
+        "Impulse Drive"
+      ],
+      "weapon_skills_raw": "** Raiden Thrust (/)\n** Penta Thrust ()\n** Impulse Drive (/)"
+    },
+    "ingrid": {
+      "alter_ego": "Ingrid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Humanity has no future...if it fears what lurks in the shadows!",
+        "dismiss": "My presence is no longer required. I shall return to Adoulin, where there remains much to be done.",
+        "summon": "Petulant fools. Let Ingrid the Merciless pass judgment on all that would deny her!"
+      },
+      "display": "Trust: Ingrid",
+      "intro_text": "",
+      "job": "WHM/PLD",
+      "job_abilities": [],
+      "job_traits": [
+        "Undead Killer"
+      ],
+      "main_job": "WHM",
+      "name": "Ingrid",
+      "notable": "**Each tier of Banish seems to be on a separate recast timer for her, rather than a shared recast timer.\n**Prioritizes Cursna.",
+      "obtained": "The Merciless One or Glimmer of Portent",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/f8/Ingrid_Trust.jpg/revision/latest?cb=20140403015033",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Banish III",
+        "Haste",
+        "Cursna"
+      ],
+      "spells_raw": "**Divine: Up to Banish III\n**Enhancing: Haste\n**Healing: Cursna",
+      "sub_job": "PLD",
+      "weapon": "Rod",
+      "weapon_skills": [
+        "Seraph Strike",
+        "Judgment",
+        "Hexa Strike"
+      ],
+      "weapon_skills_raw": "**Seraph Strike\n**Judgment\n**Hexa Strike"
+    },
+    "ingrid ii": {
+      "alter_ego": "Ingrid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Dark...corrupt...filth...everywhere...",
+        "dismiss": "Thank you... I'll be going home now.",
+        "summon": "Sullied creatures of sin and guile, there won't be any ashes left when I'm done with you..."
+      },
+      "display": "Trust: Ingrid II",
+      "intro_text": "",
+      "job": "PLD/WHM/WAR",
+      "job_abilities": [],
+      "job_traits": [
+        "Undead Killer",
+        "Double Attack"
+      ],
+      "main_job": "PLD",
+      "name": "Ingrid II",
+      "notable": "**She's an exorcist, explaining her spell choices\n**",
+      "obtained": "Sinister Reign, Records of Eminence: Filled to Capacity",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/cf/Trust_Ingrid_II.PNG/revision/latest?cb=20170620091029",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Banish III",
+        "Cursna",
+        "Holy"
+      ],
+      "spells_raw": "**Up to Banish III\n**Cursna\n**Holy",
+      "sub_job": "WHM",
+      "weapon": "Rod",
+      "weapon_skills": [
+        "Inexorable Strike",
+        "Moonlight",
+        "Self-Aggrandizement",
+        "Ruthlessness"
+      ],
+      "weapon_skills_raw": "**Inexorable Strike\n**Moonlight\n**Merciless Strike (corrolates to True Strike)\n**Self-Aggrandizement (self-cure)\n**Ruthlessness (AOE HP Drain)"
+    },
+    "invincible shield (uc)": {
+      "alter_ego": "Invincible Shield",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Don't think you've won yet...!",
+        "dismiss": "Never forget your basic training, maggots!",
+        "summon": "Stand strong behind me, for my defenses reign supreme!"
+      },
+      "display": "Trust: Invincible Shield (UC)",
+      "intro_text": "",
+      "job": "WAR/MNK",
+      "job_abilities": [
+        "Provoke",
+        "Warcry",
+        "Retaliation",
+        "Tomahawk",
+        "Restraint",
+        "Blood Rage"
+      ],
+      "job_traits": [],
+      "main_job": "WAR",
+      "name": "Invincible Shield (UC)",
+      "notable": "Uses Tomahawk on monsters when it will allow for more damage (e.g. Skeletons).",
+      "obtained": "Join Invincible Shield's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/9e/Trust_Invincible_Shield_%28UC%29.png/revision/latest?cb=20150728055056",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "MNK",
+      "weapon": "Great Axe",
+      "weapon_skills": [
+        "Fragmentation",
+        "Light",
+        "Raging Rush",
+        "Steel Cyclone",
+        "Soturi's Fury"
+      ],
+      "weapon_skills_raw": "Raging Rush, Steel Cyclone, Soturi's Fury.\n** Soturi's Fury has the Fragmentation property which can potentially skillchain into Light."
+    },
+    "iroha": {
+      "alter_ego": "Iroha",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Vana'diel, please permit me to remain here for a little while longer!",
+        "dismiss": "I would give anything for the gods to keep me here longer!",
+        "summon": "Master, it gives me no greater pleasure than to fight at your side!"
+      },
+      "display": "Trust: Iroha",
+      "intro_text": "",
+      "job": "SAM/WHM",
+      "job_abilities": [
+        "Third Eye",
+        "Hasso",
+        "Meditate",
+        "Hagakure"
+      ],
+      "job_traits": [
+        "Blessing of Phoenix",
+        "Save TP"
+      ],
+      "main_job": "SAM",
+      "name": "Iroha",
+      "notable": "",
+      "obtained": "Cipher: Iroha from Nary a Cloud in Sight",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/0/0e/Trust_Iroha.PNG/revision/latest?cb=20170620091216",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Protectra V",
+        "Shellra V"
+      ],
+      "spells_raw": "*Protectra V and Shellra V Does not cast the lower tier versions of Protectra and Shellra",
+      "sub_job": "WHM",
+      "weapon": "Naginata (polearm",
+      "weapon_skills": [
+        "Amatsu: Hanadoki",
+        "Amatsu: Fuga",
+        "Amatsu: Choun",
+        "Amatsu: Gachirin"
+      ],
+      "weapon_skills_raw": "*Amatsu: Hanadoki\n*Amatsu:Fuga\n*Amatsu: Choun\n*Amatsu: Gachirin"
+    },
+    "iroha ii": {
+      "alter_ego": "Iroha",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk...I have not...trained enough...",
+        "dismiss": "Master, I shall see you again--in the future.",
+        "summon": "Master! The time is now!"
+      },
+      "display": "Trust: Iroha II",
+      "intro_text": "",
+      "job": "WHM/BLM/SAM",
+      "job_abilities": [
+        "Hasso",
+        "Meditate"
+      ],
+      "job_traits": [],
+      "main_job": "WHM",
+      "name": "Iroha II",
+      "notable": "",
+      "obtained": "Cipher: Iroha II from The Orb's Radiance",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/ec/Trust_Iroha_II.png/revision/latest?cb=20151230193149",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Protectra V",
+        "Shellra V",
+        "Magic Burst",
+        "Flare II"
+      ],
+      "spells_raw": "",
+      "sub_job": "BLM",
+      "weapon": "Naginata (Polearm)",
+      "weapon_skills": [
+        "Amatsu: Kyori",
+        "Amatsu: Hanadoki",
+        "Amatsu: Suien",
+        "Amatsu: Gachirin",
+        "Rise from Ashes"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "iron eater": {
+      "alter_ego": "Iron Eater",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "It comes as no surprise that they would resort to such cheap ploys...",
+        "dismiss": "All rivers eventually lead out to sea... May we meet again.",
+        "summon": "I may not be the most effective of soldiers, but I promise to do all that I can."
+      },
+      "display": "Trust: Iron Eater",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Provoke",
+        "Berserk",
+        "Restraint"
+      ],
+      "job_traits": [
+        "Store TP",
+        "Double Attack"
+      ],
+      "main_job": "WAR",
+      "name": "Iron Eater",
+      "notable": "**While Restraint is active, he tends to not use a weapon skill until he reaches 300% TP.\n**Uses Provoke when his summoner has below 50% HP and is not already targeted by the enemy. He will not Provoke enemies off other Alter Egos.\n**\"Store TP\" attribute effects have been raised.\n**The chance of performing a double attack has been increased.\n**The fifth tier of the merit point category \"Double Attack Rate\" has been added.",
+      "obtained": "Trust: Bastok (Acquire Trust: Naji, Trust: Ayame, and Trust: Volker, then speak to Iron Eater in Metalworks' Presidential Building)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/42/Trust-Iron_eater.JPG/revision/latest?cb=20140331161541",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Great Axe",
+      "weapon_skills": [
+        "Shield Break",
+        "Armor Break",
+        "Steel Cyclone"
+      ],
+      "weapon_skills_raw": "Shield Break, Armor Break, and Steel Cyclone."
+    },
+    "jakoh wahcondalo (uc)": {
+      "alter_ego": "Jakoh Wahcondalo",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "It...can't be!",
+        "dismiss": "Aren't I good? Yeah, I know I am.",
+        "summon": "Khazam's Jakoh Wahcondalo rrreporting in!"
+      },
+      "display": "Trust: Jakoh Wahcondalo (UC)",
+      "intro_text": "",
+      "job": "THF/WAR",
+      "job_abilities": [
+        "Conspirator",
+        "Feint",
+        "Sarva's Storm",
+        "Rudra's Storm"
+      ],
+      "job_traits": [
+        "Double Attack",
+        "Triple Attack"
+      ],
+      "main_job": "THF",
+      "name": "Jakoh Wahcondalo (UC)",
+      "notable": "",
+      "obtained": "Join Jakoh Wahcondalo's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/42/Trust_Jakoh_Wahcondalo_%28UC%29.png/revision/latest?cb=20150727233518",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Dagger",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "joachim": {
+      "alter_ego": "Joachim",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "May yer light never...leave this land...",
+        "dismiss": "Yer strength be a beacon t' us all.",
+        "summon": "It's by yer hand that th' seeds of hope have begun t' bear fruit."
+      },
+      "display": "Trust: Joachim",
+      "intro_text": "",
+      "job": "BRD/WHM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "BRD",
+      "name": "Joachim",
+      "notable": "*Harp has HUGE range (greater than a normal harp).\n*Uses a very weak Throwing ranged attack for his auto-attack. It is assumed he uses Traverser stones.\n*Cures if HP reaches yellow (75%).",
+      "obtained": "Trade Cipher: Joachim from Alter Ego Extravaganza or Records of Eminence: Alter Ego: Adelheid to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/a0/Trust_Joachim.png/revision/latest?cb=20131231212226",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WHM",
+      "weapon": "Throwing and Daurdabla",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "karaha-baruha": {
+      "alter_ego": "Karaha-Baruha",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "The moon...sets...",
+        "dismiss": "I hope that the people of Windurst are able to rest easy at night.",
+        "summon": "A grand welcome...to all of you."
+      },
+      "display": "Trust: Karaha-Baruha",
+      "intro_text": "",
+      "job": "WHM/SMN",
+      "job_abilities": [],
+      "job_traits": [
+        "Auto Refresh I"
+      ],
+      "main_job": "WHM",
+      "name": "Karaha-Baruha",
+      "notable": "**Seems to save TP in order to close skillchains.\n**Skillchains with Robel-Akbel when present.",
+      "obtained": "Trade Cipher: Karaha (from Repeat Login Campaigns that he is available) to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/fb/TrustKarahaBaruha.png/revision/latest?cb=20150328144436",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Cure VI",
+        "Protectra",
+        "Shellra",
+        "Erase",
+        "Haste",
+        "Bar Spell"
+      ],
+      "spells_raw": "**Up to Cure VI.\n**Protectra/Shellra up to tier V.\n**Erase and -na spells.\n**Haste.\n**Bar -ra spells after a party member takes damage from a certain element.\n***They bestow roughly +129 Magic Evasion at 99+.",
+      "sub_job": "SMN",
+      "weapon": "Staff",
+      "weapon_skills": [
+        "Starburst",
+        "Sunburst",
+        "Spirit Taker",
+        "Howling Moon",
+        "Lunar Bay"
+      ],
+      "weapon_skills_raw": "**Starburst (light or dark dmg)\n**Sunburst (light or dark dmg)\n**Spirit Taker (physical dmg)\n**Howling Moon (AOE dark dmg)\n**Lunar Bay (dark dmg)"
+    },
+    "kayeel-payeel": {
+      "alter_ego": "Kayeel-Payeel",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I could not...overcome...",
+        "dismiss": "A thrilling battle!",
+        "summon": "This marks the end of but the first phase of the operation"
+      },
+      "display": "Trust: Kayeel-Payeel",
+      "intro_text": "",
+      "job": "BLM/SMN",
+      "job_abilities": [],
+      "job_traits": [
+        "Auto Refresh"
+      ],
+      "main_job": "BLM",
+      "name": "Kayeel-Payeel",
+      "notable": "Since he unloads on the mob so quickly at the start, he would be suitable for mobs you need to kill quickly with ice or lightning nukes.\n*Does not cast Blizzard VI Thunder VI or Elemental Magic That is not Ice or Lightning",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Kayeel-Payeel to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c5/Trust_Kayeel-Payeel.png/revision/latest?cb=20150702191900",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Blizzard I-V",
+        "Blizzaga",
+        "Blizzaja",
+        "Freeze I-II",
+        "Thunder I-V",
+        "Thundaga",
+        "Thundaja",
+        "Burst I-II"
+      ],
+      "spells_raw": "Blizzard I-V, Blizzaga, Blizzaja, Freeze I-II, Thunder I-V, Thundaga, Thundaja, Burst I-II",
+      "sub_job": "SMN",
+      "weapon": "Staff (Claustrum)",
+      "weapon_skills": [
+        "Sunburst",
+        "Tartarus Torpor",
+        "Gate of Tartarus"
+      ],
+      "weapon_skills_raw": "**Sunburst\n**Tartarus Torpor\n**Gate of Tartarus - grants 8MP/tic."
+    },
+    "king of hearts": {
+      "alter_ego": "King of Hearts",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "SYs★teM...★oVEr★lOAd...cArdDiaN★oVER.",
+        "dismiss": "ThiS★caNnOT bE!!!",
+        "summon": "NeED★RdM? PLeaSe sENd★teLL!"
+      },
+      "display": "Trust: King of Hearts",
+      "intro_text": "",
+      "job": "RDM/WHM/BLM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "RDM",
+      "name": "King of Hearts",
+      "notable": "** Possesses increased duration for Enhancing Magic.\n** Levels up after weapon skills on occasion; what effects this gives are currently unknown.",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: King to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/3f/KingOfHearts.PNG/revision/latest?cb=20170420011613",
+      "race": "Cardians",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [
+        "Dia III",
+        "Haste II",
+        "Refresh II",
+        "Phalanx II",
+        "Protect V",
+        "Shell V",
+        "Cure IV",
+        "Erase",
+        "Firaga IV",
+        "Magic Burst",
+        "Liquefaction",
+        "Fusion",
+        "Light",
+        "Skillchains",
+        "Temper"
+      ],
+      "spells_raw": "** Dia III.\n** Haste II, Refresh II, and Phalanx II on himself and his summoning player, regardless of job (so, to utilize him fully, it makes sense for his summoning player to be on a job that can utilize Refresh). Phalanx II on the party member with hate. Will not refresh other alter egos.\n** Protect V and Shell V.\n** Up to Cure IV.\n** Erase and -na spells.\n** Up to Firaga IV to Magic Burst after Liquefaction, Fusion, and Light Skillchains.\n** Temper up full-time.",
+      "sub_job": "WHM",
+      "weapon": "Staff",
+      "weapon_skills": [
+        "Dismiss",
+        "Death: SYs★teM...★oVEr★lOAd...cArdDiaN★oVER",
+        "FuSIOn★BaTteRIes★ACTiVAtEd★FIre fOR EFfeCt★ComMeNCiNg"
+      ],
+      "weapon_skills_raw": "FuSIOn★BaTteRIes★ACTiVAtEd★FIre fOR EFfeCt★ComMeNCiNg.\n*Dismiss: ThiS★caNnOT bE!!!\n*Death: SYs★teM...★oVEr★lOAd...cArdDiaN★oVER."
+    },
+    "klara": {
+      "alter_ego": "Klara",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "You're every bit...the coward I expected.",
+        "dismiss": "I want to take hold of something fluffy, and then... On second thought...never mind.",
+        "summon": "Mythril Musketeer Captain, Klara Bester, at your service."
+      },
+      "display": "Trust: Klara",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Berserk",
+        "Warcry"
+      ],
+      "job_traits": [],
+      "main_job": "WAR",
+      "name": "Klara",
+      "notable": "",
+      "obtained": "Bundle of half-inscribed scrolls: Speak to Gentle Tiger (S) in Bastok Markets (S) (H-6) after completing the quest Bonds of Mythril",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/fc/TrustKlara.png/revision/latest?cb=20140813001013",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Temblor Blade",
+        "Vorpal Blade"
+      ],
+      "weapon_skills_raw": "Temblor Blade, Vorpal Blade"
+    },
+    "koru-moru": {
+      "alter_ego": "Koru-Moru",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "My brain is fit to...bang-bustingly-burst...",
+        "dismiss": "Wiggly-waggly-wonderful! I was just starting to get bored-areeno!",
+        "summon": "Hoo hoo hoo hoo! Can it wait? I'm making lunch for my diddly-daddly-dear Mojiji!"
+      },
+      "display": "Trust: Koru-Moru",
+      "intro_text": "",
+      "job": "RDM",
+      "job_abilities": [
+        "Convert"
+      ],
+      "job_traits": [],
+      "main_job": "RDM",
+      "name": "Koru-Moru",
+      "notable": "**Uses Convert when extremely low on MP.\n**Casts Phalanx on whoever has the highest enmity with the current target.\n***Jobs he's known to refresh: White Mage, Black Mage, Red Mage, Paladin, Summoner, Scholar, Geomancer, Rune Fencer.\n***Jobs he's known not to refresh: Blue Mage, Dark Knight.\n***Known to haste: Warrior, Paladin, Thief, Beastmaster.\n***Known to flurry: Ranger, Corsair.\n**Does not seem to prioritize refreshes according to any specific order. Does not necessarily refresh himself firs...",
+      "obtained": "Trade Cipher: Koru-Moru from Records of Eminence: Tutorial > Intermediate > \"Always Stand on 117\" or Alter Ego Extravaganza to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/50/Trust-_Koru-Moru.jpg/revision/latest?cb=20141001124839",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [
+        "Dia III",
+        "Slow II",
+        "Dispel",
+        "Distract II",
+        "Protect V",
+        "Shell V",
+        "Phalanx II",
+        "Refresh II",
+        "Haste II",
+        "Flurry II",
+        "Cure IV"
+      ],
+      "spells_raw": "**Enfeebling: Dia III, Slow II, Dispel, Distract II.\n**Enhancing: Protect V, Shell V, Phalanx II, Refresh II, Haste II, Flurry II.\n**Healing: Up to Cure IV when the party member is around 50% HP (orange).",
+      "sub_job": "",
+      "weapon": "Wand",
+      "weapon_skills": [],
+      "weapon_skills_raw": "None (does not melee)"
+    },
+    "kukki-chebukki": {
+      "alter_ego": "Kukki-Chebukki",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I won't let you off so easy...next time!",
+        "dismiss": "Hey, hey! I said you couldn't do that!",
+        "summon": "Don't stop now--it's Kukki-Chebukki!"
+      },
+      "display": "Trust: Kukki-Chebukki",
+      "intro_text": "",
+      "job": "BLM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "Kukki-Chebukki",
+      "notable": "**Conserves magic when enemy is low on HP by using lower tier magic spells.\n**Keeps his distance from the enemy.\n**Often stands around inactive, doing little more than performing emotes. This may only happen if his siblings are present.",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Kukki to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/6/69/Trust_Kukki.jpg/revision/latest?cb=20141231210823",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Sleepga",
+        "On Lightsday",
+        "AoE Tier I-III ~ga",
+        "Elemental Debuffs"
+      ],
+      "spells_raw": "Elemental Magic single target Tier I-V spells, AoE Tier I-III ~ga and ~ja spells, Elemental Debuffs, and Meteor. Uses magic spells based on Vana'diel day (i.e., if it's Firesday, he will cast fire-based spells).\n**On Darksday, only casts Sleepga I-II. (Does Not cast Bio Drain Aspir or Aspir II) \n**On Lightsday, does not cast anything.",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "kupipi": {
+      "alter_ego": "Kupipi",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "These tears...they sting-wing...",
+        "dismiss": "What a wo~nderful time I had!",
+        "summon": "You can entrust e~verything to the meticulous Kupipi!"
+      },
+      "display": "Trust: Kupipi",
+      "intro_text": "",
+      "job": "WHM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "WHM",
+      "name": "Kupipi",
+      "notable": "",
+      "obtained": "Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/0/0d/Kupipi_1.JPG/revision/latest?cb=20140403013450",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Protectra",
+        "Shellra",
+        "Protect",
+        "Shell",
+        "Erase",
+        "Paralyze",
+        "Slow",
+        "Flash"
+      ],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Club and Shield",
+      "weapon_skills": [
+        "Moonlight",
+        "Starlight"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "kupofried": {
+      "alter_ego": "Kupofried",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "N/A (cannot die)",
+        "dismiss": "Stay safe, kupo!",
+        "summon": "Magnificent Moogle Magic coming your way, kupo!"
+      },
+      "display": "Trust: Kupofried",
+      "intro_text": "*The reason Kupofried's alter ego looks different from his normal self is because he got dressed up for the Adventurer Appreciation Campaign, as revealed in the event cutscene if the player had previously met Kupofried.",
+      "job": "GEO",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "GEO",
+      "name": "Kupofried",
+      "notable": "",
+      "obtained": "Adventurer Appreciation Campaign 2015 (Behemoth Battle)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/91/Trust_Kupofried.png/revision/latest?cb=20150814233330",
+      "race": "Moogle",
+      "recast_time": "240 seconds",
+      "role": "Support (Passive)",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "kuyin hathdenna": {
+      "alter_ego": "Kuyin Hathdenna",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "N/A (due to her non-interactive status, she cannot die)",
+        "dismiss": "Mew, mew! Let's keep this a secret between us, 'kay?"
+      },
+      "display": "Trust: Kuyin Hathdenna",
+      "intro_text": "",
+      "job": "Passive (Geomancer)",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "Passive (Geomancer)",
+      "name": "Kuyin Hathdenna",
+      "notable": "",
+      "obtained": "September 2014 Login Campaign: obtain Cipher: Kuyin for 500 login points and trade it to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/ca/TrustKuyin.png/revision/latest?cb=20140915194220",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Passive Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "lehko habhoka": {
+      "alter_ego": "Lehko Habhoka",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Grgl...I can't...fulfill my prrromise to you...",
+        "dismiss": "If you're interested in learning more, there's some space in my chambers...",
+        "summon": "Will you see a demon or a saint? Well...that's not for me to decide."
+      },
+      "display": "Trust: Lehko Habhoka",
+      "intro_text": "",
+      "job": "THF/BLM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "THF",
+      "name": "Lehko Habhoka",
+      "notable": "**Uses Ranged Attacks very frequently. Always runs to stay in melee range.\n**Maximum MP has been increased.\n**The attribute \"Enhanced Magic Accuracy\" has been added.",
+      "obtained": "Trade Cipher: Lehko to Gondebaud, Clarion Star, or Wetata (must have completed the quest offered by the NPC with whom you trade)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/4e/TrustLehko.png/revision/latest?cb=20140314231659",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Tier I"
+      ],
+      "spells_raw": "Tier I and II single-target elemental spells based on target's weaknesses.",
+      "sub_job": "BLM",
+      "weapon": "Dagger, throwing daggers",
+      "weapon_skills": [
+        "Lunar Revolution",
+        "Iridal Pierce",
+        "Debonair Rush",
+        "Inspirit"
+      ],
+      "weapon_skills_raw": "**Lunar Revolution: Conal damage.\n**Iridal Pierce: Light-elemental AoE damage.\n**Debonair Rush: Single-target damage.\n**Inspirit: AoE HP recovery."
+    },
+    "leonoyne": {
+      "alter_ego": "Leonoyne",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "And so my dance on the battlefield comes to an end...",
+        "dismiss": "Away from the frontlines and back to the backlines.",
+        "summon": "Hah hah hah! The ringing of steel upon steel!"
+      },
+      "display": "Trust: Leonoyne",
+      "intro_text": "",
+      "job": "BLM/DRK",
+      "job_abilities": [],
+      "job_traits": [
+        "Auto Refresh"
+      ],
+      "main_job": "BLM",
+      "name": "Leonoyne",
+      "notable": "Prioritizes AoE magic and abilities.",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Leonoyne to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/7a/Trust_Leonoyne.png/revision/latest?cb=20150702192507",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Ice Spikes",
+        "Blizzaga I-III"
+      ],
+      "spells_raw": "Ice Spikes, Blizzaga I-III",
+      "sub_job": "DRK",
+      "weapon": "Bahadur",
+      "weapon_skills": [
+        "Freezebite",
+        "Shockwave",
+        "Spine Chiller",
+        "Herculean Slash"
+      ],
+      "weapon_skills_raw": "**Freezebite\n**Shockwave\n**Spine Chiller\n**Herculean Slash"
+    },
+    "lhe lhangavo": {
+      "alter_ego": "Lhe Lhangavo",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Ugh...this just isn't...my day...",
+        "dismiss": "Finished with me already? Then I'll be heading back to the coalition--hopefully Levil hasn't burned the place down.",
+        "summon": "If wer'e gonna do this, wer'e gonna do it fast and hard!"
+      },
+      "display": "Trust: Lhe Lhangavo",
+      "intro_text": "",
+      "job": "MNK/WAR",
+      "job_abilities": [
+        "Dodge",
+        "Provoke",
+        "Chakra",
+        "Impetus"
+      ],
+      "job_traits": [
+        "Counter",
+        "Double Attack",
+        "Kick Attacks"
+      ],
+      "main_job": "MNK",
+      "name": "Lhe Lhangavo",
+      "notable": "Uses provoke under certain circumstances.",
+      "obtained": "Trade Cipher: Lhe to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/6/62/Trust_Lhe_Lhangavo.png/revision/latest?cb=20150214193136",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Bare hands",
+      "weapon_skills": [
+        "Asuran Fists",
+        "Backhand Blow",
+        "Dragon Kick",
+        "Raging Fists"
+      ],
+      "weapon_skills_raw": "** Asuran Fists\n** Backhand Blow\n** Dragon Kick\n** Raging Fists"
+    },
+    "lhu mhakaracca": {
+      "alter_ego": "Lhu Mhakaracca",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Keep Quiet, Guttler...it's nap time...",
+        "dismiss": "Hahaha, that was fun!",
+        "summon": "Guttler, it's feeding time!"
+      },
+      "display": "Trust: Lhu Mhakaracca",
+      "intro_text": "",
+      "job": "BST/WAR",
+      "job_abilities": [
+        "Berserk",
+        "Feral Howl"
+      ],
+      "job_traits": [
+        "Double Attack"
+      ],
+      "main_job": "BST",
+      "name": "Lhu Mhakaracca",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Lhu to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/ed/Trust_Lhu_Mhakaracca.PNG/revision/latest?cb=20140630205926",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Guttler / Shield",
+      "weapon_skills": [
+        "Spinning Axe",
+        "Rampage",
+        "Decimation",
+        "Onslaught"
+      ],
+      "weapon_skills_raw": "**Spinning Axe\n**Rampage\n**Decimation\n**Onslaught\n*As of the November 2021 Update her shield has higher stats if the player who called her is item level 100 or higher."
+    },
+    "lilisette": {
+      "alter_ego": "Lilisette",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "What I have...wasn't enough",
+        "dismiss": "The future is ours to decide!",
+        "summon": "Be thankful to meet your end at the hands of Lilisette!"
+      },
+      "display": "Trust: Lilisette",
+      "intro_text": "",
+      "job": "DNC",
+      "job_abilities": [
+        "Thorned Stance"
+      ],
+      "job_traits": [],
+      "main_job": "DNC",
+      "name": "Lilisette",
+      "notable": "",
+      "obtained": "A Forbidden Reunion (trade Cipher: Lilisette to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/40/Trust_Lilisette.png/revision/latest?cb=20141007093732",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Daggers",
+      "weapon_skills": [
+        "Dancer's Fury",
+        "Whirling Edge"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "lilisette ii": {
+      "alter_ego": "Lilisette",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "No...Way...",
+        "dismiss": "Keep an eye out for me...sometime in your future!",
+        "summon": "Hehehe! Ladies and gents, get ready for Future Fabulous's Special Double Act!"
+      },
+      "display": "Trust: Lilisette II",
+      "intro_text": "",
+      "job": "DNC",
+      "job_abilities": [
+        "Vivifying Waltz",
+        "Divine Waltz",
+        "Dancer's Fury",
+        "Rousing Samba",
+        "Whirling Edge"
+      ],
+      "job_traits": [],
+      "main_job": "DNC",
+      "name": "Lilisette II",
+      "notable": "",
+      "obtained": "Ganged Up On",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/3c/LilisetteII.png/revision/latest?cb=20160203010446",
+      "race": "Multiracial",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Daggers",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "lion": {
+      "alter_ego": "Lion",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Sorry for not fulfilling my promise...",
+        "dismiss": "Time to head off! Until we meet again!",
+        "summon": "Let's put an end to the years of trouble and discord!"
+      },
+      "display": "Trust: Lion",
+      "intro_text": "",
+      "job": "THF",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "THF",
+      "name": "Lion",
+      "notable": "",
+      "obtained": "Repeat Login Campaign",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/fb/Trust_Lion.png/revision/latest?cb=20140114200652",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Dagger",
+      "weapon_skills": [
+        "Pirate Pummel",
+        "Powder Keg",
+        "Grapeshot",
+        "Walk the Plank"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "lion ii": {
+      "alter_ego": "Lion",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "This land is wrapped in fear...sadness...despair...",
+        "dismiss": "Beware of what lies ahead.",
+        "summon": "I'll never give up, knowing that the crystal has placed its trust in me."
+      },
+      "display": "Trust: Lion II",
+      "intro_text": "",
+      "job": "THF/NIN",
+      "job_abilities": [],
+      "job_traits": [
+        "Occasionally Triple Attacks"
+      ],
+      "main_job": "THF",
+      "name": "Lion II",
+      "notable": "**WSs are pretty weak in comparison to other Trust.\n**Uses either her dagger or a roundhouse kick when auto-attacking. These are not normal Kick Attacks, her kicks completely replace her dagger auto-attack for a turn when she uses them.\n**Can perform Light (Skillchain) with Trust: Maat (UC) at level 50.\n**Only uses unique weapon skills (uses no standard skills).\n**Rarely starts a skillchain with the player when duoing with her; waits for the player to use a weapon skill, then skillchains with it...",
+      "obtained": "A Land After Time",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/fb/Trust_Lion_II.PNG/revision/latest?cb=20170620090756",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "NIN",
+      "weapon": "Dagger and Roundhouse Kicks",
+      "weapon_skills": [
+        "Pirate Pummel",
+        "Powder Keg",
+        "Grapeshot",
+        "Walk the Plank"
+      ],
+      "weapon_skills_raw": "**Pirate Pummel: Single target damage and high DoT Burn.\n**Powder Keg: Cone Attack , Defense Down and Magic Defense Down.\n**Grapeshot: Cone Attack, Stun.\n**Walk the Plank: AoE damage, Knockback, Bind, and Dispel."
+    },
+    "luzaf": {
+      "alter_ego": "Luzaf",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk... Even I...could not succeed.",
+        "dismiss": "You've always come to me when I needed it. Next time, I shall return the favor tenfold.",
+        "summon": "Do not mistake me for one with a penchant for frivolities."
+      },
+      "display": "Trust: Luzaf",
+      "intro_text": "",
+      "job": "COR/NIN",
+      "job_abilities": [
+        "Quick Draw",
+        "Dark Shot",
+        "Light Shot",
+        "Phantom Roll",
+        "Triple Shot"
+      ],
+      "job_traits": [],
+      "main_job": "COR",
+      "name": "Luzaf",
+      "notable": "**Uses Ranged Attacks frequently.\n**Almost always attempts to Skillchain with the party if they have enough TP to perform a Weapon Skill.\n**Like Trust: Naja Salaheem (UC), Luzaf will randomly select one of his weapon skills with which to always initiate if he has sufficient TP and no one has used a skillchain-compatible weapon skill recently. You can summon him again to change which weapon skill with which he prefers initiating, although there is a 1/4 chance it will be the same one again. Unlik...",
+      "obtained": "Trade Cipher: Luzaf to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/76/Trust_Luzaf.png/revision/latest?cb=20140414221813",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "NIN",
+      "weapon": "Dagger, Sword, and Death Penalty",
+      "weapon_skills": [
+        "Leaden Salute",
+        "Bisection",
+        "Akimbo Shot",
+        "Grisly Horizon"
+      ],
+      "weapon_skills_raw": "**Leaden Salute\n**Bisection\n**Akimbo Shot\n**Grisly Horizon"
+    },
+    "maat": {
+      "alter_ego": "Maat",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "dismiss": "If you don't need me, then I'll go help someone else!",
+        "summon": "Hoho! Let me at 'em!"
+      },
+      "display": "Trust: Maat",
+      "intro_text": "",
+      "job": "MNK",
+      "job_abilities": [
+        "Mantra"
+      ],
+      "job_traits": [],
+      "main_job": "MNK",
+      "name": "Maat",
+      "notable": "Per the Nov. 11, 2017 Version Update under Battle-related: \"The effects of TP on the following weapon skills are now the same as those for players.\n\n Combo / One Inch Punch / Howling Fist / Dragon Kick / Asuran Fists\n\nThe potency of the weapon skill Bear Killer has been increased.\"\n*",
+      "obtained": "Shattering Stars (complete on 6 different jobs, then talk to Maat as one of his 15 jobs)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/91/TrustMaat.png/revision/latest?cb=20140526004357",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "His fists",
+      "weapon_skills": [],
+      "weapon_skills_raw": "(level): Hand-to-Hand weapon skills up to Asuran Fists(250), as well as the exclusive Bear Killer()."
+    },
+    "maat (uc)": {
+      "alter_ego": "Maat",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Heh heh heh...I was...too slow.",
+        "dismiss": "You've still got limits to exceed, young one! I know you can do it!",
+        "summon": "Ready to crack some skulls? Heh heh heh."
+      },
+      "display": "Trust: Maat (UC)",
+      "intro_text": "",
+      "job": "MNK/WAR",
+      "job_abilities": [
+        "Impetus",
+        "Counterstance",
+        "Hollow Smite",
+        "Victory Smite"
+      ],
+      "job_traits": [
+        "Double Attack",
+        "Kick Attacks"
+      ],
+      "main_job": "MNK",
+      "name": "Maat (UC)",
+      "notable": "",
+      "obtained": "Join Maat's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/a7/Trust_Maat_%28UC%29.png/revision/latest?cb=20150721162912",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Bare hands and feet",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "makki-chebukki": {
+      "alter_ego": "Makki-Chebukki",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "dismiss": "You..you wouldn't do that!",
+        "summon": "Out of the way! Makki-Chebukki's back in town!"
+      },
+      "display": "Trust: Makki-Chebukki",
+      "intro_text": "",
+      "job": "RNG",
+      "job_abilities": [
+        "Sharpshot",
+        "Barrage",
+        "Flashy Shot"
+      ],
+      "job_traits": [],
+      "main_job": "RNG",
+      "name": "Makki-Chebukki",
+      "notable": "**Keeps his distance from the enemy.\n**Often stands around inactive, doing little more than performing emotes. On Lightsday he does nothing, just like his sibling, Kukki-Chebukki.",
+      "obtained": "Conquest Points during Alter Ego Extravaganza",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/b/b1/Trust_Makki_Chebukki.jpg/revision/latest?cb=20170606132001",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Ranged Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Bow",
+      "weapon_skills": [
+        "Empyreal Arrow"
+      ],
+      "weapon_skills_raw": "Empyreal Arrow."
+    },
+    "margret": {
+      "alter_ego": "Margret",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "All information should be judged...with a discerning eye.",
+        "dismiss": "Fight well and live well.",
+        "summon": "The right to free knowledge is undeniable--a right that I intend to uphold."
+      },
+      "display": "Trust: Margret",
+      "intro_text": "",
+      "job": "RNG",
+      "job_abilities": [
+        "Barrage",
+        "Double Shot",
+        "Decoy Shot",
+        "Sharpshot"
+      ],
+      "job_traits": [],
+      "main_job": "RNG",
+      "name": "Margret",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Margret to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/b/b3/Trust_Margret.jpg/revision/latest?cb=20141231210842",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Ranged Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Dagger / Bow",
+      "weapon_skills": [
+        "Arching Arrow",
+        "Piercing Arrow",
+        "Refulgent Arrow",
+        "Sidewinder"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "matsui-p": {
+      "alter_ego": "Akihiko Matsui",
+      "casting_time": "5 seconds",
+      "dialogue": {},
+      "display": "Trust: Matsui-P",
+      "intro_text": "",
+      "job": "NIN/BLM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "NIN",
+      "name": "Matsui-P",
+      "notable": "**Prefers to open skillchains. Will remember the last weapon skill used by the party leader and will open the highest-tier skillchain possible. Will not open skillchains for other trusts in the party.\n**Does the most damage by magic bursting skillchains twice, with Ninjutsu and tier 1 elemental Black Magic, MP permitting.\n**Prioritizes self buffs and debuffing his current target at the start of combat.\n**Ranged Attack - Uses shuriken.\n**Matsui-P is named after Akihiko Matsui, FFXI Producer.",
+      "obtained": "One Venturous Tarutaru Campaign",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/1/16/Trust_Matsui-P.jpg/revision/latest?cb=20201210130013",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "BLM",
+      "weapon": "Two katana and shuriken",
+      "weapon_skills": [
+        "Blade: Rin",
+        "Blade: Retsu",
+        "Blade: Ei",
+        "Blade: Jin",
+        "Blade: Ten",
+        "Blade: Ku",
+        "Blade: Shun",
+        "Blade: Kamu"
+      ],
+      "weapon_skills_raw": "**Blade: Rin - Delivers a single-hit attack. Chance of critical varies with TP.\n**Blade: Retsu - Delivers a two-hit attack. Paralyzes enemy. Duration of paralysis varies with TP.\n**Blade: Ei - Delivers a dark elemental attack. Damage varies with TP.\n**Blade: Jin - Delivers a three-hit attack. Chance of critical varies with TP.\n**Blade: Ten - Delivers a single-hit attack. Damage varies with TP.\n**Blade: Ku - Delivers a five-hit attack. Accuracy varies with TP.\n**Blade: Shun - Delivers a fivefold attack. Attack power varies with TP.\n**Blade: Kamu - Lowers target's accuracy. Duration of effect va..."
+    },
+    "maximilian": {
+      "alter_ego": "Maximilian",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Always forward...never left or right...",
+        "dismiss": "A good army will scrape together everything they can.",
+        "summon": "Turtle sleeps in rocky den♪ 'Cause he's not a citizen♪"
+      },
+      "display": "Trust: Maximilian",
+      "intro_text": "",
+      "job": "THF/WAR",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "THF",
+      "name": "Maximilian",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Maximilian to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/f7/Trust_Maximilian.png/revision/latest?cb=20150702192400",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Sword/Sword",
+      "weapon_skills": [
+        "Ryaaaaaaaaah!"
+      ],
+      "weapon_skills_raw": "Ryaaaaaaaaah!"
+    },
+    "mayakov": {
+      "alter_ego": "Mayakov",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "No--not the hair!",
+        "dismiss": "Where one thtage endth, another beginth!",
+        "summon": "The lighth shine on Vana'diel thith day!"
+      },
+      "display": "Trust: Mayakov",
+      "intro_text": "",
+      "job": "DNC",
+      "job_abilities": [
+        "Saber Dance"
+      ],
+      "job_traits": [],
+      "main_job": "DNC",
+      "name": "Mayakov",
+      "notable": "",
+      "obtained": "Trade Cipher: Mayakov from Repeat Login Campaign to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/76/Trust_Mayakov.png/revision/latest?cb=20150316234050",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Swords",
+      "weapon_skills": [
+        "Fast Blade",
+        "Vorpal Blade",
+        "Swift Blade",
+        "Coming up Roses"
+      ],
+      "weapon_skills_raw": "**Fast Blade\n**Vorpal Blade\n**Swift Blade\n**Coming up Roses (his exclusive weapon skill)"
+    },
+    "mihli aliapoh": {
+      "alter_ego": "Mihli Aliapoh",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I-I...lost? Drrreadful!",
+        "dismiss": "Each day's battle puts a sprrring in my step the next morning!",
+        "summon": "Hey, hey--I want a turrrn!"
+      },
+      "display": "Trust: Mihli Aliapoh",
+      "intro_text": "",
+      "job": "WHM",
+      "job_abilities": [
+        "Afflatus Solace"
+      ],
+      "job_traits": [],
+      "main_job": "WHM",
+      "name": "Mihli Aliapoh",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Mihli to Gondebaud, Clarion Star, or Wetata), Records of Eminence: Alter Ego: Valaineral",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/ac/Trust_Mihli.png/revision/latest?cb=20131231212029",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Cure VI",
+        "Protectra",
+        "Shellra",
+        "Protect",
+        "Shell",
+        "Slow",
+        "Paralyze",
+        "Erase"
+      ],
+      "spells_raw": "** Up to Cure VI.\n** Protectra and Shellra (highest available tier).\n*** Protect and Shell if only one member needs the status.\n** Slow and Paralyze.\n** Erase, -na Spells, favoring herself first.\n*As of the November 2021 Update her shield has higher stats if the player who called her is item level 100 or higher.",
+      "sub_job": "",
+      "weapon": "Club and Shield",
+      "weapon_skills": [
+        "Scouring Bubbles",
+        "Brainshaker",
+        "True Strike",
+        "Hexa Strike"
+      ],
+      "weapon_skills_raw": "Scouring Bubbles (AoE Water damage), Brainshaker, True Strike, and Hexa Strike."
+    },
+    "mildaurion": {
+      "alter_ego": "Mildaurion",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "If it ends here...there can be no beginning...",
+        "dismiss": "My movements will be limited, but rest assured that I will be watching over you always.",
+        "summon": "I will also fight alongside you. I must see this matter put to rest."
+      },
+      "display": "Trust: Mildaurion",
+      "intro_text": "",
+      "job": "Special (PLD/WAR)",
+      "job_abilities": [],
+      "job_traits": [
+        "Double Attack",
+        "Undead Killer"
+      ],
+      "main_job": "Special (PLD",
+      "name": "Mildaurion",
+      "notable": "**Does not cast any spells at all, despite her high MP. Perhaps the accident during her transformation from Kuluu to Zilart: while she received a MP pool, she did not receive the ability to cast.\n***Trusts with Refresh like Koru-Moru will waste time and MP casting it on her.\n**All 8 elements are covered in her weapon skills. She has 2 magical WS with dark elements, and 2 physical WS with light elements.",
+      "obtained": "Trade Cipher: Mildaurion from Repeat Login Campaign to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/73/Trust_Mildaurion.png/revision/latest?cb=20150514220211",
+      "race": "Zilart (Race)",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR)",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": "(unique Zilart)"
+    },
+    "mnejing": {
+      "alter_ego": "Mnejing",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "...Well... That was more violent than necessary.",
+        "dismiss": "Though you may be far away, I ask you--never forget about Nashmeira.",
+        "summon": "You've never let anyone stand in your way. Not even us or Nashmeira..."
+      },
+      "display": "Trust: Mnejing",
+      "intro_text": "",
+      "job": "PLD",
+      "job_abilities": [
+        "Flashbulb",
+        "Provoke",
+        "Automaton",
+        "Strobe",
+        "Shield Bash",
+        "Disruptor",
+        "Dispel"
+      ],
+      "job_traits": [],
+      "main_job": "PLD",
+      "name": "Mnejing",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Mnejing to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/71/Mnejing_Trust.jpg/revision/latest?cb=20140403015716",
+      "race": "Automaton",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Valoredge Head / Valoredge Frame",
+      "weapon_skills": [
+        "Chimera Ripper",
+        "Slapstick",
+        "String Clipper",
+        "Shield Subverter"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "monberaux": {
+      "alter_ego": "Monberaux",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I cannot go on much longer...",
+        "dismiss": ".",
+        "summon": "I am Doctor Monberaux. My services are available for any affliction."
+      },
+      "display": "Trust: Monberaux",
+      "intro_text": "",
+      "job": "\"Chemist\"",
+      "job_abilities": [
+        "Mix",
+        "Magic Defense Bonus",
+        "Magic Attack Bonus",
+        "Hyper Potion",
+        "Max Potion",
+        "Panacea"
+      ],
+      "job_traits": [],
+      "main_job": "\"Chemist\"",
+      "name": "Monberaux",
+      "notable": "",
+      "obtained": "Get the cipher in exhange for 480 Deeds of Heroism at an A.M.A.N",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/6/65/2020_March_Monberaux.jpg/revision/latest?cb=20200310175826",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [],
+      "spells_raw": "none.",
+      "sub_job": "",
+      "weapon": "None (does not melee)",
+      "weapon_skills": [],
+      "weapon_skills_raw": "none."
+    },
+    "moogle": {
+      "alter_ego": "Moogle",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "N/A (due to his non-interactive status, he cannot die)",
+        "dismiss": "See you soon, kupo!",
+        "summon": "Malevolent monsters! This is my master's...kupo?"
+      },
+      "display": "Trust: Moogle",
+      "intro_text": "",
+      "job": "GEO",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "GEO",
+      "name": "Moogle",
+      "notable": "",
+      "obtained": "Adventurer Appreciation Campaign 2014 (trade Cipher: Moogle to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/d/d1/Trust_Moogle.png/revision/latest?cb=20140517054712",
+      "race": "Moogle",
+      "recast_time": "240 seconds",
+      "role": "Support (Passive)",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "morimar": {
+      "alter_ego": "Morimar",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "dismiss": "Time ta head back. Ya know where ta find me.",
+        "summon": "Morimar's on the job! Let's not waste any time!"
+      },
+      "display": "Trust: Morimar",
+      "intro_text": "",
+      "job": "BST",
+      "job_abilities": [],
+      "job_traits": [
+        "Beast Killer"
+      ],
+      "main_job": "BST",
+      "name": "Morimar",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (Cipher: Morimar)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/1/19/Trust_Morimar.jpg/revision/latest?cb=20170606131358",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Great Axe",
+      "weapon_skills": [
+        "Arduous Decision",
+        "Into the Light",
+        "Camaraderie of the Crevasse",
+        "Vehement Resolution"
+      ],
+      "weapon_skills_raw": "**Arduous Decision: Fragmentation/Compression skillchain properties.\n**Into the Light: Fusion/Impaction skillchain properties.\n**Camaraderie of the Crevasse: Detonation/ Impaction skillchain properties.\n**Vehement Resolution: Only used at less than 50% HP, fully heals Morimar, removes debuffs on Morimar and gives him an aura.\n**12 Blades of Remorse: Light skillchain property and AoE damage (might only be used during aura.)"
+    },
+    "mumor": {
+      "alter_ego": "Mumor",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk...a singer is nothing...without her fans...",
+        "dismiss": "Less smiting, more reciting! See you soon!♪",
+        "summon": "To see the inverted rainbow of your smile...!"
+      },
+      "display": "Trust: Mumor",
+      "intro_text": "",
+      "job": "DNC/WAR",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "DNC",
+      "name": "Mumor",
+      "notable": "She uses her weapon skill less often than most Alter egos use theirs due to her using TP for Sambas and Steps. Occasionally Double Attacks.",
+      "obtained": "Fantastic Fraulein Mumor: Dynamic DopplegangersFantastic Fraulein Mumor: Curtain Call",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/b/bc/Trust_Mumor.png/revision/latest?cb=20140729230050",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Miracle Wand",
+      "weapon_skills": [
+        "Skullbreaker"
+      ],
+      "weapon_skills_raw": "Skullbreaker."
+    },
+    "mumor ii": {
+      "alter_ego": "Mumor",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Oh noes...!",
+        "dismiss": "Thanks, everybody! And remember, just because I'm everyone's idol, doesn't mean you all can't fit inside my heart!",
+        "summon": "Hey, everybody! It's Fantastic Fraulein ★ Mumor! Here I go...♪"
+      },
+      "display": "Trust: Mumor II",
+      "intro_text": "",
+      "job": "BLM",
+      "job_abilities": [],
+      "job_traits": [
+        "Occult Acumen"
+      ],
+      "main_job": "BLM",
+      "name": "Mumor II",
+      "notable": "** Even though she Dual Wields, she only hits with one.\n** Casts spells based on mob's weaknesses (like Robel-Akbel).\n** Stun is seen only during Firesday Night Fever mode.\n** Firesday Night Fever is followed by Final Eternal Heaven.",
+      "obtained": "Fantastic Fraulein Mumor: Curtain Call",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/e/e7/Trust_Mumor_II.png/revision/latest?cb=20150810215132",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Single target elemental spells",
+        "Enfeebling Magic"
+      ],
+      "spells_raw": "Single target elemental spells, -ja spells when available at highest levels. Occasionally casts Stun. Does not cast Ancient Magic, Enfeebling Magic, nor Enhancing Magic\n*Does not cast Drain Aspir nor Aspir II\n*Does not cast Meteor\nOr any -ga spells.",
+      "sub_job": "",
+      "weapon": "Miracle Wand x2",
+      "weapon_skills": [
+        "Lovely Miracle Waltz",
+        "Neo Crystal Jig",
+        "Super Crusher Jig",
+        "Firesday Night Fever",
+        "Final Eternal Heaven"
+      ],
+      "weapon_skills_raw": "Mumor's exclusive performance moves Shining Summer Samba (magical damage), Lovely Miracle Waltz, Neo Crystal Jig, Super Crusher Jig, Firesday Night Fever, Final Eternal Heaven."
+    },
+    "naja salaheem": {
+      "alter_ego": "Naja Salaheem",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "P-perrrsonnel expenses...too high...what a failure of a leader I've been.",
+        "dismiss": "Don't ya even think of tarrrnishing my reputation!",
+        "summon": "Ya been waiting for me all this time? Well, let's be gettin' starrrted, slate's all clean!♪"
+      },
+      "display": "Trust: Naja Salaheem",
+      "intro_text": "",
+      "job": "MNK/WAR",
+      "job_abilities": [
+        "True Strike",
+        "Hexa Strike",
+        "Black Halo",
+        "Focus",
+        "Dodge",
+        "Counter",
+        "Counterstance"
+      ],
+      "job_traits": [],
+      "main_job": "MNK",
+      "name": "Naja Salaheem",
+      "notable": "",
+      "obtained": "Trade Cipher: Naja to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/85/Naja4.JPG/revision/latest?cb=20140214222340",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Morgenstern (Club)",
+      "weapon_skills": [
+        "Peacebreaker"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "naja salaheem (uc)": {
+      "alter_ego": "Naja Salaheem",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I can feel my hair...standing on end.",
+        "dismiss": "Another fine catch!",
+        "summon": "Everything I do is in the name of the empire!"
+      },
+      "display": "Trust: Naja Salaheem (UC)",
+      "intro_text": "",
+      "job": "THF/WAR",
+      "job_abilities": [],
+      "job_traits": [
+        "Double Attack",
+        "Triple Attack"
+      ],
+      "main_job": "THF",
+      "name": "Naja Salaheem (UC)",
+      "notable": "",
+      "obtained": "Join Naja Salaheem's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/8f/Trust_Naja_Salaheem_%28UC%29.png/revision/latest?cb=20150728030222",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Club",
+      "weapon_skills": [
+        "Peacebreaker",
+        "Justicebreaker",
+        "Black Halo",
+        "Hexa Strike",
+        "Knott"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "najelith": {
+      "alter_ego": "Najelith",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Ryaaf...this might be...the end...",
+        "dismiss": "May the wind always be at your back!",
+        "summon": "Counselor Najelith, reporting for duty!"
+      },
+      "display": "Trust: Najelith",
+      "intro_text": "",
+      "job": "RNG",
+      "job_abilities": [
+        "Barrage",
+        "Double Shot"
+      ],
+      "job_traits": [
+        "Store TP"
+      ],
+      "main_job": "RNG",
+      "name": "Najelith",
+      "notable": "Uses ranged attacks every couple of melee swings.\nPer the December 10, 2015 update:\n* \" \"Store TP\" atrribute effects have been increased.\n* \"Enhanced critical hit rate\" attribute added.\n* Combat logic has been adjusted.\n** To have Najelith's alter ego perform melee attacks on a monster, lure the monster close to her.\"",
+      "obtained": "Trade Cipher: Najelith to Gondebaud, Clarion Star, or Wetata (must have completed the quest offered by the NPC with whom you trade)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/93/Trust_Najelith.png/revision/latest?cb=20140514203527",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Ranged Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Dagger and Bow",
+      "weapon_skills": [
+        "Cyclone",
+        "Sidewinder",
+        "Typhonic Arrow",
+        "Empyreal Arrow"
+      ],
+      "weapon_skills_raw": "** Dagger: Cyclone.\n** Bow: Sidewinder, Typhonic Arrow, Empyreal Arrow."
+    },
+    "naji": {
+      "alter_ego": "Naji",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "He'll never let me hear the end of this...!",
+        "dismiss": "Just one more step on my road to glory!",
+        "summon": "All right! Let me at 'em!"
+      },
+      "display": "Trust: Naji",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Burning Blade",
+        "Red Lotus Blade",
+        "Vorpal Blade",
+        "Provoke"
+      ],
+      "job_traits": [],
+      "main_job": "WAR",
+      "name": "Naji",
+      "notable": "",
+      "obtained": "Trust: Bastok",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/2/2c/Trust_Naji.png/revision/latest?cb=20131231223227",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Sword",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "nanaa mihgo": {
+      "alter_ego": "Nanaa Mihgo",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Uuurk...and to think, there were so many more trrreasures to be nabbed!",
+        "dismiss": "Now you know how dangerous it is to be a prrroductive member of society!",
+        "summon": "Looking to make a new frrriend, are we?"
+      },
+      "display": "Trust: Nanaa Mihgo",
+      "intro_text": "",
+      "job": "THF",
+      "job_abilities": [
+        "Despoil"
+      ],
+      "job_traits": [
+        "Gilfinder",
+        "Treasure Hunter"
+      ],
+      "main_job": "THF",
+      "name": "Nanaa Mihgo",
+      "notable": "Per the December 10, 2015 update: \n\"The success rate of the ability Despoil has been increased.\"",
+      "obtained": "Trust: Windurst (Windurst Trust permit), Mihgo's Amigo and Rank 3 in any nation",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5e/Trust_NanaaMihgo.png/revision/latest?cb=20131231223134",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Dagger",
+      "weapon_skills": [
+        "Wasp Sting",
+        "Dancing Edge",
+        "King Cobra Clamp"
+      ],
+      "weapon_skills_raw": "*Wasp Sting\n*Dancing Edge\n*King Cobra Clamp (conal magic)"
+    },
+    "nashmeira": {
+      "alter_ego": "Nashmeira",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Oh, no! This isn't how it was suppposed to be...!",
+        "dismiss": "Thank you...for everything.",
+        "summon": "You know more about us than any...you have come to us when we needed you most, and the time has come to return that favor."
+      },
+      "display": "Trust: Nashmeira",
+      "intro_text": "",
+      "job": "PUP/WHM",
+      "job_abilities": [
+        "No Job Abilities"
+      ],
+      "job_traits": [],
+      "main_job": "PUP",
+      "name": "Nashmeira",
+      "notable": "**Her main job appears to be Puppetmaster: if her job combination were MNK/WHM, then the HP difference between and Trust: Naja Salaheem, a MNK/WAR, would not be so massive. does not have Max HP Boost.\n**Does not counter or guard.\n**Provides synergy bonuses to Ovjang and Mnejing while summoned in the same party.",
+      "obtained": "By examining the Imperial Whitegate in after completing Eternal Mercenary",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/9e/Trust_Nashmeira.png/revision/latest?cb=20140323085818",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Poisona"
+      ],
+      "spells_raw": "Poisona and Erase whenever needed. Up to Cure IV in emergencies.",
+      "sub_job": "WHM",
+      "weapon": "Fists",
+      "weapon_skills": [],
+      "weapon_skills_raw": "Imperial Authority as her only weapon skill. Appears to have Distortion primary property."
+    },
+    "nashmeira ii": {
+      "alter_ego": "Nashmeira",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "No...Don't leave me!",
+        "dismiss": "Let us return to Al Zahbi!",
+        "summon": "Strength be with me..."
+      },
+      "display": "Trust: Nashmeira II",
+      "intro_text": "",
+      "job": "PUP/WHM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "PUP",
+      "name": "Nashmeira II",
+      "notable": "",
+      "obtained": "Ever Forward",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/90/Trust-Nashmeira-II.png/revision/latest?cb=20160408043550",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Protect",
+        "Shell",
+        "Protectra",
+        "Shellra",
+        "Up to Cure VI",
+        "Erase"
+      ],
+      "spells_raw": "Up to Cure VI, up to Curaga V, Erase and -na spells.\n**Does not cast Protect/Shell or Protectra/Shellra.",
+      "sub_job": "WHM",
+      "weapon": "Fists",
+      "weapon_skills": [
+        "Only uses Imperial Authority"
+      ],
+      "weapon_skills_raw": "Only uses Imperial Authority."
+    },
+    "noillurie": {
+      "alter_ego": "Noillurie",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "For bereft of love and honor...a woman's life...holds no meaning...",
+        "dismiss": "No thanks are required. I merely perform my duty.",
+        "summon": "The heathens shall pay dearly... My work has only just begun."
+      },
+      "display": "Trust: Noillurie",
+      "intro_text": "",
+      "job": "SAM/PLD",
+      "job_abilities": [
+        "Sekkanoki",
+        "Hasso",
+        "Third Eye",
+        "Meditate"
+      ],
+      "job_traits": [
+        "Auto Refresh",
+        "Double Attack"
+      ],
+      "main_job": "SAM",
+      "name": "Noillurie",
+      "notable": "",
+      "obtained": "Summer Alter Ego Extravaganza (trade Cipher: Noillurie to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/4/44/Trust_Noillurie.PNG/revision/latest?cb=20140630161747",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Cure III",
+        "Cure IV"
+      ],
+      "spells_raw": "",
+      "sub_job": "PLD",
+      "weapon": "Great Katana (Amanomurakumo)",
+      "weapon_skills": [
+        "Tachi: Kaiten",
+        "Tachi: Yukikaze",
+        "Tachi: Gekko"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "ovjang": {
+      "alter_ego": "Ovjang",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "This is quite...infuriating.",
+        "dismiss": "Keep your chin up and eyes focused!",
+        "summon": "Hahaha...let's pulverize them!"
+      },
+      "display": "Trust: Ovjang",
+      "intro_text": "",
+      "job": "BLM/RDM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "Ovjang",
+      "notable": "*Casts no healing or enhancing magic under any conditions.\n*Stormwaker Frame does blunt damage.",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Ovjang to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/ad/Ovjang_Trust.jpg/revision/latest?cb=20140403015503",
+      "race": "Automaton",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Elemental Magic",
+        "Paralyze",
+        "Slow",
+        "Silence",
+        "Dispel"
+      ],
+      "spells_raw": "*Up to tier IV Elemental Magic (single target)\n*Paralyze\n*Slow\n*Silence\n*Dispel",
+      "sub_job": "RDM",
+      "weapon": "Stormwaker Head / Stormwaker Frame",
+      "weapon_skills": [
+        "Slapstick",
+        "Knockout",
+        "Sixth Element",
+        "Gravitation"
+      ],
+      "weapon_skills_raw": "*Slapstick\n*Knockout\n*Sixth Element Effect: \n**Appears to have Gravitation primary property"
+    },
+    "pieuje (uc)": {
+      "alter_ego": "Pieuje",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Is this...where the road ends?",
+        "dismiss": "A war is not won by the number of soldiers, but by the strength of their dedication.",
+        "summon": "Pieuje I d'Oraguille, ready to defend the Kingdom to the last!"
+      },
+      "display": "Trust: Pieuje (UC)",
+      "intro_text": "",
+      "job": "WHM",
+      "job_abilities": [
+        "Afflatus Misery"
+      ],
+      "job_traits": [
+        "Auto Refresh",
+        "Regain"
+      ],
+      "main_job": "WHM",
+      "name": "Pieuje (UC)",
+      "notable": "Light elemental damage is added to his melee attack (akin to Enlight II) when Afflatus Misery & Auspice are active together (which is almost constantly). Remains stationary after the battle starts, except, when the mob moves out of Flash casting range, he will move back into range.\nPer the December 10, 2015 update:\n* \"Behavior for casting Cure in emergency situations has been added.\n* Casting priority of Cure has been lowered.\n* Logic for using the ability Nott has been added.\n* Weapon skill usa...",
+      "obtained": "Complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst, and join Pieuje's Unity Concord faction",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/a1/Trust_Pieuje.png/revision/latest?cb=20150829162927",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Flash",
+        "Cure I-VI",
+        "Protectra/Shellra I-V",
+        "Auspice",
+        "Haste",
+        "Status Recovery (-na) spells",
+        "Erase",
+        "Esuna"
+      ],
+      "spells_raw": "Flash, Cure I-VI, Protectra/Shellra I-V, Auspice, Haste, Status Recovery (-na) spells, Erase, Esuna.",
+      "sub_job": "",
+      "weapon": "Mace",
+      "weapon_skills": [
+        "Starlight",
+        "Moonlight",
+        "Nott"
+      ],
+      "weapon_skills_raw": "Starlight, Moonlight, Nott (recovers somewhat more HP than MP)."
+    },
+    "prishe": {
+      "alter_ego": "Prishe",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Aww, crap...",
+        "dismiss": "If you get your head chopped off before I get back, I'll kick the holy hell out of your lifeless body!",
+        "summon": "Prishe, reporting in! Time to break out the grub--your treat!"
+      },
+      "display": "Trust: Prishe",
+      "intro_text": "",
+      "job": "MNK/WHM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "MNK",
+      "name": "Prishe",
+      "notable": "",
+      "obtained": "The Chains Fall Free",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5b/Trust_Prishe.png/revision/latest?cb=20140219000547",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Cure IV"
+      ],
+      "spells_raw": "",
+      "sub_job": "WHM",
+      "weapon": "Fists",
+      "weapon_skills": [
+        "Knuckle Sandwich",
+        "Auroral Uppercut",
+        "Nullifying Dropkick"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "prishe ii": {
+      "alter_ego": "Prishe",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "No! Eat me! I can't lose. I won't...lose...!",
+        "dismiss": "My work here is done.",
+        "summon": "Get your dukes up. Time to laugh in the face of oblivion!"
+      },
+      "display": "Trust: Prishe II",
+      "intro_text": "",
+      "job": "MNK/WHM",
+      "job_abilities": [
+        "Hysteroanima",
+        "Psychoanima"
+      ],
+      "job_traits": [
+        "Counter",
+        "Guard"
+      ],
+      "main_job": "MNK",
+      "name": "Prishe II",
+      "notable": "** Uses three unique weapon skills.\n** Casts Curaga to awaken sleeping party members.\n** Casts Curaga on party members below 30% HP (orange) under certain circumstances. If you want her to cast it when they are in the yellow (<75%), put Trust: Ulmia in the party.",
+      "obtained": "Call to Serve",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c2/Trust_Prishe_II.PNG/revision/latest?cb=20170422082814",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Up to Curaga V"
+      ],
+      "spells_raw": "Up to Curaga V.",
+      "sub_job": "WHM",
+      "weapon": "Fists",
+      "weapon_skills": [
+        "Knuckle Sandwich",
+        "Auroral Uppercut",
+        "Nullifying Dropkick"
+      ],
+      "weapon_skills_raw": "**Knuckle Sandwich\n**Auroral Uppercut (AoE)\n**Nullifying Dropkick"
+    },
+    "qultada": {
+      "alter_ego": "Qultada",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Well...done...",
+        "dismiss": "Farewell for now, Seagull.",
+        "summon": "The tension and excitement of a true match...like walking on a tightrope..."
+      },
+      "display": "Trust: Qultada",
+      "intro_text": "",
+      "job": "COR",
+      "job_abilities": [
+        "Double-Up",
+        "Quick Draw",
+        "Snake Eye",
+        "Triple Shot"
+      ],
+      "job_traits": [
+        "Enhanced Magic Accuracy"
+      ],
+      "main_job": "COR",
+      "name": "Qultada",
+      "notable": "Uses a balance of melee and ranged attacks.\nPer the December 10, 2015 update: \n* \"The \"Enhanced Magic Accuracy\" attribute has been added.\"",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Qultada to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/2/27/Trust_Qultada.jpg/revision/latest?cb=20150402232716",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Sword/Gun",
+      "weapon_skills": [
+        "Burning Blade",
+        "Savage Blade",
+        "Sniper Shot",
+        "Detonator"
+      ],
+      "weapon_skills_raw": "** Sword: Burning Blade, Savage Blade.\n** Gun: Sniper Shot, Detonator."
+    },
+    "rahal": {
+      "alter_ego": "Rahal",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I have lost...",
+        "dismiss": "May the light of the Goddess shine down upon you!",
+        "summon": "I am Rahal S Lebrart, leader of the Royal Knights."
+      },
+      "display": "Trust: Rahal",
+      "intro_text": "",
+      "job": "PLD/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Berserk",
+        "Sentinel. Rampart"
+      ],
+      "job_traits": [
+        "Dragon Killer"
+      ],
+      "main_job": "PLD",
+      "name": "Rahal",
+      "notable": "**Closes skillchains. If he can't, he'll use Fast Blade or Swift Blade at 2000+ TP.\n**Casts Cure on party members who have been slept to wake them up.\n*As of the November 2021 Update his shield has higher stats if the player who called him is item level 100 or higher.",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Rahal to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5b/Trust-_Rahal.jpg/revision/latest?cb=20141001124725",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Up to Cure IV",
+        "Flash",
+        "Phalanx",
+        "Enlight"
+      ],
+      "spells_raw": "Up to Cure IV, Flash, Phalanx, Enlight.\n** Does not Cast Protect Or Shell.",
+      "sub_job": "WAR",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Fast Blade",
+        "Seraph Blade",
+        "Swift Blade",
+        "Savage Blade"
+      ],
+      "weapon_skills_raw": "Fast Blade, Seraph Blade, Swift Blade, Savage Blade."
+    },
+    "rainemard": {
+      "alter_ego": "Rainemard",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Were that Altana had seen fit to guide me...",
+        "dismiss": "A true warrior does not shrink from defeat.",
+        "summon": "Witness the true embodiment of my sorrow."
+      },
+      "display": "Trust: Rainemard",
+      "intro_text": "",
+      "job": "RDM",
+      "job_abilities": [
+        "Composure"
+      ],
+      "job_traits": [],
+      "main_job": "RDM",
+      "name": "Rainemard",
+      "notable": "",
+      "obtained": "Bundle of half-inscribed scrolls: Speak to Shanene in Batallia Downs (S) ( - center west on the grid) to receive a Cipher: Rainemard",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5b/Rainemard.png/revision/latest?cb=20140814131658",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Even at low levels",
+        "Protect I-V",
+        "Shell I-V",
+        "Phalanx",
+        "Haste/Haste II",
+        "Distract/Distract II",
+        "Refresh"
+      ],
+      "spells_raw": "Protect I-V, Shell I-V, Phalanx, Haste/Haste II, Distract/Distract II, Refresh, Tier I Enspells based on the target monster's weakness.\n** Does not cast any Cure Spells\n**Even at low levels, En- spells do ~60 damage (which at low levels is more or less the damage equivalent of him using a weapon skill every hit). This makes Rainemard an exceptionally powerful Trust for leveling from 16 until around 40 or so.",
+      "sub_job": "",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Trust: Curilla",
+        "Burning Blade",
+        "Red Lotus Blade",
+        "Savage Blade",
+        "Vorpal Blade"
+      ],
+      "weapon_skills_raw": "Burning Blade, Red Lotus Blade, Savage Blade, Vorpal Blade\n*Casts spells on himself only. If Curilla is present, will cast Haste/Phalanx/Refresh on her."
+    },
+    "robel-akbel": {
+      "alter_ego": "Robel-Akbel",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "There is one for whom this must be done...",
+        "dismiss": "You have done my troops a great service.",
+        "summon": "Let us fight side by side. For the survival of Jeuno, and the future of all children of Altana."
+      },
+      "display": "Trust: Robel-Akbel",
+      "intro_text": "",
+      "job": "BLM/SMN",
+      "job_abilities": [],
+      "job_traits": [
+        "Auto Refresh"
+      ],
+      "main_job": "BLM",
+      "name": "Robel-Akbel",
+      "notable": "** Opens up skillchains for Karaha-Baruha.\n** Weather, day, and the target's elemental weaknesses/resistances affect his spell choices. This makes him excellent for determining any of an enemy's elemental weaknesses (other than light and dark). Possibly strengths as well if he won't cast certain elements, even on their days or during their weather, on enemies with no elemental weaknesses.",
+      "obtained": "Trade Cipher: Robel-Akbel (from Repeat Login Campaigns that he is available) to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5f/Trust_Robel-Akbel.png/revision/latest?cb=20150715045512",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Stone/Water/Aero/Fire/Blizzard/Thunder I through V"
+      ],
+      "spells_raw": "Stone/Water/Aero/Fire/Blizzard/Thunder I through V, Stun. Magic Bursts with -ja and -ga spells.",
+      "sub_job": "SMN",
+      "weapon": "Staff",
+      "weapon_skills": [
+        "Spirit Taker",
+        "Quietus Sphere"
+      ],
+      "weapon_skills_raw": "Spirit Taker, Quietus Sphere (AOE dark damage), Null Blast (damage dealt restores MP, like Mystic Boon with Skillchain properties)."
+    },
+    "romaa mihgo": {
+      "alter_ego": "Romaa Mihgo (S)",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "The rrrest...is up to you.",
+        "dismiss": "Victorrry is close at hand!",
+        "summon": "When they falter... we slice into their rrranks!"
+      },
+      "display": "Trust: Romaa Mihgo",
+      "intro_text": "",
+      "job": "THF/WAR",
+      "job_abilities": [
+        "Steal",
+        "Sneak Attack",
+        "Trick Attack",
+        "Feint"
+      ],
+      "job_traits": [],
+      "main_job": "THF",
+      "name": "Romaa Mihgo",
+      "notable": "She will not position herself for Trick Attack, someone must be in front of her.",
+      "obtained": "Bundle of half-inscribed scrolls: Speak to Romaa Mihgo (S) in Windurst Waters (S) (G-11) (North) after completing the quest At Journey's End",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/ff/TrustRomaaMihgo.png/revision/latest?cb=20140813001558",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Cobra Clamp",
+        "Vorpal Blade",
+        "Savage Blade"
+      ],
+      "weapon_skills_raw": "Cobra Clamp, Vorpal Blade, and Savage Blade."
+    },
+    "rongelouts": {
+      "alter_ego": "Rongelouts",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Urk...I have not been granted permission...to die!",
+        "dismiss": "Never let them see you frown! It's bad for morale.",
+        "summon": "Maggots, maggots, maggots! Why am I always surrounded by maggots!?"
+      },
+      "display": "Trust: Rongelouts",
+      "intro_text": "*Summon: Maggots, maggots, maggots! Why am I always surrounded by maggots!?",
+      "job": "WAR",
+      "job_abilities": [
+        "Berserk",
+        "Warcry",
+        "Tongue Lash"
+      ],
+      "job_traits": [
+        "Beastmen Killer"
+      ],
+      "main_job": "WAR",
+      "name": "Rongelouts",
+      "notable": "",
+      "obtained": "Trade Cipher: Rongelouts to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5a/Trust_-_Rongelouts.png/revision/latest?cb=20150829233247",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Red Lotus Blade",
+        "Savage Blade"
+      ],
+      "weapon_skills_raw": "Red Lotus Blade, Savage Blade."
+    },
+    "rosulatia": {
+      "alter_ego": "Rosulatia",
+      "casting_time": "5 seconds",
+      "dialogue": {},
+      "display": "Trust: Rosulatia",
+      "intro_text": "",
+      "job": "BLM/DRK/GEO",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "Rosulatia",
+      "notable": "::::Arciela / Balamor / August / Rosulatia / Teodor / Darrcuiln\"",
+      "obtained": "Sinister Reign, Records of Eminence: Over Capacity",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/76/Trust_Rosulatia.png/revision/latest?cb=20160108100544",
+      "race": "Leafkin",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [],
+      "spells_raw": "Up to Tier V Earth-based nukes. All 3 Stonega Spells. Stonera.",
+      "sub_job": "DRK",
+      "weapon": "Vines, Roots (\"Great Sword\")",
+      "weapon_skills": [
+        "Depraved Dandia",
+        "Matriarchal Fiat"
+      ],
+      "weapon_skills_raw": "**Depraved Dandia: Single-target hit\n**Matriarchal Fiat: \n***Seems to be very situational, possibly contingent on specific magic/abilities used by other party members."
+    },
+    "rughadjeen": {
+      "alter_ego": "Rughadjeen",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "One day...I shall return.",
+        "dismiss": "The rest is for you to decide.",
+        "summon": "Steel your resolve, and a brighter future will be ours!"
+      },
+      "display": "Trust: Rughadjeen",
+      "intro_text": "",
+      "job": "PLD",
+      "job_abilities": [
+        "Holy Circle",
+        "Sentinel",
+        "Chivalry",
+        "Divine Emblem"
+      ],
+      "job_traits": [
+        "Damage Taken"
+      ],
+      "main_job": "PLD",
+      "name": "Rughadjeen",
+      "notable": "*Has a fairly potent Enfire effect.\nPer the December 10, 2015 update:\nBehavior for casting Cure in emergency situations has been added.\nCasting priority of Cure has been lowered.\nConditions for using the ability Chivalry have been adjusted.\nMaximum HP has been increased.\nThe attribute \"Potency of 'Cure' effects received increased\" has been added.\nThe \"Fast Cast\" attribute has been added.",
+      "obtained": "December 2014 Login Campaign: obtain Cipher: Rughadjeen for 500 login points and trade it to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/78/Trust_Rughadjeen.jpg/revision/latest?cb=20150830002907",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Cure IV",
+        "Flash",
+        "Raise",
+        "Holy"
+      ],
+      "spells_raw": "*Up to Cure IV\n*Flash\n*Raise\n*Holy",
+      "sub_job": "",
+      "weapon": "Algol",
+      "weapon_skills": [
+        "Power Slash",
+        "Sickle Moon",
+        "Ground Strike",
+        "Victory Beacon"
+      ],
+      "weapon_skills_raw": "*Power Slash\n*Sickle Moon\n*Ground Strike\n*Victory Beacon (AoE)"
+    },
+    "sakura": {
+      "alter_ego": "Sakura",
+      "casting_time": "5 seconds",
+      "dialogue": {},
+      "display": "Trust: Sakura",
+      "intro_text": "",
+      "job": "Passive (Geomancer)",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "Passive (Geomancer)",
+      "name": "Sakura",
+      "notable": "",
+      "obtained": "Alter Ego Extravaganza (trade Cipher: Sakura to Gondebaud, Clarion Star, or Wetata)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/b/bc/Sakura_Trust.jpg/revision/latest?cb=20140403015859",
+      "race": "Chocobo",
+      "recast_time": "240 seconds",
+      "role": "Passive Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "selh'teus": {
+      "alter_ego": "Selh'teus",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "The darkness...turns to void...",
+        "dismiss": "Farewell, I will watch over your human world...your Vana'diel...",
+        "summon": "If you are prepared to fight, then I shall stand with you against the world's end."
+      },
+      "display": "Trust: Selh'teus",
+      "intro_text": "",
+      "job": "PLD",
+      "job_abilities": [
+        "Rejuvenation (instantly restores HP",
+        "MP"
+      ],
+      "job_traits": [
+        "Regain"
+      ],
+      "main_job": "PLD",
+      "name": "Selh'teus",
+      "notable": "**Stands still when fight starts. Will follow just to stay in range of player. Does not close with mob.\n**Despite his Melee Fighter classification, he is better classified as Healer or Support (Rejuvenation is his primary purpose). Melee classification is because he only attacks in melee range.\n**According to SE, his weapon/damage type is 'staff'.\n***Attacks using magic blasts from hands (whether they're physical or magical or both is unknown).\n****Box Step lead to his attacks doing more damage,...",
+      "obtained": "Cipher: Selh'teus from the mission Call of the Void",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/7/72/Trust_Selh%27teus.png/revision/latest?cb=20150814234927",
+      "race": "Kuluu",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Magic/Staff",
+      "weapon_skills": [
+        "Revelation",
+        "Luminous Lance"
+      ],
+      "weapon_skills_raw": "** Revelation (Light damage).\n** Luminous Lance (Light damage) ."
+    },
+    "semih lafihna": {
+      "alter_ego": "Semih Lafihna",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Why does the light...fade...?",
+        "dismiss": "Time will surely bring us together once more.",
+        "summon": "I am Semih Lafihna of Windurst's Sibyl Guards!"
+      },
+      "display": "Trust: Semih Lafihna",
+      "intro_text": "",
+      "job": "RNG",
+      "job_abilities": [
+        "Barrage",
+        "Sharpshot",
+        "Stealth Shot"
+      ],
+      "job_traits": [],
+      "main_job": "RNG",
+      "name": "Semih Lafihna",
+      "notable": "",
+      "obtained": "Speak to Kupipi in Heavens Tower after completing The Path Untraveled to receive Cipher: Semih",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/8e/Trust-Semih.png/revision/latest?cb=20150712051759",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Ranged Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Bow",
+      "weapon_skills": [
+        "Sidewinder",
+        "Arching Arrow",
+        "Lux Arrow",
+        "Stellar Arrow"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "shantotto": {
+      "alter_ego": "Shantotto",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I'd love to stay longer and enjoy this little party, but I've got a seminar to attend, and must not be tardy!",
+        "dismiss": "I am hardly amazed at how well I've done, but I have to admit--it's been fun!",
+        "summon": "It's far too late for your foes to make amends, and with me at your side, they'll meet untimely ends!"
+      },
+      "display": "Trust: Shantotto",
+      "intro_text": "",
+      "job": "BLM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "Shantotto",
+      "notable": "**Quickly depletes her MP, but becomes more conservative with spell tiers when the enemy's HP is low.\n**Outside of battle, she can be released and resummoned to restore all of her MP, as long as her recast timer is ready.\n**Cast spells related to the Threnody if present, but not as strictly as Ajido-Marujido does.",
+      "obtained": "Trust: Windurst\nPrerequisites Known:\n*Rank 6 in Bastok, San d'Oria, or Windurst\n*Trust: Kupipi, Trust: Nanaa Mihgo, Trust: Ajido-Marujido\n*Trust: Ayame, Trust: Naji, Trust: Volker\n*Trust: Excenmille, Trust: Curilla, Trust: Trion\n*Curses, Foiled A-Golem!? quest completed",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/86/Shantotto_1.JPG/revision/latest?cb=20131226131144",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [],
+      "spells_raw": "single-target Elemental Magic nukes up to V in rapid succession, with a focus on high-power nukes.\n**Does not cast Ancient Magic, Enfeebling Magic, Enhancing Magic, nor Area of Effect spells.\n**Does not cast Drain, Aspir nor Aspir II.\n**Does not cast Meteor.",
+      "sub_job": "",
+      "weapon": "Unarmed (does not melee)",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "shantotto ii": {
+      "alter_ego": "Shantotto II",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "What happened to Trust? I thought it got better. But here I am now...eternally fettered...",
+        "dismiss": "I've no time to sit here and with fool's parley, for I've got places to be, so I bid you good day!",
+        "summon": "The time is at hand and they've nothing to gain, so it's time to bring them a whole world of pain!"
+      },
+      "display": "Trust: Shantotto II",
+      "intro_text": "",
+      "job": "BLM",
+      "job_abilities": [],
+      "job_traits": [
+        "Very high INT",
+        "Physical Accuracy",
+        "Magic Accuracy"
+      ],
+      "main_job": "BLM",
+      "name": "Shantotto II",
+      "notable": "",
+      "obtained": "Trade Cipher: Shantotto II to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/1/1f/ShantottoII.png/revision/latest?cb=20151120042908",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [],
+      "spells_raw": "Single-target Tier I elemental magic nukes for high damage. Does not seem to cast anything other than those six spells.",
+      "sub_job": "",
+      "weapon": "Hand Form (ranged)",
+      "weapon_skills": [
+        "Empirical Research",
+        "Doctor's Orders",
+        "Final Exam",
+        "Lesson in Pain"
+      ],
+      "weapon_skills_raw": "**Empirical Research (Fragmentation)\n**Doctor's Orders (Gravitation/)\n**Final Exam (Fusion)\n**Lesson in Pain (Scission, Distortion)"
+    },
+    "shikaree z": {
+      "alter_ego": "Shikaree Z",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Was justice not...on my side?",
+        "dismiss": "Think of this not as goodbye, but as a new beginning.",
+        "summon": "I shall hold your future in my hands... for now, at least."
+      },
+      "display": "Trust: Shikaree Z",
+      "intro_text": "",
+      "job": "DRG/WHM",
+      "job_abilities": [
+        "Jump attacks",
+        "Ancient Circle"
+      ],
+      "job_traits": [
+        "Auto Regen"
+      ],
+      "main_job": "DRG",
+      "name": "Shikaree Z",
+      "notable": "",
+      "obtained": "Three Paths",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/84/ShikareeZ.png/revision/latest?cb=20151205191520",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Cure I-IV",
+        "Poisona",
+        "Silena",
+        "Cursna",
+        "Erase",
+        "Haste"
+      ],
+      "spells_raw": "Cure I-IV, Poisona, Silena, Cursna, Erase, Haste",
+      "sub_job": "WHM",
+      "weapon": "Trident",
+      "weapon_skills": [
+        "Raiden Thrust",
+        "Skewer",
+        "Wheeling Thrust",
+        "Impulse Drive"
+      ],
+      "weapon_skills_raw": "** Raiden Thrust\n** Skewer\n** Wheeling Thrust\n** Impulse Drive"
+    },
+    "star sibyl": {
+      "alter_ego": "Star Sibyl",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "N/A (due to her non-interactive status, she cannot gain enmity nor die).",
+        "dismiss": "I see it now... You have a star to guide you.",
+        "summon": "As the Star Sibyl, I am still responsible for the guidance of our people. I still must show them the way."
+      },
+      "display": "Trust: Star Sibyl",
+      "intro_text": "",
+      "job": "Passive (Geomancer)",
+      "job_abilities": [],
+      "job_traits": [
+        "Geo-Focus"
+      ],
+      "main_job": "Passive (Geomancer)",
+      "name": "Star Sibyl",
+      "notable": "",
+      "obtained": "Trade Cipher: Star Sibyl, first offered in the July 2014 Login Campaign, to Gondebaud, Clarion Star, or Wetata, after completing the quest offered by the NPC to whom you trade",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/1/14/Trust_Star_Sibyl.jpg/revision/latest?cb=20150830003406",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "Passive Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "sylvie (uc)": {
+      "alter_ego": "Sylvie",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "I wanna...I wanna go home!",
+        "dismiss": "Gotta go! You, you go get 'em, champs! Give them hell or high water!",
+        "summon": "Hi! ...I'm Sylvie......the geomonger--I mean, geomancer!"
+      },
+      "display": "Trust: Sylvie (UC)",
+      "intro_text": "Sylvie's skill caps and entrusted indi-frailty values Fwahm, BGWiki",
+      "job": "GEO/WHM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "GEO",
+      "name": "Sylvie (UC)",
+      "notable": "",
+      "obtained": "Join Sylvie's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/9/95/Trust_Sylvie_%28UC%29.png/revision/latest?cb=20150819180256",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "",
+      "spells": [
+        "Entrust",
+        "Cure",
+        "Haste"
+      ],
+      "spells_raw": "",
+      "sub_job": "WHM",
+      "weapon": "Club",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "tenzen": {
+      "alter_ego": "Tenzen",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Even the most stout limbs...get battered by the storm...",
+        "dismiss": "All men walk their own paths--yet should they lead in the same direction, they will cross yet again.",
+        "summon": "Your voice has reached the Far East and called me to your side!"
+      },
+      "display": "Trust: Tenzen",
+      "intro_text": "",
+      "job": "SAM",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "SAM",
+      "name": "Tenzen",
+      "notable": "**Favors whichever weapon skill will create a skill chain.",
+      "obtained": "Alter Ego Extravaganza - Trade Cipher: Tenzen to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/8/89/Trust_Tenzen.png/revision/latest?cb=20131231212016",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Phoenix Blade",
+      "weapon_skills": [
+        "Amatsu: Torimai",
+        "Amatsu: Kazakiri",
+        "Amatsu: Yukiarashi",
+        "Amatsu: Tsukioboro",
+        "Amatsu: Hanaikusa",
+        "Amatsu: Tsukikage"
+      ],
+      "weapon_skills_raw": "** Amatsu: Torimai (Tachi: Enpi variant)\n** Amatsu: Kazakiri (Tachi: Jinpu variant)\n** Amatsu: Yukiarashi (Tachi: Yukikaze variant)\n** Amatsu: Tsukioboro (Tachi: Gekko variant)\n** Amatsu: Hanaikusa (Tachi: Kasha variant)\n** Amatsu: Tsukikage (unique)"
+    },
+    "tenzen ii": {
+      "alter_ego": "Tenzen",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "From birth until death...we are but floating petals dancing on the breeze...",
+        "dismiss": "Until we meet again, fare thee well.",
+        "summon": "I, Tenzen, have appeared."
+      },
+      "display": "Trust: Tenzen II",
+      "intro_text": "",
+      "job": "SAM/RNG",
+      "job_abilities": [],
+      "job_traits": [],
+      "main_job": "SAM",
+      "name": "Tenzen II",
+      "notable": "**Only uses ranged attacks.\n**Can WS after 5 ranged attacks.\n**Constantly adjusts his distance for optimal ranged damage.\n**Keeps his distance from the target.",
+      "obtained": "Cipher: Tenzen II from the mission Crashing Waves",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/39/Trust_Tenzen_II.png/revision/latest?cb=20150814235700",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Ranged Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "RNG",
+      "weapon": "Yoichinoyumi",
+      "weapon_skills": [
+        "Oisoya"
+      ],
+      "weapon_skills_raw": "Oisoya (renamed Namas Arrow)"
+    },
+    "teodor": {
+      "alter_ego": "Teodor",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Haha...you've...bested me......",
+        "dismiss": "Haha... This old man has had enough fighting for one day. Give a man a healing salve will you?",
+        "summon": "Come, wherever the challenge is greatest, let us strike forth with full fixity of purpose!"
+      },
+      "display": "Trust: Teodor",
+      "intro_text": "",
+      "job": "BLM/THF",
+      "job_abilities": [],
+      "job_traits": [
+        "Treasure Hunter",
+        "Arcana Killer",
+        "Undead Killer"
+      ],
+      "main_job": "BLM",
+      "name": "Teodor",
+      "notable": "** Classed as undead - cannot be healed.\n** Teodor's auto attacks can switch between physical damage and dark magic damage.\n** His attack that shows a swipe animation inflicts Silence. May be a great Trust against casters. He only uses this if within melee range.\n** Despite wielding his iconic weapon Vampirism, he doesn't gain the Additional Effects of Drain HP, MP, or TP.\n::::Arciela / Balamor / August / Rosulatia / Teodor / Darrcuiln\"",
+      "obtained": "Trade Cipher: Teodor to Gondebaud, Clarion Star or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/33/Trust_Teodor.PNG/revision/latest?cb=20170422082518",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Magic Bursts with -ja"
+      ],
+      "spells_raw": "Magic Bursts with -ja, -ga spells.",
+      "sub_job": "THF",
+      "weapon": "Vampirism (\"Great Sword\")",
+      "weapon_skills": [
+        "Open Coffin",
+        "Frenzied Thrust",
+        "Sinner's Cross",
+        "Ravenous Assault",
+        "Start from Scratch",
+        "Hemocladis"
+      ],
+      "weapon_skills_raw": "**Open Coffin: Fusion/Compression skillchain properties and inflicts Bio & Darkness damage.\n**Frenzied Thrust: Fragmentation/Transfixion skillchain properties. Will close some distance if he's at range.\n**Sinner's Cross: Gravitation/Scission skillchain properties.\n**Ravenous Assault: HP Drain.\n**Start from Scratch: Grants a shadow flame aura which has shadows. Triggered at below 50% HP and grants Regen effect. Removes all his status down effects. \n**Hemocladis: Distortion skillchain property and AoE damage (might only use it with the aura). Heals him to full."
+    },
+    "trion": {
+      "alter_ego": "Trion",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "There was nothing further I could have done!",
+        "dismiss": "Sweet will be the aroma of the 812 Rolanberry I sip tonight!",
+        "summon": "I am Trion, prince of San d'Oria. May my blade lead us to victory this day!"
+      },
+      "display": "Trust: Trion",
+      "intro_text": "",
+      "job": "PLD/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Sentinel",
+        "Royal Bash",
+        "Royal Savior"
+      ],
+      "job_traits": [],
+      "main_job": "PLD",
+      "name": "Trion",
+      "notable": "Uses Provoke and casts Flash to establish and hold hate.\n:Feb. 10, 2017 Update - \"All magic skills have been increased.\"\n*As of the November 2021 Update his shield has higher stats if the player who called him is item level 100 or higher.",
+      "obtained": "Trust: San d'Oria (mission rank 6 required)",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/d/da/Trust_Trion.png/revision/latest?cb=20131231201714",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Flash"
+      ],
+      "spells_raw": "Flash, casts healing magic on himself and party members when HP is yellow (up to Cure IV).",
+      "sub_job": "WAR",
+      "weapon": "Sword and Shield",
+      "weapon_skills": [
+        "Red Lotus Blade",
+        "Flat Blade",
+        "Savage Blade"
+      ],
+      "weapon_skills_raw": "Red Lotus Blade, Flat Blade, Savage Blade."
+    },
+    "uka totlihn": {
+      "alter_ego": "Uka Totlihn",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Bongo, Tango, Fandango, for the love of...do something!",
+        "dismiss": "Are we done alrrready? If you need me, you know where to find me!",
+        "summon": "We'll dance to the abyss and back!"
+      },
+      "display": "Trust: Uka Totlihn",
+      "intro_text": "",
+      "job": "DNC/WAR",
+      "job_abilities": [],
+      "job_traits": [
+        "Double Attack"
+      ],
+      "main_job": "DNC",
+      "name": "Uka Totlihn",
+      "notable": "**Prioritizes Haste Samba over Drain Samba if there is any party member with the following main jobs (support jobs are not considered): White Mage, Red Mage, Paladin, Scholar.\n**Seems to only use Curing Waltz when someone is <50% HP. \n**Judgment is her only Weapon Skill. She uses it less often than most alter egos due to her using TP for Sambas, Steps and Waltzes.",
+      "obtained": "Cipher: Uka first obtained August 2015 Login Campaign for 500 login points",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/f5/Trust_Uka_Totlihn.png/revision/latest?cb=20140814231341",
+      "race": "Mithra",
+      "recast_time": "240 seconds",
+      "role": "Melee",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Club",
+      "weapon_skills": [
+        "Judgment"
+      ],
+      "weapon_skills_raw": "Judgment."
+    },
+    "ullegore": {
+      "alter_ego": "Ullegore",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Noooooo! This adventure is not...not boring enough!",
+        "dismiss": "Disgusting! There is far too much fun going on around here. I'm leaving!",
+        "summon": "Adventure? Booo! Who needs adventure? With my dark magic, I will rid Vana'diel of silly adventures once and for all! Mwahahaha!"
+      },
+      "display": "Trust: Ullegore",
+      "intro_text": "",
+      "job": "BLM",
+      "job_abilities": [
+        "Bored to Tears",
+        "Envoutement",
+        "Memento Mori",
+        "Silence Seal"
+      ],
+      "job_traits": [],
+      "main_job": "BLM",
+      "name": "Ullegore",
+      "notable": "**Auto-attacks with his staff.\n**Keeps a short distance from the battle target, less than 10 yalms.\n**Has more MP than any other Alter ego (over 4,000 MP at high item levels).\n**Uses Memento Mori on himself, then casts Comet.\n**Can be cured, even though he is undead.",
+      "obtained": "August 2015 Login Campaign: obtain Cipher: Ullegore for 500 login points and trade it to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/f/f3/Trust_Ullegore.png/revision/latest?cb=20151229215532",
+      "race": "Corses",
+      "recast_time": "240 seconds",
+      "role": "Offensive Caster",
+      "spells": [
+        "Comet. Occasionally casts Stun"
+      ],
+      "spells_raw": "Up to tier V nukes, Comet. Occasionally casts Stun.",
+      "sub_job": "",
+      "weapon": "Staff",
+      "weapon_skills": [
+        "Envoutement",
+        "Silence Seal instead"
+      ],
+      "weapon_skills_raw": "No staff weapon skills. Uses job abilities Bored to Tears, Envoutement and Silence Seal instead."
+    },
+    "ulmia": {
+      "alter_ego": "Ulmia",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Why is it that trusting and being trusted cause such melancholy...?",
+        "dismiss": "I want to continue to sing songs about the world. Surely you, of all people, understand why.",
+        "summon": "No matter how many times the flames of oblivion flare up and threaten to consume civilization, people will always find a way to survive."
+      },
+      "display": "Trust: Ulmia",
+      "intro_text": "",
+      "job": "BRD",
+      "job_abilities": [
+        "Pianissimo"
+      ],
+      "job_traits": [],
+      "main_job": "BRD",
+      "name": "Ulmia",
+      "notable": "**Does not attack.\n**Uses Pianissimo followed by a Ballad on her summoner when her summoner has below 75% MP. She also does this for other Alter Egos under different conditions. Uses Pianissimo followed by Prelude on her summoner if her summoner is a RNG.\n**Often casts 2 Marches or Ballads.\n**Sentinel's Scherzo appears to be triggered by severe damage. She may also cast it if you have Weakness.\n**Unlike Joachim, Ulmia times her recasts to replace song effects as they wear off.\n**Minuet activates...",
+      "obtained": "Dawn\n:*Obtained by completing Dawn and then checking the Dilapidated Gate at (I-11) in Misareaux Coast while in possession of any Trust permit",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/3/3c/Trust_Ulmia.png/revision/latest?cb=20140219000559",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Active Support",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "String Instrument",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "valaineral": {
+      "alter_ego": "Valaineral R Davilles",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Our time has run out.",
+        "dismiss": "I shall prepare myself for the day you next call upon me!",
+        "summon": "Let the Royal Family's blade be seared forever into their memories!"
+      },
+      "display": "Trust: Valaineral",
+      "intro_text": "",
+      "job": "PLD/WAR",
+      "job_abilities": [
+        "Provoke",
+        "Defender",
+        "Sentinel",
+        "Majesty",
+        "Fealty",
+        "Chivalry",
+        "Divine Emblem",
+        "Palisade"
+      ],
+      "job_traits": [
+        "Undead Killer"
+      ],
+      "main_job": "PLD",
+      "name": "Valaineral",
+      "notable": "**From level 1 on, he can use Uriel Blade under certain conditions, even when he has 0-999 TP. \n**Once cast, he keeps Majesty up all the time.\n**Does not Cast Protect Protect II Protect III or any Shell Spells.\n\nAs of the October 2021 Update:\n*His cure frequency has been increased and his Enmity+, Cure Potency+, Spell interruption rate down, Refresh+, and Damage Taken- attributes have all increased.\n\nAs of the November 2021 Update:\n*his shield has higher stats if the player who called him is ite...",
+      "obtained": "Alter Ego Extravaganza (Cipher: Valaineral); Records of Eminence: Call Forth an Alter Ego",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/5c/Trust_Valaineral.png/revision/latest?cb=20131231212502",
+      "race": "Elvaan",
+      "recast_time": "240 seconds",
+      "role": "Tank",
+      "spells": [
+        "Cure IV",
+        "Protect IV",
+        "Flash",
+        "Reprisal",
+        "Phalanx",
+        "Enlight"
+      ],
+      "spells_raw": "**Up to Cure IV and Protect IV (Protect V during Majesty,)\n**Flash\n**Reprisal\n**Phalanx\n**Enlight",
+      "sub_job": "WAR",
+      "weapon": "Hauteclaire and Shield",
+      "weapon_skills": [
+        "Uriel Blade",
+        "Circle Blade",
+        "Savage Blade",
+        "Sanguine Blade"
+      ],
+      "weapon_skills_raw": "**Uriel Blade (AoE)\n**Circle Blade (AoE)\n**Savage Blade\n**Sanguine Blade"
+    },
+    "volker": {
+      "alter_ego": "Volker",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Could it be I am...unfit to lead?",
+        "dismiss": "A good adventure always rests well on the heart!",
+        "summon": "With Volker, leader of the Mythril Musketeers, at your side, you've nothing to fear!"
+      },
+      "display": "Trust: Volker",
+      "intro_text": "",
+      "job": "WAR",
+      "job_abilities": [
+        "Provoke",
+        "Berserk-Ruf",
+        "Defender",
+        "Warcry",
+        "Aggressor",
+        "Retaliation"
+      ],
+      "job_traits": [],
+      "main_job": "WAR",
+      "name": "Volker",
+      "notable": "",
+      "obtained": "Trust: Bastok: attain mission rank 6 of any nation, then talk to Lucius at (J-9) in Metalworks",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/6/63/Trust_Volker.png/revision/latest?cb=20131231203344",
+      "race": "Hume",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter/Tank",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Sword",
+      "weapon_skills": [
+        "Red Lotus Blade",
+        "Spirits Within",
+        "Vorpal Blade",
+        "Savage Blade"
+      ],
+      "weapon_skills_raw": "Red Lotus Blade, Spirits Within, Vorpal Blade, Savage Blade.\n*In the October 2017 version update: \"Volker’s provoke ability logic has been adjusted. The adjustments occur when the player’s group already has a main tank so that Volker is able to better fill a sub-tank role.\""
+    },
+    "ygnas": {
+      "alter_ego": "Ygnas",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Erp...",
+        "dismiss": "Keep...Adoulin...safe...",
+        "summon": "Erp!"
+      },
+      "display": "Trust: Ygnas",
+      "intro_text": "",
+      "job": "WHM",
+      "job_abilities": [],
+      "job_traits": [
+        "Regain",
+        "Auto Refresh",
+        "Beast Killer"
+      ],
+      "main_job": "WHM",
+      "name": "Ygnas",
+      "notable": "",
+      "obtained": "Records of Eminence: The Arciela Directive",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/2/2d/Ygnas_Trust.PNG/revision/latest?cb=20170713165022",
+      "race": "Leafkin",
+      "recast_time": "240 seconds",
+      "role": "Healer",
+      "spells": [
+        "Cure VI",
+        "Erase",
+        "Protect V",
+        "Shell V",
+        "Protectra V",
+        "Shellra V",
+        "Haste"
+      ],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "None",
+      "weapon_skills": [
+        "Phototrophic Blessing",
+        "Phototrophic Wrath",
+        "Deific Gambol",
+        "Sacred Caper"
+      ],
+      "weapon_skills_raw": ""
+    },
+    "yoran-oran (uc)": {
+      "alter_ego": "Yoran-Oran",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Wha-? Inconceivable...",
+        "dismiss": "Oh, how time flies-ethy! I must return to the lab at once. I have some rather precarious petri cultures-ethy left unattended.",
+        "summon": "Dr. Yoran-Oran, former minister-ethy of the Rhinostery in Windurst, at your service."
+      },
+      "display": "Trust: Yoran-Oran (UC)",
+      "intro_text": "",
+      "job": "WHM",
+      "job_abilities": [
+        "Afflatus Solace"
+      ],
+      "job_traits": [],
+      "main_job": "WHM",
+      "name": "Yoran-Oran (UC)",
+      "notable": "",
+      "obtained": "Join Yoran-Oran's Unity Concord faction and complete any one of Trust: San d'Oria, Trust: Bastok, or Trust: Windurst",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/c/c1/Trust_Yoran-Oran_%28UC%29.png/revision/latest?cb=20150819155809",
+      "race": "Tarutaru",
+      "recast_time": "240 seconds",
+      "role": "",
+      "spells": [
+        "Protectra",
+        "Shellra",
+        "Stoneskin"
+      ],
+      "spells_raw": "",
+      "sub_job": "",
+      "weapon": "Club",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "zazarg": {
+      "alter_ego": "Zazarg",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Defeated? Me!?",
+        "dismiss": "Adventuring with you has been a blast--but make sure you take care of the front lines! Gahaha!",
+        "summon": "Let's wipe the floor with 'em! Gahahaha!"
+      },
+      "display": "Trust: Zazarg",
+      "intro_text": "",
+      "job": "MNK/WAR",
+      "job_abilities": [
+        "Howling Fist",
+        "Dragon Kick",
+        "Asuran Fists",
+        "Meteoric Impact"
+      ],
+      "job_traits": [],
+      "main_job": "MNK",
+      "name": "Zazarg",
+      "notable": "",
+      "obtained": "Fist of the People",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/0/0d/Zazarg_Trust.jpg/revision/latest?cb=20140403014359",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Hand-to-Hand",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    },
+    "zeid": {
+      "alter_ego": "Zeid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Ugh...those fiends are of incomparable power...",
+        "dismiss": "Dismiss me? You'll regret it!",
+        "summon": "I don't play by others' rules...so get outta my way."
+      },
+      "display": "Trust: Zeid",
+      "intro_text": "",
+      "job": "DRK",
+      "job_abilities": [
+        "Last Resort",
+        "Souleater"
+      ],
+      "job_traits": [],
+      "main_job": "DRK",
+      "name": "Zeid",
+      "notable": "",
+      "obtained": "Trade Cipher: Zeid from Repeat Login Campaign to Gondebaud, Clarion Star, or Wetata",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/a/ac/Trust_Zeid.png/revision/latest?cb=20140101030755",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [
+        "Drain II",
+        "Aspir II",
+        "Absorb Spells",
+        "Stun",
+        "Endark"
+      ],
+      "spells_raw": "(at level 99)\n**Up to Drain II and Aspir II when, respectively, HP or MP is low\n**All Absorb Spells\n**Stun to interrupt weaponskills whenever able\n**Endark",
+      "sub_job": "",
+      "weapon": "Great Sword",
+      "weapon_skills": [
+        "Power Slash",
+        "Freezebite",
+        "Ground Strike",
+        "Abyssal Drain",
+        "Abyssal Strike"
+      ],
+      "weapon_skills_raw": "**Power Slash\n**Freezebite\n**Ground Strike\n**Abyssal Drain (unique WS)\n**Abyssal Strike (unique WS) (add'l effect: Stun)"
+    },
+    "zeid ii": {
+      "alter_ego": "Zeid",
+      "casting_time": "5 seconds",
+      "dialogue": {
+        "death": "Graaaaaaaaah!",
+        "dismiss": "Til we meet again.",
+        "summon": "I refuse to hesitate or turn back--even for a moment."
+      },
+      "display": "Trust: Zeid II",
+      "intro_text": "",
+      "job": "DRK/WAR",
+      "job_abilities": [
+        "Last Resort",
+        "Souleater"
+      ],
+      "job_traits": [],
+      "main_job": "DRK",
+      "name": "Zeid II",
+      "notable": "",
+      "obtained": "Volto Oscuro",
+      "portrait_url": "https://static.wikia.nocookie.net/ffxi/images/5/51/Zeid_II.png/revision/latest?cb=20151217012701",
+      "race": "Galka",
+      "recast_time": "240 seconds",
+      "role": "Melee Fighter",
+      "spells": [],
+      "spells_raw": "",
+      "sub_job": "WAR",
+      "weapon": "Great Sword",
+      "weapon_skills": [],
+      "weapon_skills_raw": ""
+    }
+  }
+}

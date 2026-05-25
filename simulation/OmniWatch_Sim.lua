@@ -739,4 +739,249 @@ function M.export_set()
     windower.add_to_chat(207, '[OW/Sim] exported set to ' .. fname)
 end
 
+-- ─── Set import ─────────────────────────────────────────────────────────────
+-- Pull a named gear set out of an arbitrary GearSwap gear file and load it
+-- into the sim's equipment, regardless of the player's current job. Because
+-- GearSwap sets are CODE (set_combine, gear.* refs, the `empty` token,
+-- nested tables built inside init_gear_sets()), we can't just text-parse the
+-- file — we execute it in a sandbox with stubs for the GearSwap globals,
+-- then walk the dotted set path (e.g. "sets.engaged.HighHaste") into the
+-- resolved table.
+--
+-- filepath : absolute path to the gear .lua file (chosen in the overlay).
+-- setpath  : dotted set path, with or without a leading "sets."
+--            ("sets.engaged.HighHaste" or "engaged.HighHaste" both work).
+
+-- Map GearSwap slot names → the sim's slot keys.
+local _SIM_SLOT_ALIASES = {
+    ear1 = 'left_ear',  ear2 = 'right_ear',
+    lear = 'left_ear',  rear = 'right_ear',
+    ring1 = 'left_ring', ring2 = 'right_ring',
+    lring = 'left_ring', rring = 'right_ring',
+    -- pass-throughs (already match): main, sub, range, ammo, head, neck,
+    -- body, hands, back, waist, legs, feet, left_ear, right_ear,
+    -- left_ring, right_ring.
+}
+local _SIM_VALID_SLOTS = {
+    main=true, sub=true, range=true, ammo=true, head=true, neck=true,
+    left_ear=true, right_ear=true, body=true, hands=true,
+    left_ring=true, right_ring=true, back=true, waist=true,
+    legs=true, feet=true,
+}
+
+-- Build (or reuse) a lowercase item-name → id index from res.items.
+local _sim_name_to_id = nil
+local function _sim_build_name_index()
+    if _sim_name_to_id then return _sim_name_to_id end
+    _sim_name_to_id = {}
+    if res and res.items then
+        for id, it in pairs(res.items) do
+            local n = it.en or it.enl
+            if n then _sim_name_to_id[n:lower()] = id end
+            if it.enl then _sim_name_to_id[it.enl:lower()] = id end
+        end
+    end
+    return _sim_name_to_id
+end
+
+-- Resolve an item reference (string name, or a {name=,augments=} table, or a
+-- stub value) to a numeric item id. Returns 0 if unresolvable.
+local function _sim_ref_to_id(ref)
+    if ref == nil then return 0 end
+    local name = nil
+    if type(ref) == 'string' then
+        name = ref
+    elseif type(ref) == 'table' then
+        name = ref.name or ref.en or ref.enl
+    end
+    if not name or name == '' then return 0 end
+    local idx = _sim_build_name_index()
+    return idx[tostring(name):lower()] or 0
+end
+
+-- Build the sandbox environment for running a gear file.
+local function _sim_make_sandbox()
+    -- Auto-vivifying table: any nested access creates an empty sub-table,
+    -- so `sets.engaged.HighHaste = {...}` and `gear.da.body` both work
+    -- without the real globals being present.
+    local function autoviv()
+        local t = {}
+        setmetatable(t, {
+            __index = function(self, k)
+                local v = autoviv()
+                rawset(self, k, v)
+                return v
+            end,
+        })
+        return t
+    end
+
+    local env = {}
+    -- Core Lua libs the file may touch.
+    env._G = env
+    env.pairs = pairs; env.ipairs = ipairs; env.type = type
+    env.tostring = tostring; env.tonumber = tonumber
+    env.table = table; env.string = string; env.math = math
+    env.pcall = pcall; env.select = select; env.next = next
+    env.setmetatable = setmetatable; env.rawget = rawget; env.rawset = rawset
+    env.print = function() end
+
+    -- GearSwap globals the gear file relies on.
+    env.sets = autoviv()
+    env.gear = autoviv()
+    -- `empty` is GearSwap's "explicitly unequip" sentinel; represent as a
+    -- table we recognize as empty when resolving.
+    env.empty = { __ow_empty = true }
+    -- set_combine(a, b, ...) merges left-to-right (later wins), shallow.
+    env.set_combine = function(...)
+        local out = {}
+        for _, tbl in ipairs({...}) do
+            if type(tbl) == 'table' then
+                for k, v in pairs(tbl) do out[k] = v end
+            end
+        end
+        return out
+    end
+    -- Mote state/list constructors → tolerant no-op stubs. A single
+    -- universal stub object that is callable and indexable any number of
+    -- levels deep, so M(...)/S{...}/state.X:set() etc. never error.
+    local stub_obj
+    stub_obj = setmetatable({}, {
+        __index = function() return stub_obj end,
+        __call  = function() return stub_obj end,
+        __concat = function() return '' end,
+    })
+    env.M = function() return stub_obj end
+    env.S = function() return stub_obj end
+    env.T = function() return stub_obj end
+    env.L = function() return stub_obj end
+    -- Common GearSwap funcs that gear files sometimes call at set-build time.
+    env.include = function() end
+    env.get_sets = function() end
+    env.add_to_chat = function() end
+    env.windower = setmetatable({}, {__index = function() return function() end end})
+    env.player = setmetatable({}, {__index = function() return '' end})
+    env.world  = setmetatable({}, {__index = function() return '' end})
+    env.res = res   -- let the file read resources if it wants
+    -- Anything else the file references globally resolves to the tolerant
+    -- stub instead of nil (prevents "attempt to index nil").
+    setmetatable(env, {
+        __index = function()
+            return stub_obj
+        end,
+    })
+    return env
+end
+
+-- Walk a dotted path ("sets.engaged.HighHaste") into a table. Returns the
+-- value or nil. Tolerant of a leading "sets." (the sandbox's top table IS
+-- `sets`, so we strip a leading "sets." segment).
+local function _sim_walk_path(root_sets, setpath)
+    local p = tostring(setpath or ''):gsub('%s+', '')
+    -- Strip a leading "sets." if present.
+    p = p:gsub('^sets%.', '')
+    if p == '' then return nil end
+    local node = root_sets
+    for seg in p:gmatch('[^%.]+') do
+        if type(node) ~= 'table' then return nil end
+        -- Support bracket-quoted segments like ['Blade: Jin'] written as
+        -- Blade: Jin in the path (rare; users typically type dotted).
+        node = rawget(node, seg)
+        if node == nil then return nil end
+    end
+    return node
+end
+
+function M.import_set(filepath, setpath)
+    if not filepath or filepath == '' then
+        windower.add_to_chat(123, '[OW/Sim] import: no file path given.')
+        return false
+    end
+    if not setpath or setpath == '' then
+        windower.add_to_chat(123, '[OW/Sim] import: no set path given.')
+        return false
+    end
+
+    -- Read + load the file under the sandbox env.
+    local chunk, lerr
+    if loadfile then
+        chunk, lerr = loadfile(filepath)
+    end
+    if not chunk then
+        -- Fallback: read bytes and loadstring (handles odd path cases).
+        local f = io.open(filepath, 'r')
+        if not f then
+            windower.add_to_chat(123,
+                '[OW/Sim] import: cannot open file: ' .. tostring(filepath))
+            return false
+        end
+        local body = f:read('*a'); f:close()
+        chunk, lerr = loadstring(body, '@' .. filepath)
+        if not chunk then
+            windower.add_to_chat(123,
+                '[OW/Sim] import: parse error: ' .. tostring(lerr))
+            return false
+        end
+    end
+
+    local env = _sim_make_sandbox()
+    setfenv(chunk, env)
+    local ok_run, run_err = pcall(chunk)
+    if not ok_run then
+        windower.add_to_chat(123,
+            '[OW/Sim] import: file error: ' .. tostring(run_err))
+        return false
+    end
+
+    -- Most gear files build sets inside init_gear_sets() (and sometimes
+    -- user_setup/user_job_setup). Call whatever exists, in a sane order,
+    -- each guarded so a missing dependency doesn't abort the whole import.
+    for _, fn_name in ipairs({'user_setup', 'job_setup', 'user_job_setup',
+                              'get_sets', 'init_gear_sets',
+                              'job_init_gear_sets', 'init_sets'}) do
+        local fn = rawget(env, fn_name)
+        if type(fn) == 'function' then
+            pcall(fn)
+        end
+    end
+
+    local set = _sim_walk_path(env.sets, setpath)
+    if type(set) ~= 'table' then
+        windower.add_to_chat(123, string.format(
+            '[OW/Sim] import: set "%s" not found in %s',
+            tostring(setpath), tostring(filepath:match('[^/\\]+$') or filepath)))
+        return false
+    end
+
+    -- Translate the resolved set into sim equipment. Clear existing sim
+    -- equipment first so the imported set fully replaces it.
+    _ow_sim_state.equipment = {}
+    local applied, skipped = 0, 0
+    for raw_slot, ref in pairs(set) do
+        local sk = tostring(raw_slot):lower()
+        sk = _SIM_SLOT_ALIASES[sk] or sk
+        if _SIM_VALID_SLOTS[sk] then
+            -- `empty` sentinel → explicit empty (id 0).
+            if type(ref) == 'table' and ref.__ow_empty then
+                _ow_sim_state.equipment[sk] = 0
+                applied = applied + 1
+            else
+                local iid = _sim_ref_to_id(ref)
+                if iid > 0 then
+                    _ow_sim_state.equipment[sk] = iid
+                    applied = applied + 1
+                else
+                    skipped = skipped + 1
+                end
+            end
+        end
+    end
+
+    windower.add_to_chat(207, string.format(
+        '[OW/Sim] imported "%s": %d slots applied%s',
+        tostring(setpath), applied,
+        (skipped > 0) and (', ' .. skipped .. ' unresolved') or ''))
+    return true
+end
+
 return M

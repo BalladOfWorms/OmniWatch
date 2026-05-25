@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.4.0'
+_addon.version  = '1.5.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -148,13 +148,17 @@ do
     local loader_path = base .. 'chat/_loader.lua'
     local chunk, load_err = loadfile(loader_path)
     if chunk then
-        local ok_run, mod_or_err = pcall(chunk)
+        local ok_run, mod_or_err, mod_err2 = pcall(chunk)
         if ok_run and type(mod_or_err) == 'table' then
             _chat = mod_or_err
         else
+            -- _loader.lua returns (nil, errmsg) when a submodule fails,
+            -- so the real reason is in the SECOND return value. pcall
+            -- failure puts the error in the first. Show whichever we got.
+            local why = mod_err2 or mod_or_err
             windower.add_to_chat(123, string.format(
                 '[OmniWatch] chat module failed to initialize: %s',
-                tostring(mod_or_err)))
+                tostring(why)))
         end
     else
         windower.add_to_chat(207, string.format(
@@ -353,6 +357,10 @@ local ow_path_augments = {}
 -- and is poised to grow with any other gear that needs hidden-augment
 -- data. Rename pending — see Misc_augments.lua header for actual scope.
 local ow_unity_augments = {}
+-- JSE overlay primary-stat contributions (str/dex/.../chr), captured by
+-- ow_compute_stats so ow_send_stats can re-add them after overwriting the
+-- primary stats from Gear_info (which doesn't include the JSE overlay).
+_ow_jse_primary_overlay = {}
 -- ow_Gifts: alias for the global Gifts loaded by gearinfo/_loader.lua
 -- from gearinfo/res/Gifts.lua (single source of truth). Both ow_Gifts
 -- and Gifts point at the same table.
@@ -411,6 +419,37 @@ local function ow_user_config_dir()
     end
     -- Fallback: legacy in-addon location.
     return windower.addon_path .. 'data'
+end
+
+-- ── Self-contained trust-buff-loss probe ──────────────────────────────
+-- Writes 0x076 per-member buff lines DIRECTLY to a log file from this
+-- file, with zero dependency on the chat module / _loader / buff_events
+-- (those layers kept getting out of sync across deploys and silently
+-- swallowed the probe). Toggle with //ow trustprobe [on|off]. The log
+-- lands next to the addon's data dir as ow_trustprobe.log.
+-- trustprobe toggle. Global (no 'local') on purpose: the main chunk is
+-- at Lua 5.1's 200-local limit, and globals don't consume a slot.
+_ow_trustprobe_on = false
+-- Master flag for the unified //ow chatdebug command. Drives every chat
+-- probe at once. Global for the same 200-local-limit reason.
+_ow_chatdebug_on = false
+-- Mob damage-absorb buff tracking (Stoneskin etc.). Keyed by mob id →
+-- { [bid]=true }. Absorb buffs on mobs fire no wear-off packet/text;
+-- they break silently when depleted by damage. We record them on apply
+-- and clear (sending REMOVE) when the mob takes real HP damage. Global
+-- for the 200-local-limit reason.
+_ow_mob_absorb_buffs = {}
+function _ow_trustprobe_log(line)
+    if not _ow_trustprobe_on then return end
+    -- Write through the SAME proven writer the other probes use
+    -- (buff_events._probe_log, exposed as _chat._probe_log), which
+    -- reliably creates data/ow_classify_probe.log. Our own io.open
+    -- writer kept failing on path resolution, so don't maintain a
+    -- second path — reuse the one that works. Output lands in
+    -- ow_classify_probe.log alongside the other probe lines.
+    if _chat and _chat._probe_log then
+        _chat._probe_log(line)
+    end
 end
 
 local function ow_user_config_path()
@@ -2467,12 +2506,52 @@ local function _ow_drain_inbound()
 
         if head == 'SIM_MODE' then
             if _sim then
-                _sim.set_active(rest == 'on')
+                local turning_on = (rest == 'on')
+                _sim.set_active(turning_on)
                 -- When sim turns on, send a fresh inventory snapshot
                 -- at the next prerender tick (rate-limit allows since
                 -- _ow_inv_snap_last_sent starts at 0).
-                if rest == 'on' and _ow_mark_inv_dirty then
+                if turning_on and _ow_mark_inv_dirty then
                     _ow_mark_inv_dirty()
+                end
+                -- When sim turns OFF, force the live-stats path to fully
+                -- recompute on its next tick. The 1 Hz live gate only
+                -- recomputes when a signature CHANGES; right after closing
+                -- sim while idle, live gear/buffs haven't changed since
+                -- before sim, so the gate would see "no change" and leave
+                -- the stale SIM stats on the panel until something moved
+                -- (which is why it only fixed itself on reopen). Invalidate
+                -- the signature caches so every check trips → full resend of
+                -- real stats + equipment immediately.
+                if not turning_on then
+                    _ow_stats_last_full    = nil   -- trips the 30s force-full
+                    _ow_stats_last_job     = nil   -- trips the job check
+                    _ow_stats_last_hastesig = nil  -- trips the haste check
+                    _ow_stats_last_buffsig = nil   -- trips the any-buff check
+                    -- (last_stats_send is a file-local declared after this
+                    -- function, so we can't reset it here — but the next
+                    -- 1 Hz tick is at most ~1s away and the invalidated
+                    -- signatures above force it to a full recompute then.)
+                    if _ow_mark_inv_dirty then
+                        _ow_mark_inv_dirty()       -- re-push live equipment
+                    end
+                end
+            end
+        elseif head == 'SIM_IMPORT' then
+            -- Import a named set from an arbitrary gear file into the sim.
+            -- Wire form: SIM_IMPORT|<filepath>|<setpath>
+            -- Filepath may contain spaces/backslashes but not '|'. Setpath
+            -- is the trailing field (everything after the first '|' in the
+            -- payload, split once more at the LAST '|' so a setpath can't be
+            -- confused with a path that contains '|' — paths shouldn't).
+            local s1 = rest:find('|', 1, true)
+            if s1 and _sim and _sim.import_set then
+                local fpath = rest:sub(1, s1 - 1)
+                local spath = rest:sub(s1 + 1)
+                local ok_imp, err_imp = pcall(_sim.import_set, fpath, spath)
+                if not ok_imp then
+                    windower.add_to_chat(123,
+                        '[OmniWatch] sim import error: ' .. tostring(err_imp))
                 end
             end
         elseif head == 'SIM' then
@@ -2496,7 +2575,30 @@ local function _ow_drain_inbound()
                 _sim.set_value(p1, p2, p3)
             end
         elseif head == 'SETTING' then
-            -- Future use: schema settings pushed from python. No-op for now.
+            -- Forwarded from Python's settings menu via the
+            -- apply_setting_side_effects path (any setting flagged
+            -- applies="lua" or "both" lands here). Wire form:
+            --   SETTING|<key>|<value>
+            -- value arrives as "true" / "false" for bool settings or
+            -- a stringified value for others.
+            local sep2 = rest:find('|', 1, true)
+            local skey = sep2 and rest:sub(1, sep2 - 1) or rest
+            local sval = sep2 and rest:sub(sep2 + 1) or ''
+            if skey:sub(1, 3) == 'sc_' and OW_Skillchains
+                    and OW_Skillchains.set_setting then
+                -- Strip the sc_ prefix — the Skillchains module's
+                -- internal keys are 'track_sc', 'show_props', etc.
+                -- (no namespace prefix; that's only on the python side
+                -- to avoid colliding with other settings). Boolean
+                -- conversion: anything that isn't literally 'true' is
+                -- treated as false.
+                local internal_key = skey:sub(4)
+                local lv = (sval or ''):lower()
+                local bool_val = (lv == 'true' or lv == '1')
+                pcall(OW_Skillchains.set_setting, internal_key, bool_val)
+            end
+            -- Other SETTING keys: no handler yet. Left for future
+            -- schema-pushed settings.
         elseif head == 'CFGWIZ' then
             -- Config wizard messages from the pygame overlay. rest is
             -- one of:
@@ -2651,6 +2753,39 @@ end
 --   //omniwatch state <string>  - report fallback state string
 --   //omniwatch debug           - toggle diagnostic printing in console/chat
 _ow_cast_debug = false
+-- Recent-action-name cache for fixing the native client's "?"
+-- placeholder. The game client renders "<Actor> uses ?" / "readies ?"
+-- when it can't resolve an ability/item ID to a name (newer content
+-- than the client's DAT files, custom server abilities, etc.). The
+-- action PACKET still carries the numeric ID, and Windower's resource
+-- tables (res.monster_abilities / res.job_abilities / res.items /
+-- res.spells) can usually resolve it. So when the action handler
+-- resolves a name, we stash it keyed by actor_id; when a "?" text line
+-- arrives for that actor shortly after, we substitute the real name.
+--   _ow_recent_action_name[actor_id] = {name=<str>, ts=<os.clock>}
+_ow_recent_action_name = {}
+-- _ow_th_table: detected Treasure Hunter level per mob, keyed by mob
+-- id → {level=<int>, ts=<os.clock>}. Populated when a TH proc fires
+-- (Added Effect Message 603 on melee/ranged/spell damage, or message
+-- 608 on weaponskills). The target card reads this to show "TH - N".
+-- FFXI only sends the proc message when TH first procs or increases a
+-- level, so this reflects the highest level seen on that mob so far.
+-- Requires the player to be on a TH-capable job (THF main, or /THF) —
+-- otherwise no proc messages are ever sent and the table stays empty.
+_ow_th_table = {}
+-- TTL for a TH entry (seconds). Guards against a reused mob id showing
+-- a stale TH from a previous mob. Refreshed on each proc.
+local _OW_TH_TTL = 600
+-- How long (seconds) a cached action name stays valid for "?"
+-- substitution. The text line follows the action packet within a
+-- frame or two, so a short window avoids substituting a stale name
+-- onto an unrelated later "?" line.
+local _OW_ACTION_NAME_TTL = 3.0
+-- _ow_text_capture: temporary diagnostic flag for inspecting raw
+-- incoming-text events (mode byte, length, first 100 chars, first
+-- 40 hex bytes). Toggled via //ow textcapture. Off by default to
+-- avoid console spam during normal use.
+_ow_text_capture = false
 
 -- Buff-timer parser debug. Turn on with //ow buffdebug to see the 0x063
 -- packet contents printed to chat (one line per parsed slot, with computed
@@ -2958,14 +3093,12 @@ local PW_COMMANDS_HELP = {
     {'chatreset',             'Clear the chat history rings without '
                               .. 'disturbing the live drain. Use between '
                               .. 'test scenarios to start with a clean dump.'},
-    {'chatdebug [on|off]',    'Toggle per-emit chat echo. Every chat event '
-                              .. 'prints to FFXI chat as it lands in the ring. '
-                              .. 'Useful for live-verifying emits.'},
-    {'chathex [on|off]',      'Toggle raw-byte hex dumps to FFXI chat for any '
-                              .. 'chat line containing non-ASCII bytes. Shows '
-                              .. 'what Windower passes us BEFORE stripping. Use '
-                              .. 'to diagnose Japanese / autotranslate / accented '
-                              .. 'name byte sequences. Turn OFF when done.'},
+    {'chatdebug [on|off]',    'Unified chat diagnostics. Turns on EVERY chat '
+                              .. 'probe at once (text capture, packet trace, '
+                              .. 'battle classify, buff/debuff apply+wear, trust, '
+                              .. 'hex, dropped-modes) and funnels all output to '
+                              .. '%APPDATA%/OmniWatch/chatdebug_log.txt. Turn OFF '
+                              .. 'when done.'},
     {'blu',                   'BLU set-spell diagnostic: lists equipped set '
                               .. 'spells, their per-spell trait points and '
                               .. 'stat bonuses, and the resolved DW% from '
@@ -3025,6 +3158,29 @@ ow_safe_register('addon command', function(command, ...)
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
         windower.add_to_chat(207, string.format('[OW] buff_debug = %s',
             tostring(_ow_buff_debug)))
+    elseif command == 'dwtest' then
+        -- One-shot DW-needed readout. The DW math (required pct, total
+        -- haste) is computed inside ow_send_stats, NOT ow_compute_stats —
+        -- so we run the full real path: compute, then send (which fills in
+        -- _dw_required_pct/total haste and fires the [OW dw] emit line).
+        -- Force the emit so it prints even if the value hasn't changed.
+        local s = ow_compute_stats()
+        if s then
+            local _saved_dbg = _ow_buff_debug
+            _ow_buff_debug = true
+            ow_send_stats(s)   -- computes haste/dw, fires [OW dw] line
+            windower.add_to_chat(207, string.format(
+                '[OW dwtest] panel dw_needed=%s | required=%s trait=%s jp=%s | dual_wield(gear)=%s total_haste=%s',
+                tostring(s['dw needed']), tostring(s['_dw_required_pct']),
+                tostring(s['dw trait']), tostring(s['_jp_dw_gift']),
+                tostring(s['dual wield']), tostring(s['total haste'])))
+            -- Force-resend so the [OW dw] gs c hasteinfo line always prints.
+            local sim_on = (_sim and _sim.is_active and _sim.is_active()) or false
+            _ow_write_dw_needed(s, sim_on, true)
+            _ow_buff_debug = _saved_dbg
+        else
+            windower.add_to_chat(207, '[OW dwtest] no stats computed')
+        end
     elseif command == 'geartrace' then
         -- Toggle a one-shot tracer in Gear_Processing.lua's
         -- description-substitution pipeline. When on, prints when the
@@ -3035,41 +3191,6 @@ ow_safe_register('addon command', function(command, ...)
         _ow_gear_trace = not _ow_gear_trace
         windower.add_to_chat(207, string.format('[OW] gear_trace = %s',
             tostring(_ow_gear_trace)))
-    elseif command == 'dumpgi' then
-        -- Print the aggregated Gear_info table. This is the output of
-        -- get_equip_stats — the sum of all equipped item stats, prior
-        -- to compute_player_stats and the lowercase-key copy into the
-        -- `stats` table that gets sent to Python. Use when a stat
-        -- shows correctly in temp_table (per geartrace) but doesn't
-        -- appear in the panel: if Gear_info has it, the loss is in
-        -- compute or wire emission. If Gear_info doesn't, the loss
-        -- is in get_equip_stats's aggregation.
-        if not Gear_info then
-            windower.add_to_chat(207, '[OW] dumpgi: Gear_info is nil — '
-                .. 'run refresh_all first')
-            return
-        end
-        -- Force a refresh so we see the current state.
-        if _gi and _gi.refresh_all then pcall(_gi.refresh_all) end
-        local keys = {}
-        for k in pairs(Gear_info) do keys[#keys+1] = k end
-        table.sort(keys)
-        windower.add_to_chat(207, '[OW] Gear_info contents:')
-        for _, k in ipairs(keys) do
-            local v = Gear_info[k]
-            local vstr
-            if type(v) == 'table' then
-                vstr = '{skill=' .. tostring(v.skill or '?')
-                       .. ' value=' .. tostring(v.value or '?') .. '}'
-            else
-                vstr = tostring(v)
-            end
-            -- Only print non-zero/non-empty for brevity.
-            if v ~= 0 and v ~= '' and v ~= nil then
-                windower.add_to_chat(207, string.format(
-                    '  %s = %s', k, vstr))
-            end
-        end
     elseif command == 'gearcache_clear' or command == 'cachebust' then
         -- Nuke the persisted gearinfo cache and rebuild it from
         -- scratch. Needed after parser changes in Gear_Processing.lua:
@@ -3113,31 +3234,6 @@ ow_safe_register('addon command', function(command, ...)
         windower.add_to_chat(207, string.format(
             '[OW] buffts_debug = %s. Cast a buff and watch for [OW buffts] '
             .. 'lines.', tostring(_ow_buffts_debug)))
-    elseif command == 'dumpcfg' then
-        -- Diagnostic: dump current in-memory ow_user_config to chat.
-        -- Useful when the wizard isn't showing expected values — this
-        -- reveals whether the in-memory state matches what's saved
-        -- on disk.
-        local b = (ow_user_config and ow_user_config.bards) or {}
-        local c = (ow_user_config and ow_user_config.corsairs) or {}
-        windower.add_to_chat(207, '[OW DIAG] dumpcfg: ow_user_config in memory:')
-        windower.add_to_chat(207, string.format(
-            '[OW DIAG]   setup_complete = %s',
-            tostring(ow_user_config and ow_user_config.setup_complete)))
-        if b.self then
-            local parts = {}
-            for _, fk in ipairs(PW_BARD_FAMILY_KEYS) do
-                parts[#parts+1] = string.format('%s=%s',
-                    fk, tostring(b.self[fk]))
-            end
-            windower.add_to_chat(207, '[OW DIAG]   bards.self: '
-                                      .. table.concat(parts, ' '))
-        end
-        if c.self then
-            windower.add_to_chat(207, string.format(
-                '[OW DIAG]   corsairs.self.phantom_roll = %s',
-                tostring(c.self.phantom_roll)))
-        end
     elseif command == 'dumpstats' then
         -- Dump the full computed stats dict to chat. Useful for
         -- verifying which stats a gear swap actually contributes.
@@ -3282,36 +3378,6 @@ ow_safe_register('addon command', function(command, ...)
         if count == 0 then
             windower.add_to_chat(207,
                 '[OW] jobbonus: no active rolls (or none with a bonus job)')
-        end
-    elseif command == 'dumpjp' then
-        -- Dump every field on p.job_points[mjob:lower()] so we can see
-        -- the exact field names windower uses for per-tier Job Point
-        -- categories (e.g. ranged_accuracy_bonus, phantom_roll_duration,
-        -- etc.). These are SEPARATE from the Gift table; gifts are at
-        -- specific JP totals and live in ow_Gifts, while these are
-        -- per-tier purchases that go up to 20 each. Used to wire those
-        -- bonuses into stats[] without guessing field names.
-        local p = windower.ffxi.get_player()
-        local mjob = p and p.main_job
-        if not (mjob and p.job_points) then
-            windower.add_to_chat(207, '[OW] dumpjp: no job_points data')
-            return
-        end
-        local jpkey = mjob:lower()
-        local jpdata = p.job_points[jpkey]
-        if not jpdata then
-            windower.add_to_chat(207, string.format(
-                '[OW] dumpjp: no job_points[%s]', jpkey))
-            return
-        end
-        windower.add_to_chat(207, string.format(
-            '[OW] dumpjp %s:', mjob))
-        local keys = {}
-        for k in pairs(jpdata) do keys[#keys+1] = k end
-        table.sort(keys)
-        for _, k in ipairs(keys) do
-            windower.add_to_chat(207, string.format(
-                '  %s = %s', tostring(k), tostring(jpdata[k])))
         end
     elseif command == 'dumpgifts' then
         -- Dump the EXACT structure of GearInfo's Gifts data for the
@@ -3719,151 +3785,53 @@ ow_safe_register('addon command', function(command, ...)
             windower.add_to_chat(207, '[OW] chat history cleared.')
         end
     elseif command == 'chatdebug' then
-        -- Toggle per-emit chat echo. When on, every chat event prints
-        -- to FFXI chat as it's pushed to the ring. Useful for verifying
-        -- emits fire in real-time without waiting for chatdump.
+        -- UNIFIED chat diagnostics. One switch drives every chat-debug
+        -- probe we have; all output funnels to a single AppData file:
+        --   %APPDATA%/OmniWatch/chatdebug_log.txt
+        -- Replaces the old separate commands (textcapture, chatpktdebug,
+        -- chatpkttrace, chathex, droppedmodes, buffwearprobe,
+        -- battleclassify, debuffapplyprobe, trustprobe, and the old
+        -- per-emit chatdebug echo) — flipping chatdebug flips them all.
         -- Usage: //ow chatdebug [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
+        local target
+        if args[1] == 'on' or args[1] == 'off' then
+            target = (args[1] == 'on')
         else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_debug()
-            end
-            _chat.set_debug(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] chat debug = %s', tostring(target)))
+            target = not _ow_chatdebug_on
         end
-    elseif command == 'chathex' then
-        -- Toggle raw-byte hex dumps. Prints two FFXI chat lines per
-        -- non-ASCII chat event: [hex mode=N] <hex bytes> and
-        -- [hex mode=N] text: <decoded text>. Use to identify Japanese
-        -- byte sequences, autotranslate marker bytes, and any other
-        -- byte-level patterns that the strip might be mishandling.
-        -- Auto-stops after a few minutes if user forgets to turn off?
-        -- No — keep it manual. The mode-byte filter prevents recursion
-        -- via the 207 add_to_chat call, but it's still noisy.
-        -- Usage: //ow chathex [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
-        else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_hex_capture()
+        _ow_chatdebug_on = target
+
+        -- Plain module flags (no _chat dependency).
+        _ow_text_capture  = target
+        _ow_trustprobe_on = target
+
+        -- Chat-module probe setters. Guarded — if the chat module isn't
+        -- loaded we still toggle the plain flags above.
+        if _chat then
+            if _chat.set_debug              then _chat.set_debug(target) end
+            if _chat.set_hex_capture        then _chat.set_hex_capture(target) end
+            if _chat.set_chat_pkt_debug     then _chat.set_chat_pkt_debug(target) end
+            if _chat.set_chat_pkt_trace     then _chat.set_chat_pkt_trace(target) end
+            if _chat.set_dropped_mode_log   then _chat.set_dropped_mode_log(target) end
+            if _chat.set_buff_wear_probe    then _chat.set_buff_wear_probe(target) end
+            if _chat.set_buff_apply_probe   then _chat.set_buff_apply_probe(target) end
+            if _chat.set_battle_classify_probe then
+                _chat.set_battle_classify_probe(target)
             end
-            _chat.set_hex_capture(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] chat hex capture = %s', tostring(target)))
         end
-    elseif command == 'chatcpdebug' then
-        -- Toggle checkparam packet diagnostic. When on, every 0x0DD
-        -- packet that arrives dumps its parsed field/value list to
-        -- chat so we can see exactly what fields Windower's packets
-        -- library populates on this install. Use this if /checkparam
-        -- output isn't landing in the System tab — the dump will show
-        -- whether parse succeeded and which field names are available.
-        -- Usage: //ow chatcpdebug [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
-        else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_cp_debug()
-            end
-            _chat.set_cp_debug(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] checkparam packet debug = %s', tostring(target)))
+
+        -- Stamp the log on enable so it's obvious the toggle took and the
+        -- build is current.
+        if target and _chat and _chat._probe_log then
+            _chat._probe_log(string.format(
+                '[%s] [chatdebug] ENABLED — all chat probes active',
+                os.date('%H:%M:%S')))
         end
-    elseif command == 'chatpktdebug' then
-        -- Toggle 0x017 chat packet diagnostic. When on, every 0x017
-        -- packet that arrives dumps its parsed mode/sender/message
-        -- to chat. Useful for diagnosing missing chat (mode byte
-        -- mismatch, dropped tells, etc.).
-        -- Usage: //ow chatpktdebug [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
-        else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_chat_pkt_debug()
-            end
-            _chat.set_chat_pkt_debug(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] chat packet debug = %s', tostring(target)))
-        end
-    elseif command == 'chatpkttrace' then
-        -- Toggle comprehensive 0x017 packet trace. When on, EVERY
-        -- chat packet (any mode, including NPC dialog and system)
-        -- is logged to data/chat_packet_log.txt with timestamp,
-        -- mode, sender, message, and hex dump. Compact one-liner
-        -- also goes to FFXI chat for live observation.
-        -- Used to nail down empirical mode → channel mappings.
-        -- Usage: //ow chatpkttrace [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
-        else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_chat_pkt_trace()
-            end
-            _chat.set_chat_pkt_trace(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] chat packet trace = %s (log: data/chat_packet_log.txt)',
-                tostring(target)))
-        end
-    elseif command == 'droppedmodes' then
-        -- Toggle the high-mode-filter dropped-line telemetry. Off by
-        -- default. Useful when a chat line isn't appearing: turn this
-        -- on, reproduce the missing line, and the console will show
-        -- the mode byte. That mode can then be added to REAL_HIGH_MODES
-        -- in emit.lua.
-        -- Usage: //ow droppedmodes [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
-        else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_dropped_mode_log()
-            end
-            _chat.set_dropped_mode_log(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] dropped-mode telemetry = %s',
-                tostring(target)))
-        end
-    elseif command == 'buffwearprobe' then
-        -- Toggle the buff_events action-message diagnostic. When on,
-        -- every action message reaching buff_events.process is logged
-        -- with its msg_id, status param, target, and our classification.
-        -- Used for finding msg_ids that should be in STATUS_WEAR_MSGS
-        -- but aren't (so "X is no longer asleep" doesn't fire as a
-        -- chat event today).
-        -- Usage: //ow buffwearprobe [on|off]
-        if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
-        else
-            local target
-            if args[1] == 'on' or args[1] == 'off' then
-                target = args[1] == 'on'
-            else
-                target = not _chat.is_buff_wear_probe()
-            end
-            _chat.set_buff_wear_probe(target)
-            windower.add_to_chat(207, string.format(
-                '[OW] buff_events action-message probe = %s',
-                tostring(target)))
-        end
+
+        windower.add_to_chat(207, string.format(
+            '[OW] chatdebug = %s%s', tostring(target),
+            target and ' (logs to %APPDATA%/OmniWatch/chatdebug_log.txt)'
+                   or ''))
     elseif command == 'condense' then
         -- Toggle condensed multi-hit display. When on, e.g. a 3-hit
         -- melee round shows as "Wormfood strikes Wasp x3 (770/766/592)
@@ -3962,40 +3930,6 @@ ow_safe_register('addon command', function(command, ...)
                 end
             end
         end
-    elseif command == 'dumpdesc' then
-        -- Dump the raw description text of every equipped item, with
-        -- escaped newlines visible. Lets us see how items like Nyame
-        -- are actually formatted (single line / multi-line / Pet: split)
-        -- so we can verify the description parser handles them correctly.
-        local equipment = windower.ffxi.get_items
-            and windower.ffxi.get_items('equipment')
-        if not equipment then
-            windower.add_to_chat(207, '[OW] no equipment table')
-            return
-        end
-        local slot_names = {
-            'main','sub','range','ammo','head','neck','left_ear','right_ear',
-            'body','hands','left_ring','right_ring','back','waist','legs','feet'
-        }
-        for _, sn in ipairs(slot_names) do
-            local bag   = equipment[sn .. '_bag']
-            local index = equipment[sn]
-            if index and index ~= 0 and bag then
-                local idata = windower.ffxi.get_items(bag, index)
-                if idata and idata.id and idata.id ~= 0 then
-                    local id = idata.id
-                    local name = (res.items[id] and res.items[id].english)
-                                or ('id:' .. id)
-                    local d = res.item_descriptions
-                              and res.item_descriptions[id]
-                    local txt = (d and d.english) or '(no description)'
-                    -- Replace newlines with literal \n so we see them.
-                    local visible = txt:gsub('\n', '\\n')
-                    windower.add_to_chat(207, string.format(
-                        '[PW DESC] %s [%d]: %s', sn, id, visible))
-                end
-            end
-        end
     elseif command == 'dumpcharstats' then
         -- Print stat-related fields from get_player() so we can see what
         -- the API actually returns. player.stats.X is the gear+buffs
@@ -4063,75 +3997,6 @@ ow_safe_register('addon command', function(command, ...)
         if _ow_bolters_value > 0 then
             windower.add_to_chat(207, string.format(
                 '[OW] Cached Bolter\'s roll value = %d', _ow_bolters_value))
-        end
-    elseif command == 'dumpstats' then
-        -- Force a recompute and print summary to chat.
-        local ok, err = pcall(function()
-            if ow_compute_stats and ow_send_stats then
-                local s = ow_compute_stats()
-                ow_send_stats(s)
-                local keys = {'str','dex','vit','agi','int','mnd','chr'}
-                local line = ''
-                for _, k in ipairs(keys) do
-                    line = line .. k:upper() .. ':' .. tostring(s[k] or '-') .. ' '
-                end
-                windower.add_to_chat(207, '[OW] ' .. line)
-                windower.add_to_chat(207, string.format(
-                    '[OW] Gear:%s%% Magic:%s%% JA:%s%% Total:%s%%',
-                    tostring(s['haste'] or 0),
-                    tostring(s['magic haste'] or 0),
-                    tostring(s['ja haste'] or 0),
-                    tostring(s['total haste'] or 0)))
-                windower.add_to_chat(207, string.format(
-                    '[OW] Acc1:%s Att1:%s TP/hit:%s Hits->WS:%s',
-                    tostring(s['accuracy'] or '-'),
-                    tostring(s['attack'] or '-'),
-                    tostring(s['tp per hit'] or '-'),
-                    tostring(s['hits to ws'] or '-')))
-                -- DW breakdown so we can see what each piece contributes.
-                -- Walks current equipment, calling DW_Gear for each
-                -- equipped id and totalling. Also reports the trait DW
-                -- and any free 'dual wield' parsed from raw description.
-                do
-                    local equipment = windower.ffxi.get_items
-                                       and windower.ffxi.get_items('equipment')
-                    if equipment then
-                        local slots = {'main','sub','range','ammo','head','neck',
-                                       'left_ear','right_ear','body','hands',
-                                       'left_ring','right_ring','back','waist',
-                                       'legs','feet'}
-                        local total_dw_gear = 0
-                        for _, sn in ipairs(slots) do
-                            local bag = equipment[sn..'_bag']
-                            local idx = equipment[sn]
-                            if idx and idx ~= 0 and bag then
-                                local idata = windower.ffxi.get_items(bag, idx)
-                                if idata and idata.id ~= 0 then
-                                    local id = idata.id
-                                    local nm = (res.items[id] and res.items[id].en)
-                                               or ('id:'..id)
-                                    local dw_gear = DW_Gear and DW_Gear[id]
-                                                    and DW_Gear[id]['Dual Wield'] or 0
-                                    if dw_gear > 0 then
-                                        windower.add_to_chat(207, string.format(
-                                            '[OW]   DW_Gear: %s = +%d',
-                                            nm, dw_gear))
-                                        total_dw_gear = total_dw_gear + dw_gear
-                                    end
-                                end
-                            end
-                        end
-                        windower.add_to_chat(207, string.format(
-                            '[OW] DW_Gear total: %d (vs final stats DW: %s)',
-                            total_dw_gear, tostring(s['dual wield'] or '-')))
-                    end
-                end
-                windower.add_to_chat(207, string.format(
-                    '[OW] file: addons/OmniWatch/data/omniwatch_stats.lua'))
-            end
-        end)
-        if not ok then
-            windower.add_to_chat(123, '[OW] dumpstats err: ' .. tostring(err))
         end
     elseif command == 'serverstats' then
         -- Experimental: silent server-truth stat fetcher via 0x061
@@ -4250,167 +4115,6 @@ ow_safe_register('addon command', function(command, ...)
                 end
             end
         end
-    elseif command == 'dumpduration' then
-        -- Show what the addon thinks the roll + enhancing duration
-        -- multipliers will be at the next cast, given current gear,
-        -- merits, and JPs. Helps diagnose timer mismatches.
-        local ok2, err2 = pcall(function()
-            -- Build the gear inventories for both categories so we can
-            -- list which equipped pieces contribute.
-            if not _OW_ROLL_DURATION_GEAR_BY_ID then
-                _ow_roll_duration_mult()  -- side-effect: builds cache
-            end
-            if not _OW_ENHANCING_DUR_BY_ID then
-                local me = windower.ffxi.get_player()
-                _ow_enhancing_duration_mult('Stoneskin',
-                                             (me and me.buffs) or {})
-            end
-
-            -- Walk equipment for: roll-duration seconds, enhancing %,
-            -- mainhand-only weapon filter, Tricorne synergy detection.
-            local equipment = windower.ffxi.get_items
-                              and windower.ffxi.get_items('equipment')
-            local slots = {'main','sub','range','ammo','head','neck',
-                           'left_ear','right_ear','body','hands',
-                           'left_ring','right_ring','back','waist',
-                           'legs','feet'}
-            local roll_pieces, enh_pieces = {}, {}
-            local roll_seconds, enh_total = 0, 0
-            local has_tricorne_synergy = false
-            -- Resolve mainhand-only ids by name.
-            local mainhand_only_ids = {}
-            for _, mh_name in ipairs({"Commodore's Knife", "Lanun Knife",
-                                       "Rostam", "Rostam +1"}) do
-                local item = res.items and (res.items:with('en', mh_name)
-                                            or res.items:with('enl', mh_name))
-                if item and item.id then
-                    mainhand_only_ids[item.id] = true
-                end
-            end
-            if equipment then
-                for _, sn in ipairs(slots) do
-                    local bag = equipment[sn..'_bag']
-                    local idx = equipment[sn]
-                    if idx and idx ~= 0 and bag then
-                        local idata = windower.ffxi.get_items(bag, idx)
-                        if idata and idata.id then
-                            local nm = (res.items and res.items[idata.id]
-                                        and res.items[idata.id].en) or '?'
-                            local r = _OW_ROLL_DURATION_GEAR_BY_ID[idata.id]
-                            if r then
-                                if mainhand_only_ids[idata.id] and sn ~= 'main' then
-                                    table.insert(roll_pieces,
-                                        string.format(
-                                          '%s: %s = +%ds (SKIPPED: mainhand-only)',
-                                          sn, nm, r))
-                                else
-                                    roll_seconds = roll_seconds + r
-                                    table.insert(roll_pieces,
-                                        string.format('%s: %s = +%ds',
-                                                       sn, nm, r))
-                                end
-                            end
-                            if sn == 'head' and _OW_TRICORNE_SYNERGY_BY_ID[idata.id] then
-                                has_tricorne_synergy = true
-                            end
-                            local e = _OW_ENHANCING_DUR_BY_ID[idata.id]
-                            if e then
-                                enh_total = enh_total + e
-                                table.insert(enh_pieces,
-                                    string.format('%s: %s = +%.0f%%',
-                                                   sn, nm, e * 100))
-                            end
-                        end
-                    end
-                end
-            end
-
-            -- Read merits + JPs with source tracking for visibility.
-            local ws, jpdur = 0, 0
-            local ws_src, jp_src = 'none', 'none'
-            local p = windower.ffxi.get_player()
-            if p then
-                if p.merits and tonumber(p.merits.winning_streak) then
-                    local v = tonumber(p.merits.winning_streak) or 0
-                    if v > 0 then ws = v; ws_src = 'live' end
-                end
-                if p.job_points and p.job_points.cor
-                   and tonumber(p.job_points.cor.phantom_roll_duration) then
-                    local v = tonumber(p.job_points.cor.phantom_roll_duration) or 0
-                    if v > 0 then jpdur = v; jp_src = 'live' end
-                end
-            end
-            if ws == 0 then
-                local v = tonumber((PW_COR_MERITS or {}).winning_streak) or 0
-                if v > 0 then ws = v; ws_src = 'manual config' end
-            end
-            if jpdur == 0 then
-                local v = tonumber((PW_COR_JP_GIFTS or {}).phantom_roll_duration) or 0
-                if v > 0 then jpdur = v; jp_src = 'manual config' end
-            end
-            ws    = math.min(5,  math.max(0, ws))
-            jpdur = math.min(20, math.max(0, jpdur))
-
-            local merit_seconds = ws * 20
-            local synergy_seconds = has_tricorne_synergy and (ws * 6) or 0
-            local jp_seconds = jpdur * 2
-            local roll_base = 300
-            local roll_final = roll_base + merit_seconds + synergy_seconds
-                             + jp_seconds + roll_seconds
-            local roll_mult = roll_final / roll_base
-
-            windower.add_to_chat(207, '[OW] === Phantom Roll duration ===')
-            windower.add_to_chat(207, string.format(
-                '[OW] base 300s + %ds (Winning Streak %d, %s) + %ds (JP %d, %s) = %ds',
-                merit_seconds, ws, ws_src, jp_seconds, jpdur, jp_src,
-                roll_base + merit_seconds + jp_seconds))
-            if has_tricorne_synergy then
-                windower.add_to_chat(207, string.format(
-                    '[OW] + %ds Tricorne synergy (Comm.Tri+2/Lanun head + Winning Streak %d)',
-                    synergy_seconds, ws))
-            end
-            if #roll_pieces > 0 then
-                for _, ln in ipairs(roll_pieces) do
-                    windower.add_to_chat(207, '[OW]   ' .. ln)
-                end
-                windower.add_to_chat(207, string.format(
-                    '[OW]   gear total: +%ds', roll_seconds))
-            else
-                windower.add_to_chat(207, '[OW]   (no roll-duration gear equipped)')
-            end
-            windower.add_to_chat(207, string.format(
-                '[OW] -> final %ds (%dm %ds, mult %.3fx)',
-                roll_final,
-                math.floor(roll_final / 60), roll_final % 60,
-                roll_mult))
-
-            local me = windower.ffxi.get_player()
-            local active = (me and me.buffs) or {}
-            local has_comp = false
-            for _, bid in ipairs(active) do
-                if bid == PW_BUFF_COMPOSURE then has_comp = true; break end
-            end
-            local is_rdm = me and me.main_job == 'RDM'
-            local comp_mult = (is_rdm and has_comp) and 3.0 or 1.0
-            local enh_mult = (1.0 + enh_total) * comp_mult
-            windower.add_to_chat(207, '[OW] === Enhancing duration (self) ===')
-            if #enh_pieces > 0 then
-                for _, ln in ipairs(enh_pieces) do
-                    windower.add_to_chat(207, '[OW]   ' .. ln)
-                end
-            else
-                windower.add_to_chat(207, '[OW]   (no enhancing-duration gear equipped)')
-            end
-            windower.add_to_chat(207, string.format(
-                '[OW] gear +%.0f%% composure %s (RDM main: %s) -> mult %.3fx',
-                enh_total * 100,
-                has_comp and 'ACTIVE' or 'inactive',
-                is_rdm and 'yes' or 'no',
-                enh_mult))
-        end)
-        if not ok2 then
-            windower.add_to_chat(123, '[OW] dumpduration err: ' .. tostring(err2))
-        end
     elseif command == 'dps' then
         -- DPS panel control. Subcommands: bare 'dps' = toggle panel,
         -- 'reset' = clear rolling window, 'party' = toggle party tracking,
@@ -4496,6 +4200,63 @@ ow_safe_register('addon command', function(command, ...)
         else
             windower.add_to_chat(207, string.format(
                 '[OW] unknown dps subcommand: %s', sub))
+        end
+    elseif command == 'sc' then
+        -- Skillchain panel control. Subcommands mirror Ivaar's
+        -- Skillchains addon surface for muscle-memory compatibility:
+        --   bare 'sc'      → toggle main panel visibility
+        --   sc burst       → toggle magic-burst window display
+        --   sc weapon      → toggle WS suggestion list
+        --   sc spell       → toggle spell suggestion list (SCH/BLU)
+        --   sc pet         → toggle pet ability suggestion list (BST/SMN)
+        --   sc props       → toggle resonating properties row
+        --   sc timer       → toggle SC window countdown bar
+        --   sc step        → toggle current chain-step row
+        --   sc track       → toggle the whole "track sc" master
+        --   sc dump        → print diagnostic state
+        if not OW_Skillchains then
+            windower.add_to_chat(123,
+                '[OW] Skillchains module not loaded. Place '
+                .. 'Skillchains.lua next to OmniWatch.lua and reload.')
+            return
+        end
+        local sub = (args[1] or ''):lower()
+        local sub_map = {
+            burst  = 'track_magic_burst',
+            weapon = 'show_weapon',
+            spell  = 'show_spell',
+            pet    = 'show_pet',
+            props  = 'show_props',
+            timer  = 'show_timer',
+            step   = 'show_step',
+            track  = 'track_sc',
+        }
+        if sub == '' then
+            local cur = OW_Skillchains.get_setting('show_panel')
+            OW_Skillchains.set_setting('show_panel', not cur)
+            windower.add_to_chat(207, string.format(
+                '[OW] SC panel: %s', cur and 'OFF' or 'ON'))
+        elseif sub_map[sub] then
+            local key = sub_map[sub]
+            local cur = OW_Skillchains.get_setting(key)
+            OW_Skillchains.set_setting(key, not cur)
+            windower.add_to_chat(207, string.format(
+                '[OW] SC %s: %s', sub, cur and 'OFF' or 'ON'))
+        elseif sub == 'dump' then
+            local st = OW_Skillchains.status()
+            windower.add_to_chat(207, '[OW] === Skillchains status ===')
+            windower.add_to_chat(207, string.format(
+                '[OW] job=%s  aeonic=%s  resonating=%d',
+                tostring(st.main_job), tostring(st.aeonic_flavor),
+                st.resonating_count))
+            for k, v in pairs(st.settings) do
+                windower.add_to_chat(207, string.format(
+                    '[OW]   %s = %s', k, tostring(v)))
+            end
+        else
+            windower.add_to_chat(207,
+                '[OW] usage: //ow sc [burst|weapon|spell|pet|props|'
+                .. 'timer|step|track|dump]')
         end
     end
 end)
@@ -4627,7 +4388,25 @@ end
 
 -- ── Buff packet handler ──────────────────────────────────────────────────────
 ow_safe_register('incoming chunk', function(id, original)
+    -- Handler-entry probe: when trustprobe is on, log which packet ids
+    -- THIS handler actually receives. Throttled to once per id per ~3s to
+    -- avoid flood. If 0x076 (=118) never appears here while other ids do,
+    -- the handler isn't being routed 0x076. If NOTHING appears, the
+    -- handler isn't running. If 0x076 DOES appear, the block logic is the
+    -- problem. Decisive either way.
+    if _ow_trustprobe_on then
+        _ow_entry_seen = _ow_entry_seen or {}
+        local nowt = os.time()
+        if (nowt - (_ow_entry_seen[id] or 0)) >= 3 then
+            _ow_entry_seen[id] = nowt
+            _ow_trustprobe_log(string.format(
+                '[%s] [entry] handler1 received id=0x%03X (%d)',
+                os.date('%H:%M:%S'), id, id))
+        end
+    end
     if id == 0x076 then
+        local me = windower.ffxi.get_player()
+        local my_id = me and me.id or 0
         for k = 0, 4 do
             local playerId = original:unpack('I', k*48+5)
             if playerId ~= 0 then
@@ -4642,10 +4421,218 @@ ow_safe_register('incoming chunk', function(id, original)
                         table.insert(buffs, buff)
                     end
                 end
+
+                -- Unconditional diagnostic: log EVERY member in this 0x076
+                -- (including the local player and first-sight members),
+                -- with class + current buff ids. Routed through
+                -- buff_events.debug_party_member_dump, which gates on
+                -- M.debug_apply directly and writes via the module-local
+                -- _probe_log — the SAME proven path the 0x063 dump uses,
+                -- so it fires regardless of which _loader accessors are
+                -- deployed. (The earlier _chat._probe_log-gated version
+                -- stayed silent because that export wasn't in the running
+                -- build.) Conclusively answers whether trusts appear in
+                -- 0x076 with a buff array and whether it changes on wear.
+                if _chat and _chat.debug_party_member_dump then
+                    _chat.debug_party_member_dump(playerId, buffs)
+                end
+
+                -- trustprobe member dump. When //ow trustprobe is on,
+                -- write this member's class + buff
+                -- ids into the shared probe log (ow_classify_probe.log,
+                -- via _chat._probe_log). Greppable by the
+                -- [0x076-member] tag. Authoritative diagnostic for
+                -- whether trusts carry buffs in 0x076 and whether the
+                -- array drops on wear-off.
+                if _ow_trustprobe_on then
+                    local cls = 'other'
+                    if _chat and _chat.classify_entity then
+                        local c = _chat.classify_entity(playerId)
+                        if c then cls = c end
+                    end
+                    local idstrs = {}
+                    for _, b in ipairs(buffs) do idstrs[#idstrs+1] = tostring(b) end
+                    _ow_trustprobe_log(string.format(
+                        '[%s] [0x076-member] pid=%d class=%s nbuffs=%d ids={%s}',
+                        os.date('%H:%M:%S'), playerId, cls, #buffs,
+                        table.concat(idstrs, ',')))
+                end
+
+                -- Party-member buff-LOSS detection. FFXI only fires a
+                -- 0x029 wear-off action-message for the LOCAL player, so a
+                -- party/alliance member dropping a buff is reflected ONLY
+                -- here (the periodic 0x076 snapshot). Diff this member's
+                -- previous buff multiset against the new one; for each
+                -- buff whose count dropped, synthesize a "loses X" chat
+                -- event via the chat module.
+                --
+                -- Guards:
+                --   * Skip the local player — their losses already come
+                --     via 0x029 (process_status_message). Diffing here too
+                --     would double-emit.
+                --   * Skip when there's no PRIOR snapshot for this member
+                --     (first sight / post-zone). An absent→present
+                --     transition isn't a loss; emitting then would spam a
+                --     full "loses everything" list whenever someone comes
+                --     into range.
+                -- pcall-isolated so a diff/emit error can't break party
+                -- buff tracking (the assignment below must always run).
+                if playerId ~= my_id and _chat
+                   and _chat.process_party_buff_loss then
+                    local prev = party_buffs[playerId]
+                    if type(prev) == 'table' then
+                        pcall(function()
+                            -- Multiset counts: old and new.
+                            local old_ct, new_ct = {}, {}
+                            for _, b in ipairs(prev) do
+                                old_ct[b] = (old_ct[b] or 0) + 1
+                            end
+                            for _, b in ipairs(buffs) do
+                                new_ct[b] = (new_ct[b] or 0) + 1
+                            end
+
+                            -- Probe: log this member's buff DELTA (gains
+                            -- and losses) whenever it changes, gated by
+                            -- the debuffapplyprobe toggle. This is to
+                            -- diagnose trust buff-LOSS: if a trust's buff
+                            -- wears in game but its 0x076 array never
+                            -- drops the id (suspected — trust arrays are
+                            -- known to lag), we'll see losses for PC
+                            -- members but never for trusts here.
+                            if _chat._probe_log then
+                                local probe_on = false
+                                if _chat.is_buff_apply_probe then
+                                    probe_on = _chat.is_buff_apply_probe()
+                                end
+                                if probe_on then
+                                    local gains, losses = {}, {}
+                                    for b, nc in pairs(new_ct) do
+                                        local oc = old_ct[b] or 0
+                                        for _ = 1, (nc - oc) do
+                                            gains[#gains+1] = b
+                                        end
+                                    end
+                                    for b, oc in pairs(old_ct) do
+                                        local nc = new_ct[b] or 0
+                                        for _ = 1, (oc - nc) do
+                                            losses[#losses+1] = b
+                                        end
+                                    end
+                                    local cls = 'other'
+                                    if _chat.classify_entity then
+                                        local c = _chat.classify_entity(playerId)
+                                        if c then cls = c end
+                                    end
+                                    if #gains > 0 or #losses > 0 then
+                                        _chat._probe_log(string.format(
+                                            '[0x076-delta] pid=%d class=%s gains={%s} losses={%s}',
+                                            playerId, cls,
+                                            table.concat(gains, ','),
+                                            table.concat(losses, ',')))
+                                    end
+                                end
+                            end
+
+                            -- Any buff whose count decreased = net loss.
+                            -- Emit once per net decrement.
+                            for b, oc in pairs(old_ct) do
+                                local nc = new_ct[b] or 0
+                                for _ = 1, (oc - nc) do
+                                    _chat.process_party_buff_loss(playerId, b)
+                                end
+                            end
+                        end)
+                    end
+                end
+
                 party_buffs[playerId] = buffs
             end
         end
     end
+
+    -- ── Self debuff-apply detection via 0x063 sub-9 (buff list) ─────────
+    -- The packet-native answer to "I see a debuff wear off but never saw
+    -- it land." Three probe captures proved mob debuffs (e.g. Scythe Tail
+    -- stun) do NOT surface in the 0x028 action stream — not the main
+    -- message, not add_effect, not spike_effect. They arrive only as the
+    -- buff appearing in the player's authoritative buff array, which the
+    -- server pushes in the 0x063 sub-type 9 packet (the same data the
+    -- party panel reads). This is NOT client polling — it's decoding a
+    -- server packet, exactly like the 0x076 party-buff diff above.
+    --
+    -- Parse layout (proven, from skillchains.lua's 0x063 sub-9 handler):
+    -- sub-type in byte 5; 32 buff slots starting at byte 9, each 2 bytes
+    -- little-endian (lo + 256*hi). 0 and 255 (0xFF) are empty sentinels.
+    --
+    -- Diff against the previous self snapshot; emit an apply for any
+    -- DEBUFF that newly appeared. buff_events restricts to debuffs —
+    -- buffs you receive already emit via recognized 0x028 apply messages
+    -- (msg 230 etc.), so this won't double them. Wear-offs stay on the
+    -- 0x029 path. First snapshot (and post-zone) captured WITHOUT
+    -- emitting so we don't spam applies for buffs already up.
+    if id == 0x063 and original:byte(5) == 9
+       and _chat and _chat.process_self_debuff_apply then
+        pcall(function()
+            -- 0x063 sub-9 buff list layout, CONFIRMED from raw packet
+            -- capture:
+            --   byte 1 = 0x63 (id), byte 5 = 0x09 (sub-type)
+            --   buff ids begin at byte 7, as plain 2-byte little-endian
+            --   (lo + 256*hi), 32 slots, 0/255 = empty.
+            -- Raw sample: ... 09 00 C4 00 28 00 29 00 FF 00 ...
+            --   -> 196, 40(Protect), 41(Shell), empty, ...
+            -- Earlier attempts were wrong: the skillchains-style offset
+            -- (byte 9) was off by one slot, and the 0x076-style high-bit
+            -- bitmask reconstruction doesn't apply here (this packet is
+            -- straight LE, not the split low/high format 0x076 uses).
+            -- slot n (1..32) low byte at 5 + n*2; high byte at 6 + n*2.
+            local cur_ct = {}
+            for n = 1, 32 do
+                local lo = original:byte(5 + n * 2)     or 0
+                local hi = original:byte(6 + n * 2)     or 0
+                local bid = lo + 256 * hi
+                -- 0 and 255 are empty sentinels; real status ids are
+                -- 1..1023. Reject anything outside that as a parse
+                -- artifact rather than emitting a bogus apply.
+                if bid ~= 0 and bid ~= 255 and bid >= 1 and bid <= 1023 then
+                    cur_ct[bid] = (cur_ct[bid] or 0) + 1
+                end
+            end
+
+            -- Verification dump (raw hex + parsed ids), gated by the
+            -- debuffapplyprobe toggle. Throttled inside the function.
+            if _chat and _chat.debug_self_buff_dump then
+                _chat.debug_self_buff_dump(original, cur_ct)
+            end
+
+            if _ow_self_buff_prev then
+                -- APPLIES: debuff newly present (count went up).
+                for bid, cc in pairs(cur_ct) do
+                    local pc = _ow_self_buff_prev[bid] or 0
+                    for _ = 1, (cc - pc) do
+                        _chat.process_self_debuff_apply(bid)
+                    end
+                end
+                -- REMOVALS: debuff no longer present (count went down).
+                -- Catches removals that DON'T fire a standard 0x029
+                -- wear-off message — e.g. Mix: Vaccine (a Chemist ability)
+                -- curing disease. A spell cure like Viruna does fire a
+                -- recognized wear-off, so it already shows via 0x029; this
+                -- catches the rest by watching the authoritative buff
+                -- array leave. process_self_debuff_loss dedupes against
+                -- recent 0x029 wear-offs so the Viruna case isn't doubled.
+                if _chat.process_self_debuff_loss then
+                    for bid, pc in pairs(_ow_self_buff_prev) do
+                        local cc = cur_ct[bid] or 0
+                        for _ = 1, (pc - cc) do
+                            _chat.process_self_debuff_loss(bid)
+                        end
+                    end
+                end
+            end
+            _ow_self_buff_prev = cur_ct
+        end)
+    end
+
     -- ── Server_Stats 0x061 dispatch ────────────────────────────────────
     -- Route incoming 0x061 packets to the Server_Stats module if loaded.
     -- The module decides itself whether to act (subtype check, enabled
@@ -4676,6 +4663,14 @@ ow_safe_register('incoming chunk', function(id, original)
                 '[OW chat_pkt] handler error: ' .. tostring(err))
         end
     end
+
+    -- Skillchains sub-module: needs to see 0x050 (equipment change,
+    -- for aeonic-weapon detection) and 0x063 sub-9 (buff list, for
+    -- Aftermath / Chainbound buff tracking). Both are no-ops in the
+    -- module when the packet doesn't match.
+    if OW_Skillchains and OW_Skillchains.handle_chunk then
+        pcall(OW_Skillchains.handle_chunk, id, original)
+    end
 end)
 
 -- ── Mob debuff/buff tracking (based on Debuffed.lua by Xathe) ────────────────
@@ -4686,13 +4681,36 @@ end)
 local MSG_DAMAGE_LAND   = { [2]   = true, [252] = true }
 local MSG_ENFEEBLE_LAND = { [236] = true, [237] = true, [268] = true, [271] = true }
 
+-- Message IDs that mean "a status was applied" via a mob ability/TP
+-- move (X gains the effect of Y / self status apply). Used to detect a
+-- mob self-buffing or self-debuffing via a TP move so it shows on the
+-- target card. CONFIRMED via the [mob-self-buff] probe: a mob self-buff
+-- arrives as cat 11, self-target, msg=194 (Protect param=40, Regen
+-- param=42, and also self STR Down param=136 — so 194 is a generic
+-- status-apply, NOT buff-only; the buff-vs-debuff split is decided by
+-- the PARAM via the enfeebling check, not the message id). 159 is the
+-- enfeeble-on-target apply (STR Down param=136 on a party member).
+local MSG_BUFF_APPLY = { [127] = true, [128] = true, [130] = true,
+                         [159] = true, [194] = true, [230] = true,
+                         [242] = true, [270] = true, [272] = true }
+
 -- Message IDs that mean "mob died":
 local MSG_DEATH = { [6] = true, [20] = true, [113] = true,
                     [406] = true, [605] = true, [646] = true }
 
 -- Message IDs that mean "debuff wore off":
 local MSG_WEAR_OFF = { [64] = true, [204] = true, [206] = true,
-                       [350] = true, [531] = true }
+                       [350] = true, [531] = true,
+                       -- Status REMOVAL via dispel/erase/loss (confirmed
+                       -- via probe): msg 342 = a buff removed ("X's Shell
+                       -- effect is removed" — Shell param=41, Defense
+                       -- Boost param=93 on a dispelled mob); msg 341 = a
+                       -- debuff removed (STR Down param=136 cured by
+                       -- Erase/Panacea). Param holds the status id, so the
+                       -- REMOVE wire (target_id, param_1) clears the right
+                       -- entry. This is how a mob's self-buff leaves the
+                       -- target card when a player dispels it.
+                       [341] = true, [342] = true }
 
 -- Action categories: 4 = magic cast, 6 = job ability (shot uses this)
 -- Action packet categories (from Windower community packet docs).
@@ -5312,6 +5330,21 @@ _ow_dps_events       = _ow_dps_events       or {}    -- list of event tables
 _ow_dps_window_s     = _ow_dps_window_s     or 300   -- 5 minutes
 _ow_dps_emit_acc     = _ow_dps_emit_acc     or 0     -- accumulator for 2 Hz emit throttling
 _ow_dps_last_event_ts= _ow_dps_last_event_ts or 0    -- for "active combat" detection (UI hint)
+-- Minimum span (seconds) the DPS divisor is floored to, so the very
+-- first hit or two doesn't divide by a near-zero span and spike the
+-- number. ~one melee round; after this much combat the average is
+-- meaningful and then settles toward the true rate.
+DPS_MIN_SPAN         = DPS_MIN_SPAN or 3
+-- Remembered tier (1-5) of the Protect currently on the player, captured
+-- from the cast packet's spell id when we witness Protect land on us
+-- (exact, source-independent). nil = no witnessed cast, so ow_compute_
+-- stats falls back to estimating the tier from job level. Cleared when
+-- Protect (buff id 40) wears off so it can't go stale.
+_ow_my_protect_tier  = _ow_my_protect_tier or nil
+-- Same as _ow_my_protect_tier but for Shell (buff id 41). Shell adds
+-- magic damage taken reduction (MDT), not physical DEF. Cleared when
+-- Shell wears off.
+_ow_my_shell_tier    = _ow_my_shell_tier or nil
 
 PW_DPS_INCLUDE_PARTY = (PW_DPS_INCLUDE_PARTY == nil) and true or PW_DPS_INCLUDE_PARTY
 
@@ -5658,6 +5691,12 @@ local function _ow_dps_aggregate()
                 hits = 0, misses = 0, crits = 0,
                 spells_landed = 0, spells_resisted = 0, magic_bursts = 0,
                 evaded = 0, mob_swings_at = 0,
+                -- Timestamps of the earliest and latest event in this
+                -- source's window — used to compute the TRUE elapsed
+                -- combat span so DPS = damage / actual_seconds, not
+                -- damage / full_window (which made the number start tiny
+                -- and ramp up until the window filled).
+                first_ts = nil, last_ts = nil,
             }
         end
         return out[src]
@@ -5666,6 +5705,12 @@ local function _ow_dps_aggregate()
     for _, ev in ipairs(_ow_dps_events) do
         local src = ev.src
         local b = bucket(src)
+        -- Track the true combat span for this source: earliest and
+        -- latest event timestamp seen in the window.
+        if ev.ts then
+            if not b.first_ts or ev.ts < b.first_ts then b.first_ts = ev.ts end
+            if not b.last_ts  or ev.ts > b.last_ts  then b.last_ts  = ev.ts end
+        end
         if ev.kind == 'melee_hit' then
             b.white_total = b.white_total + (ev.value or 0)
             b.hits = b.hits + 1
@@ -5741,7 +5786,27 @@ local function _ow_dps_emit()
                         and (b.evaded / b.mob_swings_at) * 100 or 0
         local total_dmg = b.white_total + b.ranged_total
                           + b.magic_total + b.ws_total
-        local dps = total_dmg / _ow_dps_window_s
+        -- DPS = damage / ACTUAL elapsed combat span, not / full window.
+        -- Dividing by the fixed window (e.g. 300s) made the number start
+        -- tiny and slowly climb as the window filled — only correct after
+        -- a full window of combat. Instead use the real span between the
+        -- first and last event in the window, capped at the window length
+        -- (so a long window still rolls) and floored at a few seconds (so
+        -- the very first hit or two doesn't divide by ~0 and spike to an
+        -- absurd number). This gives a meaningful average from the first
+        -- couple of rounds that then fluctuates around the true rate as
+        -- gear/WS/buffs change — the behavior you'd expect.
+        local span
+        if b.first_ts and b.last_ts and b.last_ts > b.first_ts then
+            span = b.last_ts - b.first_ts
+        else
+            span = 0
+        end
+        -- Cap to the rolling window; floor to DPS_MIN_SPAN so early hits
+        -- don't produce a wildly inflated number.
+        if span > _ow_dps_window_s then span = _ow_dps_window_s end
+        if span < DPS_MIN_SPAN then span = DPS_MIN_SPAN end
+        local dps = total_dmg / span
         table.insert(lines, string.format(
             'DPS|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%.1f|%.1f|%.1f|%.1f|%d|%d|%.1f|%d|%d|%d',
             src, scope,
@@ -5779,6 +5844,289 @@ local function _ow_dps_emit()
     end
 end
 
+-- Populate the recent-action-name cache from any action, resolving
+-- the name from the correct Windower resource table by category. This
+-- is what lets the text-path "?" resolver replace the client's
+-- unresolved "<Actor> uses ?" / "readies ?" with the real name —
+-- extended here to cover not just mob abilities but player/trust
+-- weaponskills, job abilities, item uses, and spells. All lookups hit
+-- the live res tables, so they stay correct as content is added.
+-- Category map (Windower action categories):
+--   3  = weapon skill   → res.weapon_skills
+--   4  = spell finish    → res.spells
+--   6  = job ability / item use → res.job_abilities, then res.items
+--   8  = spell begin     → res.spells (action.param holds the id)
+--   11 = mob TP begin    → res.monster_abilities (handled inline too)
+--   13 = mob TP finish    → res.monster_abilities (handled inline too)
+local function _ow_cache_action_name(act)
+    if not act or not act.actor_id then return end
+    local cat = act.category
+    if not cat then return end
+    local tgt    = act.targets and act.targets[1]
+    local action = tgt and tgt.actions and tgt.actions[1]
+    local name
+
+    if cat == 3 then
+        local ws = act.param and res.weapon_skills
+                   and res.weapon_skills[act.param]
+        name = ws and (ws.en or ws.name)
+    elseif cat == 4 then
+        local sp = act.param and res.spells and res.spells[act.param]
+        name = sp and (sp.en or sp.name)
+    elseif cat == 8 then
+        -- Spell begin: id is in the per-target action param, not
+        -- act.param (which is a cast-animation id).
+        local sid = (action and action.param) or act.param
+        local sp = sid and res.spells and res.spells[sid]
+        name = sp and (sp.en or sp.name)
+    elseif cat == 6 then
+        -- Job ability OR item use (both arrive on cat 6). Try job
+        -- abilities first, then items.
+        local ja = act.param and res.job_abilities
+                   and res.job_abilities[act.param]
+        name = ja and (ja.en or ja.name)
+        if not name then
+            local it = act.param and res.items and res.items[act.param]
+            name = it and (it.en or it.english)
+        end
+    elseif cat == 11 or cat == 13 then
+        local ab = act.param and res.monster_abilities
+                   and res.monster_abilities[act.param]
+        name = ab and (ab.en or ab.name)
+    end
+
+    if name and name ~= '' then
+        _ow_recent_action_name[act.actor_id] = {name = name, ts = os.clock()}
+    end
+end
+
+-- Emit APPLY (is_buff=1, no timer) for any buff a MOB applies to ITSELF
+-- via an ability/TP move (e.g. Metallic Body → Stoneskin, Bubble
+-- Curtain → Shell). Scans every target/action in the packet for a
+-- self-targeted (target id == actor id) buff-apply message and sends
+-- one APPLY per buff so it shows on the target card. Duration 0 = no
+-- timer; the card clears it on REMOVE (wear-off / dispel). Global (no
+-- 'local') to avoid the main-chunk 200-local limit. Called for BOTH
+-- cat 11 and cat 13 since either can carry the mob's self-buff effect.
+-- Idempotent on the wire: re-sending an APPLY for an already-present
+-- buff just refreshes the same effect_id entry, so double-calling
+-- across categories is harmless.
+function _ow_emit_mob_self_buffs(act, actor_id)
+    if not act or not act.targets or not actor_id then return end
+    local res = _G.res
+    -- Broad probe (only under //ow chatdebug): log EVERY target/action of
+    -- this mob action — including non-self targets — so the capture shows
+    -- the real packet structure even if our "self-target" assumption
+    -- (_t.id == actor_id) is wrong. Tells us the cat, each target id vs
+    -- the actor id, the message id, the param (buff id), and whether the
+    -- message is in our buff-apply set.
+    if _chat and _chat.is_buff_apply_probe and _chat.is_buff_apply_probe()
+       and _chat._probe_log then
+        for _, _t in pairs(act.targets) do
+            if _t.actions then
+                for _, _a in pairs(_t.actions) do
+                    _chat._probe_log(string.format(
+                        '[%s] [mob-self-buff] actor=%s cat=%s tgt=%s '
+                        .. 'self=%s msg=%s param=%s buffname=%s '
+                        .. 'in_apply_set=%s',
+                        os.date('%H:%M:%S'), tostring(actor_id),
+                        tostring(act.category), tostring(_t.id),
+                        tostring(_t.id == actor_id),
+                        tostring(_a.message), tostring(_a.param),
+                        tostring(res and res.buffs and _a.param
+                                 and res.buffs[_a.param]
+                                 and (res.buffs[_a.param].en
+                                      or res.buffs[_a.param].enl)),
+                        tostring(_a.message
+                                 and MSG_BUFF_APPLY[_a.message]
+                                 and true or false)))
+                end
+            end
+        end
+    end
+    for _, _t in pairs(act.targets) do
+        if _t.id == actor_id and _t.actions then
+            for _, _a in pairs(_t.actions) do
+                local _m   = _a.message
+                local _bid = _a.param
+                if _m and MSG_BUFF_APPLY[_m] and _bid and _bid ~= 0 then
+                    local bname = (res and res.buffs and res.buffs[_bid]
+                                   and (res.buffs[_bid].en
+                                        or res.buffs[_bid].enl))
+                                  or ('Buff #' .. tostring(_bid))
+                    -- msg 194 (and friends) carry BOTH buffs (Protect,
+                    -- Regen) and debuffs (STR Down) on self, so decide
+                    -- the column by the PARAM (status id), not the
+                    -- message. _chat.is_debuff is the fallback-protected
+                    -- enfeebling check. is_buff=0 for debuffs → debuff
+                    -- column; 1 for buffs → buff column.
+                    local is_deb = false
+                    if _chat and _chat.is_debuff then
+                        is_deb = _chat.is_debuff(_bid)
+                    end
+                    local is_buff_flag = is_deb and 0 or 1
+                    -- 8th wire field (name): Python uses it when present,
+                    -- falls back to spell-id resolution otherwise, so
+                    -- the existing 7-field debuff APPLY is unaffected.
+                    udp_status:send(string.format(
+                        'APPLY|%d|%d|%d|%d|%d|%d|%s',
+                        actor_id, act.param or 0, _bid, 0,
+                        actor_id, is_buff_flag, bname))
+                    -- Damage-absorb buffs (Stoneskin=37, Magic Shield=
+                    -- absorbs magic) fire NO wear-off packet OR text for
+                    -- mobs — they break silently when their absorb pool
+                    -- is depleted by damage. Record that this mob has the
+                    -- absorb buff so the damage handler can infer the
+                    -- break (mob takes real HP damage → buff consumed →
+                    -- REMOVE). Keyed by mob id → set of absorb bids.
+                    if _bid == 37 then
+                        _ow_mob_absorb_buffs[actor_id] =
+                            _ow_mob_absorb_buffs[actor_id] or {}
+                        _ow_mob_absorb_buffs[actor_id][_bid] = true
+                        if _chat and _chat.is_buff_apply_probe
+                           and _chat.is_buff_apply_probe()
+                           and _chat._probe_log then
+                            _chat._probe_log(string.format(
+                                '[%s] [absorb-track] RECORDED mob=%d '
+                                .. 'bid=%d (Stoneskin) — will REMOVE on '
+                                .. 'next HP damage',
+                                os.date('%H:%M:%S'), actor_id, _bid))
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Emit REMOVE for any status dispelled / erased / lost on a target.
+-- Scans ALL targets of an action (the dispel is cast BY a player, the
+-- status is removed FROM the target — a mob whose buff is dispelled, or
+-- a party member whose debuff is erased). Confirmed via probe: msg 342
+-- = a buff removed (Shell param=41 / Defense Boost param=93 dispelled
+-- off a mob), msg 341 = a debuff removed (STR Down param=136 erased).
+-- Param = the status id. This is the 0x028-delivered counterpart to the
+-- 0x029 MSG_WEAR_OFF path, and unlike a mob self-buff (cat 11/13) a
+-- dispel arrives on the dispelling spell/ability — cat 4 (spell, e.g.
+-- Dispel/Erase) or cat 6 (ability) — so the caller runs this for those
+-- categories too. Global (no 'local') to avoid the 200-local limit.
+function _ow_emit_status_removals(act)
+    if not act or not act.targets then return end
+    for _, _t in pairs(act.targets) do
+        if _t.actions then
+            for _, _a in pairs(_t.actions) do
+                if (_a.message == 341 or _a.message == 342)
+                   and _a.param and _a.param ~= 0 then
+                    udp_status:send(string.format('REMOVE|%d|%d',
+                        _t.id, _a.param))
+                    -- Keep the absorb-break tracking in sync: if this
+                    -- removal was for a tracked absorb buff (Stoneskin
+                    -- dispelled), forget it so we don't double-handle it.
+                    if _ow_mob_absorb_buffs[_t.id] then
+                        _ow_mob_absorb_buffs[_t.id][_a.param] = nil
+                        if not next(_ow_mob_absorb_buffs[_t.id]) then
+                            _ow_mob_absorb_buffs[_t.id] = nil
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Damage-absorb buff break heuristic. Stoneskin (and similar absorb
+-- buffs) on a MOB fire no wear-off packet or text — they break silently
+-- when the absorb pool is depleted by damage. FFXI fully absorbs hits
+-- until Stoneskin is gone, so the moment the mob takes ACTUAL HP damage
+-- ("takes N points of damage", a damage-land message) any absorb buff
+-- it had is consumed. So: if a target is a mob we've recorded with an
+-- absorb buff (e.g. Stoneskin) and it takes HP damage, send REMOVE for
+-- that buff and forget it. Scans all targets/actions. Damage messages:
+-- 1 (hits), 2/252 (takes/crit) and 3 (WS) — any nonzero-damage land.
+-- Global (no 'local') to avoid the 200-local limit.
+function _ow_check_absorb_break(act)
+    if not act or not act.targets then return end
+    if not next(_ow_mob_absorb_buffs) then return end  -- nothing tracked
+    for _, _t in pairs(act.targets) do
+        local tracked = _t.id and _ow_mob_absorb_buffs[_t.id]
+        if tracked and _t.actions then
+            for _, _a in pairs(_t.actions) do
+                local m = _a.message
+                -- Probe: log every action on a tracked mob so we can see
+                -- exactly which message/param the damage carries and why
+                -- the break did or didn't fire.
+                if _chat and _chat.is_buff_apply_probe
+                   and _chat.is_buff_apply_probe()
+                   and _chat._probe_log then
+                    _chat._probe_log(string.format(
+                        '[%s] [absorb-break] tracked mob=%d msg=%s '
+                        .. 'param=%s is_dmg_msg=%s param_gt0=%s',
+                        os.date('%H:%M:%S'), _t.id, tostring(m),
+                        tostring(_a.param),
+                        tostring(m == 1 or m == 2 or m == 3 or m == 252),
+                        tostring(_a.param and _a.param > 0 or false)))
+                end
+                -- A damage-land message with a NONZERO damage value means
+                -- real HP was lost — so the absorb buff has broken. We
+                -- require param>0 because a hit FULLY absorbed by
+                -- Stoneskin still arrives as a hit message but deals 0 HP
+                -- (Stoneskin is intact); only the overflow hit that
+                -- actually reduces HP (param>0) signals the break. 1=melee
+                -- hit, 2=crit/takes, 252=additional, 3=weaponskill.
+                if (m == 1 or m == 2 or m == 3 or m == 252)
+                   and _a.param and _a.param > 0 then
+                    for bid in pairs(tracked) do
+                        udp_status:send(string.format('REMOVE|%d|%d',
+                            _t.id, bid))
+                        if _chat and _chat.is_buff_apply_probe
+                           and _chat.is_buff_apply_probe()
+                           and _chat._probe_log then
+                            _chat._probe_log(string.format(
+                                '[%s] [absorb-break] FIRED REMOVE mob=%d '
+                                .. 'bid=%d (took %d dmg)',
+                                os.date('%H:%M:%S'), _t.id, bid, _a.param))
+                        end
+                    end
+                    _ow_mob_absorb_buffs[_t.id] = nil
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- Detect an item-applied Protect/Shell on US (e.g. the trust Monberaux's
+-- "Guard Drink", which always grants Protect V + Shell V). Such buffs
+-- arrive NOT as a spell cast (cat 4) but as an item/ability AoE apply
+-- (cat 11/6, msg 194 self / 280 AoE), with the item name rendered as an
+-- auto-translate token ({6}) we can't match by text. So we key on the
+-- shape instead: a Protect (param 40) or Shell (param 41) apply landing
+-- on the player from a NON-spell category. On COR/DNC the only such
+-- source is Guard Drink (always tier V), so we pin the witnessed tier to
+-- 5 — giving the stat panel the correct +220 DEF / -29% MDT. This sets
+-- the same _ow_my_*_tier vars the spell-cast path uses; they're cleared
+-- on wear-off. (A real spell-cast Protect/Shell still takes the cat-4
+-- path and records its exact tier there, overriding any stale value.)
+function _ow_detect_item_protect_shell(act, actor_id)
+    if not act or not act.targets then return end
+    local me = windower.ffxi.get_player()
+    if not (me and me.id) then return end
+    for _, _t in pairs(act.targets) do
+        if _t.id == me.id and _t.actions then
+            for _, _a in pairs(_t.actions) do
+                local m = _a.message
+                -- msg 194 (self/single apply) or 280 (AoE apply) carrying
+                -- the status id in param. 40 = Protect, 41 = Shell.
+                if (m == 194 or m == 280) then
+                    if     _a.param == 40 then _ow_my_protect_tier = 5
+                    elseif _a.param == 41 then _ow_my_shell_tier   = 5
+                    end
+                end
+            end
+        end
+    end
+end
+
 local function handle_incoming_action(act)
     if not act or not act.targets or not act.targets[1] then return end
 
@@ -5788,16 +6136,31 @@ local function handle_incoming_action(act)
     -- handler chain.
     pcall(_ow_dps_record_action, act)
 
-    -- Chat panel buff/debuff event hook. Synthesizes "X gains 'Buff'"
-    -- and "X loses 'Buff'" chat events from action-packet status
-    -- messages for the Buffs and Debuffs tabs. pcall'd so a malformed
-    -- packet can't kill the rest of the handler chain. _chat may be
-    -- nil if the chat module failed to load — guard before calling.
+    -- Recent-action-name cache for the "?" text fix. pcall'd so a
+    -- malformed packet can't disrupt the handler chain.
+    pcall(_ow_cache_action_name, act)
+
+    -- Battle synth FIRST, then buff/debuff synth. Order matters for the
+    -- chat display: a mob TP move emits a "uses <ability>" readies line
+    -- (battle synth) AND a "gains the effect of <buff>" line (buff synth)
+    -- from the same packet. Logically the mob USES the ability and THEN
+    -- gains the effect, so the readies line must push to the chat ring
+    -- BEFORE the buff-gain line. They're independent emitters (combat vs
+    -- status), so order between them only affects display sequence, not
+    -- logic. pcall'd so a malformed packet can't kill the handler chain;
+    -- _chat may be nil if the chat module failed to load.
+    if _chat and _chat.process_battle_action then
+        pcall(_chat.process_battle_action, act)
+    end
     if _chat and _chat.process_action then
         pcall(_chat.process_action, act)
     end
-    if _chat and _chat.process_battle_action then
-        pcall(_chat.process_battle_action, act)
+
+    -- Skillchains sub-module: extract SC opens/closes from this action
+    -- and update its resonating state. No-op when the module isn't
+    -- loaded.
+    if OW_Skillchains and OW_Skillchains.handle_action then
+        pcall(OW_Skillchains.handle_action, act)
     end
 
     local tgt     = act.targets[1]
@@ -5805,6 +6168,38 @@ local function handle_incoming_action(act)
     local msg_id  = action and action.message
     local actor_id = act.actor_id
     local cat      = act.category
+
+    -- Mob self-buff detection (cat 11 OR 13). Run EARLY, before the
+    -- category branches below — some of those branches return early
+    -- (e.g. the cat-11 "readies" wind-up), so doing it here guarantees
+    -- the scan runs whichever category carries the mob's self-buff
+    -- effect. Emits APPLY|...|is_buff (no timer) for the target card.
+    -- pcall'd so a malformed packet can't break the handler chain.
+    if cat == 11 or cat == 13 then
+        pcall(_ow_emit_mob_self_buffs, act, actor_id)
+    end
+    -- Status removal (dispel/erase/loss → REMOVE). Runs for the
+    -- status-changing categories: a dispel is a SPELL (cat 4, e.g.
+    -- Dispel/Erase) or ABILITY (cat 6), and a mob can also lose a buff
+    -- as part of its own action (cat 11/13). Confirmed via probe that
+    -- the STR Down erase arrived as cat 4.
+    if cat == 4 or cat == 6 or cat == 11 or cat == 13 then
+        pcall(_ow_emit_status_removals, act)
+    end
+    -- Damage-absorb buff break (Stoneskin etc. on a mob — breaks silently
+    -- when depleted). Runs for damage-dealing categories: 1 melee, 2
+    -- ranged, 3 weaponskill, 4 spell (nuke), 11 mob TP. If a tracked mob
+    -- takes HP damage, its absorb buff is consumed → REMOVE.
+    if cat == 1 or cat == 2 or cat == 3 or cat == 4 or cat == 11 then
+        pcall(_ow_check_absorb_break, act)
+    end
+    -- Item-applied Protect/Shell on us (Guard Drink → Protect V/Shell V).
+    -- Comes via item/ability AoE apply (cat 11 self/AoE, or cat 6), never
+    -- a spell cast, so it's detected here by status-id shape and pins the
+    -- tier to V for the stat panel.
+    if cat == 6 or cat == 11 then
+        pcall(_ow_detect_item_protect_shell, act, actor_id)
+    end
 
     -- Diagnostic: show every action category we receive so we can see
     -- which categories fire for mob casts in this environment.
@@ -6397,6 +6792,42 @@ local function handle_incoming_action(act)
                     end
                 end
 
+                -- Trust / other-bard songs: the block above only runs
+                -- for songs WE sing (act.actor_id == my_id) because it
+                -- does gear-aware duration math against our own equipment.
+                -- For a song sung by a TRUST (or another party bard) that
+                -- lands on us, that gate skips it, so the buff timer fell
+                -- back to the generic status name ("March" instead of
+                -- "Victory March"). The specific spell IS available:
+                -- probe-confirmed act.param resolves to the real song
+                -- (420=Victory March, 399=Sword Madrigal, etc.). Emit a
+                -- name-only buff_gain with the spell's BASE duration (we
+                -- can't see the caster's song+ / duration gear, and the
+                -- generic-path duration was already correct, so base is
+                -- the safe choice). This sets display_name to the
+                -- specific tier without disturbing the self path's
+                -- gear-aware numbers.
+                if act.actor_id ~= my_id and spell_data
+                   and spell_data.type == 'BardSong' then
+                    local _tname = spell_data.enl or spell_data.en
+                    local _tbid  = spell_data.status
+                    if _tname and _tbid and _tbid > 0 then
+                        local song_class = _ow_classify_song(_tname)
+                        local base = _ow_song_base_duration(song_class)
+                        local emit_dur = (base or 120) - 1.0
+                        if emit_dur < 1 then emit_dur = 1 end
+                        ow_events.emit('buff_gain', {
+                            target_id    = my_id,
+                            buff_id      = _tbid,
+                            spell_id     = song_probe_id,
+                            duration     = emit_dur,
+                            actor_id     = act.actor_id or 0,
+                            display_name = _tname,
+                        })
+                    end
+                end
+
+
                 -- Recognise as a song if we have it in our March table.
                 -- Don't depend on spell_data.type matching 'BardSong' since
                 -- the type string varies across Windower res versions.
@@ -6652,11 +7083,30 @@ local function handle_incoming_action(act)
         end
         return
     elseif cat == CAT_MOB_TP_BEGIN then
-        -- Monster ability wind-up. Same pattern: ability id is likely in
-        -- action.param for the target.
-        local aid = (action and action.param) or act.param
-        local ab = res.monster_abilities and res.monster_abilities[aid]
-        local n_ = (ab and (ab.en or ab.name)) or ('Ability #' .. tostring(aid))
+        -- Monster ability wind-up ("<Mob> readies <Ability>.").
+        -- Per BattleMod's parse_action_packet.lua, categories 11 and
+        -- 13 carry the ability ID in act.param — NOT the per-target
+        -- actions[1].param (that's only for categories 7/8/9). Reading
+        -- the per-target param here produced wrong names (e.g. the
+        -- nonexistent "Chameleon Skin") because that field holds
+        -- unrelated animation/status data for a category-11 wind-up.
+        local aid = act.param
+        local ab = aid and res.monster_abilities
+                   and res.monster_abilities[aid]
+        if not ab then
+            -- No valid ability resolved — don't fabricate a name.
+            -- A missing readies line is better than a wrong one.
+            if _ow_cast_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OW] MOB_TP_BEGIN: no ability for act.param=%s '
+                    .. '(action.param=%s)',
+                    tostring(aid),
+                    tostring(action and action.param)))
+            end
+            return
+        end
+        local n_ = ab.en or ab.name or ('Ability #' .. tostring(aid))
+        _ow_recent_action_name[actor_id or 0] = {name = n_, ts = os.clock()}
         udp_cast:send(string.format('CAST_START|%d|ability|%s', actor_id or 0, n_))
         ow_events.emit('cast_begin', {
             actor_id = actor_id, kind = 'ability',
@@ -6683,11 +7133,56 @@ local function handle_incoming_action(act)
                     spell_id = act.param, name = sname,
                     target_id = tgt and tgt.id, msg_id = msg_id,
                 })
+                -- Protect tier capture: if a Protect (single-target,
+                -- name "Protect"/"Protect II".."Protect V" — NOT the AoE
+                -- "Protectra") just landed on US, record its exact tier
+                -- from the spell name so ow_compute_stats can add the
+                -- correct DEF. Source-independent (whoever cast it) and
+                -- exact, vs the job-level estimate fallback. Target check
+                -- uses the player's own id.
+                if tgt and tgt.id then
+                    local _me = windower.ffxi.get_player()
+                    if _me and _me.id and tgt.id == _me.id then
+                        local _n = sname:lower()
+                        if _n:find('^protect') and not _n:find('protectra') then
+                            local _tier = 1
+                            if     _n:find(' v')   then _tier = 5
+                            elseif _n:find(' iv')  then _tier = 4
+                            elseif _n:find(' iii') then _tier = 3
+                            elseif _n:find(' ii')  then _tier = 2
+                            else                        _tier = 1 end
+                            _ow_my_protect_tier = _tier
+                        elseif _n:find('^shell') and not _n:find('shellra') then
+                            -- Shell tier capture (exact, from spell name),
+                            -- mirroring Protect. Feeds MDT, not DEF.
+                            local _tier = 1
+                            if     _n:find(' v')   then _tier = 5
+                            elseif _n:find(' iv')  then _tier = 4
+                            elseif _n:find(' iii') then _tier = 3
+                            elseif _n:find(' ii')  then _tier = 2
+                            else                        _tier = 1 end
+                            _ow_my_shell_tier = _tier
+                        end
+                    end
+                end
             end
         end
     elseif cat == CAT_MOB_TP_FINISH then
-        local ab = res.monster_abilities and res.monster_abilities[act.param]
-        local n_ = (ab and (ab.en or ab.name)) or ('Ability #' .. tostring(act.param))
+        -- Monster TP move landing. act.param holds the ability ID
+        -- (category 13, same as 11 per BattleMod). Don't fabricate a
+        -- name if the lookup fails.
+        local ab = act.param and res.monster_abilities
+                   and res.monster_abilities[act.param]
+        if not ab then
+            if _ow_cast_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OW] MOB_TP_FINISH: no ability for act.param=%s',
+                    tostring(act.param)))
+            end
+            return
+        end
+        local n_ = ab.en or ab.name or ('Ability #' .. tostring(act.param))
+        _ow_recent_action_name[actor_id or 0] = {name = n_, ts = os.clock()}
         udp_cast:send(string.format('CAST_DONE|%d|ability|%s', actor_id or 0, n_))
         ow_events.emit('cast_complete', {
             actor_id = actor_id, kind = 'ability',
@@ -6745,6 +7240,11 @@ local function handle_incoming_action_message(arr)
         local my_id = me and me.id or 0
         if arr.target_id == my_id and _ow_buff_sources then
             local bid = arr.param_1
+            -- Protect (status id 40) wore off us → forget the remembered
+            -- tier so ow_compute_stats stops adding its DEF (and won't use
+            -- a stale tier next time Protect goes up).
+            if bid == 40 then _ow_my_protect_tier = nil end
+            if bid == 41 then _ow_my_shell_tier   = nil end
             local srcs = _ow_buff_sources[bid]
             if type(srcs) == 'table' and #srcs > 0 then
                 if #srcs == 1 then
@@ -6800,11 +7300,64 @@ ow_safe_register('incoming chunk', function(id, data)
             -- with full_name=name (the bucket name "Minuet") and
             -- Caster=nil — both of which break check_buffs's song match.
             if _gi and _gi.captured_action_handler then
+                -- GearInfo's action handler emits a COR "Bust!" line via
+                -- windower.add_to_chat (Action_Processing.lua). We don't want
+                -- GearInfo's chatter — suppress add_to_chat for the duration
+                -- of GearInfo's handler only, then restore it so OmniWatch's
+                -- own output is unaffected. (notice() is already no-op'd in
+                -- gearinfo/_loader.lua; this covers the one direct add_to_chat.)
+                local _saved_atc = windower.add_to_chat
+                windower.add_to_chat = function() end
                 local ok_gi, err_gi = pcall(_gi.captured_action_handler, parsed)
+                windower.add_to_chat = _saved_atc
                 if not ok_gi and _ow_buff_debug then
                     windower.add_to_chat(123, string.format(
                         '[OW] _gi action handler error: %s',
                         tostring(err_gi)))
+                end
+            end
+
+            -- ── Treasure Hunter proc detection ──────────────────────
+            -- parse_action (above) doesn't expose the Added-Effect
+            -- fields, so we do a parallel string-keyed parse just for
+            -- TH. Based on Krizz's THTracker (BSD-2, credited),
+            -- expanded: Krizz handled only cat 1 (melee) + cat 3 (WS).
+            -- TH also procs on cat 2 (ranged) and cat 4 (damage spell);
+            -- the "Added Effect Message == 603" signature is the same
+            -- on melee/ranged/spell, while WS report TH via the primary
+            -- action Message == 608. We record the highest level seen
+            -- per mob. Note: the server only sends a proc message when
+            -- TH first procs or increases a level, so this is event-
+            -- driven, not per-hit. No procs ever arrive unless the
+            -- player is THF main or /THF.
+            local ok_th, pth = pcall(packets.parse, 'incoming', data)
+            if ok_th and pth then
+                local tgt_id = pth['Target 1 ID']
+                local cat    = pth.Category
+                if tgt_id and tgt_id ~= 0 then
+                    local lvl
+                    if (cat == 1 or cat == 2 or cat == 4)
+                       and pth['Target 1 Action 1 Has Added Effect']
+                       and pth['Target 1 Action 1 Added Effect Message'] == 603 then
+                        lvl = pth['Target 1 Action 1 Added Effect Param']
+                    elseif cat == 3
+                           and pth['Target 1 Action 1 Message'] == 608 then
+                        lvl = pth['Target 1 Action 1 Param']
+                    end
+                    if lvl and lvl > 0 then
+                        local prev = _ow_th_table[tgt_id]
+                        -- Keep the highest level observed (TH climbs as
+                        -- it re-procs; we never want to show a lower
+                        -- value than already seen on this mob).
+                        local newlvl = (prev and prev.level and prev.level > lvl)
+                                       and prev.level or lvl
+                        _ow_th_table[tgt_id] = {level = newlvl, ts = os.clock()}
+                        if _ow_cast_debug then
+                            windower.add_to_chat(207, string.format(
+                                '[OW TH] mob=%d TH=%d (cat=%d)',
+                                tgt_id, newlvl, cat))
+                        end
+                    end
                 end
             end
         end
@@ -7685,9 +8238,46 @@ end
 local function _ow_classify_buff_source(buff_id, actor_id)
     local me = windower.ffxi.get_player()
     local is_self_cast = (me and me.id and actor_id == me.id)
+    -- Debuff check FIRST: a debuff is a debuff regardless of who/what
+    -- applied it. Use the chat module's fallback-protected is_debuff
+    -- (it falls back to a frozen enfeebling list when BattleMod's
+    -- _G.enfeebling isn't loaded — a direct _G.enfeebling:contains()
+    -- here was silently no-op'ing when that global was absent, which is
+    -- why Disease still showed as a buff). If the chat module isn't up
+    -- yet, fall back to the direct global. This fixes e.g. Disease
+    -- (id 8) showing in the buff timers.
+    if buff_id then
+        local is_deb = false
+        if _chat and _chat.is_debuff then
+            is_deb = _chat.is_debuff(buff_id)
+        elseif _G.enfeebling and _G.enfeebling.contains then
+            is_deb = _G.enfeebling:contains(buff_id)
+        end
+        if is_deb then return 'debuff' end
+    end
+    -- Treat songs/rolls from PARTY members (including our trusts and
+    -- their pets) as "ours" for styling — they should show full-color
+    -- like self buffs, NOT greyed with a ~ prefix. The ~/grey treatment
+    -- is meant only for buffs from players OUTSIDE our party (another
+    -- bard buffing us incidentally). Trusts classify as 'party' (own
+    -- trusts) or 'pet'; a party member's trust is 'party_pet'.
+    local from_party = is_self_cast
+    if not from_party and actor_id and actor_id ~= 0
+       and _chat and _chat.classify_entity then
+        local c = _chat.classify_entity(actor_id)
+        if c == 'party' or c == 'pet' or c == 'party_pet'
+           or c == 'alliance' then
+            from_party = true
+        end
+    end
     if buff_id == 251 then return 'food' end
-    if OW_SONG_BUFF_IDS[buff_id] then return is_self_cast and 'song' or 'song_other' end
-    if OW_ROLL_BUFF_IDS[buff_id] then return is_self_cast and 'roll' or 'roll_other' end
+    if OW_SONG_BUFF_IDS[buff_id] then return from_party and 'song' or 'song_other' end
+    if OW_ROLL_BUFF_IDS[buff_id] then return from_party and 'roll' or 'roll_other' end
+    -- Generic buffs: keep the strict self-only check. Only OUR own cast
+    -- gets 'self' (which drives self gear-aware duration/stat handling);
+    -- everything else stays 'other'. Widening this to party could mis-
+    -- apply our gear math to a member's buff, so leave it as-is — the
+    -- party-awareness above is deliberately limited to song/roll styling.
     return is_self_cast and 'self' or 'other'
 end
 
@@ -8433,7 +9023,203 @@ end)
 -- if food buff (251) is active in player.buffs but not in our timer dict,
 -- look up the food's known duration from OW_FOOD_DURATION_MIN.
 
+-- ── Own outgoing chat: resolve auto-translate from the INTACT source ──
+-- FFXI's 'outgoing text' event delivers the command you type (e.g.
+-- "/p {test}") with auto-translate phrases as INTACT 6-byte FD sequences:
+--   FD <type> <lang> <id_hi> <id_lo> FD     (id = id_hi*256 + id_lo)
+-- The incoming-text ECHO of your own message, by contrast, arrives
+-- pre-mangled by Windower as "FD <id_lo> FD" — the id_hi byte is lost —
+-- so phrases like "test" (id 7801 = 0x1E79) render as the stray low byte
+-- (0x79 = "y"). Tells resolve via the 0x0B6 outgoing packet and yells
+-- round-trip as inbound 0x017, so both are fine; party/say/linkshell/
+-- shout/emote have NO intact source EXCEPT this event. So we resolve the
+-- phrase here from the intact bytes, emit a clean line, and suppress the
+-- mangled echo (see _ow_own_outgoing_suppress, checked in emit.lua).
+
+-- Resolve all 6-byte FD auto-translate sequences in s to {English}.
+-- Mirrors the 0x0B6 tell handler's resolver.
+function _ow_resolve_outgoing_at(s)
+    if not s or s == '' then return s end
+    if not s:find(string.char(0xFD), 1, true) then return s end
+    local out, i, n = {}, 1, #s
+    while i <= n do
+        local b = s:byte(i)
+        if b == 0xFD and i + 5 <= n and s:byte(i + 5) == 0xFD then
+            local id = (s:byte(i + 3) or 0) * 256 + (s:byte(i + 4) or 0)
+            local phrase = res.auto_translates and res.auto_translates[id]
+            local txt = phrase and (phrase.en or phrase.ja)
+            out[#out + 1] = '{' .. (txt or string.format('?phrase:%d?', id)) .. '}'
+            i = i + 6
+        else
+            out[#out + 1] = string.char(b)
+            i = i + 1
+        end
+    end
+    return table.concat(out)
+end
+
+-- Map an outgoing chat command to (emit_mode, channel_label). Returns nil
+-- for commands we DON'T handle here (tell → 0x0B6; yell → inbound 0x017;
+-- non-chat commands). emit_mode matches the FFXI incoming-text mode codes
+-- emit.lua/Python expect, so the clean line routes to the right tab/color.
+_OW_OUT_CHAT_CMDS = {
+    ['p']         = 5,  ['party']      = 5,
+    ['s']         = 1,  ['say']        = 1,
+    ['l']         = 6,  ['linkshell']  = 6,  ['ls']  = 6,
+    ['l2']        = 27, ['linkshell2'] = 27, ['ls2'] = 27,
+    ['sh']        = 3,  ['shout']      = 3,
+    ['em']        = 9,  ['emote']      = 9,
+}
+
+-- Substitution store: the outgoing-text handler records the resolved AT
+-- phrase body keyed by mode. emit.lua's own-echo path swaps the mangled
+-- echo body for this resolved text (then lets the echo display normally).
+-- Short TTL so an unrelated later line with the same mode isn't affected.
+_ow_own_outgoing_suppress = _ow_own_outgoing_suppress or {}
+
+ow_safe_register('outgoing text', function(mode, text, blocked)
+    -- DIAGNOSTIC echo (only when chatdebug is on).
+    if _chat and _chat.is_debug and _chat.is_debug() then
+        local hexparts = {}
+        for k = 1, math.min(48, #(text or '')) do
+            hexparts[#hexparts + 1] = string.format('%02X', text:byte(k))
+        end
+        windower.add_to_chat(207, string.format(
+            '[OW otext] text=%q', (text or ''):sub(1, 50)))
+        if #hexparts > 0 then
+            windower.add_to_chat(207, '[OW otext] hex: ' .. table.concat(hexparts, ' '))
+        end
+    end
+
+    if blocked then return end
+    if not text or text == '' then return end
+    -- Only act on chat phrases that actually contain an AT sequence — a
+    -- plain "/p hello" needs no resolution and flows through the normal
+    -- echo path unharmed.
+    if not text:find(string.char(0xFD), 1, true) then return end
+
+    -- Parse leading command. Accept "/p", "/party", "/l2", etc.
+    -- (case-insensitive, alphanumeric so /l2 and /ls2 match).
+    local cmd, rest = text:match('^/(%w+)%s+(.+)$')
+    if not cmd then return end
+    local emit_mode = _OW_OUT_CHAT_CMDS[cmd:lower()]
+    if not emit_mode then return end   -- tell/yell/non-chat: not ours
+
+    local ok, err = pcall(function()
+        local resolved = _ow_resolve_outgoing_at(rest)
+        -- SJIS → UTF-8 for any non-AT, non-ASCII portion. The resolved
+        -- {phrase} text is already UTF-8 ASCII so it passes through.
+        local ok_c, conv = pcall(windower.from_shift_jis, resolved)
+        if ok_c and conv then resolved = conv end
+
+        -- Store the resolved body for in-place substitution. emit.lua's
+        -- own-echo path will swap the mangled echo body for this and let
+        -- the echo display normally (it already passes the own-echo
+        -- gate). We do NOT emit our own line here — routing it back
+        -- through emit_chat would hit the DROPPED_CHAT_MODES gate and be
+        -- dropped, since the sender is in the sender arg, not the text.
+        _ow_own_outgoing_suppress[emit_mode] = {
+            resolved = resolved, ts = os.clock(),
+        }
+    end)
+    if not ok and _chat and _chat.is_debug and _chat.is_debug() then
+        windower.add_to_chat(123, '[OW otext] resolve failed: ' .. tostring(err))
+    end
+end)
+
 ow_safe_register('outgoing chunk', function(id, data)
+    -- ── 0x0B6: outgoing /tell ───────────────────────────────────────
+    -- Captured BEFORE FFXI builds the display string, so we have
+    -- access to structured autotranslate phrase IDs. The text-event
+    -- path receives only the post-display string where phrases have
+    -- been substituted with display glyphs we can't decode back.
+    -- Resolving phrases here means outgoing tells render correctly
+    -- even when they contain {Auto-translate Phrases}.
+    --
+    -- Packet structure (per Windower fields.lua):
+    --   offset 4: unsigned short _unknown1 (0x0003)
+    --   offset 6: char[15] Target Name (SJIS, null-padded)
+    --   offset 21 (0x15): char* Message (SJIS, FD-wrapped autotranslate
+    --     phrases embedded: FD <unused> <lang_start> <id_hi> <id_lo> FD)
+    if id == 0x0B6 then
+        local ok_ot, err_ot = pcall(function()
+            -- Target name: bytes 7-21 (1-indexed in lua = offset 6 in
+            -- 0-indexed packet). Null-trimmed.
+            local target_sjis = data:sub(7, 21):gsub('%z+$', '')
+            -- Message: byte 22 to end (1-indexed = offset 21 in 0-indexed).
+            local msg_sjis = data:sub(22) or ''
+            -- Strip any trailing null padding.
+            msg_sjis = msg_sjis:gsub('%z+$', '')
+            if msg_sjis == '' and target_sjis == '' then return end
+
+            -- Walk the message bytes, replacing FD ... FD sequences
+            -- with {english_phrase}. Per the Windower wiki:
+            --   FD <lang_end> <lang_start> <id_hi> <id_lo> FD
+            -- The phrase ID is a big-endian 16-bit value in bytes 4,5.
+            -- We use res.auto_translates[id] to resolve to the English
+            -- phrase (or fall back to the Japanese if no English entry).
+            local out = {}
+            local i = 1
+            local n = #msg_sjis
+            while i <= n do
+                local b = msg_sjis:byte(i)
+                if b == 0xFD and i + 5 <= n
+                        and msg_sjis:byte(i + 5) == 0xFD then
+                    -- 6-byte autotranslate sequence.
+                    local id_hi = msg_sjis:byte(i + 3) or 0
+                    local id_lo = msg_sjis:byte(i + 4) or 0
+                    local phrase_id = id_hi * 256 + id_lo
+                    local phrase = res.auto_translates
+                                   and res.auto_translates[phrase_id]
+                    local text = phrase and (phrase.en or phrase.ja)
+                                       or string.format('?phrase:%d?', phrase_id)
+                    -- Wrap in literal braces matching FFXI's UI convention.
+                    out[#out + 1] = '{' .. text .. '}'
+                    i = i + 6
+                else
+                    out[#out + 1] = string.char(b)
+                    i = i + 1
+                end
+            end
+            local msg_assembled_sjis = table.concat(out)
+
+            -- SJIS → UTF-8. The target name and the non-AT portions
+            -- of the message both need this conversion; the phrase
+            -- text we substituted was already UTF-8 from res.auto_translates.
+            -- A mixed approach (convert per-segment) would be cleanest
+            -- but more complex; instead we convert the whole thing and
+            -- accept that the brace-wrapped phrase text passes through
+            -- from_shift_jis as ASCII (no SJIS-special bytes), which is
+            -- a no-op for plain English.
+            local function to_utf8(s)
+                if not s or s == '' then return '' end
+                local ok, conv = pcall(windower.from_shift_jis, s)
+                if ok and conv then return conv end
+                return s
+            end
+            local target_utf8 = to_utf8(target_sjis)
+            local msg_utf8    = to_utf8(msg_assembled_sjis)
+
+            -- Build the line in FFXI's outgoing-tell wire form:
+            -- "<Target>>> <message>". The chat module's segmenter
+            -- (chat_packets.lua) usually adds spans for the sender
+            -- region and the body; calling emit_chat with just a
+            -- text payload lets it apply standard handling.
+            local line = target_utf8 .. '>> ' .. msg_utf8
+            if _chat and _chat.emit_chat then
+                pcall(_chat.emit_chat, 12, '', line)
+            end
+        end)
+        if not ok_ot and _ow_chat_debug then
+            windower.add_to_chat(123,
+                '[OW] outgoing tell capture failed: ' .. tostring(err_ot))
+        end
+        -- Continue to other handlers below (don't return; 0x037 path
+        -- is independent).
+    end
+
+
+    -- ── 0x037: item use (existing food-buff capture) ────────────────
     if id ~= 0x037 then return end
     -- Bag at offset 0x05, Slot at offset 0x04 in the packet body.
     -- (Windower's parsed packet has 'Bag' and 'Inventory Index' fields,
@@ -8474,8 +9260,20 @@ ow_safe_register('zone change', function()
     _ow_roll_state   = {}
     _ow_food_stats   = {}
     _ow_food_item_id = 0
+    -- Drop the 0x063 self-buff snapshot: after a zone the buff list
+    -- repopulates from scratch, and without clearing this the repopulate
+    -- would diff as a flurry of "afflicted with" lines for debuffs that
+    -- were already on you. Next 0x063 sub-9 re-captures a baseline
+    -- without emitting.
+    _ow_self_buff_prev = nil
     pcall(_ow_dps_reset)         -- DPS rolling window doesn't span zones
     pcall(_ow_save_buff_state)
+    -- Skillchains: drop all resonating state. Mobs in the new zone
+    -- share ids with the old zone's mobs, so leaving stale entries
+    -- would render bogus SC info on the wrong target.
+    if OW_Skillchains and OW_Skillchains.handle_zone_change then
+        pcall(OW_Skillchains.handle_zone_change)
+    end
     -- Notify subscribers (e.g. recast timer panel may want to flush state).
     local info = windower.ffxi.get_info() or {}
     ow_events.emit('zone_change', {zone_id = info.zone or 0})
@@ -8486,14 +9284,138 @@ end)
 -- "<Mob> readies <Ability>." for TP moves. The packet-based CAST_START is
 -- the primary source, but this catches cases where packet category numbers
 -- differ from what we expected.
+
+-- Modes whose lines are already captured by the 0x017 / 0x0CC packet
+-- handler (registered on `incoming chunk` above) OR by the 0x0B6
+-- outgoing chunk handler (registered on `outgoing chunk` below). The
+-- incoming-text handler skips these to avoid double-emitting the
+-- same line.
+--   mode 4  = /tell received → captured by 0x017
+--   mode 12 = /tell sent     → captured by 0x0B6 (with proper
+--             autotranslate phrase resolution); the text-path mirror
+--             receives only the post-display string where {phrases}
+--             have been substituted with display glyphs we can't
+--             decode, so skipping it here removes that broken
+--             rendering in favor of the chunk-path version.
+-- Other player-chat modes (say, shout, yell, emote, /party,
+-- linkshells) come through one path or the other but not both —
+-- skipping them would erase the line entirely. Add a mode here
+-- only after confirming it actually duplicates.
+-- Module-scope so it's allocated once, not per call.
+local _OW_TEXT_PATH_SKIP_MODES = {
+    [4]  = true,   -- /tell received (also captured by 0x017)
+    [12] = true,   -- /tell sent     (now captured by 0x0B6)
+}
+
+-- Build the set of "ally" names: you, your party, alliance members, and
+-- their pets/trusts. Lowercased for case-insensitive matching. Rebuilt
+-- each call (party composition changes); cheap (<=18 members). Global
+-- (no 'local') to avoid the main-chunk 200-local limit.
+function _ow_build_ally_name_set()
+    local names = {}
+    local me = windower.ffxi.get_player()
+    if me and me.name then names[me.name:lower()] = true end
+    if me and me.pet and me.pet.name then names[me.pet.name:lower()] = true end
+    local party = windower.ffxi.get_party()
+    if party then
+        for _, m in pairs(party) do
+            if type(m) == 'table' and m.name and m.name ~= '' then
+                names[m.name:lower()] = true
+                -- Pet/trust of this member, if present in the mob array.
+                if m.mob and m.mob.pet_index and m.mob.pet_index ~= 0 then
+                    local pet = windower.ffxi.get_mob_by_index
+                                and windower.ffxi.get_mob_by_index(m.mob.pet_index)
+                    if pet and pet.name and pet.name ~= '' then
+                        names[pet.name:lower()] = true
+                    end
+                end
+            end
+        end
+    end
+    return names
+end
+
+-- Decide whether a battle-damage TEXT line belongs to ANOTHER party
+-- (neither actor nor target is an ally). Used to drop other-party combat
+-- noise from System on shared battle modes (e.g. 40) that we can't
+-- blanket-suppress. Returns true ONLY when we positively extract a name
+-- and confirm it's NOT an ally — fail OPEN (return false) on any parse
+-- uncertainty so we never hide the player's own combat.
+function _ow_battle_text_is_other_party(text)
+    if not text or text == '' then return false end
+    local allies = _ow_build_ally_name_set()
+    -- Quick win: if any ally name appears anywhere in the line, keep it.
+    local low = text:lower()
+    for nm in pairs(allies) do
+        if nm ~= '' and low:find(nm, 1, true) then
+            return false   -- an ally is involved → keep
+        end
+    end
+    -- No ally name found in the line. To avoid hiding lines we simply
+    -- failed to parse, require that the line actually looks like a
+    -- battle-damage line (mentions damage / points / a known battle
+    -- verb) before deciding it's other-party. Otherwise fail open.
+    if low:find('points of damage') or low:find(' takes ')
+       or low:find(' uses ') then
+        return true   -- battle line with no ally named → other party
+    end
+    return false
+end
+
 ow_safe_register('incoming text', function(original, modified, original_mode, modified_mode, blocked)
     if not original then return end
+
+    -- When _ow_text_capture is on, print every incoming text event
+    -- with its mode byte and content. Use to identify what mode /check
+    -- and NPC dialog actually arrive on so we can route them
+    -- correctly. Toggle with //ow textcapture [on|off].
+    if _ow_text_capture then
+        -- Write to the shared probe log (ow_classify_probe.log via
+        -- _chat._probe_log) instead of FFXI chat — printing every event
+        -- to the console spams the game window. Filter to the line
+        -- families we're diagnosing: ability uses, buff gains/losses,
+        -- status-effect text, and cure/damage arrow lines. Adjust the
+        -- keyword list as needed for a given investigation.
+        local _lc = (original or ''):lower()
+        if _lc:find('uses') or _lc:find('gains the effect')
+           or _lc:find('effect disappears') or _lc:find('disappears')
+           or _lc:find('damage') or _lc:find('→')
+           or _lc:find('recovers') or _lc:find('afflicted')
+           or _lc:find('wear off') or _lc:find('wears off')
+           or _lc:find('invisible') or _lc:find('sneak') then
+            local snippet = (original or ''):sub(1, 120)
+            local hex = {}
+            for i = 1, math.min(40, #(original or '')) do
+                hex[#hex + 1] = string.format('%02X', (original or ''):byte(i))
+            end
+            if _chat and _chat._probe_log then
+                _chat._probe_log(string.format(
+                    '[%s] [textcap] mode=%s modmode=%s len=%d blocked=%s text=%q',
+                    os.date('%H:%M:%S'),
+                    tostring(original_mode), tostring(modified_mode),
+                    #(original or ''), tostring(blocked), snippet))
+                if #hex > 0 then
+                    _chat._probe_log('             [textcap-hex] '
+                                     .. table.concat(hex, ' '))
+                end
+            end
+        end
+    end
 
     -- Strip common FFXI control characters before pattern matching. The game
     -- uses various bytes in the 0x00-0x1F range as formatting / autotranslate
     -- markers that differ from plain ASCII.
     local text = original
-    -- Remove any byte < 0x20 except newline and tab.
+    -- FFXI color codes are TWO bytes: 0x1F <index> (color-start) and
+    -- 0x1E <index> (color variant). Strip the marker AND its following
+    -- index byte together — otherwise the single-byte cleanup below
+    -- removes only the 0x1F/0x1E and leaves the index (often a high byte
+    -- like 0xA7/0xCF) orphaned, rendering as a stray glyph (e.g. the
+    -- garbage char seen before "Invisible"/"Sneak" in wear-off lines).
+    text = text:gsub('\31.', ''):gsub('\30.', '')
+    -- Remove any remaining control bytes < 0x20 except newline (\10) and
+    -- tab (\9). Includes a lone 0x1E/0x1F that had no following index
+    -- byte (so the two-byte strip above didn't catch it).
     text = text:gsub('[%z\1-\8\11-\31]', '')
 
     -- ── Chat panel capture ──────────────────────────────────────────────
@@ -8502,11 +9424,61 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
     -- lines like "Goblin Leecher starts casting Firaga III" still land
     -- in the chat panel — they're system messages users want to see.
     --
-    -- We don't try to extract a sender name from the raw text here; that's
-    -- mode-specific (tells look like "<<Name>>", party like "(Name) text",
-    -- etc.) and will be added in step 8 when segment tokenization lands.
-    -- For step 2, sender_name is left empty — Python falls back to '?'.
-    if _chat and _chat.emit_chat then
+    -- IMPORTANT: skip modes that 0x017 / 0x0CC packet handler already
+    -- captures (player chat — say/tell/yell/shout/party/LS/emote). The
+    -- packet handler at the top of the chunk callback is the canonical
+    -- source for those modes; emitting them here too would duplicate
+    -- every player-chat line (most visibly: self-tells showing twice
+    -- ── Fix the client's "?" placeholder ───────────────────────────────
+    -- The game client renders "<Actor> uses ?" / "<Actor> readies ?"
+    -- when it can't resolve an ability/item ID to a name. OmniWatch's
+    -- action handler already resolved that ID via Windower's resources
+    -- and cached it by actor_id (_ow_recent_action_name). If this text
+    -- line is a "?" action line, swap in the real name. Leaves the line
+    -- untouched when we have no cached name (so worst case = unchanged).
+    if text:find('%?') then
+        -- Match "<Actor> uses ?" or "<Actor> readies ?" (the ? may be
+        -- followed by punctuation/period). Capture the actor portion.
+        local actor_txt = text:match('^(.-) uses %?')
+                       or text:match('^(.-) readies %?')
+                       or text:match('^(.-) uses an? %?')
+        if actor_txt and actor_txt ~= '' then
+            local clean = actor_txt:gsub('^The ', '')
+            local mob = windower.ffxi.get_mob_by_name(clean)
+            local rec = mob and mob.id and _ow_recent_action_name[mob.id]
+            if rec and (os.clock() - rec.ts) <= _OW_ACTION_NAME_TTL then
+                -- Replace the first standalone "?" with the real name.
+                text = text:gsub('%?', rec.name, 1)
+                if _ow_cast_debug then
+                    windower.add_to_chat(207, string.format(
+                        '[OW] resolved "?" -> %s for %s',
+                        rec.name, clean))
+                end
+            end
+        end
+    end
+
+    -- because in and out arrive on different modes through different
+    -- code paths). System messages, errors, kills, drops, RoE etc. are
+    -- not carried on 0x017, so they still come through here.
+    --
+    -- Other-party battle-text gate (mode 40 etc.): FFXI battle-damage
+    -- text modes like 40 carry BOTH your own combat and — when other
+    -- parties fight nearby — their combat ("Noel uses Magic Mortar.The
+    -- Apex Jagil takes 965 points of damage", where Noel is another
+    -- player's automaton). The packet synth already DROPS these via its
+    -- ally-gate, but the raw text line still reaches System on a shared
+    -- mode we can't blanket-suppress (it'd kill your own damage text
+    -- too). So gate by NAME here: if the line names an actor/target and
+    -- NEITHER is you / your party / alliance / their pets, drop it.
+    -- Fail OPEN — if we can't extract a name, let the line through so we
+    -- never hide your own combat.
+    local _battle_text_modes = {[40]=true}
+    if original_mode and _battle_text_modes[original_mode]
+       and _ow_battle_text_is_other_party(text) then
+        -- other party's battle line; drop from System.
+    elseif _chat and _chat.emit_chat
+            and not _OW_TEXT_PATH_SKIP_MODES[original_mode or -1] then
         local ok_emit, err_emit = pcall(_chat.emit_chat,
                                         original_mode or 0, '', text)
         if not ok_emit and _ow_chat_debug then
@@ -8738,6 +9710,71 @@ do
     end
 end
 
+-- ── DREMA path-augment overlay loader ────────────────────────────────────
+-- REMA / Dynamis-Divergence Su4/Su5 weapons return opaque "Path: A/B/C"
+-- extdata strings carrying NO readable augment stats. The file
+-- gearinfo/res/DREMA_Augments.lua maps item_id → { ['path: a'] = {...},
+-- ['path: b'] = {...}, ['path: c'] = {...} } with the R15 augment lines
+-- per path. The gear walk resolves these via ow_path_augments[id][path].
+--
+-- Without this load, ow_path_augments held only the small inline set
+-- defined above, so REMA / Dyna-D weapons like Gandring (item 21575,
+-- Evasion+100 on 'path: c') never resolved their augments. gearinfo's
+-- _loader loads a fixed res/ list that does NOT include this file, and
+-- nothing else loaded it either — so it was effectively dead data.
+--
+-- Loaded via loadfile (same pattern as Misc_augments) so gearinfo's
+-- vendored loader stays unmodified. Merge is PER-PATH: for each item,
+-- the file's path entries override/extend the inline ow_path_augments
+-- paths for the same item, rather than replacing the whole item — so an
+-- inline path the file doesn't define is preserved.
+--
+-- Failure mode: missing/malformed file → ow_path_augments keeps just the
+-- inline set, REMA/Dyna-D path augments inactive, red chat warning fires.
+do
+    local base = windower.addon_path or ''
+    if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+        base = base .. '/'
+    end
+    local path = base .. 'gearinfo/res/DREMA_augments.lua'
+    local chunk, load_err = loadfile(path)
+    if chunk then
+        local ok_run, ret = pcall(chunk)
+        if ok_run and type(ret) == 'table' then
+            local items, paths = 0, 0
+            for item_id, path_tbl in pairs(ret) do
+                if type(path_tbl) == 'table' then
+                    -- Per-path merge: preserve any inline paths for this
+                    -- item that the file doesn't define.
+                    local dst = ow_path_augments[item_id]
+                    if type(dst) ~= 'table' then
+                        dst = {}
+                        ow_path_augments[item_id] = dst
+                    end
+                    for path_key, lines in pairs(path_tbl) do
+                        dst[path_key] = lines
+                        paths = paths + 1
+                    end
+                    items = items + 1
+                end
+            end
+            if _ow_buff_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OmniWatch] DREMA_Augments loaded: %d items, %d paths',
+                    items, paths))
+            end
+        else
+            windower.add_to_chat(123, string.format(
+                '[OmniWatch] DREMA_Augments.lua ran but returned no table: %s',
+                tostring(ret)))
+        end
+    else
+        windower.add_to_chat(123, string.format(
+            '[OmniWatch] DREMA_augments.lua not loaded (%s) -- REMA path augments inactive.',
+            tostring(load_err)))
+    end
+end
+
 -- ── Server_Stats module loader ───────────────────────────────────────────
 -- Optional, opt-in feature. Loads Server_Stats.lua from the addon root.
 -- If the file is missing, OmniWatch runs normally — the feature is a
@@ -8767,6 +9804,11 @@ _ow_serverstats_dirty = false
 -- trigger an invalidate on the very first call.
 _ow_last_main_job = nil
 _ow_last_sub_job  = nil
+-- Previous self buff-list snapshot (bid -> count) from the 0x063 sub-9
+-- packet, for debuff-apply detection. nil until the first 0x063 sub-9
+-- arrives (and after zone change) so the baseline isn't read as a
+-- flurry of applies for buffs already active.
+_ow_self_buff_prev = nil
 do
     local base = windower.addon_path or ''
     if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
@@ -8811,6 +9853,58 @@ do
         if _ow_buff_debug then
             windower.add_to_chat(207, string.format(
                 '[OmniWatch] Server_Stats.lua not loaded: %s',
+                tostring(load_err)))
+        end
+    end
+end
+
+-- ── Skillchains module loader ───────────────────────────────────────────
+-- Optional sub-module mirroring Server_Stats's pattern. Watches action
+-- packets (0x028) for SC opens/closes, tracks resonating properties
+-- per mob, and emits a UDP stream on port 5015 carrying current state
+-- + WS suggestions. Python's skillchain panel renders that stream.
+--
+-- The module exposes:
+--   OW_Skillchains.handle_action(act)       — called per parsed action
+--   OW_Skillchains.handle_chunk(id, data)   — for 0x050 / 0x063
+--   OW_Skillchains.tick(now)                — called from prerender
+--   OW_Skillchains.handle_job_change()      — called on job change
+--   OW_Skillchains.handle_zone_change()     — called on zone change
+--   OW_Skillchains.set_setting(key, value)  — toggles from slash cmd
+--   OW_Skillchains.get_setting(key)
+--   OW_Skillchains.status()                 — for //ow sc dump
+--   OW_Skillchains.init()                   — one-time setup
+--
+-- If the load fails OW_Skillchains stays nil; every call site uses
+-- guard `if OW_Skillchains then` so a missing module is harmless.
+OW_Skillchains = nil
+do
+    local base = windower.addon_path or ''
+    if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+        base = base .. '/'
+    end
+    local path = base .. 'Skillchains.lua'
+    local chunk, load_err = loadfile(path)
+    if chunk then
+        local ok_run, ret = pcall(chunk)
+        if ok_run and type(ret) == 'table' then
+            OW_Skillchains = ret
+            if OW_Skillchains.init then
+                pcall(OW_Skillchains.init)
+            end
+            if _ow_buff_debug then
+                windower.add_to_chat(207,
+                    '[OmniWatch] Skillchains module loaded.')
+            end
+        else
+            windower.add_to_chat(123, string.format(
+                '[OmniWatch] Skillchains.lua ran but returned no table: %s',
+                tostring(ret)))
+        end
+    else
+        if _ow_buff_debug then
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] Skillchains.lua not loaded: %s',
                 tostring(load_err)))
         end
     end
@@ -9534,6 +10628,13 @@ function ow_compute_stats()
     local sim_on = (_sim and _sim.is_active and _sim.is_active()) or false
 
     local stats = {}
+    -- Path-augment delta accumulator. Holds ONLY stats resolved from
+    -- opaque "Path: A/B/C" augments (via ow_path_augments). GearInfo's
+    -- compute_player_stats can't see these, so we re-add the relevant
+    -- ones after it overwrites stats below. Flat keys cover eva/def
+    -- (not slot-split); _by_slot[slot_name] holds per-slot copies so
+    -- acc/att route to main/sub/ranged fields correctly.
+    local _ow_path_aug_stats = { _by_slot = {} }
 
     -- ── Sim mode is now a layered DELTA on top of the live compute ─────
     -- The starting stats table is built from the same live merges as
@@ -9611,6 +10712,10 @@ function ow_compute_stats()
     -- callers feeding the overlay only need to write to the primary
     -- key.
     local unity_aug_overlay = {}
+    -- Reset the JSE primary-stat stash each compute (paired with the
+    -- overlay dict) so a stale value can't linger if the restamp block
+    -- is skipped this tick.
+    _ow_jse_primary_overlay = {}
 
     -- Walk all 16 slot keys exposed by the equipment table.
     for pos = 0, 15 do
@@ -9681,9 +10786,30 @@ function ow_compute_stats()
                                 local resolved = ow_path_augments
                                                  and ow_path_augments[id]
                                                  and ow_path_augments[id][lower]
+                                if _ow_cast_debug then
+                                    windower.add_to_chat(207, string.format(
+                                        '[OW pathaug] id=%d raw="%s" lower="%s" inTable=%s resolved=%s',
+                                        id, astr, lower,
+                                        (ow_path_augments and ow_path_augments[id]) and 'Y' or 'N',
+                                        resolved and ('Y('..#resolved..')') or 'N'))
+                                end
                                 if resolved then
                                     for _, line in ipairs(resolved) do
                                         ow_parse_desc_line(stats, line)
+                                        -- Also record into the path-aug
+                                        -- delta table so eva/def/etc. can
+                                        -- be re-added after GearInfo (which
+                                        -- can't see opaque path augments)
+                                        -- overwrites them below. Flat copy
+                                        -- handles eva/def (not slot-split);
+                                        -- the per-slot copy lets acc/att
+                                        -- route to main/sub/ranged fields.
+                                        ow_parse_desc_line(_ow_path_aug_stats, line)
+                                        local _slot = entry.slot_name or '?'
+                                        _ow_path_aug_stats._by_slot[_slot] =
+                                            _ow_path_aug_stats._by_slot[_slot] or {}
+                                        ow_parse_desc_line(
+                                            _ow_path_aug_stats._by_slot[_slot], line)
                                     end
                                 else
                                     ow_parse_desc_line(stats, astr)
@@ -10184,6 +11310,64 @@ function ow_compute_stats()
                 end
                 if result.eva then stats['evasion'] = result.eva end
                 if result.def then stats['defense'] = result.def end
+                -- Re-add path-augment stats that GearInfo's compute
+                -- couldn't see. GearInfo decodes augments itself but has
+                -- no knowledge of our DREMA path table, so opaque
+                -- "Path: A/B/C" augments (e.g. Gandring Evasion+100 /
+                -- Accuracy / Attack on a path) are missing from the
+                -- result.acc/att/eva/def values it just wrote above. Add
+                -- the separately-tracked path-aug deltas back here. No
+                -- double-count: these stats are precisely the ones
+                -- GearInfo structurally cannot resolve from "Path: X".
+                --
+                -- acc/att are slot-split by GearInfo (main/sub/ranged),
+                -- so route each weapon slot's path-aug contribution to
+                -- the matching field. eva/def aren't slot-split.
+                local _by_slot = _ow_path_aug_stats._by_slot or {}
+                local _slot_main = _by_slot['main'] or {}
+                local _slot_sub  = _by_slot['sub']  or {}
+                local _slot_rng  = _by_slot['range'] or {}
+                local _slot_ammo = _by_slot['ammo'] or {}
+                -- Helper: add v to stats[key] if nonzero.
+                local function _pa_add(key, v)
+                    if v and v ~= 0 then
+                        stats[key] = (stats[key] or 0) + v
+                    end
+                end
+                -- DREMA path-augment acc/att. Per in-game /checkparam,
+                -- the augment accuracy/attack appears on BOTH primary and
+                -- auxiliary for this gear, so apply the main weapon's
+                -- path-aug acc/att to both hands (and the sub weapon's
+                -- own to sub). _slot_main/_slot_sub are populated only
+                -- from ow_path_augments (DREMA_augments.lua) resolution,
+                -- so non-DREMA weapons are never affected by this.
+                _pa_add('accuracy',  _slot_main['accuracy'])
+                _pa_add('attack',    _slot_main['attack'])
+                _pa_add('accuracy2', (_slot_main['accuracy'] or 0) + (_slot_sub['accuracy'] or 0))
+                _pa_add('attack2',   (_slot_main['attack'] or 0) + (_slot_sub['attack'] or 0))
+                -- Ranged weapon + ammo → ranged accuracy / ranged attack.
+                _pa_add('ranged accuracy',
+                        (_slot_rng['ranged accuracy'] or _slot_rng['accuracy'] or 0)
+                        + (_slot_ammo['ranged accuracy'] or _slot_ammo['accuracy'] or 0))
+                _pa_add('ranged attack',
+                        (_slot_rng['ranged attack'] or _slot_rng['attack'] or 0)
+                        + (_slot_ammo['ranged attack'] or _slot_ammo['attack'] or 0))
+                -- eva / def — flat (any slot contributes; not split).
+                _pa_add('evasion', _ow_path_aug_stats['evasion'])
+                _pa_add('defense', _ow_path_aug_stats['defense'])
+                if _ow_cast_debug then
+                    local function _nz(t)
+                        local out = {}
+                        for k, v in pairs(t) do
+                            if k ~= '_by_slot' and type(v) == 'number' and v ~= 0 then
+                                out[#out+1] = k .. '+' .. v
+                            end
+                        end
+                        return #out > 0 and table.concat(out, ' ') or 'none'
+                    end
+                    windower.add_to_chat(207,
+                        '[OW pathaug] re-added after GearInfo: ' .. _nz(_ow_path_aug_stats))
+                end
 
                 -- OmniWatch patch (2026-05-18): compute_player_stats
                 -- only returns physical totals (acc/att/eva/def). The
@@ -10380,9 +11564,13 @@ function ow_compute_stats()
                             stats['ranged attack'] = (stats['ranged attack'] or 0) + v
                             stats['evasion']       = (stats['evasion']       or 0) + math.floor(v / 2)
                         elseif sk == 'dex' then
-                            stats['accuracy']        = (stats['accuracy']        or 0) + v
-                            stats['accuracy2']       = (stats['accuracy2']       or 0) + v
-                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + v
+                            -- DEX→Accuracy is ~0.75/DEX (post-2014), not
+                            -- 1:1. Full-value here put both hands 4 over
+                            -- /checkparam for a +15 DEX neck (15 vs 11).
+                            local _dex_acc = math.floor(v * 0.75)
+                            stats['accuracy']        = (stats['accuracy']        or 0) + _dex_acc
+                            stats['accuracy2']       = (stats['accuracy2']       or 0) + _dex_acc
+                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + _dex_acc
                         elseif sk == 'int' then
                             stats['magic accuracy']     = (stats['magic accuracy']     or 0) + math.floor(v / 2)
                             stats['magic attack bonus'] = (stats['magic attack bonus'] or 0) + math.floor(v / 2)
@@ -10394,12 +11582,20 @@ function ow_compute_stats()
                     end
                 end
 
+                -- Stash the JSE overlay's PRIMARY-stat contributions so
+                -- ow_send_stats can re-add them after it overwrites
+                -- stats[primary] from Gear_info. Gear_info does NOT include
+                -- this overlay (only GearInfo-tracked gear), so without
+                -- this the override clobbers the neck's +DEX/+AGI/etc.
+                _ow_jse_primary_overlay = {}
+                for _, pk in ipairs({'str','dex','vit','agi',
+                                     'int','mnd','chr'}) do
+                    local pv = unity_aug_overlay[pk]
+                    if pv and pv ~= 0 then
+                        _ow_jse_primary_overlay[pk] = pv
+                    end
+                end
                 -- ── Trust GearInfo's computed totals ─────────────────
-                -- _gi.compute_player_stats() already consumed
-                -- Buffs_inform when computing att.main / acc.main /
-                -- eva / def. Those return values include song / roll /
-                -- buff contributions. Re-stamping Buffs_inform.Attack
-                -- on top would double-count.
                 --
                 -- The exception is keys GI doesn't return at all from
                 -- compute_player_stats (HP, MP, magic def. bonus, the
@@ -10614,10 +11810,209 @@ function ow_compute_stats()
         end
     end
 
+    -- ── Protect DEF ──────────────────────────────────────────────────────
+    -- GearInfo's defense is gear/trait-based and does NOT include the
+    -- Protect magic buff, so the panel under-reported DEF whenever Protect
+    -- was up. Add Protect's flat DEF here, on top of all other defense
+    -- sources (gear, path augments, sim). Tier resolution, best-first:
+    --   1. If we WITNESSED the Protect cast on us (_ow_my_protect_tier set
+    --      from the cast packet's spell id), use that exact tier.
+    --   2. Otherwise estimate the tier from the highest Protect-casting
+    --      level we have — main or sub job that is WHM or RDM, with the
+    --      real subjob cap min(sub_lvl, floor(main_lvl/2)). This covers
+    --      Protect already up before the overlay saw the cast.
+    -- DEF-by-tier (user-specified): I/II=+50, III=+90, IV=+140, V=+220.
+    do
+        local p = windower.ffxi.get_player()
+        if p and p.buffs then
+            local has_protect = false
+            for _, bid in ipairs(p.buffs) do
+                if bid == 40 then has_protect = true break end
+            end
+            if has_protect then
+                local tier = _ow_my_protect_tier
+                if not tier then
+                    -- Estimate the tier from YOUR job/level (we only reach
+                    -- here when the cast wasn't witnessed, so the caster
+                    -- is unknown — best signal is what tier you yourself
+                    -- could have up). Per-job unlock levels differ, so use
+                    -- a table per Protect-casting job and return the
+                    -- highest tier that job qualifies for at the given
+                    -- level. Levels transcribed from the spell pages:
+                    --   tier:    I    II   III  IV   V
+                    --   WHM:     7    27   47   63   76
+                    --   RDM:     7    27   47   63   77
+                    --   PLD:     10   30   50   70   90
+                    --   SCH:     10   30   50   66   80
+                    --   RUN:     20   40   60   80   (no V)
+                    local _PROTECT_UNLOCK = {
+                        WHM = {7, 27, 47, 63, 76},
+                        RDM = {7, 27, 47, 63, 77},
+                        PLD = {10, 30, 50, 70, 90},
+                        SCH = {10, 30, 50, 66, 80},
+                        RUN = {20, 40, 60, 80},          -- RUN caps at IV
+                    }
+                    local function _protect_tier(job, lvl)
+                        local tbl = _PROTECT_UNLOCK[job]
+                        if not tbl then return 0 end
+                        local t = 0
+                        for i = 1, #tbl do
+                            if (lvl or 0) >= tbl[i] then t = i else break end
+                        end
+                        return t
+                    end
+                    local main_lvl = tonumber(p.main_job_level) or 0
+                    local sub_lvl  = tonumber(p.sub_job_level)  or 0
+                    -- Subjob spell access caps at half the main level.
+                    local eff_sub  = math.min(sub_lvl, math.floor(main_lvl / 2))
+                    tier = math.max(
+                        _protect_tier(p.main_job, main_lvl),
+                        _protect_tier(p.sub_job,  eff_sub))
+                    -- Buff is active but our job can't account for it (e.g.
+                    -- COR/DNC have Protect from Guard Drink, or it was
+                    -- applied before the overlay saw the cast). The buff
+                    -- IS doing something, so don't show 0 — assume tier V,
+                    -- the realistic external source (Guard Drink = Protect
+                    -- V). A real lower-tier cast we witness overrides this
+                    -- via _ow_my_protect_tier above.
+                    if tier == 0 then tier = 5 end
+                end
+                local PROTECT_DEF = {[1]=50, [2]=50, [3]=90, [4]=140, [5]=220}
+                local add = PROTECT_DEF[tier]
+                if add then
+                    stats['defense'] = (stats['defense'] or 0) + add
+                end
+            end
+        end
+    end
+
+    -- ── Shell MDT ────────────────────────────────────────────────────────
+    -- Same structure as Protect, but Shell (buff id 41) reduces MAGIC
+    -- damage taken — it adds to 'magic damage taken' (stored negative =
+    -- reduction; Python floors the total at -50%). Tier resolution is the
+    -- same two-tier scheme: exact witnessed-cast tier first, then a
+    -- per-job level estimate. Shell's unlock levels and MDT% differ from
+    -- Protect — transcribed from the spell pages:
+    --   tier:    I    II   III  IV   V
+    --   WHM:     17   37   57   68   76
+    --   RDM:     17   37   57   68   87
+    --   PLD:     20   40   60   80   (no V)
+    --   SCH:     20   40   60   71   90
+    --   RUN:     10   30   50   70   90
+    --   MDT%:   -11  -16  -22  -27  -29
+    do
+        local p = windower.ffxi.get_player()
+        if p and p.buffs then
+            local has_shell = false
+            for _, bid in ipairs(p.buffs) do
+                if bid == 41 then has_shell = true break end
+            end
+            if has_shell then
+                local tier = _ow_my_shell_tier
+                if not tier then
+                    local _SHELL_UNLOCK = {
+                        WHM = {17, 37, 57, 68, 76},
+                        RDM = {17, 37, 57, 68, 87},
+                        PLD = {20, 40, 60, 80},          -- PLD caps at IV
+                        SCH = {20, 40, 60, 71, 90},
+                        RUN = {10, 30, 50, 70, 90},
+                    }
+                    local function _shell_tier(job, lvl)
+                        local tbl = _SHELL_UNLOCK[job]
+                        if not tbl then return 0 end
+                        local t = 0
+                        for i = 1, #tbl do
+                            if (lvl or 0) >= tbl[i] then t = i else break end
+                        end
+                        return t
+                    end
+                    local main_lvl = tonumber(p.main_job_level) or 0
+                    local sub_lvl  = tonumber(p.sub_job_level)  or 0
+                    local eff_sub  = math.min(sub_lvl, math.floor(main_lvl / 2))
+                    tier = math.max(
+                        _shell_tier(p.main_job, main_lvl),
+                        _shell_tier(p.sub_job,  eff_sub))
+                    -- Same as Protect: buff active but job can't account
+                    -- for it (Guard Drink Shell V on COR/DNC, or applied
+                    -- before we saw the cast) → assume tier V rather than
+                    -- showing nothing. Witnessed lower-tier cast overrides.
+                    if tier == 0 then tier = 5 end
+                end
+                -- MDT is negative (reduction). Add the tier's value on top
+                -- of gear MDT; Python caps the total at the -50% floor.
+                local SHELL_MDT = {[1]=-11, [2]=-16, [3]=-22, [4]=-27, [5]=-29}
+                local add = SHELL_MDT[tier]
+                if add then
+                    stats['magic damage taken'] =
+                        (stats['magic damage taken'] or 0) + add
+                end
+            end
+        end
+    end
+
     return stats
 end
 
 -- Encode stats dict to the UDP wire format and send.
+-- Tracks the last DW-needed value pushed to GearSwap so we only send when
+-- the value changes (not every frame). nil = nothing sent yet.
+_ow_last_dw_sent = nil
+
+-- Push OmniWatch's "dw needed" to GearSwap, mimicking the HasteInfo addon
+-- exactly so existing GearSwap files work unchanged (OmniWatch replaces
+-- HasteInfo as the reporter). HasteInfo's contract:
+--   * command:  gs c hasteinfo <N>
+--   * value N:  DW% still needed FROM GEAR — i.e. the total DW% required
+--               to hit the delay cap MINUS the player's non-gear DW
+--               (traits + JP gift). It does NOT subtract worn gear DW;
+--               the number is the gear *target*, which is what GearSwap's
+--               determine_haste_group() thresholds expect.
+--   * -1:       sentinel for "this job cannot dual wield at all" (no DW
+--               trait). GearSwap treats this as DW off (DW = N > 0).
+--   * cadence:  send ONLY when N changes from the last value sent (or on a
+--               forced resend). HasteInfo never spams every tick — that
+--               was the flicker/gear-thrash problem. We compute N every
+--               stats tick (cheap) but only send_command when it differs.
+function _ow_write_dw_needed(stats, sim_on, force)
+    -- Never report during sim/what-if — would swap real gear off a
+    -- hypothetical calculation. (HasteInfo has no sim concept; this is the
+    -- OmniWatch-specific guard that replaces it.)
+    if sim_on then return end
+    if not stats then return end
+
+    -- Non-gear DW = traits + JP gift (the part HasteInfo subtracts).
+    local dw_trait  = tonumber(stats['dw trait'])   or 0
+    local jp_gift   = tonumber(stats['_jp_dw_gift']) or 0
+    local non_gear  = dw_trait + jp_gift
+
+    local n
+    if dw_trait <= 0 then
+        -- No DW trait → job can't dual wield. HasteInfo sends -1 here.
+        n = -1
+    else
+        local req = tonumber(stats['_dw_required_pct'])
+        if not req then return end   -- not computed this tick; skip
+        -- DW% still needed from gear = required total - non-gear DW,
+        -- floored at 0 (never negative), matching HasteInfo's actual_needed.
+        n = math.max(0, math.ceil(req - non_gear))
+    end
+
+    -- Stream the value EVERY tick, like the GearInfo addon (which pushed
+    -- 'gs c gearinfo ...' on every update loop). No send-on-change gate:
+    -- the outer stats loop already only runs on a real change (job/haste/
+    -- buff/gear signature) at ~1 Hz, so this isn't spammy, and a freshly
+    -- reloaded GearSwap always gets the current number on the next tick
+    -- (the old send-on-change gate left a reloaded GS with no value).
+    _ow_last_dw_sent = n
+
+    if _ow_buff_debug then
+        windower.add_to_chat(207, string.format(
+            '[OW dw] gs c hasteinfo %d  (req=%s, trait=%d, jp=%d)',
+            n, tostring(stats['_dw_required_pct']), dw_trait, jp_gift))
+    end
+    windower.send_command('gs c hasteinfo ' .. tostring(n))
+end
+
 function ow_send_stats(stats)
     local sim_on = (_sim and _sim.is_active and _sim.is_active()) or false
 
@@ -10698,7 +12093,13 @@ function ow_send_stats(stats)
         }
         for lower_k, upper_k in pairs(_PRIMARY_KEY_MAP) do
             if type(Gear_info[upper_k]) == 'number' then
-                stats[lower_k] = Gear_info[upper_k]
+                -- Gear_info = base + GearInfo-tracked gear, but it does
+                -- NOT include the JSE neck overlay. Add that overlay's
+                -- primary contribution (stashed during compute) so the
+                -- neck's +DEX/+AGI/etc. isn't clobbered by this override.
+                local jse = (_ow_jse_primary_overlay
+                             and _ow_jse_primary_overlay[lower_k]) or 0
+                stats[lower_k] = Gear_info[upper_k] + jse
             end
         end
     end
@@ -11384,7 +12785,20 @@ function ow_send_stats(stats)
             else
                 dw_total_required_pct = math.ceil((1 - (0.20 / (1 - haste_frac))) * 100)
             end
-            stats['dw needed'] = math.max(0, dw_total_required_pct - total_dw)
+            -- Panel value: NOT floored at 0 — a negative means you're
+            -- OVER the DW cap (wearing more DW than needed), which the
+            -- panel shows as a red -N so you can drop that much DW for
+            -- other stats. (The value SENT to GearSwap is floored at 0
+            -- separately in _ow_write_dw_needed; this unfloored number is
+            -- display-only.)
+            stats['dw needed'] = dw_total_required_pct - total_dw
+            -- Store the HasteInfo-style pieces for the GearSwap report:
+            -- HasteInfo sends "DW% still needed FROM GEAR" = required_total
+            -- minus only the NON-gear DW (traits + JP gift), NOT minus the
+            -- gear you're currently wearing. (stats['dw needed'] above is
+            -- the residual after current gear — a different number, right
+            -- for the panel but wrong for GearSwap's haste-group tiers.)
+            stats['_dw_required_pct'] = dw_total_required_pct
 
             if _ow_cast_debug then
                 windower.add_to_chat(207, string.format(
@@ -11530,7 +12944,8 @@ function ow_send_stats(stats)
             else
                 req_dw_pct = math.ceil((1 - (0.20 / (1 - haste_frac))) * 100)
             end
-            stats['dw needed'] = math.max(0, req_dw_pct - total_dw)
+            stats['dw needed'] = req_dw_pct - total_dw
+            stats['_dw_required_pct'] = req_dw_pct
 
             -- Recompute Store-TP-derived values when sim buffs (Samurai
             -- Roll) added flat STP into stats['store tp']. Mirrors the
@@ -11741,6 +13156,11 @@ function ow_send_stats(stats)
         mjob  = (player and player.main_job) or ''
         sjob  = (player and player.sub_job)  or ''
     end
+    -- Write OmniWatch's computed "dw needed" to the shared file so
+    -- GearSwap can pull it (replaces the old command push that swapped
+    -- gear back and forth on every flicker). Real-gear only, on-change.
+    _ow_write_dw_needed(stats, sim_on)
+
     local header = string.format('PLAYER|%s|%s|%s', pname, mjob, sjob)
     local payload
     if #lines == 0 then
@@ -12649,6 +14069,18 @@ ow_safe_register('prerender', function()
                 local function ne(s)
                     return (s == '' or s == nil) and '~' or s
                 end
+                -- TH (Treasure Hunter) level on this mob. Looked up from
+                -- the proc-detection table with a freshness check. 0 when
+                -- no TH has procced, the entry is stale, or this isn't a
+                -- mob. Python hides the "TH - N" readout when 0.
+                local th_level = 0
+                if kind == 'mob' then
+                    local th = _ow_th_table[id]
+                    if th and th.level and th.ts
+                       and (os.clock() - th.ts) <= _OW_TH_TTL then
+                        th_level = th.level
+                    end
+                end
                 return
                     ne(tostring(name))    .. '|' ..
                     tostring(id)          .. '|' ..
@@ -12664,7 +14096,8 @@ ow_safe_register('prerender', function()
                     ne(main_job_str)      .. '|' ..
                     ne(sub_job_str)       .. '|' ..
                     ne(title_str)         .. '|' ..
-                    ne(race_key)
+                    ne(race_key)          .. '|' ..
+                    tostring(th_level)
             end
 
             local main_mob = windower.ffxi.get_mob_by_target('t')
@@ -13337,6 +14770,25 @@ ow_safe_register('prerender', function()
         _ow_chat_drain_acc = 0
         if _chat then
             pcall(_chat.drain_text,   udp_chat)
+        end
+    end
+
+    -- ── Skillchains panel emit (10 Hz) ───────────────────────────────────
+    -- Push current resonating state + suggestions to the Python overlay
+    -- on port 5015. The module dedupes internally so the wire stays
+    -- quiet when nothing has changed. No-op without the module.
+    _ow_sc_tick_acc = (_ow_sc_tick_acc or 0) + 1
+    if _ow_sc_tick_acc >= 6 then
+        _ow_sc_tick_acc = 0
+        if OW_Skillchains and OW_Skillchains.tick then
+            pcall(OW_Skillchains.tick, os.clock())
+        end
+        -- Job-change poll. Cheap (string compare); only takes action
+        -- if main_job has actually changed since the last check. Done
+        -- on the same cadence as the tick so per-job toggles reload
+        -- without a separate timer.
+        if OW_Skillchains and OW_Skillchains.handle_job_change then
+            pcall(OW_Skillchains.handle_job_change)
         end
     end
 end)

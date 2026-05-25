@@ -189,7 +189,31 @@ function find_all_values(item)
 				-- augment list through parse_augment_line so the stats
 				-- land in the same edited_item table; from there they flow
 				-- through get_equip_stats into Gear_info naturally.
-				if v.augments then
+				--
+				-- OmniWatch patch (2026-05-20): ONLY apply the static
+				-- augment block when the item is ACTUALLY augmented. These
+				-- stats come from physically augmenting the piece (Unity
+				-- accolades) — an unaugmented Unity item should get the
+				-- rank bonus above (which it does, unconditionally) but
+				-- NOT these augment stats. `augs` is the item's real
+				-- decoded extdata augments (set at the top of
+				-- find_all_values): nil/empty when unaugmented, populated
+				-- once augmented. Without this gate, an equipped-but-
+				-- unaugmented item (e.g. a fresh Jute Boots +1) showed the
+				-- full augment block as if maxed.
+				-- Robust augmented check: count real augment entries
+				-- (extdata can decode to empty strings / 'none' placeholders
+				-- on an unaugmented item; those don't count).
+				local _has_real_aug = false
+				if augs then
+					for _, a in ipairs(augs) do
+						if a and a ~= '' and a ~= 'none' then
+							_has_real_aug = true
+							break
+						end
+					end
+				end
+				if v.augments and _has_real_aug then
 					for _, aug_line in ipairs(v.augments) do
 						parse_augment_line(edited_item, aug_line)
 					end
@@ -293,9 +317,23 @@ function check_for_augments(item)
 					-- desypher_description pipeline so all the normal
 					-- abbreviation rewrites (Ranged Acc / Mag. Acc /
 					-- Magic Atk. Bonus / etc.) apply.
+					--
+					-- OmniWatch rule (2026-05-21): a DREMA weapon's
+					-- AUGMENTS affect only the hand it's equipped in. The
+					-- path-augment Accuracy/Attack would otherwise land in
+					-- the shared stat bucket (applied to BOTH hands = the
+					-- offhand leak). Skip them HERE; OmniWatch's path-aug
+					-- re-add applies them to the equipped hand only. This
+					-- only affects the AUGMENT acc/att — the weapon's BASE
+					-- Accuracy/Attack come through GearInfo's normal item
+					-- parsing (not this resolver) and still apply to both
+					-- hands, as they should. Every other augment stat
+					-- (eva/def/magic acc/DEX/etc.) flows through normally.
 					for _, line in ipairs(resolved_lines) do
 						for i, j in pairs(desypher_description(line, item_t)) do
-							if temp[i] then
+							if i == 'Accuracy' or i == 'Attack' then
+								-- skip — handled per-hand by OmniWatch
+							elseif temp[i] then
 								temp[i] = temp[i] + j
 							else
 								temp[i] = j

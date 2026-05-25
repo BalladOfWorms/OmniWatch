@@ -69,10 +69,60 @@ M.condense_melee = true
 -- Toggled via //ow condense [on|off] alongside the melee toggle.
 M.condense_magic = true
 
+-- Diagnostic: when true, EVERY battle event logs its actor/target
+-- id+class and the gate verdict (SHOWN/DROPPED) to the unified
+-- chatdebug log (%APPDATA%/OmniWatch/chatdebug_log.txt) so it's easy to
+-- capture and send. Use to find why an other-party action does or
+-- doesn't leak — each line shows exactly what class the actor and
+-- target resolved to. Off by default. Driven by the unified
+-- //ow chatdebug switch (→ _loader.set_battle_classify_probe).
+M.debug_classify = false
+
 function M.set_deps(ring_mod, classifier_mod)
     _ring       = ring_mod
     _classifier = classifier_mod
 end
+
+-- ── Probe log file ───────────────────────────────────────────────────────
+-- Shared diagnostic log for the classification probes. Written to the
+-- unified %APPDATA%/OmniWatch/chatdebug_log.txt (the SAME file every
+-- other chat probe uses, so all diagnostics land in one place). Lazy-
+-- opened on first write, appended, flushed each line so a crash/reload
+-- never loses captured lines. Errors are swallowed — a diagnostic must
+-- never break the synth path.
+local _probe_log_file = nil
+local function _probe_log(line)
+    if not _probe_log_file then
+        -- Unified chatdebug log: %APPDATA%/OmniWatch/chatdebug_log.txt
+        -- (same file as the other probes). Falls back to the addon data
+        -- dir if APPDATA isn't set. Previously this wrote to a SEPARATE
+        -- file (data/ow_classify_probe.log), which is why battle-classify
+        -- SHOWN/DROPPED lines were missing from the unified capture.
+        local path
+        local appdata = os.getenv('APPDATA')
+        if appdata and appdata ~= '' then
+            appdata = appdata:gsub('\\', '/')
+            path = appdata .. '/OmniWatch/chatdebug_log.txt'
+        else
+            local base = windower.addon_path or ''
+            if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+                base = base .. '/'
+            end
+            path = base .. 'data/chatdebug_log.txt'
+        end
+        local f = io.open(path, 'a')
+        if not f then return end   -- couldn't open; stay silent
+        _probe_log_file = f
+        local now = os.date('*t')
+        f:write(string.format(
+            '\n=== battle classify probe started %04d-%02d-%02d %02d:%02d:%02d ===\n',
+            now.year, now.month, now.day, now.hour, now.min, now.sec))
+    end
+    _probe_log_file:write(line)
+    _probe_log_file:write('\n')
+    _probe_log_file:flush()
+end
+M._probe_log = _probe_log
 
 -- Status apply/wear message IDs that buff_events.lua handles. We skip
 -- them here so we don't double-emit. The synth-events flow guarantees
@@ -124,6 +174,32 @@ local SPELL_HEAL   = T{7, 8, 9, 14, 80, 263, 276}
 local SPELL_MISS   = T{85, 284, 653, 654}
 local SPELL_DRAIN  = T{132, 161, 227, 281}
 local SPELL_ABSORB = T{572, 642}
+
+-- TP-move status-application messages. When a TP move (cat 11) carries
+-- one of these message IDs, it APPLIES A STATUS rather than dealing
+-- damage — action.param is a status/effect value, not a damage number.
+-- Without this, the cat-11 physical path renders e.g. "Apex Crab uses
+-- Metallic Body -> Apex Crab for 37 damage" (msg 117 = "Defense is
+-- enhanced but attacks weaken"; the 37 is the effect value). These IDs
+-- are the enhance/fortify/"gains the effect of" templates from
+-- action_messages.lua.
+local TP_BUFF_MSGS = T{117, 118, 120, 121, 131, 134, 148, 149, 150,
+                       151, 159, 166, 186, 194, 205, 230, 266, 280, 286,
+                       287, 319}
+-- msg 159 = a STATUS change (apply OR removal), param is the status id,
+-- never damage. Seen as: a debuff-apply (STR Down param 136) AND an
+-- item status-cure (Antidote removing Poison param 3). Both should
+-- render WITHOUT a damage trailer ("Monberaux uses {item} → Wormfood"),
+-- so it lives in the buff/status set above, not the damage path —
+-- otherwise an Antidote shows "→ Wormfood for N damage".
+
+-- HP-restore messages that arrive on the cat-11 path. A trust using a
+-- Chemist Mix / medicine (Max. Potion, Life Water, etc.) comes through
+-- as cat 11 with msg 238 and param = HP restored. Without this the
+-- cat-11 renderer treats the 500 as a DAMAGE value ("→ Target for 500
+-- damage") instead of a heal. Confirmed via probe: Max. Potion =
+-- cat 11, msg 238, param 500 (= 500 HP). Render as 'heal'.
+local TP_HEAL_MSGS = T{238}
 
 local function _spell_result(msg)
     if SPELL_DAMAGE:contains(msg) then return 'damage' end
@@ -281,10 +357,50 @@ end
 -- action — used by routing rules like "monsters' melee on me" vs
 -- "monsters' melee on party". May be '' for self-targeted or
 -- action-without-target events.
+-- Classes whose actions belong to YOUR fight and should pass the battle
+-- gate even when neither side is an ally. 'mob_engaged' = the monster
+-- your group has claim on; its self-buffs (Bubble Curtain → Shell, etc.)
+-- target the mob itself, so neither actor nor target is an ally and the
+-- ally-only gate would drop them — but they ARE part of your fight and
+-- you want to see the "uses <ability>" readies line, not just the buff
+-- on the card. 'mob_passive' / 'other_pet' deliberately stay OUT (other
+-- parties' fights remain hidden).
+local _INFIGHT_CLASSES = {
+    ['self'] = true, ['pet'] = true, ['party'] = true,
+    ['party_pet'] = true, ['alliance'] = true,
+    ['mob_engaged'] = true,
+}
+
 local function emit_event(actor_id, actor_name, actor_class,
                            target_id, target_name, target_class,
                            kind, segments)
     if not _ring or not _ring.text_ring then return end
+
+    -- Gate verdict for the diagnostic. Computed first so the probe can
+    -- report SHOWN vs DROPPED before the early return below.
+    local _passes = (_INFIGHT_CLASSES[actor_class or ''] ~= nil)
+                    or (_INFIGHT_CLASSES[target_class or ''] ~= nil)
+    if M.debug_classify then
+        local now = os.date('*t')
+        _probe_log(string.format(
+            '[%02d:%02d:%02d] %-7s actor=%s id=%s [%s]  target=%s id=%s [%s]  kind=%s',
+            now.hour, now.min, now.sec,
+            _passes and 'SHOWN' or 'DROPPED',
+            tostring(actor_name), tostring(actor_id), tostring(actor_class),
+            tostring(target_name), tostring(target_id), tostring(target_class),
+            tostring(kind)))
+    end
+
+    -- Battle-feed gate: show events where the actor OR target is part of
+    -- YOUR fight — player / party / alliance / their pet or trust, OR the
+    -- engaged mob itself (so the mob's own TP-move "uses X" lines show,
+    -- not just the resulting buff on the card). This filters OTHER groups'
+    -- fights (their trust/pet/mob acting — none in-fight for you) out of
+    -- the battle feed. Your own fights are unaffected.
+    if not (_INFIGHT_CLASSES[actor_class or ''] or _INFIGHT_CLASSES[target_class or '']) then
+        return
+    end
+
     local flat_parts = {}
     for i = 1, #segments do flat_parts[i] = segments[i].text end
     local flat = table.concat(flat_parts)
@@ -370,6 +486,17 @@ local function emit_physical(kind, actor_id, actor_name, actor_class,
         table.insert(segs, S(' (guarded)', 'default'))
     elseif result == 'no_damage' then
         table.insert(segs, S(' for no damage', 'default'))
+    elseif result == 'tp_use' then
+        -- Status-applying TP move (self-buff / enfeeble): no damage
+        -- trailer. Line reads "Actor uses 'Move' → Target" and stops.
+        -- (Nothing appended — the param is a status value, not damage.)
+    elseif result == 'heal' then
+        -- HP-restore action (e.g. a trust's Mix/medicine like Max
+        -- Potion → msg 238, param = HP restored). Render as a heal, not
+        -- damage: "Actor uses 'X' → Target recovers N HP".
+        table.insert(segs, S(' recovers ', 'default'))
+        table.insert(segs, S(tostring(damage), 'damage_number'))
+        table.insert(segs, S(' HP', 'default'))
     elseif result == 'crit' then
         table.insert(segs, S(' for ', 'default'))
         table.insert(segs, S(tostring(damage), 'damage_number'))
@@ -794,8 +921,25 @@ function M.process(act)
     -- apply lines independently; this condense is purely about the
     -- "spell cast" line, so showing all recipients (caster included)
     -- is the right count.
-    if M.condense_magic and cat == 4 then
-        local spell_name = _spell_name(primary_id)
+    if M.condense_magic and (cat == 4 or cat == 6 or cat == 11) then
+        -- cat 4 = magic (songs/ga-spells/Cure V); cat 6 = job abilities;
+        -- cat 11 = TP-move-category abilities (Mix/Guard Drink and other
+        -- party-wide AoE — confirmed via packet log). All produce one
+        -- action per target in an AoE packet; condense to a single line.
+        -- A mob's single-target TP move is also cat 11 but has 1 target,
+        -- so the >= 2 guard leaves it as a normal per-target line.
+        local spell_name
+        if cat == 6 then
+            spell_name = _ja_name(primary_id)
+        elseif cat == 11 then
+            spell_name = _monster_tp_name(primary_id)
+        else
+            spell_name = _spell_name(primary_id)
+        end
+        -- cat 6 with an unknown name = enchantment item (Warp Ring, trust
+        -- primer, etc.) — let the per-target loop handle (and skip) those
+        -- exactly as before, rather than condensing a bogus '?' line.
+        local _skip_condense = (cat == 6 and spell_name == '?')
         local targets_info = {}
         for _, tgt in pairs(act.targets) do
             if tgt.actions then
@@ -809,7 +953,8 @@ function M.process(act)
                     -- them. Everything else uses normal spell-result
                     -- classification.
                     local result
-                    if _is_status_msg(action.message) then
+                    if _is_status_msg(action.message)
+                       or (cat == 11 and TP_BUFF_MSGS:contains(action.message)) then
                         result = 'cast'
                     else
                         result = _spell_result(action.message)
@@ -823,19 +968,34 @@ function M.process(act)
                 end
             end
         end
-        if #targets_info >= 2 then
+        if #targets_info >= 2 and not _skip_condense then
             -- Multi-target — emit one condensed line and we're done.
             emit_spell_condensed(actor_id, actor_name, actor_class,
                                  spell_name, targets_info)
             return
         end
-        -- 0 or 1 targets: fall through to normal loop (no condense).
+        -- 0 or 1 targets (or skipped): fall through to normal loop.
     end
 
     for _, tgt in pairs(act.targets) do
         if tgt.actions then
             local target_id = tgt.id
             local target_name, target_class = _resolve(target_id, nil)
+
+            -- Suppress the self-targeted ranged "phantom". A ranged-attack
+            -- packet (cat 2/12) includes the SHOOTER as one of its own
+            -- targets with a 0-damage action — the "readies/uses ranged
+            -- attack" artifact — alongside the real target entry for the
+            -- shot at the mob. Rendering the self entry produces the
+            -- bogus "Joachim shoots Joachim for 0 damage" line while the
+            -- real "Joachim shoots <mob>" renders correctly from the
+            -- other target. Skip any cat-2/12 target whose id equals the
+            -- actor's. (Melee never self-targets this way; other
+            -- categories like self-buffs legitimately target the actor,
+            -- so the guard is scoped to ranged only.)
+            if (cat == 2 or cat == 12) and target_id == actor_id then
+                -- skip this target entirely
+            else
 
             -- For melee (cat 1) and ranged (cat 2/12) multi-hit rounds,
             -- collapse all actions on this target into a single line
@@ -851,6 +1011,20 @@ function M.process(act)
                 end
                 if #actions_for_target > 0 then
                     local kind = (cat == 1) and 'melee' or 'ranged'
+                    if M.debug_classify and cat == 1 then
+                        local _n = os.date('*t')
+                        local _msgs = {}
+                        for _, a in ipairs(actions_for_target) do
+                            _msgs[#_msgs+1] = tostring(a.message)
+                        end
+                        _probe_log(string.format(
+                            '[%02d:%02d:%02d]   [melee-condensed] cat=1 msgs={%s} '
+                            .. 'actor=%s id=%s target=%s nhits=%d',
+                            _n.hour, _n.min, _n.sec,
+                            table.concat(_msgs, ','),
+                            tostring(actor_name), tostring(actor_id),
+                            tostring(target_name), #actions_for_target))
+                    end
                     emit_physical_condensed(kind,
                         actor_id, actor_name, actor_class,
                         target_id, target_name, target_class,
@@ -864,6 +1038,17 @@ function M.process(act)
                 -- by message ID set.
                 if not _is_status_msg(action.message) then
                     if cat == 1 then
+                        if M.debug_classify then
+                            local _n = os.date('*t')
+                            _probe_log(string.format(
+                                '[%02d:%02d:%02d]   [melee-emit] cat=1 msg=%s '
+                                .. 'actor=%s id=%s result=%s target=%s',
+                                _n.hour, _n.min, _n.sec,
+                                tostring(action.message),
+                                tostring(actor_name), tostring(actor_id),
+                                tostring(_physical_result(action)),
+                                tostring(target_name)))
+                        end
                         emit_physical('melee',
                             actor_id, actor_name, actor_class,
                             target_id, target_name, target_class,
@@ -880,10 +1065,24 @@ function M.process(act)
                             action, _physical_result(action),
                             _ws_name(primary_id))
                     elseif cat == 11 then
+                        -- Status-applying TP moves (self-buffs like
+                        -- Metallic Body, enfeebles, etc.) carry a
+                        -- status-effect message, not a damage one — the
+                        -- param is an effect value, not damage. Render
+                        -- those as a plain "uses" with no damage trailer
+                        -- so we don't claim "X for N damage" on a buff.
+                        local tp_res = _physical_result(action)
+                        if TP_BUFF_MSGS:contains(action.message) then
+                            tp_res = 'tp_use'
+                        elseif TP_HEAL_MSGS:contains(action.message) then
+                            -- HP-restore Mix/medicine (Max Potion etc.):
+                            -- render "→ Target recovers N HP", not damage.
+                            tp_res = 'heal'
+                        end
                         emit_physical('tp_move',
                             actor_id, actor_name, actor_class,
                             target_id, target_name, target_class,
-                            action, _physical_result(action),
+                            action, tp_res,
                             nil, _monster_tp_name(primary_id))
                     elseif cat == 4 then
                         emit_spell(
@@ -908,10 +1107,19 @@ function M.process(act)
                                 _ja_result(action.message, action.param))
                         end
                     elseif cat == 9 then
+                        -- Item use. The resolvable item ID is in the
+                        -- per-target action.param (e.g. Warp Ring = 28540),
+                        -- NOT the packet-level act.param/primary_id (which
+                        -- holds a non-item value like 24931 that resolves
+                        -- to '?'). Diagnostic confirmed _item_name(
+                        -- action.param) = 'Warp Ring'. Prefer action.param;
+                        -- fall back to primary_id if it doesn't resolve.
+                        local it_nm = _item_name(action.param)
+                        if it_nm == '?' then it_nm = _item_name(primary_id) end
                         emit_item(
                             actor_id, actor_name, actor_class,
                             target_id, target_name, target_class,
-                            _item_name(primary_id))
+                            it_nm)
                     elseif cat == 13 then
                         emit_cast_start(
                             actor_id, actor_name, actor_class,
@@ -929,6 +1137,7 @@ function M.process(act)
                 end
             end
             end  -- closes the 'else' branch of condense_melee if/else
+            end  -- closes the self-targeted-ranged-phantom guard else
         end
     end
 end

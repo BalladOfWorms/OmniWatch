@@ -20,6 +20,7 @@ OmniWatch puts the live state of your character and party in one place:
 - **Recast tracker** — magic and ability recasts with timer bars, custom aliases, and auto-hide when nothing's recasting
 - **Buff timer panel** — duration bars for active buffs that color-shift as they're about to wear off
 - **DPS tracker** — rolling-window damage tracking with sparklines, per-encounter logging to CSV/JSONL, optional party-member damage tracking
+- **Chat panel** — floating, resizable chat log with tabs (World, LS1/LS2, Party, Battle, Buffs, Debuffs, Mob, two user-customizable tabs, System, Gearswap), unread badges per tab, scrollback, and a built-in composer for sending say/tell/reply/shout/yell/linkshell messages without opening the game's chat field. Per-job routing rules let you decide which combat events land in which tab.
 - **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB, elemental affinity, fast cast, store TP, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses
 - **Hotbar** — customizable button panel for slash commands, items, gearswap calls, and macros
 - **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection
@@ -52,7 +53,7 @@ That's it. No Python, no pip, no extra installs — the overlay ships as a self-
    Or add `lua load OmniWatch` to your auto-load list so it starts every session.
 
 4. **Run the overlay executable:**
-   Double-click `OmniWatch.exe` in the addon folder. The overlay window opens; drag/dock it where you want.
+   Double-click `OmniWatch.exe` in the addon folder. The overlay window opens; **hold Shift and drag** to move it where you want.
 
 The lua addon and the overlay talk over `127.0.0.1` UDP — they don't need each other started in a particular order, but you'll only see live data once both are running and you've logged in to a character.
 
@@ -79,6 +80,7 @@ The build is safe; full source is at https://github.com/BalladOfWorms/OmniWatch 
 ## Running
 
 - **Lua first or python first** — either works. Reload the lua addon in-game with `//lua reload OmniWatch` whenever you change lua code.
+- **Moving the window** — the OmniWatch window is borderless, so to move the whole window, **hold Shift and drag** anywhere on it. (To reposition individual panels within the window instead, use setup mode — see Edit-mode below.)
 - **Per-character configs**: layouts, settings, buffs, recasts, gearswap path, and other per-character files live under `%APPDATA%\OmniWatch\<charname>\`. The character whose configs are active is shown next to the gear button in the header. Click that label to switch which character's config you're editing.
 
 ## Settings
@@ -89,16 +91,18 @@ OmniWatch settings live in two places, depending on what you want to change:
 
 Click the gear icon at the top of the overlay. The dropdown is grouped by panel:
 
-- **General** — DPS sparkline, always-on-top, window opacity, transparent background, crash log access, zone-timer reset, setup mode, Vana'diel time offset
+- **General** — exit OmniWatch, full screen, always-on-top, window opacity, global UI scale (0.5×–3.0× — shrink everything for 4K or enlarge for readability), transparent background
+- **Header** — reset zone timer, adjust Vana'diel time, show 'Bags' button, gearswap folder picker
 - **Party** — show alliance, show pets, show buffs, show debuffs, compact icon grid, edit buff/debuff blacklists, edit buff aliases
 - **Equipment** — show equipment panel
 - **Statistics** — show stats panel
 - **Recast Timer** — show recast, autohide, edit blacklist, edit aliases
 - **Buff Timer** — show buff timer, autohide, edit blacklist, edit aliases
+- **Chat Panel** — show chat panel, font size, show input bar (composer)
+- **Skillchain** — show skillchain panel, auto-hide when inactive, track skillchains, track magic burst
 - **Target Card** — show target, show sub-target, buffs/debuffs toggles per card
 - **DPS Tracker** — show DPS, rolling window seconds, track party damage, open log files
 - **HotBar** — show hotbar, edit hotbar
-- **Inventory** — show inventory button, gearswap folder picker
 - **Developer** — sim mode toggle and other dev-mode tools
 
 Most toggles take effect immediately; a few (sim mode, gearswap folder) ask for a reload.
@@ -229,6 +233,58 @@ Rolling-window damage tracker. Per encounter:
 
 Slash commands: `//ow dps`, `//ow dps reset`, `//ow dps window <seconds>`, `//ow dps party`, `//ow dps status`.
 
+### Skillchain panel
+
+Live skillchain helper. When a weapon skill or ability opens a skillchain, the panel shows the current resonating state — the skillchain properties available and the closing window before it expires — and suggests what to use next:
+
+- **Skillchain suggestions** — weapon skills (and pet moves, where relevant) that would continue or close the current chain
+- **Magic burst suggestions** — spells whose element matches the active skillchain, for bursting in the window
+- Auto-hides when nothing is resonating (toggleable)
+
+Tracking of skillchains and of magic-burst suggestions can each be toggled independently in the settings menu (**Skillchain → Track skillchains / Track magic burst**), so casters and melee can show only what's relevant to them.
+
+### Chat panel
+
+Floating chat log that sits inside the overlay. Useful when you want a second chat view that survives FFXI's own chat log resets, has independent scrollback, and can be styled / filtered separately from the in-game window.
+
+**Tabs**:
+- **Tell** — incoming and outgoing tells *only*. Sits at the front of the tab row and acts as a kind of answering machine: if someone sends you a tell while you're away, it lands here with its own unread badge instead of scrolling past in World.
+- **World** — say, shout, yell, emote, NPC speech
+- **LS1 / LS2** — linkshell 1 and 2
+- **Party** — party chat
+- **Battle** — combat actions (your hits, mob hits, weapon skills, magic)
+- **Buffs** — status effects landing on you or party members
+- **Debuffs** — debuffs landing on you or party members
+- **Mob** — buffs and debuffs landing on mobs
+- **Custom 1 / Custom 2** — user-relabeled and user-routed; pick any combination of event types to land here
+- **System** — system messages
+- **Gearswap** — gearswap log output (lights, set swaps, equip warnings)
+
+Each tab tracks its own unread count and shows a red badge in the tab header when new messages arrive while you're on a different tab. Click a tab to switch; the badge clears when you read it. Scroll the body with the mouse wheel. Scrolling up **pauses autoscroll** and holds your view on the messages you're reading, so incoming events don't yank the view down mid-fight; scroll back to the bottom and live updates resume. Scroll position is tracked per tab.
+
+**Clear buttons** (in the panel header, just after the "Chat (N events)" title):
+- **Clear Tab** — removes only the events shown in the active tab, leaving the other tabs untouched
+- **Clear All** — wipes the entire chat buffer across every tab
+
+(The "(N events)" counter in the title is a lifetime total of everything received this session and keeps counting after a clear — clearing affects the displayed buffer, not the counter.)
+
+**Composer** (optional row at the bottom of the panel — togglable via the "Show chat composer" setting):
+- Channel picker: **say / tell / reply / shout / yell / ls1 / ls2** — click the channel label or use the `<` / `>` arrows to cycle
+- **Tell target** field appears next to the channel when "tell" is selected
+- Click the body to focus, type, **Enter** to send, **Esc** to cancel. Sends go through Windower as if you'd typed them in the game's chat field
+
+**Routing config** (the **Filters ⚙** button in the panel header):
+Opens `omniwatch_routing_gui.exe` — a standalone editor for the routing rules that decide which combat events appear on which tab. Rules are stored per-job, with a global fallback and baked-in defaults. Each event type (melee hits, weapon skills, magic, buffs, debuffs, etc.) can be:
+- **Default** — emit to the canonical tab (e.g. melee → Battle)
+- **Hidden** — don't show in the chat panel at all
+- **Routed** — emit to one or more tabs of your choice, including the two custom tabs
+
+Routing JSON lives in `%APPDATA%\OmniWatch\<charname>\`:
+- `omniwatch_chat_routing.json` — global config (fallback)
+- `omniwatch_chat_routing-<JOB>.json` — per-job override
+
+The panel is resizable via the bottom-right corner grip (pixel-precise, not a uniform scale — you set the width and height independently). Position is draggable in setup mode.
+
 ### Stats panel
 
 Full character stat grid in `/checkparam` style. Each cell is computed from skill caps + base attributes + gear + food + buffs + merits + traits + master level bonuses, using formulas documented on BG-wiki.
@@ -242,6 +298,15 @@ Full character stat grid in `/checkparam` style. Each cell is computed from skil
 - Elemental affinity: Fire, Ice, Wind, Earth, Lightning, Water, Light, Dark
 
 **Server-pushed stat updates**: OmniWatch passively listens for server-side stat packets (0x061, 0x063) that fire on roll cast, gear change, and buff change. When captured, these refresh the Attack and Accuracy values to match what the server says they are — including most roll bonuses. **Caveat**: there's no reliable way to detect every variant of these packets, so certain proc-style effects (most notably the Lanun gear set's chance to boost a roll's accuracy bonus) may not always be reflected immediately. Att/Def usually update; Acc updates are best-effort.
+
+**Protect (DEF) and Shell (MDT)**: the gear/trait engine doesn't include the Protect and Shell magic buffs, so OmniWatch adds them on top — Protect contributes flat Defense, Shell contributes magic-damage-taken reduction (MDT). The amount depends on the spell *tier* (Protect/Shell I–V), and OmniWatch determines the tier in this order:
+
+1. **Witnessed cast** — if the overlay sees the Protect/Shell land on you, it reads the exact tier straight from the spell, regardless of who cast it. This is exact.
+2. **Item source (Guard Drink)** — buffs applied by an item rather than a spell (e.g. the trust Monberaux's Guard Drink, which always grants Protect V + Shell V) are detected by their packet shape and treated as tier V.
+3. **Job-level estimate** — if Protect/Shell is already active when the overlay starts (you zoned, logged in, or reloaded after it was cast) and there's no witnessed cast to read, the tier is estimated from the highest Protect/Shell-casting level you have (WHM / RDM / PLD / SCH / RUN, main or sub, with the standard half-level subjob cap).
+4. **Unknown source fallback** — if the buff is active but none of the above can place it (e.g. you're on a non-casting job like COR/DNC and the cast wasn't witnessed), OmniWatch assumes tier V, since the realistic external source in that case is Guard Drink.
+
+**Caveats**: because the buff itself carries no tier information, the estimate paths (3 and 4) are best-effort. If a higher-level party member casts a *higher* tier on you than your own level could produce and the overlay didn't witness the cast, the estimate can under-count; conversely, the unknown-source fallback assumes V, which can over-count if a low-tier Protect/Shell from an unwitnessed external source is the only thing up. The witnessed-cast and Guard Drink paths are exact; the level/fallback paths are approximations that resolve to the correct value the moment a cast is actually observed.
 
 **BLU spell-trait math**: when you're on BLU, the panel resolves your equipped set spells against canonical bluguide data and computes:
 - Trait points per category (DW, Fast Cast, MAB, Acc Bonus, MDB, Store TP, Conserve MP, etc.)
@@ -265,6 +330,8 @@ What-if calculator that runs alongside the overlay. Open via the settings menu o
   - **COR rolls**: Chaos Roll, Samurai Roll, Tactician's Roll. Each with a roll-value picker (1-11), and side-by-side checkboxes for **C. Cards** (Crooked Cards) and **Job present** (optimal-job bonus)
 
 The resulting stats panel updates live as you tweak values — no in-game commitment. Useful for "do I have enough Store TP for a 5-hit build with this song setup?" or "what's my fast cast going to be after I add Erratic Flutter to my BLU set?"
+
+**Import Set** — pull any named set out of any GearSwap gear file straight into the sim, regardless of what job you're currently on. Click **IMPORT SET**, then **Browse…** to pick a gear `.lua` file (native file picker — browse anywhere), type the set path (e.g. `sets.engaged.HighHaste`, with or without the leading `sets.`, including nested paths like `sets.engaged.DT.HighHaste`), and click **IMPORT**. OmniWatch sandbox-executes the gear file, resolves the named set to its items, and loads it into the sim equipment so you can tweak and compare. Items referenced indirectly through `gear.*` helper tables may not resolve a name (they show as unresolved); sets that name items directly resolve fully. Use **EXPORT SET** to write the current sim equipment back out as a GearSwap-style `.lua`.
 
 ### Hotbar (button panel)
 
@@ -307,6 +374,70 @@ Run `//ow setup` in-game to drop into setup mode — every panel becomes draggab
 ### GearSwap reference detection
 
 Settings menu → **Inventory → Gearswap folder** → click PICK. Choose the folder containing your gearswap `.lua` files. Items referenced anywhere in those files get a ✓ in the inventory dropdown.
+
+### Dual Wield for GearSwap gear swaps
+
+OmniWatch can drive your GearSwap dual-wield gear tiers, replacing the **HasteInfo** addon as the source. It computes how much Dual Wield your *gear* needs to reach the delay cap — required DW minus your job's DW traits and JP gift — and streams that number to GearSwap as it changes. GearSwap then equips the matching haste-tier set.
+
+Crucially, OmniWatch sends the **exact same command HasteInfo used** — `gs c hasteinfo <N>` — so if your GearSwap was already set up for HasteInfo, **you don't change any of your GearSwap logic**. You only swap the source: stop loading HasteInfo, and let OmniWatch feed the number instead.
+
+**What OmniWatch sends.** Every stats cycle (~1 Hz, only when something relevant changed), OmniWatch streams:
+
+```
+gs c hasteinfo <N>
+```
+
+where `<N>` is the gear-target DW% — the DW your gear must supply (required total − DW traits − JP gift), floored at 0. This is gear-independent, so it doesn't oscillate as your worn gear changes. On a job that can't dual wield, it sends `-1`. This matches HasteInfo's `actual_needed` value.
+
+**Setup (two changes, then you're done):**
+
+1. **Stop loading HasteInfo.** In your Globals (or wherever you auto-load addons), comment out or remove the HasteInfo load line:
+
+   ```lua
+   -- send_command('lua l hasteinfo')
+   ```
+
+2. **Remove the HasteInfo report request.** If a job file asks HasteInfo to report on load (HasteInfo's own handshake), remove it — OmniWatch streams continuously, so nothing needs to request a report. In `get_sets()` (or equivalent), delete the line:
+
+   ```lua
+   send_command('hasteinfo report')
+   ```
+
+**That's it** — keep your existing `process_hasteinfo`, `determine_haste_group`, `update_combat_form`, and your haste-tier sets exactly as they were. For reference, the standard GearSwap side looks like this (unchanged from a HasteInfo setup):
+
+```lua
+-- Catches the streamed value and re-equips.
+function process_hasteinfo(cmdParams, eventArgs)
+    if cmdParams[1] == 'hasteinfo' then
+        if type(tonumber(cmdParams[2])) == 'number' then
+            DW_needed = tonumber(cmdParams[2])
+            DW = DW_needed > 0
+        end
+        if not midaction() then
+            job_update()    -- triggers determine_haste_group()
+        end
+    end
+end
+
+-- Picks the gear tier from how much DW the gear still needs.
+function determine_haste_group()
+    classes.CustomMeleeGroups:clear()
+    if DW == true then
+        if     DW_needed <= 1                       then classes.CustomMeleeGroups:append('MaxHaste')
+        elseif DW_needed >  1 and DW_needed <= 16   then classes.CustomMeleeGroups:append('HighHaste')
+        elseif DW_needed > 16 and DW_needed <= 21   then classes.CustomMeleeGroups:append('MidHaste')
+        elseif DW_needed > 21 and DW_needed <= 34   then classes.CustomMeleeGroups:append('LowHaste')
+        elseif DW_needed > 34                       then classes.CustomMeleeGroups:append('')
+        end
+    end
+end
+```
+
+Your engaged sets then provide the tiers, e.g. `sets.engaged.MaxHaste`, `sets.engaged.HighHaste`, `sets.engaged.MidHaste`, `sets.engaged.LowHaste` (and any `.DT` variants). The thresholds above are an example; use whatever tiers your sets define.
+
+**Verify it's working:** `//ow dwtest` prints the current computation — the required DW, your traits, JP gift, and the `gs c hasteinfo <N>` value being sent. The **stats panel "DW To Cap"** cell shows the live gear-inclusive residual: green `0` at cap, yellow `+N` when you still need more DW, red `−N` when you're over-capped (you have surplus DW you could drop for other stats).
+
+**Note:** OmniWatch reads its bard-song gear data from the `gearinfo/res/BardGear.lua` file via `require`, so the **GearInfo files must remain present in your addons folder** — but GearInfo does **not** need to be *loaded/running*. In fact, if you don't want GearInfo's in-chat song-bonus announcements, leave the files on disk but don't load the addon (`//lua unload gearinfo`, and remove any `lua l gearinfo` from your init). OmniWatch keeps full song data either way.
 
 ### User config (advanced)
 
@@ -351,6 +482,7 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 ```
 <Windower>\addons\OmniWatch\
 ├── OmniWatch.exe                 # the overlay (run this)
+├── omniwatch_routing_gui.exe     # chat routing rule editor (launched from chat panel gear)
 ├── OmniWatch.lua                 # the addon (Windower auto-loads)
 ├── OmniWatch_Sim.lua             # sim-mode buff math
 ├── Server_Stats.lua              # passive server-pushed stat listener
@@ -391,6 +523,8 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
     ├── omniwatch_buff_timer.json # buff-duration overrides
     ├── omniwatch_recast.json     # recast-tracker config
     ├── omniwatch_buttons.json    # user button bindings
+    ├── omniwatch_chat_routing.json         # chat panel routing rules (global fallback)
+    ├── omniwatch_chat_routing-<JOB>.json   #   per-job override (e.g. -COR.json)
     ├── omniwatch_mobs.json       # learned mob abilities
     ├── omniwatch_zones.json      # zone → region mapping
     └── omniwatch_gearswap_path.json

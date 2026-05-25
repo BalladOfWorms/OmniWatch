@@ -79,17 +79,27 @@ local _emit_trace_log_file = nil
 -- handle to avoid per-call open overhead.
 local function _emit_trace_line(line)
     if not _emit_trace_log_file then
-        local base = windower.addon_path or ''
-        if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
-            base = base .. '/'
+        -- Unified chatdebug log: %APPDATA%/OmniWatch/chatdebug_log.txt
+        -- (same file as the other probes). Falls back to the addon data
+        -- dir if APPDATA isn't set.
+        local path
+        local appdata = os.getenv('APPDATA')
+        if appdata and appdata ~= '' then
+            appdata = appdata:gsub('\\', '/')
+            path = appdata .. '/OmniWatch/chatdebug_log.txt'
+        else
+            local base = windower.addon_path or ''
+            if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+                base = base .. '/'
+            end
+            path = base .. 'data/chatdebug_log.txt'
         end
-        local path = base .. 'data/chat_packet_log.txt'
         local f, err = io.open(path, 'a')
         if not f then
             M.trace = false
             windower.add_to_chat(123,
                 '[OW emit] trace open failed (' .. tostring(err)
-                .. '). Trace disabled. Make sure data/ folder exists.')
+                .. '). Trace disabled.')
             return
         end
         _emit_trace_log_file = f
@@ -128,6 +138,27 @@ end
 -- them.
 local function _pre_strip_byte_markers(text)
     if not text or text == '' then return text end
+    -- Leading format-prefix byte. Some high-mode broadcasts begin with
+    -- a single byte in 0x80-0xFF that is NOT part of the message text
+    -- (observed: 0xA1 on Kupofried "ancient magic" / "Page N of the
+    -- tome flares up!" lines, 0xD0 on "<Name> examines you."). It
+    -- renders as a stray leading glyph. Strip it ONLY when the next
+    -- byte is printable ASCII — that signature distinguishes a format
+    -- prefix on an ASCII line from the lead byte of a real multibyte
+    -- Shift-JIS character (which is followed by another high byte, not
+    -- ASCII), so legitimate Japanese text is left intact.
+    local b1 = text:byte(1)
+    if b1 and b1 >= 0x80 then
+        local b2 = text:byte(2)
+        -- Strip when the next byte is printable ASCII (0x20-0x7E) OR the
+        -- 0x7F marker byte that opens FFXI's name-wrapper (e.g. examine
+        -- lines are "D0 7F FC <name> ..."). A genuine multibyte
+        -- Shift-JIS char has a high (>=0x80) second byte, so this never
+        -- eats real Japanese text.
+        if b2 and ((b2 >= 0x20 and b2 <= 0x7E) or b2 == 0x7F) then
+            text = text:sub(2)
+        end
+    end
     -- Order matters. Strip \x7F<digit> end-marker first (two-byte
     -- sequence) before the bare \x7F gets caught by the FC/FB pair
     -- strip below. The digit would otherwise be left orphan.
@@ -144,6 +175,16 @@ local function _pre_strip_byte_markers(text)
     -- "Koru-Moru" rendered as "京oru-Moru", "Ilmia" as "弒lmia", etc.
     text = text:gsub('\252', '')          -- bare \xFC
     text = text:gsub('\251', '')          -- bare \xFB
+    -- Stray \x8D marker before ASCII. Observed on the job-change
+    -- Moogle's emote: "Moogle : \x8DChaaange...job!". The lone \x8D is
+    -- an FFXI format/emote marker, but \x8D is also a Shift-JIS lead
+    -- byte, so from_shift_jis pairs it with the following 'C' (0x43)
+    -- and decodes the pair to the kanji 垢 — eating the C and rendering
+    -- "垢haaange". Strip \x8D only when the next byte is printable ASCII
+    -- (0x20-0x7E); a genuine \x8D-led Shift-JIS character has a trail
+    -- byte that forms a real kanji in Japanese text, so this leaves
+    -- legitimate SJIS intact.
+    text = text:gsub('\141([\32-\126])', '%1')
     return text
 end
 
@@ -459,7 +500,7 @@ end
 -- before encoding normalization by _pre_strip_byte_markers, since
 -- those byte sequences would interfere with the SJIS-detection
 -- step in _normalize_to_utf8.
-local function _strip_ffxi_markers(text)
+local function _strip_ffxi_markers(text, mode)
     if not text or text == '' then return text end
     -- (Pre-strip byte markers — \x7F+digit, \x7F\xFC, \x7F\xFB —
     -- handled earlier in the pipeline via _pre_strip_byte_markers.
@@ -543,6 +584,17 @@ local function _strip_ffxi_markers(text)
     --     must be uppercase, and only the very first character is
     --     considered.
     text = text:gsub('^([yzw])(%u)', '%2')
+    -- 4b. FFXI leading-brace prefix on certain SYSTEM modes. Modes like
+    --     123 ("{There are no party members.") prepend a literal '{'
+    --     (0x7B) byte that the native client hides during rendering but
+    --     we receive verbatim. We strip a leading '{' or '}' followed by
+    --     an uppercase letter ONLY on these known system modes — never on
+    --     real chat, where '{' is meaningful auto-translate punctuation
+    --     (e.g. a "{Hello!}" greeting would start the same way).
+    local BRACE_PREFIX_MODES = {[121]=true, [122]=true, [123]=true, [124]=true}
+    if mode and BRACE_PREFIX_MODES[mode] then
+        text = text:gsub('^([{}])(%u)', '%2')
+    end
     -- 5. Collapse runs of whitespace from the strips, trim ends.
     text = text:gsub('%s+', ' ')
     text = text:gsub('^%s*(.-)%s*$', '%1')
@@ -601,11 +653,69 @@ local DROPPED_CHAT_MODES = {
     [12] = true,    -- /tell sent
     [13] = true,    -- /party (alt)
     [14] = true,    -- /party (alt) / LS1 BattleMod-formatted
+    [15] = true,    -- battle message: melee/abilities ("X pokes Y",
+                    --   "Scythe Tail → you"). Duplicates 0x028 synth
+                    --   from battle_events.lua (classified + ally-gated);
+                    --   leaked into System tab with \x7F prefix glyphs.
+    [16] = true,    -- battle message (others' combat actions) — dup synth
+    [17] = true,    -- battle message (party combat actions) — dup synth
+    [18] = true,    -- battle message (alliance combat actions) — dup synth
+    [19] = true,    -- battle message (misc combat) — dup synth
     [20] = true,    -- battle damage text (BattleMod fmt) — duplicates
                     --   synth from battle_events.lua via 0x028
+    [25] = true,    -- offensive item/Mix damage ("Monberaux uses Mix:
+                    --   Dark Potion.The Apex Raptor takes 666 points of
+                    --   damage"). Chemist offensive-item text; dup of
+                    --   0x028 synth, was leaking into System.
+    [28] = true,    -- mob/actor ability action+damage ("X uses → Y for
+                    --   N damage", "The X uses Ability.Y takes N...") —
+                    --   dup of 0x028 synth; leaked into System garbled.
+    [31] = true,    -- medicine / item-use + HP recovery ("Monberaux uses
+                    --   Max. Potion.Wormfood recovers 500 HP", "X uses
+                    --   Mix: Vaccine → Y for N"). Chemist/Alchemy ability
+                    --   text. Duplicates 0x028 synth and was leaking into
+                    --   System / mis-rendering cures as damage in Battle.
+                    --   (Remove this entry to show cure/recovery text.)
+    [111] = true,   -- trust/player ability-use + buff-gain text
+                    --   ("Monberaux uses Mix: Guard Drink.Monberaux gains
+                    --   the effect of Protect", "...status parameters are
+                    --   boosted"). Mix/medicine and similar ability
+                    --   applications. Dup of 0x028 synth (which already
+                    --   emits trust/party buff gains); was leaking the
+                    --   whole Mix line into the System tab.
+    [50] = true,    -- ability/song readies ("[Ulmia] Blade Madrigal →
+                    --   Ulmia") — dup synth.
+    [56] = true,    -- AoE buff target-list ("{6}: A, B, C ... is
+                    --   affected") / mob TP-move self-damage ("Apex Jagil
+                    --   uses → Apex Jagil for N damage") — dup synth.
+    [57] = true,    -- AoE TP-move DAMAGE target-list ("Apex Bats uses →
+                    --   {4}: Valaineral, Elletear... for 147 damage").
+                    --   Mob AoE TP move hitting multiple targets; dup of
+                    --   0x028 synth (ally-gated in battle_events). Was
+                    --   leaking OTHER parties' fights into System.
+    [63] = true,    -- AoE TP-move NO-DAMAGE target-list ("Apex Bats uses
+                    --   → {2}: Raidenmei and Ifrit for no damage"). Dup
+                    --   synth; other-party leak into System.
+    [112] = true,   -- mob ability + debuff-on-target ("The Apex Bats uses
+                    --   Sonic Boom.Valaineral receives the effect of
+                    --   Attack Down"). Dup of 0x028 synth; other-party
+                    --   leak into System.
+    [114] = true,   -- AoE TP-move no-damage target-list variant ("Apex
+                    --   Bats uses → {2}: Monberaux and Nekonoshippo for
+                    --   no damage"). Dup synth; other-party leak.
     [26] = true,    -- /yell (zone-broadcast variant)
     [27] = true,    -- /linkshell 2 (LS2 actual)
     [36] = true,    -- defeat text — duplicates synth ("X defeats Y")
+    [101] = true,   -- AoE ability target-list ("X uses → {6}: A, B, C")
+                    --   — dup of 0x028 synth.
+    [104] = true,   -- mob TP-move MISS ("The Apex Raptor uses Ripper
+                    --   Fang, but misses Wormfood"). Counterpart to the
+                    --   mode-28 hit; battle_events synthesizes the miss
+                    --   (cat 11 → miss), so the text line is a dup that
+                    --   was leaking into System.
+    [110] = true,   -- mob readies ability ("[Apex Raptor] Scythe Tail →
+                    --   Wormfood") — dup of 0x028 synth; this is the mob-
+                    --   ability line that was showing in System garbled.
     [144] = true,   -- NPC dialog ("Yoskolo : Welcome to..."). Users
                     --   see this in FFXI's own chat already and it
                     --   doesn't need a separate panel slot. To route
@@ -624,12 +734,14 @@ function M.emit_chat(mode, sender_name, text)
     -- trace, with [TXT] source tag to distinguish from [PKT].
     -- See chat/chat_packets.lua _trace_log_line for file path.
     --
-    -- We DO skip addon-injected modes (>= MAX_REAL_CHAT_MODE) even
-    -- in trace, because those are our own chat outputs (debug, OW
-    -- info lines, etc.) — they're not real FFXI chat and capturing
-    -- them creates feedback loops (the trace echoes a line, the
-    -- echo arrives via incoming text, the trace logs it again, etc).
-    if M.trace and mode < MAX_REAL_CHAT_MODE then
+    -- We log high modes too (so dropped server announcements like the
+    -- Ambuscade-tome / Kupofried / Besieged broadcasts show their mode
+    -- number — otherwise they'd never appear here and we couldn't tell
+    -- which mode to whitelist). We DO skip our OWN injected lines
+    -- (prefixed "[OW") to avoid the feedback loop where the trace
+    -- echoes a line, the echo re-enters via incoming text, and logs
+    -- again.
+    if M.trace and text:sub(1, 3) ~= '[OW' then
         local now = os.date('*t')
         local timestamp = string.format(
             '%02d:%02d:%02d', now.hour, now.min, now.sec)
@@ -664,20 +776,37 @@ function M.emit_chat(mode, sender_name, text)
     -- being dropped on that mode and we've confirmed it's not an
     -- addon source.
     --
-    -- Currently whitelisted:
     --   151 — server announcement (Voidwatch / Campaign / Besieged
-    --         world-event broadcasts: "Word has been received of an
-    --         undead threat in <zone>." — observed by user in May
-    --         2026 Voidwatch broadcasts).
+    --         world-event broadcasts) + home-point / system info.
+    --   150 — NPC dialog / conversation ("Jeggim : Without a
+    --         watercraft..."). The same line also arrives on mode 152
+    --         (twice) — a duplicate framing we deliberately leave
+    --         dropped so the NPC line shows once, not three times.
+    --   161 — periodic world announcements: King Kupofried's "ancient
+    --         magic" buff broadcast, and "Page N of the tome flares
+    --         up!" (Ambuscade tome progress). Confirmed via trace.
     --   205 — LS message-of-the-day (login banner / /lsmes output)
+    --   208 — /check examine line ("<Name> examines you."). Confirmed
+    --         via trace. Python's _EXAMINE_PATTERN_R then routes it to
+    --         the examine channel → System tab.
+    --
+    -- NOT whitelisted (intentionally):
+    --   152 — duplicate framing of mode-150 NPC dialog (fires 2x for
+    --         the same line). Dropping it avoids triplicate NPC lines.
+    --   160 — a third-party /checkparam addon's GearSwap-style stat
+    --         readout that runs alongside /check. User wants it
+    --         ignored, so it stays dropped.
     --
     -- When a user reports a missing system message, check their
     -- session log for the "[OW] dropped chat mode=N" telemetry
     -- line below; the mode that produced the dropped text snippet
     -- can then be added here.
     local REAL_HIGH_MODES = {
+        [150] = true,
         [151] = true,
+        [161] = true,
         [205] = true,
+        [208] = true,
     }
     if mode >= MAX_REAL_CHAT_MODE and not REAL_HIGH_MODES[mode] then
         -- Silently drop. Previously this printed a one-line preview of
@@ -688,6 +817,29 @@ function M.emit_chat(mode, sender_name, text)
         -- data/chat_packet_log.txt without touching chat.
         return
     end
+    -- Progression-message self-filter. FFXI broadcasts "<Name> earns a
+    -- job point!", "<Name> gains N limit points", and exemplar/capacity
+    -- gains for everyone in your area — so other players' gains flood the
+    -- System tab ("Delchan earns a job point!"). Keep only your own.
+    -- These are actorless-feeling system lines that lead with the subject
+    -- player's name, so we self-check by leading name.
+    do
+        local is_progression =
+            text:find('earns a job point', 1, true)
+            or text:find(' limit points', 1, true)
+            or text:find(' exemplar points', 1, true)
+            or text:find(' capacity points', 1, true)
+        if is_progression then
+            local player = windower.ffxi.get_player()
+            local pname = player and player.name or nil
+            -- Show only if the line is about us (our name leads it).
+            if not (pname and pname ~= ''
+                    and text:find(pname, 1, true) == 1) then
+                return
+            end
+        end
+    end
+
     -- Drop real-chat modes (say/tell/LS/etc.) so they don't flow into
     -- the chat panel via incoming text. The 0x017 packet handler
     -- sources INCOMING chat (messages received from others) — packets
@@ -709,16 +861,70 @@ function M.emit_chat(mode, sender_name, text)
     --    player name at the start of the line, or in the bracketed
     --    formats FFXI uses ("(Name) text" for /p, "<Name>>text" for
     --    sent tell, etc.). If detected, pass through.
-    if DROPPED_CHAT_MODES[mode] then
+    -- Mode 111 carries several line types, ALL of which duplicate the
+    -- 0x028 synth and were leaking into System:
+    --   * Mix/medicine text dupes ("Monberaux uses Mix: ...gains Protect")
+    --   * Party/trust buff-gains ("Yoran-Oran gains the effect of Protect")
+    --   * Mob ability self-buffs ("The Apex Crab uses Scissor Guard.
+    --     The Apex Crab gains the effect of Defense Boost")
+    -- The synth emits party buffs (Buffs tab), Mix (Battle), and mob TP
+    -- moves (cat 11 → Battle → the user's Mob filter) on their own paths,
+    -- so the raw text version on 111 is redundant everywhere and only
+    -- ever leaked into System. Drop the whole mode. (An earlier attempt
+    -- to selectively keep mob lines here was wrong: the text version
+    -- still routed to System, not the Mob tab — the Mob tab is fed by the
+    -- synth, not this path.)
+    -- Skillchain exception: mode 20 (battle damage text) is normally
+    -- dropped as a BattleMod-format duplicate, but a SKILLCHAIN result
+    -- line ("Fragmentation: 1023 → Apex Crab") rides mode 20 too and is
+    -- NOT a duplicate of any synth — there's no skillchain synth, so if
+    -- we drop it here Python never sees it. Let skillchain lines through
+    -- (Python's routing then files them under weaponskills). Detected by
+    -- the skillchain property names followed by a colon — tight enough to
+    -- not catch ordinary damage text.
+    local _is_skillchain = false
+    if mode == 20 then
+        local _l = text:lower()
+        if _l:find('skillchain', 1, true)
+           or _l:find('light:', 1, true)   or _l:find('darkness:', 1, true)
+           or _l:find('radiance:', 1, true) or _l:find('umbra:', 1, true)
+           or _l:find('gravitation:', 1, true)
+           or _l:find('fragmentation:', 1, true)
+           or _l:find('fusion:', 1, true)  or _l:find('distortion:', 1, true)
+           or _l:find('compression:', 1, true)
+           or _l:find('liquefaction:', 1, true)
+           or _l:find('induration:', 1, true)
+           or _l:find('reverberation:', 1, true)
+           or _l:find('transfixion:', 1, true)
+           or _l:find('scission:', 1, true)
+           or _l:find('detonation:', 1, true)
+           or _l:find('impaction:', 1, true) then
+            _is_skillchain = true
+        end
+    end
+    if DROPPED_CHAT_MODES[mode] and not _is_skillchain then
         local is_gearswap = false
         if text:sub(1, 10) == '[GearSwap]' or text:sub(1, 6) == '[CHAR]' then
             is_gearswap = true
+        elseif text:sub(1, 2) == '$[' then
+            -- GearSwap macro-set echoes: "$[Macro Set: WAR] Book: 1
+            -- Page: 3". Fired on mode 1 (same as /say) with no color,
+            -- so they look like chat but are addon output. Confirmed
+            -- via trace. Strip the leading "$" marker so the line
+            -- displays as "[Macro Set: WAR] Book: 1 Page: 3".
+            is_gearswap = true
+            text = text:sub(2)
         elseif text:match("^[A-Za-z][A-Za-z0-9 ]-%s+is now%s+[A-Za-z0-9_]+%.$") then
             is_gearswap = true
         end
 
         local is_own_echo = false
-        if not is_gearswap then
+        local _CHAT_ECHO_MODES = {
+            [1]=true,[2]=true,[3]=true,[4]=true,[5]=true,[6]=true,
+            [7]=true,[8]=true,[9]=true,[11]=true,[12]=true,[13]=true,
+            [14]=true,[26]=true,[27]=true,
+        }
+        if not is_gearswap and _CHAT_ECHO_MODES[mode] then
             local player = windower.ffxi.get_player()
             local pname = player and player.name or nil
             if pname and pname ~= '' and text:find(pname, 1, true) then
@@ -729,6 +935,33 @@ function M.emit_chat(mode, sender_name, text)
                 local pos = text:find(pname, 1, true)
                 if pos and pos <= 30 then
                     is_own_echo = true
+                end
+            end
+        end
+
+        -- Repair the MANGLED echo of our own outgoing auto-translate
+        -- chat. Windower's incoming-text echo drops the AT id's high
+        -- byte, so a phrase like {test} (id 7801) renders as a stray
+        -- char ("y"). OmniWatch's 'outgoing text' hook captured the
+        -- phrase from the INTACT typed command and stored the resolved
+        -- body keyed by mode. Here we swap the mangled body for the
+        -- resolved text, then let the echo display normally (it already
+        -- passes the own-echo gate). Consume the flag; short TTL guards
+        -- against repairing an unrelated later line.
+        if is_own_echo and _G._ow_own_outgoing_suppress then
+            local sup = _G._ow_own_outgoing_suppress[mode]
+            if sup and sup.resolved and (os.clock() - (sup.ts or 0)) < 1.0 then
+                _G._ow_own_outgoing_suppress[mode] = nil
+                -- The echo is "<sender-prefix><mangled body>". Preserve
+                -- the prefix (everything up to and including the first
+                -- ") " or "> " that FFXI uses to separate sender from
+                -- body) and replace the body with the resolved text.
+                local prefix = text:match('^(.-[%)>]%s)')
+                if prefix then
+                    text = prefix .. sup.resolved
+                else
+                    -- No recognizable sender prefix — replace whole body.
+                    text = sup.resolved
                 end
             end
         end
@@ -784,7 +1017,7 @@ function M.emit_chat(mode, sender_name, text)
     -- work with.
     text = _normalize_to_utf8(text)
 
-    text = _strip_ffxi_markers(text)
+    text = _strip_ffxi_markers(text, mode)
 
     -- Resolve sender → mob id → classification. Most chat senders
     -- won't be findable by name (different zones, LS chatter etc.),

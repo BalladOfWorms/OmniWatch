@@ -115,18 +115,55 @@ local function _resolve_at_phrase(b2, b3, b4, b5)
     local res = _load_resources()
     if not res then return '{AT}' end
     local id = b4 * 256 + b5
-    local entry = res.auto_translates[id]
-    if entry and entry.en then
-        return '{' .. entry.en .. '}'
+
+    -- Autotranslate token layout (verified against captured packets):
+    --   FD <b2=type> <b3=lang> <b4=id_hi> <b5=id_lo> FD
+    --   b2 = 0x02 → standard phrase  → res.auto_translates[id]
+    --   b2 = 0x07 → item link        → res.items[id]
+    --   b3        = language/variant (01 or 02 seen for the same phrase);
+    --               does NOT affect which table or id is used.
+    --
+    -- Proof from the chat log:
+    --   FD 07 02 0F DC → item 4060 "Beitetsu" (no phrase at 4060)
+    --   FD 02 02 14 DD → phrase 5341 "Alzadaal Undersea Ruins"
+    --   FD 02 01 14 DD → SAME phrase 5341 (only b3 differs: 01 vs 02)
+    --   FD 02 02 08 A6 → phrase 2214 "Einherjar"
+    -- An earlier attempt routed by "b2 ~= 0 → item", which was wrong:
+    -- phrases use b2=0x02 (non-zero), so that turned "Einherjar" into
+    -- the item "Imperial Rice" (both share id 2214). The distinguishing
+    -- value is specifically b2==0x07 for items.
+    local phrase = res.auto_translates and res.auto_translates[id]
+    local item   = res.items and res.items[id]
+
+    if M.debug then
+        windower.add_to_chat(207, string.format(
+            '[OW AT] bytes=%02X %02X %02X %02X  id=%d  phrase=%s  item=%s',
+            b2, b3, b4, b5, id,
+            (phrase and phrase.en) or '(nil)',
+            (item and (item.en or item.english)) or '(nil)'))
     end
-    -- Items / Key Items use different encoding ranges. Try alternate
-    -- byte combinations just in case the field order varies. (Defensive
-    -- fallback; rarely needed.)
-    local alt_id = b2 * 256 + b3
-    local alt = res.auto_translates[alt_id]
-    if alt and alt.en then
-        return '{' .. alt.en .. '}'
+
+    if b2 == 0x07 then
+        -- Item link. Prefer items; fall back to phrase if the id isn't a
+        -- known item (defensive — shouldn't happen for a valid link).
+        if item and (item.en or item.english) then
+            return '{' .. (item.en or item.english) .. '}'
+        end
+        if phrase and phrase.en then
+            return '{' .. phrase.en .. '}'
+        end
+    else
+        -- Phrase (b2==0x02 and any other non-item type). Prefer the
+        -- phrase dictionary; fall back to items only if the id isn't a
+        -- known phrase.
+        if phrase and phrase.en then
+            return '{' .. phrase.en .. '}'
+        end
+        if item and (item.en or item.english) then
+            return '{' .. (item.en or item.english) .. '}'
+        end
     end
+
     return '{AT}'
 end
 
@@ -612,7 +649,120 @@ function M.process(id, data)
             mode, sender_name, message_raw:sub(1, 60)))
     end
 
-    if not ACCEPTED_MODES[mode] then return end
+    if not ACCEPTED_MODES[mode] then
+        -- Unknown-mode 0x017 packets carry a mix of things: NPC dialog,
+        -- /check examines, bazaar receipts, server notices (all WANTED
+        -- in chat) but ALSO battle-log spam ("X uses Y", "X readies Y",
+        -- "X casts Y") and emotes (which belong in World, not System).
+        -- Rather than blanket-accept (which floods System), we
+        -- content-filter here.
+        local message_generic = _strip_markers(message_raw or '')
+        if message_generic == '' and (not sender_name or sender_name == '')
+        then
+            return   -- nothing usable
+        end
+
+        -- (1) DROP battle-action-shaped lines. These duplicate the
+        -- colored battle synthesizer (battle_events.lua) and FFXI's
+        -- own log. Matching on the canonical battle verbs catches
+        -- "Ahoge uses ?", "Chocotart readies Chameleon Skin", casts,
+        -- etc. The "?" is a stripped SJIS/AT ability name; we don't
+        -- want these in chat regardless of whether the name resolved.
+        -- Pattern: word boundary + battle verb. Lua patterns have no
+        -- \b, so we approximate with a leading space or start anchor.
+        local lower = message_generic:lower()
+        local function _has_verb(v)
+            -- match " <verb> " or "^<verb> " (verb as a whole word)
+            return lower:find(' ' .. v .. ' ', 1, true) ~= nil
+                or lower:find('^' .. v .. ' ') ~= nil
+        end
+        if _has_verb('uses')
+                or _has_verb('readies')
+                or _has_verb('casts')
+                or _has_verb('starts casting')
+                or lower:find(' uses %?')      -- "X uses ?" specifically
+                or lower:find(' takes ')        -- damage lines
+                or lower:find(' misses ')
+                or lower:find(' hits ')
+                or lower:find(' evades ')
+                or lower:find('%d+ points of') then
+            return   -- battle log; drop
+        end
+
+        -- NOTE: emote detection by verb-sniffing was removed here.
+        -- It caused false positives — common English words ("thinks",
+        -- "doubts", "angry", "aims", etc.) appear in normal player
+        -- chat, so a yell/shout containing one got misclassified as an
+        -- emote and surfaced even when the native client had filtered
+        -- it (e.g. blacklisted sender). Real emotes arrive on their
+        -- proper text modes (7/9/15) and are classified Python-side,
+        -- so they don't need detecting here.
+
+        local generic_channel, generic_sender_color
+        if sender_name and sender_name ~= '' then
+            -- Sender-attributed unknown-mode line — likely NPC dialog
+            -- ("Yoskolo : Welcome..."). Surface as chat_npc.
+            generic_channel      = 'chat_npc'
+            generic_sender_color = 'ch_other'
+        else
+            -- No sender on an unknown mode. These are mostly server
+            -- announcements (event broadcasts, world notices) that
+            -- DON'T carry a sender and may not come through the text
+            -- path. Surface as chat_other → Python routes it to System.
+            -- Battle-log spam that lands here is caught by Python's
+            -- battle-text filter (routed to hidden raw_battle), and the
+            -- system-text classifiers pull recognized notices into
+            -- System explicitly. We no longer drop these outright —
+            -- dropping was killing legitimate announcements.
+            generic_channel      = 'chat_other'
+            generic_sender_color = 'ch_other'
+            if M.debug then
+                windower.add_to_chat(207, string.format(
+                    '[OW chat_pkt no-sender -> chat_other] mode=%d msg=[%s]',
+                    mode, message_generic:sub(1, 40)))
+            end
+        end
+
+        -- Build segments: "Sender : Message" when there's a sender,
+        -- otherwise the bare message.
+        local generic_segments
+        if not sender_name or sender_name == '' then
+            generic_segments = {
+                {text = message_generic, color = generic_sender_color},
+            }
+        else
+            generic_segments = {
+                {text = sender_name,      color = generic_sender_color},
+                {text = ' : ',            color = 'default'},
+                {text = message_generic,  color = 'default'},
+            }
+        end
+        local generic_flat = ''
+        for i = 1, #generic_segments do
+            generic_flat = generic_flat .. generic_segments[i].text
+        end
+
+        _ring.text_ring.push({
+            ts           = os.time(),
+            source       = 'chat',
+            mode         = mode,
+            kind         = generic_channel,
+            actor_id     = 0,
+            actor_name   = sender_name or '',
+            actor_class  = 'other',
+            target_id    = 0,
+            target_name  = '',
+            target_class = '',
+            text         = generic_flat,
+            segments     = generic_segments,
+        })
+        if M.debug then
+            windower.add_to_chat(207, string.format(
+                '[OW chat_pkt EMIT-generic] mode=%d sender=[%s] -> %s',
+                mode, sender_name or '', generic_channel))
+        end
+        return
+    end
 
     -- sender_name is already trimmed above (byte-by-byte read stops at
     -- NUL). message gets marker-stripping for color escapes and
@@ -689,11 +839,20 @@ function M.process(id, data)
             {text = message,          color = 'default'},
         }
     else
-        -- say / shout / yell / fallthrough
+        -- say / shout / yell / fallthrough. Body color is explicit
+        -- per-channel for shout/yell so it doesn't depend on the
+        -- Python mode-color override (which could mistint yell as
+        -- tell-purple if the mode mapping is off). Say stays default.
+        local body_color = 'default'
+        if channel == 'chat_yell' then
+            body_color = 'body_yell'
+        elseif channel == 'chat_shout' then
+            body_color = 'body_shout'
+        end
         segments = {
             {text = sender_name,      color = sender_color},
             {text = ' : ',            color = 'default'},
-            {text = message,          color = 'default'},
+            {text = message,          color = body_color},
         }
     end
 

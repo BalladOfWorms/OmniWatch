@@ -112,6 +112,41 @@ M.process_action = buff_events.process
 -- natural wear-offs; this is the only packet source that does.
 M.process_status_message = buff_events.process_status_message
 
+-- Hook called from OmniWatch.lua's 0x076 party-buff diff. FFXI sends
+-- 0x029 wear-offs only for the local player, so a PARTY/ALLIANCE
+-- member losing a buff is invisible to process_status_message. The
+-- 0x076 handler diffs successive party-buff snapshots and calls this
+-- for each buff that disappeared from a member's list. Args:
+-- (player_id, buff_id). buff_events classifies buff-vs-debuff and
+-- emits a 'loses'/'recovers from' wear event, identical in shape to
+-- the self wear-off path.
+M.process_party_buff_loss = buff_events.process_party_buff_loss
+
+-- Hook called from OmniWatch.lua's 0x063 sub-9 self-buff diff. Reports a
+-- DEBUFF that newly appeared in your own buff list (the authoritative
+-- 0x063 buff array the party panel reads). Fixes "I see a debuff recover
+-- but never saw it land": mob debuffs don't surface in the 0x028 action
+-- stream at all, only as the buff appearing in 0x063. Packet-based, not
+-- client polling. Debuffs only — buffs you receive already emit via the
+-- recognized 0x028 apply messages.
+M.process_self_debuff_apply = buff_events.process_self_debuff_apply
+
+-- Hook called from OmniWatch.lua's 0x063 sub-9 diff when a DEBUFF leaves
+-- your buff array. Catches removals that don't fire a 0x029 wear-off
+-- (e.g. Mix: Vaccine). Dedupes against recent 0x029 self wear-offs so
+-- spell cures (Viruna) aren't double-reported.
+M.process_self_debuff_loss = buff_events.process_self_debuff_loss
+
+-- Public buff-vs-debuff check by status id (fallback-protected; works
+-- even when BattleMod's _G.enfeebling isn't loaded). Used by the
+-- buff-timer source classifier so debuffs like Disease are styled as
+-- debuffs, not buffs.
+M.is_debuff = buff_events.is_debuff
+
+-- 0x063 sub-9 verification dump (raw hex + parsed ids), gated by the
+-- debuffapplyprobe toggle. Lets us confirm the buff-list byte layout.
+M.debug_self_buff_dump = buff_events.debug_self_buff_dump
+
 -- Hook called from OmniWatch.lua's 0x028 handler. Synthesizes
 -- per-action colored chat events from the action packet, replacing
 -- FFXI's native battle log lines in the chat panel. Status-effect
@@ -221,6 +256,32 @@ function M.is_buff_wear_probe()
     return buff_events.debug_wear
 end
 
+-- Toggle for the buff_events debuff-APPLY diagnostic. When on, every
+-- action targeting you or a party/alliance member is logged to
+-- data/ow_classify_probe.log with its msg_id, param, buffname, and
+-- whether classify_status recognizes it. Used to find the message ID a
+-- mob TP-move/ability debuff-apply uses — the suspected cause of
+-- "I see the wear-off but not the apply" (the apply lands on a msg ID
+-- in neither module's recognized set). Companion to the wear probe.
+function M.set_buff_apply_probe(on)
+    buff_events.debug_apply = on and true or false
+end
+
+function M.is_buff_apply_probe()
+    return buff_events.debug_apply
+end
+
+-- Direct access to the probe-log writer, so OmniWatch.lua's 0x076
+-- party-buff diff can log buff deltas (the trust buff-loss diagnostic)
+-- into the same data/ow_classify_probe.log as the other probes.
+M._probe_log = buff_events._probe_log
+
+-- Per-member 0x076 dump for the trust-buff-loss diagnostic. Uses
+-- buff_events' own M.debug_apply gate + _probe_log writer, so it works
+-- even if other probe accessors aren't wired. Called per member from
+-- OmniWatch.lua's 0x076 handler.
+M.debug_party_member_dump = buff_events.debug_party_member_dump
+
 -- Toggle for the dropped-high-mode telemetry. When on, every
 -- never-before-seen mode that gets filtered out by the high-mode
 -- filter prints a one-line preview to chat. Off by default to keep
@@ -250,6 +311,21 @@ end
 
 function M.is_condense_melee()
     return battle_events.condense_melee
+end
+
+-- Toggle for the battle_events classification probe. When on, every
+-- synthesized battle event logs its actor/target id+class and the
+-- ally-gate verdict (SHOWN/DROPPED) to FFXI chat. Used to find why an
+-- other-party trust's ABILITIES leak into the battle feed — the log
+-- shows exactly what class the actor/target resolved to, so we can see
+-- whether the classifier is mis-tagging them (e.g. as an ally) or the
+-- gate is the wrong shape. Noisy in combat; off by default.
+function M.set_battle_classify_probe(on)
+    battle_events.debug_classify = on and true or false
+end
+
+function M.is_battle_classify_probe()
+    return battle_events.debug_classify
 end
 
 return M

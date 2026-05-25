@@ -10,6 +10,8 @@ import webbrowser
 import urllib.parse
 import datetime
 import traceback
+import collections as _collections
+import base64
 
 # ---------------------------------------------------------------------------
 # Crash logger
@@ -453,7 +455,68 @@ def get_vana_time():
     return hours, minutes, day_name, moon_pct, moon_phase
 
 
+# Make the process DPI-aware BEFORE pygame creates its window.
+#
+# Why this matters: Windows scales coordinates for "DPI-unaware"
+# processes — at 150% scaling on a 2560x1440 monitor, Win32 calls like
+# GetMonitorInfoW return ~1707x960 (the logical size) instead of the
+# physical 2560x1440. Our borderless-window code uses GetMonitorInfoW
+# to size the pygame surface to the work area when toggling on. With
+# DPI scaling reporting smaller values, we'd resize the surface to the
+# scaled-down size, and the resulting window would not fill the actual
+# screen — leaving empty space at the bottom of the display.
+#
+# SetProcessDpiAwarenessContext with PER_MONITOR_AWARE_V2 (-4) is the
+# modern API (Win10 1703+). It opts the entire process into receiving
+# physical pixel values from coordinate-returning APIs. We try it first;
+# if the API isn't available (older Windows), fall back to the older
+# Win8.1 SetProcessDpiAwareness(2)=PER_MONITOR. Both are no-ops on
+# non-Windows.
+#
+# Note: PyInstaller-bundled apps default to "system DPI aware" via the
+# pyi manifest. That works at 100% scaling but breaks on multi-monitor
+# setups with mixed DPI. Setting PER_MONITOR_AWARE_V2 explicitly here
+# overrides whatever the bundle defaulted to. Must happen before any
+# window is created; pygame.init() below creates a window, so we go
+# first.
+if sys.platform == "win32":
+    try:
+        import ctypes
+        try:
+            # Win10 1703+ : PER_MONITOR_AWARE_V2 = handle value -4
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(
+                ctypes.c_void_p(-4))
+        except (AttributeError, OSError):
+            try:
+                # Win8.1+ : PER_MONITOR_AWARE = 2
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except (AttributeError, OSError):
+                # Vista+ fallback : whole-system DPI aware
+                ctypes.windll.user32.SetProcessDPIAware()
+    except Exception as _e:
+        print(f"[OmniWatch] DPI awareness setup failed (non-fatal): {_e!r}")
+
+
 pygame.init()
+
+# Enable Unicode text input events (pygame.TEXTINPUT) for the chat
+# composer field. pygame's text input is window-scoped; once started
+# it stays active until pygame.key.stop_text_input(). Without this
+# call on some platforms (Windows w/ IME, macOS), TEXTINPUT events
+# don't fire and typing CJK or other multi-byte text into the chat
+# composer would silently fail. Started unconditionally so the chat
+# composer works regardless of whether the user is currently focused
+# on it.
+try:
+    pygame.key.start_text_input()
+    # Key repeat: holding a key (Backspace, arrows, chars) repeats after a
+    # 400ms delay, then every 40ms. Makes all text fields behave like normal
+    # inputs (hold Backspace to delete continuously, etc.).
+    pygame.key.set_repeat(400, 40)
+except (AttributeError, pygame.error):
+    # pygame < 2.0 or unusual install — TEXTINPUT may still work
+    # without explicit start_text_input(); fall through silently.
+    pass
 
 # Set the window icon BEFORE set_mode(). Pygame on Windows will only
 # pick up the title-bar icon if it's installed before the window is
@@ -512,7 +575,19 @@ try:
 except Exception as e:
     print(f"[OmniWatch] window icon load failed: {e!r}")
 
-screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+# Borderless from the first frame. v1.2.x supported toggling between
+# framed and borderless via Settings; v1.3.0 dropped that toggle and
+# OmniWatch is now always borderless. The OS [X] close button is gone
+# (no title bar), so the Settings menu has an explicit "Exit OmniWatch"
+# button at the top of the General section. Window position is changed
+# with Shift+drag anywhere in the window — see the MOUSEBUTTONDOWN
+# handler in the main loop.
+#
+# We pass NOFRAME (no caption, no resize handles, no min/max/close
+# buttons) but NOT FULLSCREEN — the window is a normal application
+# window minus its decorations, so it still respects the taskbar,
+# Alt+Tab, and the user's existing window arrangement.
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
 pygame.display.set_caption("OmniWatch")
 
 # Note: the previous build minimized the console window after launch
@@ -633,21 +708,70 @@ sim_window_drag      = None          # (mouse_offset_x, mouse_offset_y) while dr
 sim_window_resize    = None          # (start_w, start_h, start_mx, start_my) while resizing
 sim_window_scroll    = 0             # vertical content scroll when h < natural
 
-# Borderless-window drag state. None when not dragging. While dragging,
+# ── Sim "Import Set" file browser ──────────────────────────────────────────
+# In-overlay browser to pull a named set out of any GearSwap gear file
+# (any job), rooted at a user-configured GearSwap data path. State:
+#   sim_import_open   : modal visible
+#   sim_import_root   : configured root folder (persisted in its own JSON)
+#   sim_import_cwd    : current folder being browsed (under/at root)
+#   sim_import_file   : currently selected .lua file (full path) or None
+#   sim_import_setpath: typed set path text (e.g. "sets.engaged.HighHaste")
+#   sim_import_scroll : file-list scroll offset (entries)
+#   sim_import_field  : which text field has focus: None | "root" | "setpath"
+sim_import_open     = False
+sim_import_root     = ""
+sim_import_cwd      = ""
+sim_import_file     = None
+sim_import_setpath  = ""
+sim_import_setpath_cursor = 0   # caret index within sim_import_setpath
+sim_import_scroll   = 0
+sim_import_field    = None
+sim_import_rects    = []     # (pygame.Rect, action_dict) per frame
+sim_import_status   = ""     # transient status/error line
+
+# Config file for just the gear-root path (kept separate from the main
+# settings schema to avoid its side-effect machinery — mirrors the
+# aug-nicknames pattern).
+def _sim_import_cfg_path():
+    try:
+        return os.path.join(USER_DIR, "sim_import_root.json")
+    except Exception:
+        return "sim_import_root.json"
+
+def _sim_load_import_root():
+    global sim_import_root, sim_import_cwd
+    try:
+        p = _sim_import_cfg_path()
+        if os.path.exists(p):
+            with open(p) as f:
+                d = json.load(f)
+            r = d.get("root", "") if isinstance(d, dict) else ""
+            if isinstance(r, str):
+                r = r.replace("\x00", "").strip()
+                sim_import_root = r
+                sim_import_cwd = r
+    except Exception as e:
+        print(f"[OmniWatch] sim import root load failed: {e}")
+
+def _sim_save_import_root():
+    try:
+        with open(_sim_import_cfg_path(), "w") as f:
+            json.dump({"root": sim_import_root}, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] sim import root save failed: {e}")
+
+# Shift+drag window-move state. None when not dragging. While dragging,
 # holds {"hwnd","anchor_x","anchor_y","win_x","win_y"}: HWND of our
 # window, the mouse screen-coords at drag start, and the window's
 # screen-coords at drag start. MOUSEMOTION compares current cursor pos
 # against anchor and translates the window accordingly via SetWindowPos.
+#
+# The variable is still named `_borderless_drag` for backwards-compat
+# with v1.2.x — OmniWatch was a toggleable framed/borderless app then;
+# in v1.3.0+ the window is always borderless, so Shift+drag is the
+# only way to move it (no title bar to grab).
 _borderless_drag = None
 
-# When toggling borderless ON from a maximized window, we restore the
-# window first (un-maximize) so the style change can take effect, then
-# manually size it to fill the work area. The window is no longer in
-# the OS's "maximized" state at this point — it's a normal window
-# sized to fill the screen. We remember this so the next toggle OFF
-# can re-apply maximize and the title bar's [□] button shows the
-# correct restore icon.
-_borderless_was_fullscreen = False
 sim_state = {
     # Legacy fields (main_job/sub_job/merits/jp_spent/gifts) are kept in
     # Sim job/sub/JP/merits/master_level: drive the synthetic compute
@@ -1204,6 +1328,16 @@ def _sim_send_reset():
         print(f"[OmniWatch] sim_send_reset failed: {e!r}")
 
 
+def _sim_send_import(filepath, setpath):
+    """Ask Lua to sandbox-resolve <setpath> from <filepath> into the sim
+    equipment. Wire form: SIM_IMPORT|<filepath>|<setpath>."""
+    try:
+        payload = f"SIM_IMPORT|{filepath}|{setpath}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+    except Exception as e:
+        print(f"[OmniWatch] sim_send_import failed: {e!r}")
+
+
 def _sim_format_equip_ref(ref):
     """Serialize a sim equipment ref for the SIM|equip wire format.
     Accepts:
@@ -1322,6 +1456,2475 @@ sock_inv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_inv.bind(("127.0.0.1", 5012))
 sock_inv.setblocking(False)
 
+# ── Chat panel sockets (ports 5013 + 5014) ────────────────────────────────
+# 5013 carries chat-text events (say/party/tell/LS/yell/system) and
+# outgoing chat. 5014 carries battle log events (0x028/0x029-derived,
+# wired in step 5). Separate sockets so a backed-up battle stream can't
+# slow chat — tells must never drop.
+#
+# Both speak the same CHAT_BATCH wire format (see chat/drain.lua header):
+#   CHAT_BATCH\t<count>\t<batch_index>\t<batch_total>
+#   chat\t<ts>\t<source>\t<mode>\t<actor_id>\t<actor_name>\t<actor_class>\t<target_id>\t<target_name>\t<target_class>\t<segments_b64>\t<text_b64>
+#   chat\t...
+#
+# Receive buffer is large (32K) because heavy combat may emit a batch
+# spanning multiple datagrams; we want them all to land before the
+# socket drops anything.
+sock_chat = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_chat.bind(("127.0.0.1", 5013))
+sock_chat.setblocking(False)
+
+sock_battle = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_battle.bind(("127.0.0.1", 5014))
+sock_battle.setblocking(False)
+
+# Skillchain panel socket (port 5015). Receives SC state lines, WS
+# suggestion lists, settings echoes, and job-change notifications from
+# the Skillchains.lua sub-module. Wire format documented in
+# Skillchains.lua's header.
+sock_skillchain = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_skillchain.bind(("127.0.0.1", 5015))
+sock_skillchain.setblocking(False)
+
+# Chat panel state. Pass 1 of step 3 (receiver only) — pass 2 adds
+# the visible panel that consumes this state.
+#
+# chat_events: rolling buffer of parsed event dicts in arrival order.
+# Bounded so memory doesn't grow without limit during long sessions.
+# At ~20 events/sec sustained (heavy combat) the 2000-cap deque covers
+# ~100 seconds of scrollback in memory; older lines fall off the front.
+# (On-disk session log added in step 9 preserves the full history.)
+#
+# Event dict shape (matches the Lua side):
+#   {
+#     "ts":           float unix seconds
+#     "source":       "chat" | "outgoing" | "system" | "battle" | "echo"
+#     "mode":         int — FFXI mode byte
+#     "actor_id":     int
+#     "actor_name":   str (may be "" when unresolved)
+#     "actor_class":  str — self/party/alliance/mob/etc. (see classifier)
+#     "target_id":    int
+#     "target_name":  str
+#     "target_class": str
+#     "text":         str — FFXI markers already stripped Lua-side
+#     "segments":     list of (text, color_class) tuples for word-level
+#                     coloring. Built by Lua's chat/buff_events.lua and
+#                     chat/battle_events.lua, encoded by chat/drain.lua,
+#                     decoded here. Empty for events without coloring
+#                     (most raw incoming-text lines).
+#   }
+chat_events = _collections.deque(maxlen=2000)
+
+# Monotonic counter for stamping each event with a stable identity.
+# Used as the cache key for _chat_wrap_cache and _chat_split_cache so
+# id() reuse can't return wrapped content from a stale event to a
+# fresh one. Python reuses memory addresses after GC; when a deque
+# entry is evicted, its slot can be reused for a new event whose
+# id() collides with a still-living wrap-cache entry from the old
+# one. Result: the new event would render with the old event's
+# wrapped text — observed in user reports as "old battle line
+# replaced a checkparam line in System tab". Switching to a
+# monotonic counter eliminates the collision: every event ever
+# created gets a unique key.
+_chat_event_seq = 0
+def _chat_assign_seq(ev):
+    """Stamp an event with a unique sequence number for cache keying.
+    Returns the assigned number. Idempotent — re-stamping is fine
+    (uses .get to avoid overwrite if already set)."""
+    global _chat_event_seq
+    if "_seq" not in ev:
+        _chat_event_seq += 1
+        ev["_seq"] = _chat_event_seq
+    return ev["_seq"]
+
+# Diagnostic print toggle. When True, each parsed event is printed to
+# the Python console as it lands. Off by default — turn on with the
+# environment variable OMNIWATCH_CHAT_TRACE=1 for first-time debugging.
+# In step 3 pass 2 this becomes a panel; for pass 1 it's the only
+# visible feedback that the receiver is working.
+_chat_trace = bool(os.environ.get("OMNIWATCH_CHAT_TRACE"))
+
+# Always-on routing trace counter. The first N events get their full
+# classifier output + tab destinations logged, so when a user reports
+# "filters not working" the session log already has the diagnostic info
+# to debug the routing. Capped to keep log size sane on long sessions.
+_CHAT_ROUTE_TRACE_CAP = 50
+_chat_route_trace_count = 0
+
+# Diagnostic counters — total events received per stream since launch.
+# Useful for sanity-checking that both Lua streams are connected:
+# after a few minutes of play, chat_recv_text should be non-zero;
+# chat_recv_battle stays 0 until step 5 lands.
+chat_recv_text   = 0
+chat_recv_battle = 0
+chat_recv_errors = 0     # malformed packets dropped (logged once each)
+
+# ── Chat panel layout state ──────────────────────────────────────────────
+# Floating panel registered with the same draggable/resizable system as
+# the other panels (recast, buff, dps, ...). Differs from those in that
+# resize tracks pixel size directly (mirroring sim_window_size) rather
+# than scaling text — chat is fundamentally about readable lines, not
+# icon density, so width/height controls make more sense than scale.
+#
+# anchor is the corner pin (tl/tr/bl/br + offset) used by all panels;
+# pos is the resolved absolute coordinate updated each frame.
+chat_anchor          = None             # ["bl", ox, oy] etc.
+chat_pos             = None             # [x, y] derived from anchor each frame
+chat_scale           = 1.0              # font scale only (not panel size)
+chat_panel_dims      = [800, 280]       # [w, h] user-controlled in pixels
+CHAT_PANEL_MIN_W     = 240              # below this, lines render uselessly short
+CHAT_PANEL_MIN_H     = 80               # below this, less than 2 lines visible
+chat_panel_visible   = True
+
+# ── Skillchain panel state ──────────────────────────────────────────────
+# Populated from UDP port 5015 lines emitted by Skillchains.lua.
+# Mirrors the shape of other panels: anchor + pos + scale, plus the
+# panel-specific state (skillchain_state holds the current resonating
+# snapshot, skillchain_suggestions holds the WS/spell/pet list lua
+# computed for the player's current job/gear).
+#
+# Wire format reminder (from Skillchains.lua header):
+#   SC|tid|step|delay_ts|window_ts|props|closed|bound|action_id|resource
+#   SC_EMPTY|tid     → no resonating state, hide / blank the rows
+#   SUGGEST_BEGIN / SUGGEST|src|text / SUGGEST_END
+#   JOB|short        → player's current main job changed
+#   SETTINGS|csv     → echoed on every set_setting; Python mirrors
+skillchain_anchor    = None            # ["tl", ox, oy]
+skillchain_pos       = None            # [x, y] resolved per frame
+skillchain_scale     = 1.0
+skillchain_panel_visible = True
+# Mirror of Skillchains.lua's current_settings table. Updated when
+# lua sends a SETTINGS line. Defaults match SETTINGS_DEFAULT on the
+# lua side so the panel renders sensibly before the first SETTINGS
+# echo arrives.
+skillchain_settings = {
+    "show_panel":        True,
+    "track_sc":          True,    # master toggle for SC info
+    "track_magic_burst": True,    # master toggle for burst info
+    "show_props":        True,
+    "show_timer":        True,
+    "show_step":         True,
+    "show_weapon":       True,
+    "show_spell":        True,
+    "show_pet":          True,
+}
+# Active resonating state. None when nothing is resonating. Fields:
+#   target_id, step, delay_ts, window_ts, props (list of strings),
+#   closed (bool), bound (int, 0 = not chainbound), action_id, resource
+skillchain_state = None
+# Per-source suggestion lists. Updated atomically between SUGGEST_BEGIN
+# and SUGGEST_END. Each entry is a (name, level, prop) tuple parsed
+# from the "Name|Lv.N Prop" lua wire format.
+skillchain_suggestions = []
+# Current main job per lua (e.g. "SAM"). Used to drive job-specific
+# panel visibility — pet suggestions only show for BST/SMN, spell
+# suggestions only for SCH/BLU.
+skillchain_main_job = None
+
+# Body font size keyed off the chat_font_size setting (Small/Medium/Large).
+# Each level scales body/meta/tab fonts proportionally so the strip stays
+# balanced (timestamps don't dwarf body, tabs don't overflow). Read once
+# per draw via _chat_font_sizes() so changing the setting takes effect
+# on next render without restart.
+CHAT_FONT_SIZE_MAP = {
+    "small":  {"body": 10, "meta":  9, "tab": 10},
+    "medium": {"body": 12, "meta": 10, "tab": 11},
+    "large":  {"body": 14, "meta": 12, "tab": 13},
+}
+
+# Scroll state. 0 = pinned to bottom (auto-scroll new events). Positive
+# = scrolled UP that many *visible lines* (after wrap) from the bottom.
+# We track in visible-lines, not events, because one event may wrap
+# into multiple visible lines and the user thinks in terms of what
+# they see on screen.
+chat_scroll_offset   = 0
+
+# ── Tabs ───────────────────────────────────────────────────────────
+# Each tab has a name, a filter predicate (event_dict → bool), its
+# own scroll position, and an unread count incremented when the
+# tab is NOT active and a new event would land in it.
+#
+# Order is fixed for step 6 (hardcoded design). Step 6.5 / 10 will
+# expose tab definitions in a JSON config file so users can add /
+# remove / reorder / re-filter without code edits.
+#
+# Filter functions return True when an event belongs in that tab.
+# Define them after chat_tab_names so they can reference modes
+# easily. The actual filter functions are below this block.
+#
+# Indices:
+#   0 = All    matches everything
+#   1 = World  say (1) + shout (3) + yell (11) + emotes — all
+#              spoken-aloud messages from any range
+#   2 = LS1    linkshell slot 1
+#   3 = LS2    linkshell slot 2
+#   4 = Party  /party chat ONLY (mode 5) — not battle, just chat
+#   5 = B1    Battle filter 1 (placeholder, user-defined later)
+#   6 = B2    Battle filter 2 (placeholder, user-defined later)
+#   7 = Sys   System / RoE / sparks / gains / errors / drops
+#   8 = Cust  Custom tab (empty filter)
+
+# (short_name, full_name) — both shown contextually. Short for tab
+# strip, full reserved for tooltips and settings UI.
+#
+# For built-in tabs, short_name IS the routing identifier — saving
+# `["Battle"]` in a routing config routes to whichever tab has
+# short_name "Battle". For the two user-customizable tabs at the
+# end, the routing identifier is fixed as "custom_1" / "custom_2"
+# even though the short_name displayed can be renamed by the user
+# (overrides loaded from _meta.tab_names in the routing JSON).
+# This way users can rename "Custom 1" → "Songs" without breaking
+# any cells they'd previously routed into it.
+chat_tab_names = [
+    ("Tell",      "Tell"),       # incoming/outgoing tells ONLY — acts as
+                                 # an answering machine so tells aren't
+                                 # buried in World while you're away
+    ("World",     "World"),
+    ("LS1",       "Linkshell 1"),
+    ("LS2",       "Linkshell 2"),
+    ("Party",     "Party"),
+    ("Battle",    "Battle"),
+    ("Buffs",     "Buffs"),
+    ("Debuffs",   "Debuffs"),
+    ("Mob",       "Mob"),         # buffs/debuffs landing on mobs
+    ("Custom 1",  "Custom 1"),    # user-customizable; routing id "custom_1"
+    ("Custom 2",  "Custom 2"),    # user-customizable; routing id "custom_2"
+    ("System",    "System"),
+    ("Gearswap",  "Gearswap"),
+]
+
+# Internal-id → display-label override map. Populated from the
+# routing JSON's _meta.tab_names section at load time. Only used
+# for the two custom tabs; built-in tabs ignore overrides for them.
+# After load, chat_tab_names[i] entries for custom_1 / custom_2 are
+# rewritten in-place with the user's chosen label.
+_CUSTOM_TAB_IDS = {
+    "custom_1": 9,    # index in chat_tab_names — keep in sync above
+    "custom_2": 10,   # (shifted +1 by the Tell tab inserted at index 0)
+}
+_chat_tab_label_overrides = {}    # id → label, persisted via _meta
+
+# Index of the active tab. Persisted in save_layout.
+chat_active_tab = 0
+
+# Per-tab scroll positions. Independent — switching tabs preserves
+# where the user was reading in each. dict {tab_idx: int}; default 0.
+chat_tab_scroll = {i: 0 for i in range(len(chat_tab_names))}
+
+# Per-tab record of the last frame's true filtered physical-line count,
+# used to keep the view anchored when scrolled up (new arrivals bump the
+# scroll offset instead of sliding the view). None = pinned to bottom.
+_chat_tab_line_total = {}
+
+# Per-tab unread counts. Incremented in _ingest_chat_packet when
+# a new event lands in an inactive tab. Zeroed when the user
+# switches to that tab.
+chat_tab_unread = {i: 0 for i in range(len(chat_tab_names))}
+
+# Per-frame click-target list for tab strip. (pygame.Rect, tab_idx).
+# Reset and rebuilt every render; mousedown checks against it.
+chat_tab_rects = []
+
+# Horizontal scroll offset (in pixels) for the tab strip. When the tabs'
+# total width exceeds the available strip, the strip scrolls sideways
+# rather than abbreviating names or spilling past the panel border. Left/
+# right arrows (drawn at the strip ends) advance this. Clamped each frame
+# to [0, max_scroll] in draw_chat_panel.
+_chat_tab_hscroll = 0
+# Per-frame arrow hit-targets: {"left": Rect|None, "right": Rect|None}.
+# Rebuilt every render; mousedown checks these before the tab rects.
+_chat_tab_arrow_rects = {"left": None, "right": None}
+
+# ── Composer (bottom-of-panel chat input) ──────────────────────
+# A single-line text field at the bottom of the chat panel with a
+# channel selector (< say >). Typing into it and pressing Enter
+# sends the message to FFXI via the existing port-5011 UDP command
+# channel that hotbar buttons already use.
+#
+# State:
+#   chat_composer_text       — current text in the input field
+#   chat_composer_cursor     — cursor position (insertion index, 0..len)
+#   chat_composer_focused    — True when keystrokes go to the field
+#   chat_composer_channel    — index into CHAT_COMPOSER_CHANNELS
+#   chat_composer_tell_to    — target name when channel == "tell"
+#   chat_composer_tell_to_cursor — cursor position in tell-target field
+#   chat_composer_tell_to_focused — True when target field is focused
+#                                    (instead of main message field)
+#   chat_composer_last_blink — for cursor blink animation
+#   chat_composer_visible    — bool, whole composer row shown or hidden
+#                              (separate setting; some users want a
+#                              read-only chat panel)
+chat_composer_text          = ""
+chat_composer_cursor        = 0
+chat_composer_focused       = False
+chat_composer_channel       = 0     # default to "say"
+chat_composer_tell_to       = ""
+chat_composer_tell_to_cursor = 0
+chat_composer_tell_to_focused = False
+chat_composer_last_blink    = 0.0
+chat_composer_visible       = True
+
+# Channel options. Each entry is (key, label, slash_command_prefix).
+# slash_command_prefix is what we send to FFXI's input command. For
+# tell, it's just "/t " — the target name and message are appended
+# at send time. For reply, FFXI handles the target server-side so we
+# just send "/r <message>". For linkshells, /l and /l2 are the
+# canonical FFXI commands (shorter than /linkshell, /linkshell2).
+CHAT_COMPOSER_CHANNELS = [
+    ("say",    "say",    "/s "),
+    ("tell",   "tell",   "/t "),       # needs a target prefix at send
+    ("reply",  "reply",  "/r "),
+    ("shout",  "shout",  "/sh "),
+    ("yell",   "yell",   "/yell "),
+    ("ls1",    "ls1",    "/l "),
+    ("ls2",    "ls2",    "/l2 "),
+]
+
+# Composer-specific colors. Reuse panel palette where possible.
+CHAT_COMPOSER_BG          = (16, 18, 24, 240)
+CHAT_COMPOSER_FIELD_BG    = (28, 32, 40, 240)
+CHAT_COMPOSER_FIELD_FOCUS = (40, 48, 60, 240)   # background when focused
+CHAT_COMPOSER_FIELD_BDR   = (60, 70, 85)
+CHAT_COMPOSER_FIELD_BDR_F = (140, 200, 220)     # focused border (cool blue)
+CHAT_COMPOSER_TEXT        = (230, 230, 230)
+CHAT_COMPOSER_PLACEHOLDER = (110, 115, 125)
+CHAT_COMPOSER_CHANNEL_FG  = (220, 220, 220)
+CHAT_COMPOSER_ARROW_FG    = (200, 200, 200)
+CHAT_COMPOSER_ARROW_FG_H  = (255, 220, 130)     # hover/active arrow
+CHAT_COMPOSER_SEND_BG     = (40, 80, 120)
+CHAT_COMPOSER_SEND_FG     = (240, 240, 240)
+
+# Per-frame click target rects (rebuilt by draw_chat_panel each frame).
+_chat_composer_rect_arrow_l   = None
+_chat_composer_rect_arrow_r   = None
+_chat_composer_rect_channel   = None
+_chat_composer_rect_input     = None
+_chat_composer_rect_tell_to   = None
+_chat_composer_rect_send      = None
+
+# Wrap cache: maps (event_id, panel_width) → list[str] of wrapped lines.
+# Invalidated implicitly when panel width changes (different cache key).
+# Old entries linger but the cap-via-events deque keeps the working set
+# bounded; chat_events.maxlen=2000 so cache size is bounded too.
+_chat_wrap_cache     = {}
+_chat_wrap_cache_w   = 0       # current cache's width — clear cache on change
+
+# Per-event rendered-surface cache: (event_id, color, font_id) → Surface.
+# Same lifecycle as wrap cache. Saves font.render() calls on redraws of
+# unchanged events (the common case at 60fps).
+_chat_render_cache   = {}
+
+# Set each frame by draw_chat_panel when scrolled up — Rect of the
+# "jump to bottom" badge, or None when not visible. Read by mousedown
+# handler to detect a click on the badge.
+_chat_jump_badge_rect = None
+
+# Routing settings gear button rect, or None until first draw. Click
+# launches the standalone routing config GUI. Reset each draw so
+# resizing/hiding the chat panel doesn't leak a stale rect.
+_chat_settings_button_rect = None
+
+# Clear-buttons in the chat header. "Clear Tab" removes events from the
+# active tab only; "Clear All" wipes the whole chat buffer. None until
+# first draw; set each frame by draw_chat_panel.
+_chat_clear_tab_button_rect = None
+_chat_clear_all_button_rect = None
+
+# Mode → color map. Modes derived from in-game capture (see emit.lua
+# header comments). Unknown modes fall back to CHAT_COLOR_DEFAULT.
+#
+# Color philosophy:
+#   * Whites/light gray = ordinary speech and battle text
+#   * Cyans = personal communication (tell, party)
+#   * Yellows = own gains, kills, drops (good things)
+#   * Reds = errors, can't-do messages
+#   * Mid-gray = system stuff (RoE, sparks, accolades)
+#   * Light blue = own buffs landing
+#
+# Refine over time once the panel is visible and we see what actually
+# helps versus what's noise.
+CHAT_COLOR_DEFAULT     = (200, 200, 200)
+CHAT_MODE_PALETTE = {
+    # World-tab differentiation: each mode gets its own color so a
+    # stream of mixed say/shout/tell/yell/emote reads at a glance.
+    1:   (240, 240, 240),   # /say — white
+    2:   (240, 240, 240),   # /say echo (outgoing)
+    3:   (255, 240, 150),   # /shout — light yellow
+    4:   (200, 160, 255),   # /tell received — light purple
+    5:   (180, 230, 220),   # /party
+    7:   (200, 160, 255),   # /linkshell  (placeholder, mode TBD)
+    8:   (200, 160, 255),   # /linkshell 2 (placeholder)
+    11:  (255, 150, 200),   # /yell — pink, attention-getting
+    12:  (180, 140, 230),   # /tell sent — purple (dimmer than received)
+    13:  (150, 200, 255),   # /emote — blueish
+    28:  (200, 200, 200),   # enemy spell cast on you
+    29:  (200, 200, 200),   # melee battle
+    30:  (200, 200, 200),   # mob ability use
+    36:  (255, 230, 110),   # kill / defeat
+    50:  (160, 200, 240),   # magic effect applied
+    56:  (170, 210, 200),   # buff/regen on entity
+    59:  (200, 200, 200),   # spell resist
+    101: (170, 230, 255),   # own song land
+    121: (255, 230, 140),   # item find / drops
+    122: (220, 140, 140),   # error / unable / out of range
+    123: (220, 140, 140),   # cannot use command
+    127: (180, 180, 180),   # system / RoE / sparks
+    131: (240, 220, 150),   # gain (limit points / gil)
+}
+
+# Synthetic-event colors for buff/debuff lines (from chat/buff_events.lua).
+# Approximate FFXI's classic in-client colors for status messages:
+#   - buffs render in light cyan (the "you gain the effect of" blue)
+#   - debuffs render in dark pink/magenta (the "you are afflicted with" color)
+# These are visually distinct from the Battle red and the regular chat
+# white so the lines stand out at a glance.
+CHAT_COLOR_BUFF   = (128, 224, 255)   # light cyan
+CHAT_COLOR_DEBUFF = (255, 128, 192)   # dark pink / magenta
+COL_SKILLCHAIN    = (255, 230, 130)   # warm gold — skillchain result lines
+
+# Word-level color palette for events with segments. Each event's
+# `segments` field is a list of (text, color_class) tuples; the
+# renderer looks up the class here. Classes that don't match fall back
+# to CHAT_COLOR_DEFAULT (gray-white).
+#
+# Color choices:
+#   self/party    — close blues (you and your team are "us")
+#   alliance      — soft teal (adjacent to party but green-tinted)
+#   mob/npc/other — red / gray / off-white
+#   pet/party_pet — gold (yours, warm)
+#   spell         — mint-aqua (distinct from blues used for self/party)
+#   ability       — peach
+#   weaponskill   — magenta
+#   buff_status   — light cyan (matches Buffs tab color)
+#   debuff_status — pink (matches Debuffs tab color)
+#   damage_number — cream (numbers stand out without shouting)
+#   default       — body-text gray
+CHAT_SEGMENT_COLORS = {
+    "self":          (120, 180, 255),
+    "party":         (170, 220, 255),
+    "alliance":      (180, 230, 220),
+    "mob":           (255, 110, 110),
+    "npc":           (200, 200, 200),
+    "pet":           (255, 220, 130),
+    "party_pet":     (255, 220, 130),
+    "other":         (220, 220, 220),
+    "spell":         (140, 250, 220),
+    "ability":       (255, 200, 150),
+    "weaponskill":   (220, 130, 220),
+    "buff_status":   (128, 224, 255),
+    "debuff_status": (255, 128, 192),
+    # Verb colors for status events. Semantic:
+    #   gaining a buff / recovering from a debuff = good = yellow
+    #   losing a buff / being afflicted with debuff = bad = pink
+    "verb_good":     (255, 220, 130),   # warm yellow
+    "verb_bad":      (255, 130, 180),   # pink
+    "damage_number": (255, 240, 180),
+    "default":       (220, 220, 220),
+    # Channel-themed colors for chat sender names. Used by
+    # chat_packets.lua to color the sender according to which channel
+    # the message came in on, instead of by actor_class. This makes
+    # World vs LS1 vs LS2 vs Party visually distinct at a glance.
+    #
+    # Kept SEPARATE from the message-body palette (CHAT_MSG_COLOR_BY_MODE
+    # / CHAT_MODE_PALETTE further down). The sender-name color signals
+    # "who said it" (channel-themed at the name); the body color signals
+    # "what channel" (channel-themed at the message). Same goal, two
+    # axes — touching this table would recolor sender names, which is
+    # not what we want when adjusting body colors.
+    "ch_say":     (240, 240, 240),   # /say — white
+    "ch_shout":   (255, 180, 100),   # /shout — orange
+    "ch_yell":    (255, 200, 100),   # /yell — orange-yellow
+    "ch_tell":    (140, 220, 255),   # /tell — light blue
+    "ch_party":   (180, 230, 220),   # /party — pale teal
+    "ch_ls1":     (144, 238, 144),   # /linkshell 1 — light green
+    "ch_ls2":     (60,  150, 60),    # /linkshell 2 — dark green (matches tab)
+    "ch_emote":   (238, 130, 238),   # /em — violet
+    "ch_other":   (200, 200, 200),   # fallback grey
+    "ch_system":  (170, 190, 210),   # system/checkparam — soft blue-grey
+    # Explicit body color classes so chat_packets.lua can color a
+    # message body directly, bypassing the mode-based color override
+    # (CHAT_MSG_COLOR_BY_MODE). Needed for yell, whose mode can land
+    # on a value that the override would tint tell-purple. Using a
+    # fixed class guarantees the canonical channel color regardless
+    # of the mode byte.
+    "body_yell":  (255, 150, 200),   # /yell body — pink
+    "body_shout": (255, 240, 150),   # /shout body — light yellow
+}
+
+# Timestamp prefix dim color.
+CHAT_TIMESTAMP_COLOR   = (140, 140, 140)
+# Self-identity color: the player's own name renders in this color
+# in any chat line, regardless of which channel it came in on. Applied
+# in draw_chat_panel when a ch_*-class span (sender region) contains
+# the player's character name. Other senders keep their channel-themed
+# ch_* colors so channels remain visually distinct.
+CHAT_SELF_NAME_COLOR   = (140, 200, 255)       # soft blue
+# Background colors. Slightly different from other panels to read as
+# a distinct surface. Header is a thin top strip.
+CHAT_BG_COLOR          = (12, 14, 18, 235)     # near-black, mostly opaque
+CHAT_HEADER_COLOR      = (28, 32, 40, 235)
+CHAT_BORDER_COLOR      = (60, 70, 85)
+# "Jump to bottom" badge that appears when scrolled up + new events arrive.
+CHAT_BADGE_BG          = (40, 80, 120)
+CHAT_BADGE_FG          = (240, 240, 240)
+
+# Visual style for the tab strip.
+CHAT_TAB_BG_INACTIVE   = (20, 22, 28, 235)
+CHAT_TAB_BG_ACTIVE     = (45, 55, 75, 235)
+CHAT_TAB_FG_INACTIVE   = (160, 170, 180)
+CHAT_TAB_FG_ACTIVE     = (240, 240, 240)
+CHAT_TAB_UNREAD_BG     = (180, 70, 60)       # red badge background
+CHAT_TAB_UNREAD_FG     = (250, 250, 250)
+
+# Per-tab color theme. Active tab uses the "active" tuple as foreground;
+# inactive uses "inactive". Underline beneath active tab takes the
+# active tuple too. Order matches chat_tab_names — must update both
+# in lockstep if tabs are added/reordered.
+#
+# Colors chosen to mirror the message palette: World matches yells
+# (orange-yellow), LS1/LS2 take light/dark green, Party takes cyan
+# (matches /party message color), Battle is red, System is light
+# gray, Custom slots are dim gray.
+CHAT_TAB_PALETTE = [
+    {"active": (255, 170, 230), "inactive": (185, 120, 165)},  # 0  Tell     — pink (FFXI tell color)
+    {"active": (255, 200, 100), "inactive": (180, 140,  80)},  # 1  World    — orange-yellow
+    {"active": (130, 230, 130), "inactive": ( 90, 160,  90)},  # 2  LS1      — light green
+    {"active": ( 60, 150,  60), "inactive": ( 45, 105,  45)},  # 3  LS2      — dark green
+    {"active": (140, 220, 255), "inactive": (100, 160, 190)},  # 4  Party    — cyan
+    {"active": (235,  80,  80), "inactive": (165,  60,  60)},  # 5  Battle   — red
+    {"active": (120, 200, 255), "inactive": ( 85, 145, 185)},  # 6  Buffs    — sky blue
+    {"active": (220, 130, 220), "inactive": (160,  95, 160)},  # 7  Debuffs  — magenta-purple
+    {"active": (255, 110, 110), "inactive": (180,  80,  80)},  # 8  Mob      — soft red
+    {"active": ( 70, 110, 215), "inactive": ( 50,  78, 150)},  # 9  Custom 1 — dark blue
+    {"active": (255, 150,  60), "inactive": (185, 110,  50)},  # 10 Custom 2 — orange
+    {"active": (200, 200, 200), "inactive": (140, 140, 140)},  # 11 System   — light gray
+    {"active": (255, 215,  80), "inactive": (180, 150,  55)},  # 12 Gearswap — gold
+]
+
+
+# ── Mode classification helpers ───────────────────────────────────
+# Empirical mode groupings based on in-game capture (May 2026). These
+# are subject to refinement as more modes are identified. The sets
+# below are read by the per-tab filter predicates; updating a set
+# here automatically updates every tab that uses it.
+#
+# We use sets rather than enums or literals so the membership check
+# in filters is O(1) and adding a newly-identified mode is a one-line
+# edit instead of a multi-clause boolean.
+#
+# When a mode is unknown (not in any set), the All tab still catches
+# it, and the user can investigate via chat_listen.py / //ow chatdump
+# to identify what mode FFXI emitted.
+
+# World-range chat: say + shout + yell + emotes. One tab for every
+# spoken-aloud message regardless of range. Emote modes (13, 14) are
+# still guessed — verify with hex capture if emotes don't show up.
+CHAT_MODE_SET_WORLD    = {1, 3, 11, 13}
+CHAT_MODE_SET_LS1      = {6, 205}              # LS1 chat (text mode 6),
+                                                #   LS message-of-the-day
+                                                #   on login (205, empirical)
+CHAT_MODE_SET_LS2      = set()                 # LS2 mode unconfirmed on
+                                                #   Asura — was wrongly set
+                                                #   to {7}, but the packet
+                                                #   log shows mode 7 is a
+                                                #   self-emote. Leave empty
+                                                #   until a real LS2 line is
+                                                #   captured; LS2 falls
+                                                #   through to System for now.
+CHAT_MODE_SET_PARTY    = {5}                   # /party — chat only
+# Emotes — confirmed from Asura packet log:
+#   mode 7  = self-emote ("Wormfood shakes with laughter!")
+#   mode 9  = numeric / party emote ("Ochatea : 70")
+#   mode 15 = targeted social emote ("Aquathea bows courteously to ...")
+CHAT_MODE_SET_EMOTE    = {7, 9, 15}
+CHAT_MODE_SET_BATTLE   = {                     # combat-derived messages
+    20, 21, 22, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    50, 56, 59, 60, 61, 62, 63, 64, 65, 101,
+}
+# NPC dialog — confirmed mode 144 ("Yoskolo : Welcome to the Merry
+# Minstrel's Meadhouse.") and mode 150 (NPC conversation, e.g.
+# "Jeggim : Without a watercraft..."). NPC dialog also re-fires on
+# mode 152 (duplicate framing) — emit.lua drops 152 so it isn't
+# triplicated, so only 144/150 reach here. Separate set so NPC
+# chatter routes to its own channel (chat_npc) and can be filtered.
+CHAT_MODE_SET_NPC      = {144, 150}
+CHAT_MODE_SET_SYSTEM   = {                     # system / RoE / sparks / drops
+    0, 121, 122, 123, 127, 131, 148,           # 0 = area announce
+                                                # 123 = no-LS-equipped etc
+                                                # 121 = shop/award notices
+                                                # 127 = RoE objectives
+                                                # 131 = limit/capacity points
+                                                # 148 = signet / nation
+    161,                                        # 161 = world announcements:
+                                                # Kupofried "ancient magic"
+                                                # buff + "Page N of the tome
+                                                # flares up!" (Ambuscade tome).
+                                                # Confirmed via trace.
+}
+
+
+# ── Tab filter predicates ─────────────────────────────────────────
+# Each filter takes one event dict and returns True if that event
+# belongs in the corresponding tab. Order matches chat_tab_names.
+# Pure functions — no side effects. Cheap enough to call per-event.
+#
+# Battle catches CHAT_MODE_SET_BATTLE (combat-derived messages).
+# Custom 1 and Custom 2 return False (empty filter) until the user
+# wires up keyword/sender rules for them. They render as empty tabs.
+
+# Mode 122 ambiguity: FFXI uses mode 122 for a mixed bag of error and
+# notification lines — some are battle-context ("X is too far away",
+# "Unable to see Y", "out of range"), others are non-battle system
+# messages (RoE confirmations, "Cannot use here", etc.). The mode byte
+# alone can't distinguish them, so we look at the text. Lines containing
+# any of these phrases go to Battle; everything else on mode 122 stays
+# in System. Match is case-insensitive substring; the canonical FFXI
+# wording for each error is stable across game versions.
+_BATTLE_KEYWORDS_MODE_122 = (
+    "out of range",
+    "too far away",
+    "unable to see",
+    "cannot see",
+    "is not facing",
+    "must wait longer",
+    "cannot perform",          # "...cannot perform this action on a member of..."
+    "no longer engaged",
+    "no valid target",
+    "is fighting someone else",
+)
+
+def _is_mode_122_battle_line(ev):
+    """True if a mode-122 event is battle-context, by text keyword match.
+    Returns False for any non-122 mode or any mode-122 line without a
+    matching keyword. Cheap — substring scan over ~50-char text."""
+    if ev.get("mode") != 122:
+        return False
+    text = (ev.get("text") or "").lower()
+    if not text:
+        return False
+    for kw in _BATTLE_KEYWORDS_MODE_122:
+        if kw in text:
+            return True
+    return False
+
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Chat routing system
+# ─────────────────────────────────────────────────────────────────────
+# Events are classified into (actor_class, channel) cells. The routing
+# grid maps each cell to a list of tab names. An event with no matching
+# cell falls back to ["Battle"]. An empty list means "hide this event".
+#
+# actor_class values (from chat/classifier.lua):
+#   self, party, alliance, other, pet, party_pet, other_pet,
+#   mob_engaged (your group has claim), mob_passive (another party's
+#   claim or unclaimed), npc, system
+#   ('mob' is accepted as a legacy alias for mob_engaged in routing
+#    lookups so pre-split configs keep working.)
+#
+# channel values are derived from the event's source and content:
+#   chat_say, chat_shout, chat_yell, chat_tell, chat_party, chat_ls1,
+#   chat_ls2, chat_emote      — real FFXI chat modes
+#   buff_apply, buff_wear     — synthetic from buff_events.lua
+#   debuff_apply, debuff_wear — synthetic from buff_events.lua
+#   battle                    — synthetic from battle_events.lua (covers
+#                               melee/ranged/WS/ability/spell/etc.)
+#   checkparam                — synthetic from checkparam_events.lua
+#   gearswap                  — text-pattern-matched gearswap echoes
+#   system                    — real FFXI system mode lines
+#   unknown                   — anything that doesn't match above
+#
+# Hand-edit `omniwatch_chat_routing.json` (or use the future GUI) to
+# customize routing. If the file is missing or malformed, defaults
+# below are used.
+
+import re as _re_routing
+_GEARSWAP_TEXT_PREFIXES_R = ("[GearSwap]", "[CHAR]", "[Macro Set:")
+_GEARSWAP_STATE_PATTERN_R = _re_routing.compile(
+    r"^[A-Za-z][A-Za-z0-9 ]{0,30} is now [A-Za-z0-9_]{1,40}\.$"
+)
+
+# COR roll-broadcast text. FFXI publishes the resolution of every roll
+# as a single line listing all affected party members followed by the
+# roll name, the rolled number, and the resulting bonus. Example forms:
+#   "Wormfood, Yoran-Oran, ... . Samurai Roll <8> (+62 Store TP Bonus)"
+#   "Wormfood, ... . Chaos Roll <11>.(Lucky!) (+66% Attack!)"
+#   "Bust! Wormfood, ... . Chaos Roll <5> (-9.76% Attack!)"
+#
+# These broadcasts arrive on /say-class modes (1/3/etc.) and would
+# otherwise land in World. Route them to Battle instead — they're
+# combat output that belongs with the rest of the COR's roll info.
+# The buff itself (Store TP Bonus, Attack% bonus) is independently
+# applied via the action handler and renders on the Buffs tab, so
+# this routing doesn't lose anything.
+_ROLL_BROADCAST_PATTERN_R = _re_routing.compile(
+    r"(Roll[\s\S]*Lucky|Roll[\s\S]*Unlucky|Roll's Lucky #|"
+    r"Roll[\s\S]*\(Bust!\)|^Bust!.*Roll)"
+)
+
+# Cast-start / ready text. FFXI's native incoming_text fires when any
+# entity starts casting or readies an ability:
+#   "Wormfood starts casting Honor March on Wormfood."
+#   "The Goblin Leecher readies Hundred Fists."
+#   "Yoran-Oran starts casting Cure IV on Wormfood."
+# These arrive on mode 0 and would route to System by default. They're
+# combat events — Battle is the right destination. Pattern matches the
+# canonical verb phrases regardless of who the actor is.
+_CAST_READY_PATTERN_R = _re_routing.compile(
+    r"\b(starts casting|readies)\b"
+)
+
+# "Unable to cast" / "Unable to use" — close cousin of cast-start.
+# Triggered when a spell or JA is blocked by silence, status, recast,
+# distance, etc. Same routing logic: combat-context, belongs on Battle.
+#   "Unable to cast spells at this time."
+#   "Unable to use that ability now."
+_CAST_BLOCKED_PATTERN_R = _re_routing.compile(
+    r"^Unable to (cast|use)\b"
+)
+
+# BattleMod-formatted combat lines injected into chat as raw text.
+# BattleMod rewrites FFXI's battle log into "Actor verb Ability → Target"
+# form using a Unicode RIGHTWARDS ARROW (→, U+2192). FFXI's own
+# incoming_text never uses that arrow — native lines read "X starts
+# casting Y on Z." / "X hits Y for N points of damage." So the arrow is
+# a reliable signature for a BattleMod text line.
+#
+# These duplicate OmniWatch's own colored synth (battle_events.lua
+# builds the same line from the 0x028 action packet, classified AND
+# ally-gated). When BattleMod is loaded alongside OmniWatch its text
+# lines leak in via incoming_text on a mode we don't drop, landing in
+# System via the unknown→System fallback — including OTHER parties'
+# fights, since incoming_text carries no affiliation and the actor name
+# often won't resolve to a mob id. Example seen in the wild:
+#   "Apex Raptor casts ERROR 111 → ArkEV"
+# (an unaffiliated mob's cast on an unaffiliated player; "ERROR 111" is
+# BattleMod's own failed spell-id resolution).
+#
+# Disposition: route to raw_battle, which defaults to hidden — exactly
+# how we treat FFXI's native battle modes. The colored synth is the
+# canonical source; the BattleMod text twin is redundant. Users who
+# WANT these can route raw_battle to a tab in the GUI.
+_BATTLEMOD_LINE_PATTERN_R = _re_routing.compile("\u2192")
+
+# /check examine lines — generated when another player runs /check on
+# you or someone else /checks a mob nearby. FFXI sends these on a
+# battle-range mode byte (typically 36), so the default mode-based
+# classifier sends them to raw_battle. But they're informational, not
+# combat: the player just wants to know who's checking them. Route to
+# System instead. Patterns covered:
+#   "Vynseres examines you."
+#   "<Name> examines <Target>."
+#   "<Name> seems to be looking at <Target>."
+# Stable, low-risk to false-positive — players don't write "examines"
+# in chat the same way they write "cast" / "ready".
+_EXAMINE_PATTERN_R = _re_routing.compile(
+    r"\b(examines|seems to be looking at)\b"
+)
+
+# Bazaar transaction notices — sent to the seller when a buyer
+# purchases something from their bazaar. Wording variants observed
+# across FFXI versions:
+#   "<Player> has bought your <item> for <N> gil."
+#   "<Player> bought your <item>."
+#   "<Player> bought <item> from your bazaar."
+# Pattern matches either "bought your" (anchored to the possessive,
+# so player chat like "I bought a sword" doesn't trip it) or
+# "from your bazaar" (the standalone bazaar phrase). Routed to
+# System by default.
+_BAZAAR_PATTERN_R = _re_routing.compile(
+    r"\bbought\s+your\b|\bfrom\s+your\s+bazaar\b",
+    _re_routing.IGNORECASE
+)
+
+# Skillchain lines. FFXI emits the skillchain result on a battle-range
+# mode byte (mode 20 confirmed via trace: "Fragmentation: 1023 → Apex
+# Crab"), so the default mode classifier sends them to raw_battle
+# (hidden). But a skillchain IS a weaponskill outcome the player wants
+# to see, so route it to the 'weaponskills' channel — the same place WS
+# damage goes — and it follows whatever the user routed weaponskills to.
+# Matched by the finite set of skillchain property names anchored at a
+# word boundary (these are not words players type in normal chat the way
+# they appear here, immediately followed by ':' or 'Skillchain:'), so
+# false-positive risk is low. Both "<Name>:" and "Skillchain: <Name>"
+# forms are covered.
+_SKILLCHAIN_PATTERN_R = _re_routing.compile(
+    r"\b(Light|Darkness|Radiance|Umbra|Gravitation|Fragmentation|"
+    r"Fusion|Distortion|Compression|Liquefaction|Induration|"
+    r"Reverberation|Transfixion|Scission|Detonation|Impaction)\s*:"
+    r"|\bSkillchain\b"
+)
+
+# Chat kinds that should short-circuit text-pattern classification.
+# These are SPECIFIC player-chat channels — the lua side has already
+# identified them by player-chat mode bytes (0/1/3/4/5/7/26/27 in
+# 0x017 packet space). Generic catchalls (chat_npc, chat_other) are
+# NOT in this set and fall through to text-pattern matchers so they
+# can be re-classified as examine / bazaar / system / etc.
+_CHAT_KIND_SPECIFIC = frozenset({
+    "chat_say", "chat_tell", "chat_shout", "chat_yell",
+    "chat_party", "chat_ls1", "chat_ls2", "chat_emote",
+})
+
+# Parses cast-start / ability-ready lines into actor / verb / ability /
+# target groups for colorization. Matches:
+#   "Wormfood starts casting Foe Lullaby II on the Huge Hornet."
+#   "Yoran-Oran starts casting Cure IV on Wormfood."
+#   "The Goblin Leecher starts casting Firaga III on Wormfood."
+#   "Huge Hornet readies Final Sting on Wormfood."
+#   "Wormfood starts casting Honor March on Wormfood."   ← no target prefix; same-name case
+# Captures:
+#   actor   (greedy up to verb; may include "The " prefix)
+#   verb    ("starts casting" or "readies")
+#   ability (spell or move name)
+#   target  (may include "the " prefix; trailing period stripped)
+_CAST_PARSE_R = _re_routing.compile(
+    r"^(?P<actor>.+?)\s+(?P<verb>starts casting|readies)\s+"
+    r"(?P<ability>.+?)"
+    r"(?:\s+on\s+(?P<target>.+?))?\.?$"
+)
+
+def _chat_classify_name(name):
+    """Best-effort actor_class for a name string, using current state.
+
+    Returns one of: 'self', 'party', 'alliance', 'pet', 'party_pet',
+    'mob', 'other'. 'self' for the active player. Party / alliance
+    walk the party_data / ally1_data / ally2_data lists. Mob match
+    is heuristic (current target or "the X" prefix). Falls back to
+    'other'.
+    """
+    if not name:
+        return "other"
+    clean = name.strip()
+    # Strip leading "The " / "the " for mob name comparisons. We
+    # remember whether the prefix was there to bias toward 'mob'
+    # for ambiguous matches.
+    had_the_prefix = False
+    if clean[:4].lower() == "the ":
+        clean = clean[4:]
+        had_the_prefix = True
+    # Self.
+    if player_self_name and clean == player_self_name:
+        return "self"
+    # Party.
+    try:
+        for m in party_data:
+            if isinstance(m, dict) and m.get("name") == clean:
+                return "party"
+        for m in ally1_data:
+            if isinstance(m, dict) and m.get("name") == clean:
+                return "alliance"
+        for m in ally2_data:
+            if isinstance(m, dict) and m.get("name") == clean:
+                return "alliance"
+    except Exception:
+        pass
+    # Mob: current target match, or "the X" prefix bias.
+    try:
+        if target_info and isinstance(target_info, dict):
+            tn = target_info.get("name") or ""
+            if tn and tn == clean:
+                return "mob"
+    except Exception:
+        pass
+    if had_the_prefix:
+        return "mob"
+    return "other"
+
+def _build_cast_segments(text):
+    """Parse a cast-start text line into colored segments.
+
+    Returns a list of (text, color_class) tuples, or None if the
+    pattern doesn't match (caller falls back to the flat-text path).
+    """
+    m = _CAST_PARSE_R.match(text)
+    if not m:
+        return None
+    actor   = m.group("actor")
+    verb    = m.group("verb")
+    ability = m.group("ability")
+    target  = m.group("target")   # may be None
+    actor_cls  = _chat_classify_name(actor)
+    target_cls = _chat_classify_name(target) if target else None
+    # Pick ability color. "readies" → ability color (peach); "starts
+    # casting" → spell color (mint-aqua).
+    ability_cls = "spell" if verb == "starts casting" else "ability"
+    segs = [
+        (actor, actor_cls),
+        (f" {verb} ", "default"),
+        (ability, ability_cls),
+    ]
+    if target:
+        segs.append((" on ", "default"))
+        segs.append((target, target_cls or "other"))
+    segs.append(("." , "default"))
+    return segs
+
+# Text patterns that identify FFXI server-broadcast notices. Routes
+# events to the 'system' channel regardless of incoming mode byte,
+# since FFXI uses inconsistent modes for these notices (some are 0,
+# some are 144, some are uncategorized server-broadcast modes we
+# don't enumerate).
+#
+# Two flavors of pattern:
+#   _SYSTEM_TEXT_PREFIXES   — text.startswith match
+#   _SYSTEM_TEXT_SUBSTRINGS — `marker in text` match (more flexible
+#                             but slightly higher false-positive risk)
+#
+# Both run AFTER all mode-based classification, so /say lines reach
+# chat_say via CHAT_MODE_SET_WORLD before reaching here. False-
+# positive risk is low because by the time these patterns are
+# consulted, the line's mode byte is unknown to us (not /say,
+# /tell, /shout, /LS, /party, /yell, raw battle, or known system
+# mode).
+#
+# Add new patterns here when users report system messages landing
+# in Battle (or unknown→System fallback): explicit classification
+# lets users build routing overrides on the "system" channel that
+# fire for those lines specifically.
+_SYSTEM_TEXT_PREFIXES = (
+    # Login-campaign reward narration
+    "In celebration of",
+    # Item-obtained announcements
+    "Obtained: ",
+    "Obtained key item: ",
+    "You have obtained ",
+    "You received ",
+    # Login point balance
+    "Login Points: ",
+    "Current login points: ",
+    "You earned ",
+    # World-event broadcasts (Voidwatch, Campaign, Besieged spawns
+    # and announcements). SE's standard opener for these is
+    # "Word has been received..."
+    "Word has been received",
+    # Besieged / conquest mobilization notices
+    "Forces from ",
+    # Conquest tally
+    "The conquest tally",
+    "Conquest results",
+    # Adoulin Colonization Reives — different opening word but
+    # always end with "Reive" and route through here when their
+    # mode byte isn't in CHAT_MODE_SET_SYSTEM. Both flavors:
+    "A Heroes' Reive",
+    "A Wildskeeper Reive",
+    # Voidwalker / Voidwatch alternate phrasing
+    "An ominous aura",
+    "The veil between worlds",
+)
+
+# Substring markers (case-sensitive, fragment match). These catch
+# SE notices whose opening word varies (month names, etc.) but
+# whose content has a stable identifier. Anchored to recognizable
+# campaign / event phrasing so player chat is unlikely to trip them.
+_SYSTEM_TEXT_SUBSTRINGS = (
+    "Login Campaign",         # "The May 2026 Login Campaign..."
+    "Gratitude Campaign",     # "The Adventurer Gratitude Campaign..."
+    "Repeat Login Campaign",
+    # World-event broadcast markers — paired with the "Word has
+    # been received" prefix above, but also catches variant
+    # wordings. "undead threat" / "beastman threat" / "demon
+    # threat" etc. cover Voidwatch / Campaign Ops spawns. The
+    # phrase is verbose enough that player chat is very unlikely
+    # to false-positive.
+    "an undead threat",
+    "a beastman threat",
+    "a demon threat",
+    "an aquan threat",
+    "a beast threat",
+    "a plantoid threat",
+    "an arcana threat",
+    "an amorph threat",
+    "a dragon threat",
+    "a lizard threat",
+    "a vermin threat",
+    "a bird threat",
+    "an unsettling presence",   # alternate Voidwatch wording
+)
+
+def _chat_classify_event(ev):
+    """Return (actor_class, channel) for routing.
+
+    Both strings; channel is derived from source + mode + text shape.
+    Returns ('system', 'unknown') as a safe fallback so unclassified
+    events still route somewhere (default destination = Battle, which
+    is fine for "I don't know what this is" — Battle is the catchall).
+    """
+    source = ev.get("source") or "chat"
+    mode   = ev.get("mode", 0)
+    text   = ev.get("text") or ""
+    actor  = ev.get("actor_class") or "other"
+
+    # Synthetic events (have explicit source). These are authoritative —
+    # the Lua side knows what they are.
+    if source == "buff":
+        result = ev.get("result")  # 'apply' or 'wear'
+        return (actor, "buff_wear" if result == "wear" else "buff_apply")
+    if source == "debuff":
+        result = ev.get("result")
+        return (actor, "debuff_wear" if result == "wear" else "debuff_apply")
+    if source == "battle":
+        # battle_events.lua tags each synthesized line with its specific
+        # combat channel ('melee', 'ranged', 'weaponskills', 'damage',
+        # 'healing', 'casting', 'readies', 'abilities', 'uses', 'misses').
+        # Fall back to a generic 'battle' bucket if the tag is missing —
+        # which only happens on old Lua side or events before the kind
+        # field was added.
+        return (actor, ev.get("kind") or "battle")
+    if source == "system" and mode == -2:
+        return ("system", "checkparam")
+
+    # Chat-source events may carry an explicit `kind` field to override
+    # mode-based routing. Used by chat_packets.lua for cases where the
+    # mode byte doesn't disambiguate (e.g. LS message-of-the-day for
+    # LS2 — mode 205 alone can't tell LS1 from LS2; the Lua handler
+    # tags `kind = "chat_ls2"` to route correctly).
+    #
+    # Two tiers of chat_ kinds:
+    #   1. Specific player-chat channels (chat_say/tell/shout/yell/
+    #      party/ls1/ls2/emote) — honored directly; the lua side has
+    #      already identified them by their player-chat mode bytes.
+    #   2. Generic catchalls (chat_npc, chat_other) — used by the lua
+    #      side for unknown-mode packets that may carry routable info
+    #      (NPC dialog, /check examines, bazaar sales, server notices).
+    #      These DON'T short-circuit classification; we still run the
+    #      text-pattern matchers below so a generic-kinded event with
+    #      "examines you" content lands on the examine channel instead.
+    if source == "chat":
+        kind = ev.get("kind")
+        if kind and kind in _CHAT_KIND_SPECIFIC:
+            return (actor, kind)
+        # Generic chat_ kinds fall through to text patterns below.
+
+    # Real FFXI text. First check the text-pattern overrides (Gearswap
+    # state-set echoes piggyback on mode 1, indistinguishable by mode).
+    for prefix in _GEARSWAP_TEXT_PREFIXES_R:
+        if text.startswith(prefix):
+            return ("other", "gearswap")
+    if _GEARSWAP_STATE_PATTERN_R.match(text):
+        return ("other", "gearswap")
+
+    # COR roll broadcasts: route to Battle. FFXI sends these on
+    # say-class modes (mode 1/3/etc.) so they'd land in World by
+    # default, but they're combat output, not chat. Match before
+    # mode-based dispatch so /say chat content isn't affected.
+    if _ROLL_BROADCAST_PATTERN_R.search(text):
+        return (actor, "battle")
+
+    # Cast-start / ready lines and cast-blocked notices route to Battle.
+    # Arrive on mode 0 from incoming_text, would otherwise hit System.
+    if _CAST_READY_PATTERN_R.search(text):
+        return (actor, "casting")
+    if _CAST_BLOCKED_PATTERN_R.search(text):
+        return (actor, "battle")
+
+    # Skillchain result lines ("Fragmentation: 1023 → Apex Crab",
+    # "Skillchain: Distortion ...") — a weaponskill outcome from your
+    # fight. These CONTAIN the → arrow, so they MUST be checked BEFORE the
+    # generic BattleMod-arrow catch below (which would otherwise grab them
+    # into raw_battle/hidden). Route to 'weaponskills' with actor forced
+    # to 'self': the skillchain text carries no resolvable sender
+    # (emit.lua defaults it to 'other', which has no weaponskills routing
+    # cell and would fall to System), so attributing it to 'self' makes it
+    # follow exactly where your own weaponskills are routed.
+    if mode in CHAT_MODE_SET_BATTLE and _SKILLCHAIN_PATTERN_R.search(text):
+        return ("self", "weaponskills")
+
+    # BattleMod-formatted combat text (contains the → arrow). Redundant
+    # with our own colored synth and carries no affiliation, so other
+    # parties' fights leak in. Route to raw_battle (hidden by default),
+    # the same disposition as FFXI's native battle modes. Checked after
+    # the real cast/ready patterns so a legitimate "starts casting … on
+    # …" line (no arrow) still reaches the casting channel above.
+    if _BATTLEMOD_LINE_PATTERN_R.search(text):
+        return (actor, "raw_battle")
+
+    # /check examine lines — informational, route to System. Arrive on
+    # battle-range modes (typically 36) so without this check they'd
+    # fall through to raw_battle and either hide or land in Battle.
+    if _EXAMINE_PATTERN_R.search(text):
+        return (actor, "examine")
+
+    # Bazaar sale notices — same disposition as examine but a
+    # distinct channel so users can route bazaar separately (e.g. to a
+    # Custom tab when actively selling). Defaults to System.
+    if _BAZAAR_PATTERN_R.search(text):
+        return (actor, "bazaar")
+
+    # Mode 122 needs sub-classification (battle context vs system).
+    if mode == 122:
+        if _is_mode_122_battle_line(ev):
+            return (actor, "raw_battle")
+        return ("system", "system")
+
+    # Raw FFXI battle log modes (28/29/30/etc.) — these are the lines
+    # FFXI's client itself generates, like "Wormfood scores a critical
+    # hit!The Belaboring Wasp takes 2300 points of damage." When our
+    # synthesizer fires for the same action packet, the colored synth
+    # version makes these duplicates. Route them to a 'raw_battle'
+    # channel that defaults to hidden — they only appear if the user
+    # explicitly routes them somewhere.
+    if mode in CHAT_MODE_SET_BATTLE:
+        return (actor, "raw_battle")
+
+    # Emotes (modes 7/9/15 on Asura) → World. Confirmed from the
+    # packet log: self-emote, numeric/party emote, targeted social
+    # emote all land here.
+    if mode in CHAT_MODE_SET_EMOTE:
+        return (actor, "chat_emote")
+
+    # NPC dialog (mode 144) → chat_npc → System. Lets users filter
+    # NPC chatter (shopkeepers, quest NPCs) separately from real chat.
+    if mode in CHAT_MODE_SET_NPC:
+        return (actor, "chat_npc")
+
+    # Chat-mode based channels (real FFXI player chat).
+    if mode in CHAT_MODE_SET_WORLD:
+        # World captures say/shout/yell/emote.
+        if mode == 1 or mode == 2:    return (actor, "chat_say")
+        if mode == 3:                  return (actor, "chat_shout")
+        if mode == 11:                 return (actor, "chat_yell")
+        return (actor, "chat_emote")
+    if mode in CHAT_MODE_SET_LS1:    return (actor, "chat_ls1")
+    if mode in CHAT_MODE_SET_LS2:    return (actor, "chat_ls2")
+    if mode in CHAT_MODE_SET_PARTY:  return (actor, "chat_party")
+    if mode == 4 or mode == 12:      return (actor, "chat_tell")
+    if mode in CHAT_MODE_SET_SYSTEM: return ("system", "system")
+
+    # System message text-pattern detection. Runs AFTER all mode-based
+    # classification, so /say lines starting with "The cat..." reach
+    # chat_say via CHAT_MODE_SET_WORLD above — this only catches lines
+    # whose mode byte isn't in any known set (FFXI uses a grab-bag
+    # of mode bytes for server-broadcast notices: login campaigns,
+    # gratitude campaigns, item-obtained announcements, etc.).
+    #
+    # Two pattern sets:
+    #   _SYSTEM_TEXT_PREFIXES   — text.startswith (anchored, safest)
+    #   _SYSTEM_TEXT_SUBSTRINGS — substring `in` (catches notices
+    #                             whose opening word varies, like
+    #                             "The May 2026 Login Campaign...")
+    #
+    # Add new entries to the appropriate set when a server notice
+    # lands in System only by the unknown→System fallback below
+    # (still works, but explicit classification lets users build
+    # routing overrides on the "system" channel that take effect
+    # for that line).
+    for prefix in _SYSTEM_TEXT_PREFIXES:
+        if text.startswith(prefix):
+            return ("system", "system")
+    for marker in _SYSTEM_TEXT_SUBSTRINGS:
+        if marker in text:
+            return ("system", "system")
+
+    # Anything else (raw FFXI battle modes 28/29/30 etc. when not using
+    # synthesis, weird modes from addons, etc.) gets bucketed as
+    # 'unknown' → default destination (System; was Battle until the
+    # 'unknown' routing default was changed to stop polluting Battle).
+    # If the lua side set a generic chat_ kind, preserve it so users
+    # can build routing for chat_npc vs chat_other independently.
+    if source == "chat":
+        kind = ev.get("kind")
+        if kind in ("chat_npc", "chat_other"):
+            return (actor, kind)
+    return (actor, "unknown")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Default routing grid
+# ─────────────────────────────────────────────────────────────────────
+# Format: routing[actor][channel] = [tab_name, ...]
+#   - Empty list = hide this event
+#   - Missing entry = default destination (["Battle"])
+#   - Multiple tabs = event appears in each
+#
+# Use "*" as the actor wildcard for "any actor class". When looking up,
+# specific actor wins over "*".
+
+_CHAT_ROUTING_DEFAULTS = {
+    "*": {
+        # Real player chat channels — uniform across actors
+        "chat_say":    ["World"],
+        "chat_shout":  ["World"],
+        "chat_yell":   ["World"],
+        "chat_emote":  ["World"],
+        "chat_tell":   ["Tell"],
+        "chat_party":  ["Party"],
+        "chat_ls1":    ["LS1"],
+        "chat_ls2":    ["LS2"],
+        # Gearswap → its own tab, NOT in World
+        "gearswap":    ["Gearswap"],
+        # System → System tab
+        "system":      ["System"],
+        "checkparam":  ["System"],
+        # Battle synthesis — Battle tab.
+        #
+        # 'battle' is the generic catch-all the synthesizer emits for
+        # events that don't fit a more specific kind. The sub-channels
+        # below are emitted by battle_events.lua for specific event
+        # types — melee swings, ranged attacks, weaponskill animations,
+        # JA uses, item uses, spell casts, etc. They all route to the
+        # Battle tab here so users can per-job override individual
+        # sub-channels (e.g. hide "misses" while keeping damage).
+        #
+        # Without these explicit entries, sub-channel events fell
+        # through to the unknown→System fallback below, polluting the
+        # System tab with combat output. (That regression appeared
+        # when unknown→System was added — under the previous
+        # unknown→Battle default, the fall-through masked this gap.)
+        "battle":        ["Battle"],
+        "melee":         ["Battle"],
+        "ranged":        ["Battle"],
+        "weaponskills":  ["Battle"],
+        "abilities":     ["Battle"],
+        "uses":          ["Battle"],
+        "damage":        ["Battle"],
+        "healing":       ["Battle"],
+        "casting":       ["Battle"],
+        "readies":       ["Battle"],
+        "misses":        ["Battle"],
+        # Raw FFXI battle log (modes 28/29/30/etc.) — HIDDEN by
+        # default. The colored synthesizer from battle_events.lua
+        # replaces these, so showing both is duplication. Users who
+        # want the raw text can override this in their per-job config.
+        "raw_battle":  [],
+        # /check examine messages ("<Name> examines you." etc.) —
+        # informational, default to System. Override-friendly: users
+        # who want to ignore check spam can map this to [].
+        "examine":     ["System"],
+        # Generic chat catchalls — used when chat_packets.lua receives
+        # a packet on an unknown mode (NPC dialog, /check messages,
+        # bazaar notices, server broadcasts that came via 0x017 instead
+        # of incoming text). Default to System; users can override to
+        # put NPC dialog in its own tab.
+        "chat_npc":    ["System"],
+        "chat_other":  ["System"],
+        # Bazaar sale notices ("<Name> bought your <item>...") —
+        # informational, default to System. Route to a Custom tab
+        # when actively selling if you want a dedicated stream.
+        "bazaar":      ["System"],
+        # Status events — Battle tab by default. The Buffs/Debuffs/
+        # Mob tabs are present but receive nothing automatically; users
+        # who want category-specific routing redirect cells in the
+        # routing GUI. This avoids pre-filtering: everything combat-
+        # related lands in Battle first, the user moves out from there.
+        "buff_apply":   ["Battle"],
+        "buff_wear":    ["Battle"],
+        "debuff_apply": ["Battle"],
+        "debuff_wear":  ["Battle"],
+        # Unknown / uncategorized — System tab.
+        #
+        # IMPORTANT: this used to default to Battle, but that turned
+        # Battle into a junk drawer for anything the classifier didn't
+        # recognize: login campaign messages, "The Adventurer
+        # Gratitude Campaign" notices, "Obtained: <item>" lines, and
+        # generally any FFXI server-broadcast or notice line whose
+        # mode byte isn't in CHAT_MODE_SET_SYSTEM yet. Routing them to
+        # Battle confused users who expected Battle to mean "combat
+        # log only" (matching FFXI's own chat filter naming).
+        #
+        # System is a much better default for "I don't know what this
+        # is": it's the catchall tab and users won't be surprised to
+        # see misc server notices there. Misclassified events that
+        # SHOULD be in Battle (e.g. a new battle-mode byte we haven't
+        # added yet) will land in System instead, where they're still
+        # visible — easier to spot the misclassification and add a
+        # proper mode-byte entry than to hunt for them buried in
+        # Battle alongside the synthesizer's correct events.
+        "unknown":     ["System"],
+    },
+    # Engaged monsters — your group has claim. Combat output defaults to
+    # Battle; the Mob tab is an empty bucket users can redirect mob
+    # events into via the routing GUI. (The classifier returns
+    # 'mob_engaged' for these; the lookup also accepts a legacy 'mob'
+    # cell as an alias, so an older config that used 'mob' keeps working.)
+    "mob_engaged": {
+        "buff_apply":   ["Battle"],
+        "buff_wear":    ["Battle"],
+        "debuff_apply": ["Battle"],
+        "debuff_wear":  ["Battle"],
+        # Mob misses against the player. Visible by default — users
+        # can hide them per-job or globally in the routing GUI when
+        # they get noisy on a busy fight.
+        "misses":       ["Battle"],
+        # Mob combat output (TP moves → 'readies', spell casts, melee,
+        # damage, etc.). Previously omitted here, so these relied on the
+        # '*' wildcard fallback — which failed and dumped mob abilities
+        # into the System tab. Route them explicitly to Battle.
+        "battle":        ["Battle"],
+        "melee":         ["Battle"],
+        "ranged":        ["Battle"],
+        "weaponskills":  ["Battle"],
+        "abilities":     ["Battle"],
+        "uses":          ["Battle"],
+        "damage":        ["Battle"],
+        "healing":       ["Battle"],
+        "casting":       ["Battle"],
+        "readies":       ["Battle"],
+    },
+    # Passive mobs — monsters NOT claimed by your group (another party's
+    # claim, or unclaimed). The classifier tags these 'mob_passive' so
+    # the engaged-vs-passive distinction (what in-game filters and
+    # BattleMod expose) is expressible in routing. HIDDEN by default:
+    # the common case is "don't show me a nearby party's fight." Users
+    # who want passive-mob lines (e.g. watching for a specific NM to be
+    # claimed) can route any of these cells to a tab in the GUI.
+    #
+    # Engaged mobs keep the plain 'mob' actor class above, so an
+    # existing mob.* config keeps applying to the fight you're actually
+    # in with no migration needed.
+    "mob_passive": {
+        "buff_apply":   [],
+        "buff_wear":    [],
+        "debuff_apply": [],
+        "debuff_wear":  [],
+        "misses":       [],
+        "battle":       [],
+        "melee":        [],
+        "ranged":       [],
+        "weaponskills": [],
+        "abilities":    [],
+        "uses":         [],
+        "damage":       [],
+        "healing":      [],
+        "casting":      [],
+        "readies":      [],
+    },
+}
+
+# Loaded routing config. Set by load_chat_routing()/load_chat_routing_for_job().
+# Two levels:
+#   _chat_routing_global   — from omniwatch_chat_routing.json (global; things
+#                            you never want to see regardless of job, plus the
+#                            initial defaults shape)
+#   _chat_routing_perjob   — from omniwatch_chat_routing-<JOB>.json
+#                            (per-job overrides; loaded on job change)
+#   _chat_routing_current_job — the job string the per-job config was loaded
+#                               for. None if not loaded yet.
+#
+# At lookup time we walk: per-job → global → baked-in defaults.
+_chat_routing_global = _CHAT_ROUTING_DEFAULTS
+_chat_routing_perjob = {}
+# Global channel-hide toggles + sender blacklist, loaded from the
+# routing JSON's _meta section (set by the GUI footer controls).
+#   _chat_channel_hidden: set of channel names the user switched off
+#     (chat_say/chat_tell/chat_emote/chat_party/chat_shout/chat_yell).
+#     Events on these channels are hidden in every tab.
+#   _chat_blacklist: set of lowercased sender names. Any chat event
+#     whose actor_name matches is hidden regardless of channel.
+_chat_channel_hidden = set()
+_chat_blacklist      = set()
+_chat_routing_current_job = None
+
+# Sentinel: a tier returns this when it has no entry for a cell, which
+# is distinct from [] (the tier explicitly routes the cell to no tabs,
+# i.e. hidden). Used by _chat_routing_lookup to tell "global is silent"
+# apart from "global hides this."
+_NO_ENTRY = object()
+
+def _chat_routing_lookup(actor_class, channel, target_dim=None):
+    """Return list of tab names for this (actor, channel) cell.
+
+    Walks the resolution chain: per-job config first, then global,
+    then baked-in defaults. Specific actor wins over '*' wildcard
+    within each level. Missing cell anywhere → ["Battle"] fallback.
+
+    target_dim (optional): a target-side sub-key like "to_me",
+    "to_party", "to_other". When provided (for the 'mob_engaged' and
+    'mob_passive' actors) the lookup first tries a NESTED cell
+    actor_class[target_dim][channel] and only falls back to the flat
+    actor_class[channel] cell if the nested one is absent. This lets
+    users route, e.g., "mob hits me" to Battle but "mob hits another
+    player" to hidden, without disturbing the flat model for anyone
+    who hasn't configured target filtering.
+
+    Legacy alias: the classifier used to return a single 'mob' actor
+    for all monsters; it now returns 'mob_engaged' (your group's claim)
+    or 'mob_passive' (another party's / unclaimed). An older routing
+    config (or hand-edited JSON) that still uses the 'mob' key is honored
+    for 'mob_engaged' lookups — 'mob_engaged' falls back to a 'mob' cell
+    when no explicit 'mob_engaged' cell exists. This means existing
+    configs keep routing engaged monsters exactly as before with no
+    migration. 'mob_passive' has NO such fallback: passive monsters were
+    not separable under the old model, so a legacy 'mob' rule must not
+    silently start showing another party's fight.
+
+    Note on layering: GLOBAL IS THE CEILING. If global explicitly
+    hides a cell (empty tab list), it stays hidden regardless of the
+    per-job config — per-job can never un-hide what global hid. That
+    is the whole point of the global tier (e.g. a sender blacklist or
+    battle-spam channels the user never wants to see on ANY job). When
+    global allows a cell (or is silent on it), the per-job config then
+    applies and may hide it or refine which tab it lands in. So per-job
+    can only RESTRICT within what global permits, never expand it.
+    """
+    # Actor keys to try, in order. 'mob_engaged' also accepts a legacy
+    # 'mob' cell (see docstring). Every other actor tries only itself.
+    if actor_class == "mob_engaged":
+        actor_keys = ("mob_engaged", "mob")
+    else:
+        actor_keys = (actor_class,)
+
+    # Per-tier cell resolver. Returns the cell's tab list if this tier
+    # specifies the cell, or _NO_ENTRY if the tier is silent on it.
+    # Order within a tier:
+    #   1. nested target-specific:  tier[actor][target_dim][channel]
+    #   2. flat actor-specific:     tier[actor][channel]
+    #   3. nested wildcard target:  tier['*'][target_dim][channel]
+    #   4. flat wildcard:           tier['*'][channel]
+    # Actor-specific keys are tried in actor_keys order (so an explicit
+    # 'mob_engaged' cell wins over a legacy 'mob' cell) before '*'.
+    def _tier_lookup(tier):
+        if not tier:
+            return _NO_ENTRY
+        for ak in actor_keys:
+            specific = tier.get(ak)
+            if specific is not None:
+                if target_dim is not None:
+                    nested = specific.get(target_dim)
+                    if isinstance(nested, dict) and channel in nested:
+                        return nested[channel]
+                if channel in specific:
+                    return specific[channel]
+        wildcard = tier.get("*")
+        if wildcard is not None:
+            if target_dim is not None:
+                nested = wildcard.get(target_dim)
+                if isinstance(nested, dict) and channel in nested:
+                    return nested[channel]
+            if channel in wildcard:
+                return wildcard[channel]
+        return _NO_ENTRY
+
+    global_res = _tier_lookup(_chat_routing_global)
+    perjob_res = _tier_lookup(_chat_routing_perjob)
+
+    # GLOBAL IS THE CEILING. If global explicitly hides this cell
+    # (empty list), it stays hidden no matter what the per-job config
+    # says — per-job can never un-hide what global hid. This is the
+    # entire purpose of the global tier (e.g. a sender blacklist the
+    # user never wants to see on ANY job).
+    if global_res is not _NO_ENTRY and not global_res:
+        return []
+
+    # Global allows the cell (or is silent). Now the per-job filter
+    # applies: it may hide the cell (empty list) or refine which tab
+    # it lands in. Per-job only RESTRICTS within global's permission.
+    if perjob_res is not _NO_ENTRY:
+        return perjob_res
+
+    # No per-job entry — global's result stands (if it had one).
+    if global_res is not _NO_ENTRY:
+        return global_res
+
+    # No mapping anywhere — default to System. System is the catchall
+    # for "uncategorized notice"; Battle is reserved for events the
+    # classifier explicitly identified as combat. See the "unknown"
+    # entry in _CHAT_ROUTING_DEFAULTS for the longer rationale.
+    return ["System"]
+
+def _chat_target_dim(ev):
+    """Derive a target-side dimension key for mob actions, or None.
+
+    Only mob actors ('mob_engaged', 'mob_passive', or the legacy 'mob')
+    get target filtering — the use case is routing "mob hits me"
+    separately from "mob hits another player," plus distinguishing a mob
+    acting on ITSELF (self-buff/cure) from a mob acting on a DIFFERENT
+    monster. For every other actor this returns None so the flat routing
+    applies unchanged.
+
+    The dimension reuses the classifier's category strings (self/
+    party/alliance/pet/party_pet/other/other_pet/npc) for most
+    targets. The mob-on-mob case is split into two synthetic keys
+    by comparing actor_id and target_id:
+      - "self_mob"  the mob targeted itself (actor_id == target_id)
+      - "other_mob" the mob targeted a different monster
+    """
+    if ev.get("actor_class") not in ("mob_engaged", "mob_passive", "mob"):
+        return None
+    tc = (ev.get("target_class") or "").strip().lower()
+    if not tc:
+        return None
+    _alias = {
+        "me":      "self",
+        "player":  "self",
+        "trust":   "pet",
+    }
+    tc = _alias.get(tc, tc)
+    # Mob-on-mob: split into self vs other by id comparison. Include the
+    # engaged/passive classes (a mob self-buff has target_class
+    # 'mob_engaged' == its own actor class, not the bare 'mob' alias), so
+    # a mob buffing ITSELF resolves to 'self_mob' rather than leaking out
+    # as a literal 'mob_engaged' target dimension that no routing cell
+    # names.
+    if tc in ("mob", "monster", "enemy", "mob_engaged", "mob_passive"):
+        actor_id  = ev.get("actor_id")
+        target_id = ev.get("target_id")
+        if actor_id and target_id and actor_id == target_id:
+            return "self_mob"
+        return "other_mob"
+    return tc
+
+
+def _chat_route_event(ev):
+    """Return set of tab indices this event should appear in.
+
+    Walks the routing grid to find which tab names match, then maps
+    those names to indices in chat_tab_names. Unknown tab names in
+    the config are silently ignored (so renames don't crash). Empty
+    set means hide.
+    """
+    actor, channel = _chat_classify_event(ev)
+
+    # Global sender blacklist: hide any chat event from a named
+    # sender, regardless of channel or tab. Matches actor_name
+    # case-insensitively. Applies only to chat-source events (combat
+    # synth events have actor_name set to entity names we don't want
+    # to accidentally blacklist via a same-named player).
+    if _chat_blacklist and ev.get("source") == "chat":
+        nm = (ev.get("actor_name") or "").strip().lower()
+        if nm and nm in _chat_blacklist:
+            return set()
+
+    # Global channel-hide toggles: if the user switched this channel
+    # off in the GUI footer, hide it everywhere.
+    if channel in _chat_channel_hidden:
+        return set()
+
+    target_dim = _chat_target_dim(ev)
+    tab_names = _chat_routing_lookup(actor, channel, target_dim)
+    if not tab_names:
+        return set()
+    out = set()
+    for name in tab_names:
+        # Custom tabs route by stable internal id, not by short_name
+        # (which is just a display label and can be renamed). The
+        # _CUSTOM_TAB_IDS map gives us the tab index for these ids.
+        if name in _CUSTOM_TAB_IDS:
+            out.add(_CUSTOM_TAB_IDS[name])
+            continue
+        for i, (short, _full) in enumerate(chat_tab_names):
+            if short == name:
+                out.add(i)
+                break
+    return out
+
+
+def _make_tab_predicate(tab_idx):
+    """Return a predicate function for a specific tab index.
+
+    Each per-tab predicate is built by routing the event and checking
+    if THIS tab is in the destination set. The route is computed once
+    per event-per-tab via _chat_route_event; for very busy events the
+    grid lookup is O(1) so this is fine.
+    """
+    # Resolve the System tab index once at predicate-construction
+    # time so the fallback doesn't repeat a name lookup per event.
+    # Falls back to 0 if System somehow isn't in the tabs list.
+    _SYSTEM_TAB_IDX = next(
+        (i for i, (short, _full) in enumerate(chat_tab_names)
+         if short == "System"),
+        0)
+
+    def _pred(ev):
+        try:
+            return tab_idx in _chat_route_event(ev)
+        except Exception:
+            # Defensive: a broken classifier shouldn't kill rendering.
+            # Default to "show in System, hide everywhere else" so the
+            # event still appears somewhere. Was previously Battle but
+            # that turned Battle into a junk drawer for any event the
+            # classifier choked on. System is the better catchall.
+            return tab_idx == _SYSTEM_TAB_IDX
+    return _pred
+
+
+def _parse_routing_data(data, source_label):
+    """Validate the loaded JSON dict matches the routing schema.
+
+    Returns the cleaned data dict (drops _meta and any malformed
+    entries with a warning). Doesn't return errors — bad shapes
+    are skipped silently aside from a log line.
+    """
+    if not isinstance(data, dict):
+        print(f"[OmniWatch] chat routing config malformed (not a dict): "
+              f"{source_label}")
+        return None
+    cleaned = {}
+    for actor, ch_map in data.items():
+        if actor.startswith("_"):
+            continue   # _meta etc. — documentation only
+        if not isinstance(ch_map, dict):
+            print(f"[OmniWatch] chat routing: skipping bad actor {actor!r}")
+            continue
+        cleaned_actor = {}
+        for channel, tabs in ch_map.items():
+            if isinstance(tabs, list):
+                # Flat cell: actor[channel] = [tabs]
+                cleaned_actor[channel] = list(tabs)
+            elif isinstance(tabs, dict):
+                # Nested target cell: actor[target_dim][channel] = [tabs].
+                # Used for mob target filtering (to_me/to_party/to_other).
+                # Here `channel` is actually a target_dim key and `tabs`
+                # is a {channel: [tabs]} sub-dict.
+                cleaned_nested = {}
+                for sub_ch, sub_tabs in tabs.items():
+                    if isinstance(sub_tabs, list):
+                        cleaned_nested[sub_ch] = list(sub_tabs)
+                    else:
+                        print(f"[OmniWatch] chat routing: skipping bad "
+                              f"nested cell {actor!r}/{channel!r}/{sub_ch!r}")
+                if cleaned_nested:
+                    cleaned_actor[channel] = cleaned_nested
+            else:
+                print(f"[OmniWatch] chat routing: skipping bad cell "
+                      f"{actor!r}/{channel!r}")
+                continue
+        if cleaned_actor:
+            cleaned[actor] = cleaned_actor
+    return cleaned
+
+
+def _routing_path_for_job(job):
+    """Return the JSON path for a job's per-job routing config.
+    Empty/None job returns the global path."""
+    try:
+        if job and job.strip():
+            return os.path.join(SETTINGS_DIR,
+                                f"omniwatch_chat_routing-{job.strip().upper()}.json")
+        return os.path.join(SETTINGS_DIR, "omniwatch_chat_routing.json")
+    except NameError:
+        return None
+
+
+def load_chat_routing(path=None):
+    """Load the global routing config from omniwatch_chat_routing.json.
+
+    This is the layered foundation: events that aren't overridden by
+    per-job config use this. Missing file = silent default (uses the
+    baked-in _CHAT_ROUTING_DEFAULTS).
+
+    Per-job overrides come from load_chat_routing_for_job().
+    """
+    global _chat_routing_global
+    if path is None:
+        path = _routing_path_for_job(None)
+    if path is None:
+        return
+    try:
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cleaned = _parse_routing_data(data, path)
+        if cleaned is None:
+            return
+        # Apply tab-name overrides from _meta.tab_names. Only the
+        # custom_1 / custom_2 ids are user-renameable; built-in tabs
+        # ignore overrides (their short_names are also their routing
+        # ids and must not drift). Applied in-place to chat_tab_names
+        # so the strip renders the user's labels on next frame.
+        meta = data.get("_meta") if isinstance(data, dict) else None
+        if isinstance(meta, dict):
+            overrides = meta.get("tab_names")
+            if isinstance(overrides, dict):
+                for tab_id, label in overrides.items():
+                    if tab_id in _CUSTOM_TAB_IDS and isinstance(label, str) \
+                            and label.strip():
+                        idx = _CUSTOM_TAB_IDS[tab_id]
+                        if 0 <= idx < len(chat_tab_names):
+                            clean = label.strip()
+                            chat_tab_names[idx] = (clean, clean)
+                            _chat_tab_label_overrides[tab_id] = clean
+            # Global channel-hide toggles + sender blacklist (GUI footer).
+            global _chat_channel_hidden, _chat_blacklist
+            hidden = meta.get("channel_hidden")
+            if isinstance(hidden, list):
+                _chat_channel_hidden = {
+                    c for c in hidden if isinstance(c, str)}
+            else:
+                _chat_channel_hidden = set()
+            bl = meta.get("blacklist")
+            if isinstance(bl, list):
+                _chat_blacklist = {
+                    s.strip().lower() for s in bl
+                    if isinstance(s, str) and s.strip()}
+            else:
+                _chat_blacklist = set()
+        # Merge cleaned into the defaults: cleaned ENTRIES override
+        # defaults, but keys not in cleaned keep the default value.
+        # This way users can have a global JSON with just a few
+        # overrides (e.g. "always hide gearswap from World") without
+        # having to specify every default cell.
+        merged = {}
+        for actor in set(list(_CHAT_ROUTING_DEFAULTS.keys()) +
+                          list(cleaned.keys())):
+            base   = _CHAT_ROUTING_DEFAULTS.get(actor, {})
+            extras = cleaned.get(actor, {})
+            merged[actor] = {**base, **extras}
+        _chat_routing_global = merged
+        print(f"[OmniWatch] Loaded global chat routing config from {path}")
+    except Exception as e:
+        print(f"[OmniWatch] Could not read chat routing config: {e}")
+
+
+def load_chat_routing_for_job(job):
+    """Load per-job routing config from omniwatch_chat_routing-<JOB>.json.
+
+    If the file doesn't exist, the per-job overrides are cleared and
+    the lookup falls through to the global config. Called on job
+    change (detected by polling _inv_for_sim["main_job"] in the
+    main loop).
+
+    Future drop will add: on first load for a job with no JSON,
+    convert BattleMod's filters-<JOB>.xml and save as the seed.
+    For now: no file = no overrides = use global.
+    """
+    global _chat_routing_perjob, _chat_routing_current_job
+
+    job = (job or "").strip().upper()
+    if job == _chat_routing_current_job and _chat_routing_perjob:
+        return  # already loaded
+    _chat_routing_current_job = job
+
+    if not job:
+        # No job known yet — clear per-job overrides so global config
+        # is fully in effect.
+        if _chat_routing_perjob:
+            _chat_routing_perjob = {}
+            print("[OmniWatch] Chat routing per-job overrides cleared "
+                  "(no job known)")
+        return
+
+    path = _routing_path_for_job(job)
+    if path is None:
+        return
+
+    if not os.path.exists(path):
+        # No per-job file — clear overrides; global fully in effect.
+        # Drop 3 will add BattleMod XML import on first load for this job.
+        if _chat_routing_perjob:
+            _chat_routing_perjob = {}
+        print(f"[OmniWatch] No per-job chat routing for {job} "
+              f"(global config in effect)")
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cleaned = _parse_routing_data(data, path)
+        if cleaned is None:
+            _chat_routing_perjob = {}
+            return
+        _chat_routing_perjob = cleaned
+        print(f"[OmniWatch] Loaded per-job chat routing for {job} "
+              f"from {path}")
+    except Exception as e:
+        print(f"[OmniWatch] Could not read per-job chat routing for {job}: {e}")
+        _chat_routing_perjob = {}
+
+
+def _launch_routing_gui():
+    """Launch the standalone routing config GUI.
+
+    Looks for omniwatch_routing_gui.exe alongside OmniWatch.exe first
+    (the deployed case), falls back to running the .py script directly
+    (the development case). Detached subprocess — doesn't block the
+    overlay.
+    """
+    import subprocess
+    # Resolve "alongside this binary" — handle both PyInstaller-frozen
+    # OmniWatch.exe (sys.executable points to it) and source-running
+    # case (sys.executable is python.exe, so use __file__'s dir).
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    exe_path = os.path.join(base_dir, "omniwatch_routing_gui.exe")
+    py_path  = os.path.join(base_dir, "omniwatch_routing_gui.py")
+
+    try:
+        if os.path.exists(exe_path):
+            # Detached launch — DETACHED_PROCESS so closing OmniWatch
+            # won't kill the GUI. Windows-only flag; on other OSes
+            # subprocess.Popen with start_new_session=True is equivalent.
+            flags = 0x00000008 if sys.platform == "win32" else 0
+            subprocess.Popen([exe_path], creationflags=flags,
+                             cwd=base_dir, close_fds=True)
+            print(f"[OmniWatch] Launched {exe_path}")
+        elif os.path.exists(py_path):
+            # Dev fallback: run the .py directly.
+            flags = 0x00000008 if sys.platform == "win32" else 0
+            subprocess.Popen([sys.executable, py_path],
+                             creationflags=flags, cwd=base_dir,
+                             close_fds=True)
+            print(f"[OmniWatch] Launched {py_path} via Python")
+        else:
+            print(f"[OmniWatch] Routing GUI not found. Tried:\n"
+                  f"  {exe_path}\n  {py_path}")
+    except Exception as e:
+        print(f"[OmniWatch] Failed to launch routing GUI: {e}")
+
+
+# Build the per-tab predicates from the factory. One predicate per
+# tab index. Tabs that don't appear in the routing config get an
+# empty predicate (always False) so the tab still renders, just
+# empty. Order matches chat_tab_names exactly.
+chat_tab_filters = [_make_tab_predicate(i) for i in range(len(chat_tab_names))]
+assert len(chat_tab_filters) == len(chat_tab_names), \
+    "chat_tab_filters and chat_tab_names must have the same length"
+
+
+# Per-mode SENDER + MESSAGE colors for chat lines (say/tell/shout/yell).
+# When a mode is in this map, draw_chat_panel splits the first wrapped
+# line at the sender|message boundary and renders the two halves with
+# distinct colors. Modes NOT in this map render as a single color (the
+# CHAT_MODE_PALETTE entry).
+#
+# Design: sender name is always orange (signals "who"); message text
+# uses the channel color (signals "what channel"). This makes a stream
+# of mixed-channel chat readable at a glance — see orange "Wormfood:"
+# and your eye lands on the speaker, then the message tells you the
+# channel by color.
+CHAT_SENDER_COLOR = (255, 170,  80)            # orange — speaker name
+# GearSwap output body color — gold, matching the Gearswap tab theme.
+# Applied to macro-set echoes and "X is now Y" state lines, which
+# arrive on mode 1 and would otherwise render /say-white.
+CHAT_GEARSWAP_BODY_COLOR = (255, 215, 80)
+CHAT_MSG_COLOR_BY_MODE = {
+    1:  (240, 240, 240),                       # /say — white
+    3:  (255, 240, 150),                       # /shout — light yellow
+    4:  (200, 160, 255),                       # /tell received — light purple
+    11: (255, 150, 200),                       # /yell — pink
+    12: (180, 140, 230),                       # /tell sent — purple (dimmer than received)
+    # mode 13 (/emote) intentionally absent: emotes don't follow the
+    # "Sender: message" wire format, so the splitter would fail anyway.
+    # They render single-color via CHAT_MODE_PALETTE[13] (blueish).
+}
+
+
+def _chat_split_sender(text, mode):
+    """Split a chat line into (sender_text, message_text).
+
+    Used for say/tell/shout/yell where FFXI's wire format puts the
+    sender's name before a `:` (or `>>` for outgoing tells) and the
+    message after. Returns (None, text) for modes that don't follow
+    this pattern (battle, system, etc.) — caller should render
+    single-color in that case.
+
+    Sender includes everything up to and INCLUDING the boundary
+    delimiter and the single space that typically follows.
+
+    Boundary by mode:
+      mode 1, 3, 4, 11    — split on first ':'
+      mode 12             — split on first '>>'  (outgoing tell wire
+                            format is "RecipientName>> message", no
+                            colon present)
+
+    For yells, the zone tag in brackets stays grouped with the sender
+    ("Mytoy [BastokMark]: "). Received tells include the `>>` prefix
+    in the sender region since `>>` identifies the line as a tell.
+
+    Examples (text after FFXI marker strip):
+      /say        "Wormfood : hello there"     -> ("Wormfood : ",      "hello there")
+      /tell rcv   ">>Wormfood : hello"         -> (">>Wormfood : ",    "hello")
+      /tell sent  "Wormfood>> hello"           -> ("Wormfood>> ",      "hello")
+      /shout      "Wormfood : LFG"             -> ("Wormfood : ",      "LFG")
+      /yell       "Mytoy[BastokMark]: REMAP"   -> ("Mytoy[BastokMark]: ", "REMAP")
+
+    Edge cases:
+      * Boundary missing — degrade gracefully, return (None, text).
+      * Message text contains additional colons / >> — only split on
+        the FIRST occurrence (the sender|message boundary).
+      * Message starts immediately after boundary (no space) — split
+        boundary includes just the delimiter.
+    """
+    if mode not in CHAT_MSG_COLOR_BY_MODE:
+        return (None, text)
+    if not text:
+        return (None, text)
+
+    # Outgoing tells use ">>" as the boundary, not ":". The wire form
+    # from FFXI after marker strip is "RecipientName>> message".
+    if mode == 12:
+        idx = text.find(">>")
+        if idx < 0:
+            return (None, text)
+        boundary = idx + 2     # past ">>"
+        if boundary < len(text) and text[boundary] == " ":
+            boundary += 1
+        return (text[:boundary], text[boundary:])
+
+    # All other chat modes use ":" as the boundary.
+    colon_idx = text.find(":")
+    if colon_idx < 0:
+        return (None, text)
+    boundary = colon_idx + 1
+    if boundary < len(text) and text[boundary] == " ":
+        boundary += 1
+    return (text[:boundary], text[boundary:])
+
+
+def _chat_split_sender_cached(ev):
+    """Memoized sender split per event."""
+    key = ev.get("_seq") or id(ev)
+    cached = _chat_split_cache.get(key)
+    if cached is not None:
+        return cached
+    result = _chat_split_sender(ev.get("text", ""), ev.get("mode", 0))
+    _chat_split_cache[key] = result
+    # Bounded cleanup — same rationale as _chat_wrap_cache.
+    if len(_chat_split_cache) > 4000:
+        try:
+            evict = sorted(_chat_split_cache.keys())[:1000]
+            for k in evict:
+                _chat_split_cache.pop(k, None)
+        except TypeError:
+            _chat_split_cache.clear()
+    return result
+
+
+# Cache: event_id → (sender_text, message_text). Same lifecycle as
+# wrap cache — bounded by chat_events.maxlen.
+_chat_split_cache = {}
+
+
+def _parse_chat_batch(raw):
+    """Parse a CHAT_BATCH UDP datagram into a list of event dicts.
+
+    Wire format:
+      CHAT_BATCH\t<count>\t<batch_index>\t<batch_total>
+      chat\t<ts>\t<source>\t<mode>\t<actor_id>\t<actor_name>\t<actor_class>\t<target_id>\t<target_name>\t<target_class>\t<segments_b64>\t<text_b64>
+      chat\t...
+
+    Returns:
+      (events, header) where events is a list of dicts, header is
+      a dict {"count": int, "batch_index": int, "batch_total": int}
+      or None if the header is malformed.
+
+    Malformed event lines are skipped individually — one bad line
+    doesn't drop the whole batch. The caller is expected to handle
+    None for the header by dropping the whole datagram.
+
+    Reassembly across multiple datagrams (when batch_total > 1) is
+    NOT handled here — each datagram is independent and events are
+    appended in arrival order. The Lua side guarantees chronological
+    ordering both within and across datagrams of a single batch, so
+    naive append gives correct ordering as long as the loopback
+    socket preserves send order (it does on Windows + Linux).
+    """
+    lines = raw.split("\n")
+    if not lines:
+        return [], None
+
+    # Parse header.
+    hdr_parts = lines[0].split("\t")
+    if len(hdr_parts) < 4 or hdr_parts[0] != "CHAT_BATCH":
+        return [], None
+    try:
+        header = {
+            "count":       int(hdr_parts[1]),
+            "batch_index": int(hdr_parts[2]),
+            "batch_total": int(hdr_parts[3]),
+        }
+    except ValueError:
+        return [], None
+
+    events = []
+    for ln in lines[1:]:
+        if not ln:
+            continue
+        fields = ln.split("\t")
+        # Expected layout: chat \t ts \t source \t mode \t actor_id \t
+        # actor_name \t actor_class \t target_id \t target_name \t
+        # target_class \t segments_b64 \t text_b64 \t [kind]
+        # — 12 fields minimum; 13th (kind) optional for backward compat
+        # with older Lua side that doesn't emit the kind tag.
+        if len(fields) < 12 or fields[0] != "chat":
+            continue
+        try:
+            ts        = float(fields[1])
+            mode      = int(fields[3])
+            actor_id  = int(fields[4])
+            target_id = int(fields[7])
+        except ValueError:
+            continue
+
+        # Decode text (b64) defensively. Empty payload is legitimate
+        # for events with no text body (rare but possible). Bad b64
+        # produces empty text rather than killing the event.
+        #
+        # Encoding: try UTF-8 strict first (succeeds for ASCII and any
+        # UTF-8 the Lua side encoded). If it fails, the bytes are
+        # almost certainly Shift-JIS (FFXI's native chat encoding) —
+        # try that. If both fail, fall back to UTF-8 with replacement
+        # so we at least show something.
+        text_b64 = fields[11]
+        try:
+            raw_bytes = base64.b64decode(text_b64) if text_b64 else b""
+            try:
+                text = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    # cp932 is a superset of Shift-JIS that handles
+                    # FFXI's custom additions (elemental icons, etc.)
+                    # better than strict shift_jis.
+                    text = raw_bytes.decode("cp932")
+                except UnicodeDecodeError:
+                    text = raw_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            text = ""
+
+        # Segments encode word-level color info for rich rendering. The
+        # Lua side emits a JSON-encoded list of [text, color_class] pairs
+        # wrapped in base64. Empty string = no segments, render as flat
+        # text (backward compat with older events). Bad payload = empty.
+        # On success, segments is a list of (text, color_class) tuples.
+        #
+        # Same UTF-8/Shift-JIS encoding fallback as the text field
+        # above — FFXI's chat is SJIS, so player names and message
+        # content can include non-UTF-8 bytes that need cp932 decoding.
+        seg_b64 = fields[10]
+        segments = []
+        if seg_b64:
+            try:
+                raw_seg_bytes = base64.b64decode(seg_b64)
+                try:
+                    raw_json = raw_seg_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        raw_json = raw_seg_bytes.decode("cp932")
+                    except UnicodeDecodeError:
+                        raw_json = raw_seg_bytes.decode("utf-8",
+                                                        errors="replace")
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, list):
+                    # Each element should be a 2-element list [text, color].
+                    # Defensive: skip malformed entries rather than aborting
+                    # the whole event.
+                    for item in parsed:
+                        if (isinstance(item, list) and len(item) >= 2
+                            and isinstance(item[0], str)
+                            and isinstance(item[1], str)):
+                            segments.append((item[0], item[1]))
+            except Exception:
+                segments = []
+
+        events.append({
+            "ts":           ts,
+            "source":       fields[2],
+            "mode":         mode,
+            "actor_id":     actor_id,
+            "actor_name":   fields[5],
+            "actor_class":  fields[6],
+            "target_id":    target_id,
+            "target_name":  fields[8],
+            "target_class": fields[9],
+            "text":         text,
+            "segments":     segments,
+            # 13th field — combat channel for routing. Lua emits this
+            # on source='battle' events to tell us which channel
+            # (melee/ranged/damage/healing/etc.) the event is. Optional;
+            # missing or empty = let _chat_classify_event fall back.
+            "kind":         fields[12] if len(fields) > 12 else "",
+        })
+
+    return events, header
+
+
+def _ingest_chat_packet(raw, stream_label):
+    """Parse one CHAT_BATCH datagram and append events to chat_events.
+
+    stream_label is "text" or "battle" — used only for trace output
+    and the diagnostic counters. The events themselves identify their
+    own source via the event's `source` field.
+    """
+    global chat_recv_text, chat_recv_battle, chat_recv_errors
+    events, header = _parse_chat_batch(raw)
+    if header is None:
+        chat_recv_errors += 1
+        if chat_recv_errors <= 5:
+            # Cap noisy logs: print first 5 errors only. After that,
+            # the counter tells you it's happening without spamming.
+            print(f"[OmniWatch] chat: bad packet on {stream_label} "
+                  f"(first 80 bytes): {raw[:80]!r}")
+        return
+    for ev in events:
+        _chat_assign_seq(ev)
+        # Skillchain line cleanup: FFXI separates the parts of a mob name
+        # with an internal token that windower.from_shift_jis converts to
+        # U+30FB (・, the Katakana middle dot) — so "Apex Crab" arrives as
+        # "Apex・Crab" and displays with a stray dot ("Fragmentation: 6345
+        # → Apex・Crab"). Replace that middle dot with a plain space, but
+        # ONLY on skillchain result lines so we don't disturb any other
+        # text (kept deliberately narrow after an earlier broad byte-edit
+        # regressed normal lines). Isolated to this one event's text.
+        _txt = ev.get("text") or ""
+        if "\u30fb" in _txt and _SKILLCHAIN_PATTERN_R.match(_txt):
+            ev["text"] = _txt.replace("\u30fb", " ")
+        # Colorize cast-start / readies text. Incoming_text events
+        # arrive as flat strings with empty segments; if the text
+        # matches the cast/readies shape, rebuild as colored segments
+        # so it visually matches the packet-synth combat lines (actor
+        # in their class color, spell in spell color, target in their
+        # class color). Battle-source synth events already carry
+        # colored segments and are skipped.
+        if (ev.get("source") == "chat"
+                and not ev.get("segments")):
+            txt = ev.get("text") or ""
+            if _CAST_READY_PATTERN_R.search(txt):
+                segs = _build_cast_segments(txt)
+                if segs:
+                    ev["segments"] = segs
+        chat_events.append(ev)
+        if stream_label == "text":
+            chat_recv_text += 1
+        else:
+            chat_recv_battle += 1
+
+        # Increment unread count on every tab the event matches, EXCEPT
+        # the currently-active tab (you've effectively "read" it as it
+        # appears in front of you). Tab 0 (All) is always either active
+        # or accumulating unread like any other tab. Cap unread at 999
+        # to avoid the badge ballooning into multi-digit clutter.
+        for tab_idx, predicate in enumerate(chat_tab_filters):
+            if tab_idx == chat_active_tab:
+                continue
+            try:
+                if predicate(ev):
+                    cur = chat_tab_unread.get(tab_idx, 0)
+                    if cur < 999:
+                        chat_tab_unread[tab_idx] = cur + 1
+            except Exception:
+                # Bad filter shouldn't kill ingest; just skip this tab.
+                pass
+
+        if _chat_trace:
+            # Console trace for pass-1 verification. Compact format:
+            # [HH:MM:SS] source.mode actor[class] -> target[class]: text
+            ts_str = time.strftime("%H:%M:%S", time.localtime(ev["ts"]))
+            actor  = ev["actor_name"] or "?"
+            target = (" -> " + ev["target_name"]) if ev["target_name"] else ""
+            print(f"[chat] {ts_str} {ev['source']}.{ev['mode']:>3} "
+                  f"{actor}[{ev['actor_class']}]{target}: "
+                  f"{ev['text'][:120]}")
+
+        # ── Always-on routing trace, first N events only ─────────────────
+        # Logs the classifier output AND the resolved tab destinations
+        # for the first N chat events. Capped so the session log
+        # doesn't bloat under sustained chat. Purpose: when a user
+        # reports "filters not working", their session log already
+        # has the routing trace so Cooper can see WHY events landed
+        # where they did without needing a reproducer or env var.
+        #
+        # Logging once-per-event for a short window covers the most
+        # important diagnostic — "what does THIS event classify as,
+        # and which tabs does it route to." The cap keeps logs small
+        # for typical sessions (50 events is reached in seconds during
+        # busy chat).
+        global _chat_route_trace_count
+        if _chat_route_trace_count < _CHAT_ROUTE_TRACE_CAP:
+            _chat_route_trace_count += 1
+            try:
+                actor_cls, channel = _chat_classify_event(ev)
+                tab_set = _chat_route_event(ev)
+                tab_names = [chat_tab_names[i][0] for i in sorted(tab_set)
+                             if 0 <= i < len(chat_tab_names)]
+                print(f"[chat-route] #{_chat_route_trace_count} "
+                      f"mode={ev.get('mode', 0)} "
+                      f"source={ev.get('source', '?')} "
+                      f"actor={ev.get('actor_name', '?')!r}[{actor_cls}] "
+                      f"channel={channel} -> tabs={tab_names} "
+                      f"text={(ev.get('text', '') or '')[:60]!r}")
+                if _chat_route_trace_count == _CHAT_ROUTE_TRACE_CAP:
+                    print(f"[chat-route] (further events not traced; "
+                          f"trace cap = {_CHAT_ROUTE_TRACE_CAP})")
+            except Exception as _e:
+                print(f"[chat-route] classifier error on event: {_e}")
+
+
+def dump_chat_routing_state():
+    """Print the current chat routing configuration to the session log.
+
+    Called from the right-click handler on the chat panel header. Gives
+    a full snapshot — current active tab, per-tab unread counts, the
+    resolved routing table (per-job overrides + global merged), and a
+    classification trace of the most recent N events in chat_events.
+
+    Designed for "user reports a bug, sends their session log" workflow:
+    one click and the diagnostic state is captured.
+    """
+    print("=" * 60)
+    print("[OmniWatch] Chat routing diagnostic dump")
+    if 0 <= chat_active_tab < len(chat_tab_names):
+        _active_name = chat_tab_names[chat_active_tab][0]
+    else:
+        _active_name = "?"
+    print(f"  Active tab: {chat_active_tab} ({_active_name})")
+    print(f"  Tabs: {[t[0] for t in chat_tab_names]}")
+    print(f"  Unread: {dict(chat_tab_unread)}")
+    print(f"  Current job for routing: {_chat_routing_current_job}")
+    print(f"  Per-job overrides loaded: {bool(_chat_routing_perjob)}")
+    if _chat_routing_perjob:
+        print(f"  Per-job actors: {list(_chat_routing_perjob.keys())}")
+    print(f"  Global routing actors: "
+          f"{list(_chat_routing_global.keys())}")
+
+    # Classify and route the last 10 events to show the actual mapping.
+    recent = list(chat_events)[-10:]
+    print(f"  Last {len(recent)} event classifications:")
+    for ev in recent:
+        try:
+            actor_cls, channel = _chat_classify_event(ev)
+            tab_set = _chat_route_event(ev)
+            tab_names = [chat_tab_names[i][0] for i in sorted(tab_set)
+                         if 0 <= i < len(chat_tab_names)]
+            text_preview = (ev.get('text', '') or '')[:60]
+            print(f"    mode={ev.get('mode', 0):>3} "
+                  f"source={ev.get('source', '?'):8s} "
+                  f"{actor_cls}/{channel} -> {tab_names}: "
+                  f"{text_preview!r}")
+        except Exception as _e:
+            print(f"    [classify error: {_e}]")
+    print("=" * 60)
+
+
+def _chat_color_for_mode(mode_or_ev):
+    """Return RGB color tuple for a chat event.
+
+    Accepts either a bare mode byte (legacy callers) OR a full event
+    dict (preferred — lets us route on the `source` field for
+    synthetic events that don't have a real chat mode). Synthetic
+    events (buff/debuff/checkparam) have mode=-1/-2 which won't match
+    any real FFXI mode in the palette; we route them by source instead
+    to give them FFXI's classic status-effect colors.
+
+    Falls back to CHAT_COLOR_DEFAULT for unknown modes — the panel
+    still renders in plain gray, so adding mappings later doesn't
+    risk breaking existing modes.
+    """
+    # Backward-compat: bare int → just look up the palette.
+    if isinstance(mode_or_ev, int):
+        return CHAT_MODE_PALETTE.get(mode_or_ev, CHAT_COLOR_DEFAULT)
+
+    ev = mode_or_ev
+    src = ev.get("source")
+    # Skillchain result lines ("Fragmentation: 5665 → Apex Crab") get a
+    # single distinct skillchain color (a bright cyan-white) so they stand
+    # out in the feed. Detected by a property name followed by ':' at the
+    # START of the line, so only the actual SC result line is colored.
+    txt = ev.get("text") or ""
+    if txt and _SKILLCHAIN_PATTERN_R.match(txt):
+        return COL_SKILLCHAIN
+    # Synthetic buff/debuff events use FFXI's classic status colors:
+    # buffs render in light cyan, debuffs in dark pink/magenta. These
+    # match how status messages appear in FFXI's own chat log.
+    if src == "buff":
+        return CHAT_COLOR_BUFF
+    if src == "debuff":
+        return CHAT_COLOR_DEBUFF
+    return CHAT_MODE_PALETTE.get(ev.get("mode"), CHAT_COLOR_DEFAULT)
+
+
+def _chat_wrap_text(text, body_font, cjk_font, max_width):
+    """Greedy word-wrap `text` to fit within max_width pixels.
+
+    Measures with both body_font and cjk_font where each script run
+    falls, so CJK characters (which Consolas can't measure correctly)
+    use Yu Gothic UI widths and wrap accurately.
+
+    Returns a list of strings, one per visible line. Wraps at spaces;
+    a single word longer than max_width is rendered uncut (overflows
+    the panel) — better than character-level wrap which makes a mess
+    of mob names and URLs. In practice chat lines are short enough
+    that this is rare.
+
+    Empty input returns [""] so callers can iterate uniformly.
+    """
+    if not text:
+        return [""]
+    words = text.split(" ")
+    lines = []
+    current = ""
+    for w in words:
+        if not current:
+            trial = w
+        else:
+            trial = current + " " + w
+        if _chat_measure_mixed(trial, body_font, cjk_font) <= max_width:
+            current = trial
+        else:
+            if current:
+                lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines if lines else [""]
+
+
+def _chat_wrap_segments(segments, body_font, cjk_font, max_width):
+    """Wrap a list of (text, color_class) segments to max_width.
+
+    Returns a list of wrapped LINES, where each line is itself a list
+    of (text, color_class) spans. This lets the renderer paint each
+    span in its own color while honoring word-wrap boundaries.
+
+    Algorithm: greedy by-word wrap (same logic as _chat_wrap_text)
+    but the working unit is "word + color of each char in that word".
+    Words crossing color boundaries get split at the boundary so each
+    sub-word carries a single color. Spaces between words inherit the
+    color of the preceding char (cosmetic; matters only when a
+    differently-colored span ends with a space).
+
+    Empty segments → one empty line of one empty default span.
+    """
+    if not segments:
+        return [[("", "default")]]
+
+    # Build flat (char, color) list. Lets us treat color boundaries
+    # uniformly without per-segment string slicing.
+    flat = []
+    for seg_text, seg_color in segments:
+        for ch in seg_text:
+            flat.append((ch, seg_color))
+    if not flat:
+        return [[("", "default")]]
+
+    # Split into "words" (runs separated by spaces). A word here is a
+    # list of (char, color) tuples. We wrap by accumulating words into
+    # a current line; when adding the next word would overflow, flush.
+    words = []
+    cur_word = []
+    for ch, color in flat:
+        if ch == " ":
+            if cur_word:
+                words.append(cur_word)
+                cur_word = []
+            words.append([(" ", color)])
+        else:
+            cur_word.append((ch, color))
+    if cur_word:
+        words.append(cur_word)
+
+    # Helper: collapse a (char, color) list to "<text>" for measuring.
+    def _word_text(w):
+        return "".join(ch for ch, _ in w)
+
+    # Helper: collapse a list of words to one string for measuring.
+    def _line_text(ws):
+        return "".join(_word_text(w) for w in ws)
+
+    # Greedy pack words into lines.
+    lines_of_words = []
+    current = []  # list of words
+    for w in words:
+        trial = current + [w]
+        if _chat_measure_mixed(_line_text(trial), body_font, cjk_font) <= max_width:
+            current = trial
+        else:
+            if current:
+                # Trim a trailing pure-space word from the wrapping
+                # line, since the visible text shouldn't include it.
+                while current and _word_text(current[-1]).strip() == "":
+                    current.pop()
+                lines_of_words.append(current)
+            # Skip pure-space words at line start to avoid leading
+            # whitespace on a wrapped continuation.
+            if _word_text(w).strip() == "":
+                current = []
+            else:
+                current = [w]
+    if current:
+        # Same trailing-space trim as above for the final line.
+        while current and _word_text(current[-1]).strip() == "":
+            current.pop()
+        if current:
+            lines_of_words.append(current)
+
+    if not lines_of_words:
+        return [[("", "default")]]
+
+    # Convert each line (list of words = list of (char,color) lists)
+    # back to a list of (text, color) spans, merging adjacent chars
+    # that share a color.
+    output_lines = []
+    for line_words in lines_of_words:
+        spans = []
+        cur_text = []
+        cur_color = None
+        for w in line_words:
+            for ch, color in w:
+                if cur_color is None:
+                    cur_color = color
+                    cur_text.append(ch)
+                elif color == cur_color:
+                    cur_text.append(ch)
+                else:
+                    spans.append(("".join(cur_text), cur_color))
+                    cur_text = [ch]
+                    cur_color = color
+        if cur_text:
+            spans.append(("".join(cur_text), cur_color or "default"))
+        output_lines.append(spans if spans else [("", "default")])
+
+    return output_lines
+
+
+def _chat_wrap_cached(ev, body_font, cjk_font, max_width):
+    """Cached wrap by (event identity, panel width).
+
+    Returns one of two shapes depending on whether the event has
+    segments:
+      - No segments: list[str]   (each str a wrapped line)
+      - With segments: list[list[(text, color_class)]]
+                        (each line is its own list of colored spans)
+
+    The renderer detects which by checking type of first element.
+
+    Invalidates the whole cache when panel width changes (the cache
+    keys would become useless anyway). Per-event entries linger but
+    are bounded by chat_events deque's maxlen since events not in
+    that deque can never be looked up again.
+    """
+    global _chat_wrap_cache, _chat_wrap_cache_w
+    if max_width != _chat_wrap_cache_w:
+        _chat_wrap_cache.clear()
+        _chat_render_cache.clear()
+        _chat_wrap_cache_w = max_width
+    # Stable per-event key. Falls back to id() only for events that
+    # somehow weren't stamped (defensive — every event going through
+    # chat_events.append should be stamped).
+    key = ev.get("_seq") or id(ev)
+    cached = _chat_wrap_cache.get(key)
+    if cached is not None:
+        return cached
+
+    segs = ev.get("segments") or []
+    if segs:
+        # Segment-aware wrap. Returns list[list[(text, color)]].
+        wrapped = _chat_wrap_segments(segs, body_font, cjk_font, max_width)
+    else:
+        # Plain-text wrap. Returns list[str].
+        wrapped = _chat_wrap_text(ev.get("text", ""), body_font, cjk_font, max_width)
+    _chat_wrap_cache[key] = wrapped
+    # Bounded cleanup. Without this, the cache grows without limit
+    # since we no longer rely on id() collisions for eviction. Cap
+    # is 2x chat_events.maxlen so there's headroom for events that
+    # left the deque but are still being rendered this frame.
+    if len(_chat_wrap_cache) > 4000:
+        # Drop the 1000 smallest keys (oldest by _seq). This is O(n)
+        # but only runs when over cap; amortized cost is negligible.
+        try:
+            evict = sorted(_chat_wrap_cache.keys())[:1000]
+            for k in evict:
+                _chat_wrap_cache.pop(k, None)
+        except TypeError:
+            # Mixed key types from id() fallback — just clear everything.
+            _chat_wrap_cache.clear()
+    return wrapped
+
+
 inventory_state    = {}      # complete snapshot, swapped in on INV_END
 _inv_buffer        = {}      # accumulator while a snapshot is in progress
 inventory_last_update_ts = 0.0
@@ -1332,6 +3935,17 @@ inventory_bag_scroll     = {}         # bag_name -> int (item-row offset)
 inventory_dropdown_rects = []         # click-target list for the dropdown
 # Toggle button rect in the header (set in draw_header, read by click handler).
 inventory_button_rect    = None
+# Search state. Lives at the top of the bag-list view: an input box for
+# the user to type into, and the ranked result list when they have.
+# Search runs across every bag in inventory_state and surfaces where
+# each match lives. Focused = True means keystrokes route into the box;
+# Escape or clicking outside the panel clears focus + query.
+inventory_search_query     = ""        # current search text
+inventory_search_focused   = False     # True when keystrokes go to the box
+inventory_search_results   = []        # cached ranked list: (bag_key, item dict, score)
+inventory_search_results_key = None    # query string the cache was built for
+inventory_search_scroll    = 0         # scroll offset for the result list
+inventory_search_box_rect  = None      # set by renderer, read by click handler
 
 # dps_state: per-source bucket dicts, keyed by src tag ('me', 'pet',
 # '<party_member>'). Replaced wholesale on each batch.
@@ -1347,7 +3961,6 @@ dps_last_update_ts = 0.0
 # number — shows the trend, which is more useful than the current point
 # value during long fights. Trimmed to the last DPS_SPARK_WINDOW seconds
 # on every render call.
-import collections as _collections
 dps_history       = _collections.deque(maxlen=240)   # ~2min @ 2Hz emit rate
 DPS_SPARK_WINDOW  = 60.0     # seconds of history shown in the sparkline
 
@@ -1357,6 +3970,12 @@ mob_cast_state = {}
 CAST_DONE_TTL  = 3.0
 CAST_DONE_FADE = 1.5   # last 1.5s of the TTL fades to transparent
 CAST_START_MAX = 15.0  # safety: drop stale "casting" entries after this
+# TP moves are near-instant, so the "Using X" readies flash shouldn't
+# linger like a spell's cast bar. Cap the ability/TP-move flash at this
+# many seconds; after it, the flash stops even if no CAST_DONE arrived
+# (mob TP-move finish packets are sometimes silent). Spells are NOT
+# capped here — their cast bar is meaningful and clears on CAST_DONE.
+TP_FLASH_MAX   = 2.5
 
 # Zone / position info. Populated from UDP packets on port 5003.
 zone_info = {
@@ -1521,6 +4140,34 @@ panel_order     = []            # names in draw order; most recently dragged goe
 # Clickable hyperlink regions rebuilt each frame. List of (pygame.Rect, url).
 # On mouse click, if the click is inside any rect, we open the URL.
 click_targets   = []
+# Stats panel click regions (only populated in setup mode):
+# Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click toggles hidden.
+_stats_cell_click_rects = []
+# Tray hidden-cell chip click regions:
+# Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click un-hides.
+_stats_tray_click_rects = []
+# Save-as dropdown trigger click region (the button itself in setup mode):
+# {"rect": (x,y,w,h)} or None
+_stats_save_as_button_rect = None
+# When the save-as dropdown is open, this lists the option chips:
+# Each entry: {"target": "global"|"BLM"|..., "rect": (x,y,w,h)}.
+_stats_save_as_dropdown_rects = []
+# True while the save-as dropdown is open.
+_stats_save_as_open = False
+# Time the dropdown was opened, used for fade-in animation if we want it.
+_stats_save_as_open_at = 0.0
+# Drag state for cell reordering (setup mode only):
+#   None when no drag is active
+#   While pending: {"key", "down_x", "down_y", "rect": (x,y,w,h), "started"}
+#     where started=False until cursor has moved more than threshold
+# The "started=True" transition is when we commit to drag-and-discard-click.
+# MOUSEUP without started → it's a click → toggle hidden.
+# MOUSEUP with started → it's a drag end → commit reorder.
+_stats_cell_drag = None
+# Threshold in pixels the cursor must move before we consider it a drag
+# (as opposed to a sloppy click). Generous so accidental wobble still
+# registers as a click for hide-toggle.
+_STATS_DRAG_THRESHOLD = 5
 # Currently-hovered URL rect for visual feedback (underline).
 hovered_url_idx = -1
 
@@ -1570,25 +4217,65 @@ def resolve_anchor(anchor_tuple, pw, ph, win_w, win_h):
         return win_w - pw - ox,               win_h - ph - oy
 
 # Cache of loaded item icons, keyed by (item_id, size_px).
-# _icon_raw_cache stores the original surface; _icon_scaled_cache stores resized variants.
-_icon_raw_cache    = {}   # item_id -> pygame.Surface (or None if missing / failed to load)
+# _icon_raw_cache stores the original surface; _icon_scaled_cache stores
+# resized variants. Discipline: ONLY successful loads are cached. Missing
+# files / load errors return None without populating the cache, so a
+# bmp that arrives mid-session (icon_extractor.lua writes new icons
+# lazily when unfamiliar gear is equipped) starts rendering on the next
+# frame instead of being permanently stuck as "missing" until restart.
+_icon_raw_cache    = {}   # item_id -> pygame.Surface (only present on success)
 _icon_scaled_cache = {}   # (item_id, size) -> pygame.Surface
 
+# Telemetry for the equipment-viewer "icons missing" banner. We track
+# item ids that load_icon_surface tried and couldn't find on disk. The
+# banner reads len(_icon_missing_ids) to decide whether to render, and
+# logs the first ~10 ids the first time it fires so the user (or Cooper
+# debugging a user's session log) can see WHICH items are missing
+# without scrolling through every single print.
+_icon_missing_ids   = set()    # item_ids that have failed to load this session
+_icon_missing_logged = False    # printed the "missing ids" detail line yet?
+
 def load_icon_surface(item_id):
-    """Load the raw icon surface for an item id from ICON_DIR, or None if missing."""
+    """Load the raw icon surface for an item id from ICON_DIR, or None if missing.
+
+    Cache discipline: we ONLY cache successful loads. A failed lookup (file
+    missing on disk, pygame.image.load error) returns None without caching.
+    Rationale: icon_extractor.lua writes .bmp files lazily as new gear is
+    equipped, so an icon that doesn't exist on first check often appears
+    later in the same session. Poisoning the cache with None on first
+    miss meant those late-arriving icons never rendered until the user
+    restarted the overlay — a confusing failure mode that looked like
+    "icons just stopped working" to anyone whose extractor finishes
+    after the first equipment-viewer paint.
+
+    Misses are recorded in _icon_missing_ids so the equipment viewer can
+    paint an "icons missing" banner — important on packaged .exe builds
+    where stdout is gone and the user can't see startup diagnostics
+    unless they navigate to %APPDATA%\\OmniWatch\\logs.
+    """
     if not item_id or item_id == 0:
         return None
-    if item_id in _icon_raw_cache:
-        return _icon_raw_cache[item_id]
+    cached = _icon_raw_cache.get(item_id)
+    if cached is not None:
+        return cached
     path = os.path.join(ICON_DIR, f"{item_id}.bmp")
-    surf = None
-    if os.path.isfile(path):
-        try:
-            surf = pygame.image.load(path).convert_alpha()
-        except Exception as e:
-            print(f"Failed to load icon {item_id}: {e}")
-            surf = None
+    if not os.path.isfile(path):
+        _icon_missing_ids.add(item_id)
+        return None
+    try:
+        surf = pygame.image.load(path).convert_alpha()
+    except Exception as e:
+        # Real load error (corrupted bmp, permission issue, etc.). Log
+        # once and don't cache — next call will retry the load, which
+        # is fine: bmp corruption is rare and re-extracting fixes it.
+        print(f"[OmniWatch] Failed to load icon {item_id} from {path}: {e}")
+        _icon_missing_ids.add(item_id)
+        return None
     _icon_raw_cache[item_id] = surf
+    # Successful load — if this id was previously marked missing (icon
+    # arrived mid-session), drop it from the miss set so the banner
+    # accurately reflects current state.
+    _icon_missing_ids.discard(item_id)
     return surf
 
 def get_icon_scaled(item_id, size):
@@ -1778,6 +4465,23 @@ def _user_data_dir():
 
 USER_DIR    = _user_data_dir()
 
+# Alias for routing config paths. The chat-routing module reads from
+# SETTINGS_DIR (omniwatch_chat_routing.json + per-job variants), and
+# the standalone routing GUI writes to the same location via its own
+# _settings_dir() helper. They're the same folder — %APPDATA%\OmniWatch
+# on Windows, ~/.omniwatch on Unix — so we just alias.
+#
+# NOTE: This alias is critical. Before it existed, _routing_path_for_job
+# threw NameError on every call (caught silently by its except clause),
+# so load_chat_routing_for_job got a None path and bailed out without
+# ever loading the per-job config. Users would set "other → all
+# channels = hide" in the GUI on NIN, the JSON would save correctly,
+# and OmniWatch would never read it — so other-player events kept
+# routing to Battle by the global default-wildcard fallback. Defining
+# SETTINGS_DIR here restores the intended layering (per-job overrides
+# global, which overrides baked-in defaults).
+SETTINGS_DIR = USER_DIR
+
 # ── Per-character storage ───────────────────────────────────────────────────
 # Most config files live under USER_DIR/<charname>/ so two characters
 # on the same machine don't clobber each other's layouts, settings,
@@ -1847,7 +4551,7 @@ def _rebuild_path_constants():
     this point pick up the new paths automatically."""
     global LAYOUT_FILE, BUFF_CFG, MOBS_FILE, ZONES_FILE, BUTTONS_FILE
     global SETTINGS_FILE, GEARSWAP_PATH_FILE, BUFF_TIMER_CFG, RECAST_TIMER_CFG
-    global BUFF_STATE_SNAPSHOT
+    global BUFF_STATE_SNAPSHOT, STATS_LAYOUT_FILE
     cd = _chardir(active_view_char)
     LAYOUT_FILE        = os.path.join(cd, "omniwatch_layout.json")
     BUFF_CFG           = os.path.join(cd, "omniwatch_buffs.json")
@@ -1864,6 +4568,8 @@ def _rebuild_path_constants():
     # sent a fresh BUFF_BATCH yet (or isn't running). Entries with an
     # expires_at_unix < now are filtered out on load.
     BUFF_STATE_SNAPSHOT = os.path.join(cd, "omniwatch_buff_state.json")
+    # Per-job + global customizable stats panel layouts.
+    STATS_LAYOUT_FILE  = os.path.join(cd, "omniwatch_stats_layout.json")
 
 # Initial bind. These point to USER_DIR (no char) until the first
 # PLAYER packet fires — _rebuild_path_constants() runs again then.
@@ -1885,6 +4591,7 @@ GEARSWAP_PATH_FILE = os.path.join(USER_DIR, "omniwatch_gearswap_path.json")
 BUFF_TIMER_CFG   = os.path.join(USER_DIR, "omniwatch_buff_timer.json")
 RECAST_TIMER_CFG = os.path.join(USER_DIR, "omniwatch_recast.json")
 BUFF_STATE_SNAPSHOT = os.path.join(USER_DIR, "omniwatch_buff_state.json")
+STATS_LAYOUT_FILE = os.path.join(USER_DIR, "omniwatch_stats_layout.json")
 # DPS encounter logs stay GLOBAL (not per-char). JSON: one record per
 # line, each a full encounter dict. CSV: one summary row per encounter.
 # Both append-only and character-agnostic for now.
@@ -1995,7 +4702,8 @@ def _switch_active_view(name):
     global buttons_config, _zone_regions
     for fn_name in ("load_layout", "load_buff_config",
                     "load_recast_timer_config", "load_buff_timer_config",
-                    "load_buttons_config", "load_mobs_db", "load_zones_config"):
+                    "load_buttons_config", "load_mobs_db", "load_zones_config",
+                    "_load_stats_layout"):
         fn = globals().get(fn_name)
         if callable(fn):
             try:
@@ -2338,6 +5046,12 @@ def load_mobdb_data():
         return {}
 
     by_lower = {}
+    # Populated when the loaded JSON is schema v5+ (post-merge). Both
+    # are top-level maps. We snapshot them into globals (_mob_abilities_db)
+    # at the end of this function so the existing tooltip code path
+    # finds them.
+    v5_ability_details = {}
+    v5_family_abilities = {}
     json_path = os.path.join(MOBDATA_DIR, "mob_individuals.json")
     if os.path.isfile(json_path):
         try:
@@ -2347,6 +5061,15 @@ def load_mobdb_data():
             print(f"[OmniWatch] mob_individuals.json load failed: {e}")
             data = {}
         inds = data.get("individuals", {}) if isinstance(data, dict) else {}
+        # Schema v5 carries the abilities database inline. Pull it out
+        # here so we can hand it to _mob_abilities_db below; do this
+        # outside the per-mob loop since it's a single top-level read.
+        if isinstance(data, dict):
+            meta = data.get("_meta", {}) or {}
+            schema_v = int(meta.get("schema_version", 0) or 0)
+            if schema_v >= 5:
+                v5_ability_details = data.get("ability_details", {}) or {}
+                v5_family_abilities = data.get("family_abilities", {}) or {}
         for name_lower, rec in inds.items():
             # Detect schema: flat (v4+, fields hoisted to top level, no zones
             # array) vs zoned (v2/v3, fields inside zones[]).
@@ -2460,6 +5183,24 @@ def load_mobdb_data():
                 entry["modifiers"]  = {}
                 entry["notorious"]  = False
                 by_lower.setdefault(name_lower, []).append(entry)
+
+        # If this was a schema-v5 file, hand the embedded abilities
+        # data to the module-level _mob_abilities_db so tooltip lookups
+        # work without an external mob_abilities.json. We do this here
+        # rather than in load_mob_abilities() because the data lives
+        # inside mob_individuals.json now; load_mob_abilities() runs
+        # before we touch this file, so it returns empty and we patch
+        # it up retroactively.
+        if v5_ability_details:
+            global _mob_abilities_db
+            _mob_abilities_db = {
+                "families":  v5_family_abilities,
+                "abilities": v5_ability_details,
+            }
+            print(f"[OmniWatch] Schema v5 ability data: "
+                  f"{len(v5_ability_details)} abilities, "
+                  f"{len(v5_family_abilities)} families")
+
         print(f"[OmniWatch] Loaded merged mob db: {len(by_lower)} unique names "
               f"({sum(len(v) for v in by_lower.values())} entries).")
         return by_lower
@@ -3143,15 +5884,17 @@ def dispatch_button(idx):
 # Keep this aligned with the order user specified.
 SETTINGS_SECTIONS = [
     "General",
+    "Header",
     "Party",
     "Equipment",
     "Statistics",
     "Recast Timer",
     "Buff Timer",
+    "Chat Panel",
+    "Skillchain",
     "Target Card",
     "DPS Tracker",
     "HotBar",
-    "Inventory",
     "Developer",
 ]
 
@@ -3168,6 +5911,48 @@ SETTINGS_SCHEMA = [
                    "number.",
     },
     {
+        # Top of General: a one-click clean exit. OmniWatch always runs
+        # borderless (no OS [X] close button) so we provide an in-app
+        # way to quit. Action handler saves layout + buff state snapshot
+        # before tearing down pygame and exiting the process.
+        "key":     "exit_omniwatch",
+        "label":   "Exit OmniWatch",
+        "kind":    "button",
+        "button_text": "EXIT",
+        "section": "General",
+        "applies": "python",
+        "action":  "exit_omniwatch",
+        "help":    "Quit OmniWatch cleanly. Saves the current panel "
+                   "layout and buff state snapshot before closing. "
+                   "Use this instead of force-killing the process so "
+                   "your panel positions and durations are preserved "
+                   "for next launch.",
+    },
+    {
+        # Full-screen toggle. Borderless windows don't have an OS [□]
+        # button so we provide an in-app way to fill the monitor.
+        # Clicking once snaps the window to the current monitor's full
+        # resolution (via GetMonitorInfoW — DPI-correct because the
+        # process is PER_MONITOR_AWARE_V2). Clicking again restores
+        # the window to its pre-fullscreen size and position. The
+        # button_text flips between "FULL" and "RESTORE" to reflect
+        # the current state.
+        "key":     "toggle_fullscreen",
+        "label":   "Full screen",
+        "kind":    "button",
+        "button_text": "FULL",
+        "section": "General",
+        "applies": "python",
+        "action":  "toggle_fullscreen",
+        "help":    "Snap the OmniWatch window to fill the entire "
+                   "monitor it's currently on. Uses the full screen "
+                   "resolution (covers the taskbar). Click again to "
+                   "restore the previous size and position. With "
+                   "always-on-top enabled, this gives you a "
+                   "fullscreen-overlay effect over the game. Windows "
+                   "only.",
+    },
+    {
         "key":     "always_on_top",
         "label":   "Always on top",
         "kind":    "bool",
@@ -3175,20 +5960,8 @@ SETTINGS_SCHEMA = [
         "section": "General",
         "applies": "python",
         "help":    "Pin the OmniWatch window above all other windows. "
-                   "Windows only.",
-    },
-    {
-        "key":     "borderless_window",
-        "label":   "Borderless window",
-        "kind":    "bool",
-        "default": False,
-        "section": "General",
-        "applies": "python",
-        "help":    "Hide the OS title bar and frame around the OmniWatch "
-                   "window. With borderless on, hold SHIFT and drag "
-                   "anywhere in the window to move it. The OmniWatch app "
-                   "icon in the Windows taskbar still works normally for "
-                   "minimize/restore.",
+                   "Hold SHIFT and drag anywhere in the OmniWatch "
+                   "window to reposition it. Windows only.",
     },
     {
         "key":     "window_opacity",
@@ -3208,6 +5981,25 @@ SETTINGS_SCHEMA = [
                    "only — no effect on macOS/Linux.",
     },
     {
+        "key":     "global_ui_scale",
+        "label":   "Global UI scale",
+        "kind":    "float",
+        "default": 1.0,
+        "min":     0.5,
+        "max":     3.0,
+        "step":    0.25,
+        "section": "General",
+        "applies": "python",
+        "help":    "Scales every panel's size and text by this "
+                   "multiplier on top of each panel's own size. "
+                   "1.0 = normal (default). Raise it on 4K / high-DPI "
+                   "monitors where text is too small (try 1.5–2.0), or "
+                   "lower it below 1.0 to pack more on screen. Panels "
+                   "stay anchored to their screen edges, so after "
+                   "changing this you may want to re-drag panels into "
+                   "place once.",
+    },
+    {
         "key":     "transparent_background",
         "label":   "Transparent background",
         "kind":    "bool",
@@ -3224,7 +6016,7 @@ SETTINGS_SCHEMA = [
         "key":     "open_crash_log",
         "label":   "Open log folder",
         "kind":    "button",
-        "section": "General",
+        "section": "Developer",
         "applies": "python",
         "action":  "open_crash_log_folder",
         "help":    "Open the folder containing crash logs and per-"
@@ -3236,7 +6028,7 @@ SETTINGS_SCHEMA = [
         "label":   "Reset zone timer",
         "kind":    "button",
         "button_text": "RESET",
-        "section": "General",
+        "section": "Header",
         "applies": "python",
         "action":  "reset_zone_timer",
         "help":    "Reset the header's \"Zone Time\" counter to 0 "
@@ -3268,7 +6060,7 @@ SETTINGS_SCHEMA = [
         "min":     -1440,    # one full Vana day
         "max":     1440,
         "step":    1,
-        "section": "General",
+        "section": "Header",
         "applies": "python",
         "help":    "Adjust the in-header Vana'diel clock by N minutes "
                    "if it drifts from the in-game clock. Positive = "
@@ -3328,6 +6120,21 @@ SETTINGS_SCHEMA = [
         "section": "Party",
         "applies": "python",
         "help":    "Show the debuffs column on each party member panel.",
+    },
+    {
+        "key":     "party_buff_font_size",
+        "label":   "Buff/debuff font size",
+        "kind":    "enum",
+        "options":       ["small", "medium", "large"],
+        "option_labels": ["Small", "Medium", "Large"],
+        "default": "medium",
+        "section": "Party",
+        "applies": "python",
+        "help":    "Text size for buff and debuff entries on party "
+                   "member panels. Affects both columns. Small fits "
+                   "more lines per panel; Large is easier to read at "
+                   "a glance. No effect when 'Compact icon grid' is "
+                   "enabled (that mode uses fixed-size icons).",
     },
     {
         "key":     "party_buff_icon_grid",
@@ -3402,6 +6209,23 @@ SETTINGS_SCHEMA = [
         "help":    "Open the config wizard to set your Song+, Phantom "
                    "Roll+, and Unity Rank values. Same as //ow setup.",
     },
+    {
+        "key":     "open_stats_layout",
+        "label":   "Edit stats layout",
+        "kind":    "button",
+        "button_text": "EDIT",
+        "section": "Statistics",
+        "applies": "python",
+        "action":  "open_stats_layout",
+        "help":    "Open omniwatch_stats_layout.json in your default "
+                   "text editor. Hide cells by adding their key to the "
+                   "'hidden' array under 'global' (hidden everywhere) "
+                   "or under a job name in 'per_job' (hidden only on "
+                   "that job, in addition to global hides). Re-enter "
+                   "setup mode (//ow setup) to apply changes. For most "
+                   "users it's easier to click cells in setup mode "
+                   "and use the 'Save as' button to persist changes.",
+    },
 
     # ── Recast Timer ────────────────────────────────────────────────
     {
@@ -3471,6 +6295,99 @@ SETTINGS_SCHEMA = [
                    "Edit the `hide` list to skip specific buffs, or the "
                    "`aliases` section to shorten long names. Restart the "
                    "overlay to apply.",
+    },
+
+    # ── Chat Panel ─────────────────────────────────────────────────
+    {
+        "key":     "show_chat",
+        "label":   "Show chat panel",
+        "kind":    "bool",
+        "default": True,
+        "section": "Chat Panel",
+        "applies": "python",
+        "help":    "Show the chat log panel (floating, draggable, "
+                   "resizable). Displays /say, /party, /tell, system "
+                   "messages, and battle log. Mouse wheel scrolls; "
+                   "click the badge at the bottom to jump back to "
+                   "newest when scrolled up.",
+    },
+    {
+        "key":     "chat_font_size",
+        "label":   "Font size",
+        "kind":    "enum",
+        "options":       ["small", "medium", "large"],
+        "option_labels": ["Small", "Medium", "Large"],
+        "default": "medium",
+        "section": "Chat Panel",
+        "applies": "python",
+        "help":    "Body text size for the chat panel. Tabs and "
+                   "timestamps scale proportionally so the strip "
+                   "stays balanced. Large may need a wider panel "
+                   "(~900px) to fit all tab names on one row.",
+    },
+    {
+        "key":     "show_chat_composer",
+        "label":   "Show input bar",
+        "kind":    "bool",
+        "default": True,
+        "section": "Chat Panel",
+        "applies": "python",
+        "help":    "Show the chat input bar at the bottom of the "
+                   "panel for typing /say, /tell, /shout, /yell, "
+                   "/party, and LS messages without alt-tabbing "
+                   "to FFXI. Text starting with '/' is sent as a "
+                   "raw command regardless of selected channel.",
+    },
+
+    # ── Skillchain Panel ─────────────────────────────────────────────
+    {
+        "key":     "show_skillchain",
+        "label":   "Show skillchain panel",
+        "kind":    "bool",
+        "default": True,
+        "section": "Skillchain",
+        "applies": "python",
+        "help":    "Show the active-battle skillchain panel: resonating "
+                   "properties on your current target, the skillchain "
+                   "window timer, the magic burst window timer, and "
+                   "a list of your equipped weapon skills / spells / "
+                   "pet abilities that would continue the chain. "
+                   "Driven by the Skillchains.lua sub-module — if that "
+                   "file is missing, the panel stays empty.",
+    },
+    {
+        "key":     "autohide_skillchain",
+        "label":   "Auto-hide when inactive",
+        "kind":    "bool",
+        "default": False,
+        "section": "Skillchain",
+        "applies": "python",
+        "help":    "Hide the skillchain panel completely when no chain "
+                   "is active and there are no continuation suggestions. "
+                   "The panel reappears the moment a skillchain window "
+                   "opens. Useful to declutter the screen out of combat.",
+    },
+    {
+        "key":     "sc_track_sc",
+        "label":   "Track skillchains",
+        "kind":    "bool",
+        "default": True,
+        "section": "Skillchain",
+        "applies": "lua",
+        "help":    "Show the build-up rows: resonating properties, "
+                   "SC window countdown, chain step. Turn off to "
+                   "hide everything except the magic-burst row.",
+    },
+    {
+        "key":     "sc_track_magic_burst",
+        "label":   "Track magic burst",
+        "kind":    "bool",
+        "default": True,
+        "section": "Skillchain",
+        "applies": "lua",
+        "help":    "Show the magic-burst window timer after a chain "
+                   "closes (the ~10s period during which matching-"
+                   "element magic deals bonus damage).",
     },
 
     # ── Target Card ─────────────────────────────────────────────────
@@ -3612,13 +6529,18 @@ SETTINGS_SCHEMA = [
                    "its label, kind, command, and icon.",
     },
 
-    # ── Inventory ────────────────────────────────────────────────────
+    # ── Header ──────────────────────────────────────────────────────
+    # (Section reorganized in v1.3.0. Was previously "Inventory" —
+    # renamed to "Header" since these settings configure the top-bar
+    # widgets: bags dropdown, gearswap-folder picker, Vana'diel clock
+    # offset, and zone-timer reset. Anything that lives in the header
+    # row goes here.)
     {
         "key":     "show_inventory_button",
         "label":   "Show 'Bags' button",
         "kind":    "bool",
         "default": True,
-        "section": "Inventory",
+        "section": "Header",
         "applies": "python",
         "help":    "Show the 'Bags' dropdown button in the header next "
                    "to your gil. Lists every bag's contents with one-"
@@ -3629,7 +6551,7 @@ SETTINGS_SCHEMA = [
         "label":   "Gearswap folder",
         "kind":    "button",
         "button_text": "PICK",
-        "section": "Inventory",
+        "section": "Header",
         "applies": "python",
         "action":  "pick_gearswap_folder",
         "help":    "Folder containing your GearSwap .lua files. Items "
@@ -3763,6 +6685,9 @@ settings = load_settings()
 # Load augment nicknames (cross-character, USER_DIR-scoped).
 _load_aug_nicknames()
 
+# Load the saved sim-import gear-root path (USER_DIR-scoped).
+_sim_load_import_root()
+
 def setting(key):
     """Return the current value of the named setting, or its schema
     default if the key isn't recognised (defensive — protects against
@@ -3778,6 +6703,22 @@ def setting(key):
     if s.get("kind") == "button":
         return None
     return s.get("default")
+
+def _eff(panel_scale):
+    """Effective render scale for a panel: its own scale times the
+    global UI scale multiplier (global_ui_scale setting). Lets 4K /
+    high-DPI users enlarge everything at once, or pack more on screen
+    below 1.0, without per-panel resizing. Clamped to the setting's
+    schema range; falls back to panel_scale unchanged on any error."""
+    try:
+        g = float(setting("global_ui_scale") or 1.0)
+        if g < 0.5:
+            g = 0.5
+        elif g > 3.0:
+            g = 3.0
+        return float(panel_scale) * g
+    except (TypeError, ValueError):
+        return panel_scale
 
 def save_settings():
     """Write the current settings dict back to disk."""
@@ -3846,6 +6787,42 @@ def _open_buff_config_in_editor():
             print(f"[OmniWatch] could not create buff config: {e!r}")
             return
     _open_path(BUFF_CFG, "buff config")
+
+
+def _open_stats_layout_global():
+    """Open omniwatch_stats_layout.json so the user can edit the GLOBAL
+    layout (the fallback used for any job without a per-job override).
+
+    Adds a helpful comment-like top-level _help field if the file
+    doesn't exist yet. JSON doesn't support real comments, but a
+    leading "_help" string gives users guidance when they first open
+    the file.
+    """
+    if not os.path.exists(STATS_LAYOUT_FILE):
+        try:
+            # Build a starter file: defaults + an in-file help string
+            # listing the available cell keys so users don't have to
+            # guess what to put in the "hidden" array.
+            all_keys = [c[0] for c in STATS_CELLS]
+            starter = {
+                "_help": (
+                    "Hide stat cells by adding their key to "
+                    "the 'hidden' array under 'global' or under "
+                    "a job name in 'per_job'. Re-enter setup "
+                    "mode (//ow setup) to apply changes. "
+                    "Available cell keys: " + ", ".join(all_keys)
+                ),
+                "version": 1,
+                "global": _default_stats_layout(),
+                "per_job": {},
+            }
+            with open(STATS_LAYOUT_FILE, "w") as f:
+                json.dump(starter, f, indent=2)
+        except Exception as e:
+            print(f"[OmniWatch] could not create stats layout: {e!r}")
+            return
+    _open_path(STATS_LAYOUT_FILE, "stats layout (global)")
+
 
 def _open_buff_timer_config_in_editor():
     """Open omniwatch_buff_timer.json."""
@@ -3973,329 +6950,13 @@ def _apply_always_on_top(enabled):
         print(f"[OmniWatch] always-on-top toggle failed: {e!r}")
 
 
-def _apply_borderless_window(enabled):
-    """Recreate the pygame display surface with or without a native frame.
-
-    Pygame doesn't support toggling the frame on an existing window — we
-    have to call set_mode() again with the new flags. The old surface
-    becomes invalid, so `screen` is rebound to the new one. Window size,
-    position, and maximized state are preserved across the rebuild.
-
-    When borderless is ON:
-    - No OS title bar, no resize handles, no min/max/close buttons
-    - Window position can't be dragged via the (now-absent) title bar;
-      users hold Shift and drag anywhere in the window to move it
-    - Always-on-top still works (it's a Windows z-order flag, not a
-      frame flag)
-    - If the window was maximized when toggling on, the borderless
-      window also fills the monitor work area
-
-    When borderless is OFF:
-    - Normal title bar with "OmniWatch" caption, frame, resize edges,
-      and the X/min/max buttons
-    - Standard window drag from the title bar
-    - Maximized state preserved across the toggle
-
-    Multi-monitor: queries the work area of the monitor the window is
-    currently on, so toggling borderless on a window placed on a
-    secondary monitor fills THAT monitor (not the primary).
-    """
-    global screen
-    if not pygame.get_init() or not pygame.display.get_init():
-        # set_mode hasn't run yet — startup will pick up the setting
-        # via setting("borderless_window") at first set_mode().
-        return
-    try:
-        # Capture current state. On Windows we use GetWindowPlacement for
-        # the show-state (normal/maximized) and the "normal" rect (size
-        # the window had before being maximized). For multi-monitor
-        # support, we also query MonitorFromWindow + GetMonitorInfo to
-        # find the work area of the monitor the window is currently on.
-        old_x, old_y = None, None
-        old_w, old_h = None, None
-        was_maximized = False
-        work_w, work_h = None, None      # work area of current monitor
-        work_x, work_y = None, None      # top-left of that work area
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                from ctypes import wintypes
-                info = pygame.display.get_wm_info()
-                hwnd = info.get("window") or info.get("hwnd") or 0
-                if hwnd:
-                    class WINDOWPLACEMENT(ctypes.Structure):
-                        _fields_ = [
-                            ("length",           wintypes.UINT),
-                            ("flags",            wintypes.UINT),
-                            ("showCmd",          wintypes.UINT),
-                            ("ptMinPosition",    wintypes.POINT),
-                            ("ptMaxPosition",    wintypes.POINT),
-                            ("rcNormalPosition", wintypes.RECT),
-                        ]
-                    wp = WINDOWPLACEMENT()
-                    wp.length = ctypes.sizeof(WINDOWPLACEMENT)
-                    if ctypes.windll.user32.GetWindowPlacement(
-                            wintypes.HWND(hwnd), ctypes.byref(wp)):
-                        # showCmd: 1=normal, 2=minimized, 3=maximized
-                        was_maximized = (wp.showCmd == 3)
-                        old_x = wp.rcNormalPosition.left
-                        old_y = wp.rcNormalPosition.top
-                        old_w = wp.rcNormalPosition.right - wp.rcNormalPosition.left
-                        old_h = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top
-
-                    # Query the monitor this window is currently on, so
-                    # toggling borderless on a secondary-monitor window
-                    # fills THAT monitor's work area (not the primary's).
-                    # MonitorFromWindow flag MONITOR_DEFAULTTONEAREST = 2.
-                    class MONITORINFO(ctypes.Structure):
-                        _fields_ = [
-                            ("cbSize",    wintypes.DWORD),
-                            ("rcMonitor", wintypes.RECT),
-                            ("rcWork",    wintypes.RECT),
-                            ("dwFlags",   wintypes.DWORD),
-                        ]
-                    hmon = ctypes.windll.user32.MonitorFromWindow(
-                        wintypes.HWND(hwnd), 2)
-                    if hmon:
-                        mi = MONITORINFO()
-                        mi.cbSize = ctypes.sizeof(MONITORINFO)
-                        if ctypes.windll.user32.GetMonitorInfoW(
-                                hmon, ctypes.byref(mi)):
-                            work_x = mi.rcWork.left
-                            work_y = mi.rcWork.top
-                            work_w = mi.rcWork.right - mi.rcWork.left
-                            work_h = mi.rcWork.bottom - mi.rcWork.top
-            except Exception:
-                pass
-
-        # Decide the new pygame surface size and where the window should
-        # land. Three cases:
-        #   1) Was maximized → use work area size, place at work-area origin
-        #   2) Was normal → use the saved normal size, place at saved origin
-        #   3) No info captured (non-Windows or query failed) → keep current
-        cur_w, cur_h = screen.get_size()
-        target_w, target_h = cur_w, cur_h
-        target_x, target_y = None, None
-
-        # When toggling OFF, check if we previously entered borderless
-        # from maximized. If so, treat this transition AS IF the window
-        # were maximized — fill the work area with the framed window,
-        # then explicitly re-apply maximize state. This preserves the
-        # "fullscreen" appearance across the toggle round-trip.
-        global _borderless_was_fullscreen
-        effective_max = was_maximized
-        if not enabled and _borderless_was_fullscreen:
-            # Treat as coming out of fullscreen-borderless mode.
-            effective_max = True
-            # Force a fresh work-area query if we don't already have one.
-            if (work_w is None or work_h is None) and sys.platform == "win32":
-                try:
-                    import ctypes
-                    from ctypes import wintypes
-                    info = pygame.display.get_wm_info()
-                    hwnd_q = info.get("window") or info.get("hwnd") or 0
-                    if hwnd_q:
-                        class MONITORINFO(ctypes.Structure):
-                            _fields_ = [
-                                ("cbSize",    wintypes.DWORD),
-                                ("rcMonitor", wintypes.RECT),
-                                ("rcWork",    wintypes.RECT),
-                                ("dwFlags",   wintypes.DWORD),
-                            ]
-                        hmon = ctypes.windll.user32.MonitorFromWindow(
-                            wintypes.HWND(hwnd_q), 2)
-                        if hmon:
-                            mi = MONITORINFO()
-                            mi.cbSize = ctypes.sizeof(MONITORINFO)
-                            if ctypes.windll.user32.GetMonitorInfoW(
-                                    hmon, ctypes.byref(mi)):
-                                work_x = mi.rcWork.left
-                                work_y = mi.rcWork.top
-                                work_w = mi.rcWork.right - mi.rcWork.left
-                                work_h = mi.rcWork.bottom - mi.rcWork.top
-                except Exception:
-                    pass
-
-        if effective_max and work_w and work_h:
-            # When maximized (or coming out of fullscreen-borderless),
-            # the pygame surface must match work area OUTRIGHT so there's
-            # no gap at the bottom. We size + position the window manually
-            # rather than relying on ShowWindow(MAX) to do the right thing
-            # — that proved unreliable across DPI settings + monitor
-            # configs.
-            target_w, target_h = work_w, work_h
-            target_x, target_y = work_x, work_y
-        elif old_w and old_h:
-            target_w, target_h = old_w, old_h
-            if old_x is not None:
-                target_x, target_y = old_x, old_y
-
-        # If toggling FROM maximized, restore the window first. Windows
-        # treats maximized windows specially — style changes via
-        # SetWindowLongPtr don't fully apply until the window is in the
-        # "normal" state. Without this restore step, toggling borderless
-        # on a maximized window leaves the title bar visible because
-        # the WS_CAPTION bit clearing didn't take effect.
-        # We restore here BEFORE set_mode so the new pygame window is
-        # created in normal state. We re-apply the work-area size and
-        # position manually below to recreate the "maximized" feel
-        # without actually being in the OS's maximized state.
-        if was_maximized and sys.platform == "win32":
-            try:
-                import ctypes
-                from ctypes import wintypes
-                info = pygame.display.get_wm_info()
-                hwnd_pre = info.get("window") or info.get("hwnd") or 0
-                if hwnd_pre:
-                    # SW_RESTORE = 9: activates and displays a window.
-                    # If minimized or maximized, restores to original
-                    # size and position. Critical for the style change
-                    # that follows to actually take effect.
-                    ctypes.windll.user32.ShowWindow(
-                        wintypes.HWND(hwnd_pre), 9)
-            except Exception:
-                pass
-
-        # Recreate pygame surface with the right size + flags.
-        if enabled:
-            flags = pygame.NOFRAME
-        else:
-            flags = pygame.RESIZABLE
-        screen = pygame.display.set_mode((target_w, target_h), flags)
-        pygame.display.set_caption("OmniWatch")
-
-        # Force a Windows-level frame style refresh. SDL/pygame's
-        # set_mode reuses the existing HWND with updated styles via
-        # SetWindowLongPtr, but the recomputation of the non-client
-        # area (the frame, title bar) doesn't always happen on the
-        # first call — without an explicit FRAMECHANGED notification,
-        # toggling borderless on a maximized window sometimes shows
-        # the new size with the old border, requiring a second toggle
-        # to clear. We fix this by re-setting the window style bits
-        # explicitly and calling SetWindowPos with SWP_FRAMECHANGED.
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                from ctypes import wintypes
-                info = pygame.display.get_wm_info()
-                hwnd = info.get("window") or info.get("hwnd") or 0
-                if hwnd:
-                    GWL_STYLE = -16
-                    WS_CAPTION     = 0x00C00000
-                    WS_THICKFRAME  = 0x00040000
-                    WS_MINIMIZEBOX = 0x00020000
-                    WS_MAXIMIZEBOX = 0x00010000
-                    WS_SYSMENU     = 0x00080000
-                    WS_BORDER      = 0x00800000
-                    WS_DLGFRAME    = 0x00400000
-                    FRAME_BITS = (WS_CAPTION | WS_THICKFRAME |
-                                  WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
-                                  WS_SYSMENU | WS_BORDER | WS_DLGFRAME)
-                    # CRITICAL: LONG_PTR is pointer-sized — 64-bit on
-                    # 64-bit Python, 32-bit on 32-bit Python. ctypes
-                    # c_long is ALWAYS 32-bit, so using it as the
-                    # return type truncates the upper 32 bits on 64-bit
-                    # builds and the resulting style value is garbage.
-                    # We use c_ssize_t (signed pointer-sized) for both
-                    # argtypes and restype so the value round-trips
-                    # correctly. Also set HWND argtype explicitly.
-                    GetWindowLongPtrW = ctypes.windll.user32.GetWindowLongPtrW
-                    GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
-                    GetWindowLongPtrW.restype  = ctypes.c_ssize_t
-                    SetWindowLongPtrW = ctypes.windll.user32.SetWindowLongPtrW
-                    SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int,
-                                                  ctypes.c_ssize_t]
-                    SetWindowLongPtrW.restype  = ctypes.c_ssize_t
-                    style = GetWindowLongPtrW(wintypes.HWND(hwnd), GWL_STYLE)
-                    if enabled:
-                        # Clear frame bits for borderless.
-                        new_style = style & ~FRAME_BITS
-                    else:
-                        # Set all frame bits for framed mode.
-                        new_style = style | FRAME_BITS
-                    SetWindowLongPtrW(wintypes.HWND(hwnd), GWL_STYLE,
-                                      new_style)
-            except Exception as e:
-                # Style update failure is non-fatal; the later
-                # SetWindowPos call with FRAMECHANGED may still do the
-                # right thing on some Windows builds.
-                print(f"[OmniWatch] window style update failed: {e!r}")
-
-        # Position the new window. Two distinct paths:
-        #   - Maximized-mode toggle: explicitly place at work-area origin
-        #     and size to work-area dimensions via SetWindowPos. Then
-        #     mark the window as maximized via GetWindowPlacement +
-        #     SetWindowPlacement so OS treats it as a real maximize
-        #     (matters for the X/restore behavior after toggling back).
-        #   - Normal-mode toggle: just position it.
-        if sys.platform == "win32" and target_x is not None:
-            try:
-                import ctypes
-                from ctypes import wintypes
-                info = pygame.display.get_wm_info()
-                hwnd = info.get("window") or info.get("hwnd") or 0
-                if hwnd:
-                    SetWindowPos = ctypes.windll.user32.SetWindowPos
-                    SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
-                                             ctypes.c_int, ctypes.c_int,
-                                             ctypes.c_int, ctypes.c_int,
-                                             wintypes.UINT]
-                    SetWindowPos.restype = wintypes.BOOL
-                    SWP_NOZORDER     = 0x0004
-                    SWP_NOACTIVATE   = 0x0010
-                    SWP_FRAMECHANGED = 0x0020
-                    # SWP_FRAMECHANGED is the critical flag — tells
-                    # Windows to recompute the window's non-client area
-                    # (frame, title bar, borders) based on the current
-                    # style. Without it, the old frame can persist for
-                    # a frame after the style bits are updated, causing
-                    # the "toggle on, border remains, toggle on again
-                    # to clear" bug.
-                    SetWindowPos(
-                        wintypes.HWND(hwnd), wintypes.HWND(0),
-                        target_x, target_y, target_w, target_h,
-                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
-
-                    # When we end up framed and we're targeting work-area
-                    # size, re-apply maximize so the OS treats it as a
-                    # proper maximized window (title bar shows the
-                    # "restore down" icon instead of "maximize", and
-                    # the [□] button toggles correctly). When borderless,
-                    # we skip this since there's no frame to show a max
-                    # icon — and Windows would re-add the title bar if
-                    # we maximized a borderless window.
-                    if effective_max and not enabled:
-                        ctypes.windll.user32.ShowWindow(
-                            wintypes.HWND(hwnd), 3)  # SW_MAXIMIZE = 3
-            except Exception:
-                pass
-
-        # Update tracking: set True when we just entered fullscreen-
-        # borderless (so the next toggle OFF knows to re-maximize).
-        # Cleared when we leave borderless OR when we toggle borderless
-        # on from a non-maximized window (regular small borderless).
-        if enabled and effective_max:
-            _borderless_was_fullscreen = True
-        else:
-            _borderless_was_fullscreen = False
-
-        # Re-apply persistent window state (always-on-top, opacity)
-        # since recreating the window clears those flags.
-        if setting("always_on_top"):
-            _apply_always_on_top(True)
-        try:
-            op = int(setting("window_opacity"))
-        except (TypeError, ValueError):
-            op = 100
-        if op != 100:
-            _apply_window_opacity(op)
-
-        print(f"[OmniWatch] borderless window → "
-              f"{'ON' if enabled else 'OFF'} "
-              f"(target {target_w}x{target_h}"
-              f"{' maximized' if was_maximized else ''})")
-    except Exception as e:
-        print(f"[OmniWatch] borderless window toggle failed: {e!r}")
+# _apply_borderless_window was removed in v1.3.0. OmniWatch now
+# starts borderless (pygame.NOFRAME) and stays borderless for the
+# entire session — there is no longer a way to toggle a native
+# frame on at runtime. Window position is moved via Shift+drag
+# anywhere in the window (see MOUSEBUTTONDOWN handler). The
+# per-mode layout swap that lived here was dropped too: with only
+# one window mode there is nothing to swap between.
 
 
 def _apply_window_opacity(percent):
@@ -4740,6 +7401,255 @@ def _open_gear_settings():
     print("[OmniWatch] gear settings wizard requested")
 
 
+def _exit_omniwatch():
+    """Clean shutdown handler for the Settings → General → EXIT button.
+
+    OmniWatch runs borderless (no OS [X] close button), so this is the
+    user-facing way to quit. Order matters:
+      1) Close the settings menu first so the EXIT click visually
+         dismisses before the window goes away — feels more polished
+         than the menu vanishing as a side effect of process death.
+      2) Persist layout (anchor positions, scales, panel visibility).
+      3) Persist the buff-timer snapshot so durations survive across
+         restart instead of being read as "no buffs" for the first
+         ~few seconds until the lua side re-sends the buff list.
+      4) Tear down pygame.
+      5) sys.exit(0) — the main loop will see SystemExit and unwind.
+
+    Every step is wrapped in try/except so a failure in one stage
+    (e.g. layout file locked by an editor) doesn't prevent the
+    subsequent stages from running. We MUST get to sys.exit even if
+    the saves fail, otherwise the user clicks EXIT and nothing
+    visibly happens.
+    """
+    global settings_menu_open
+    settings_menu_open = False
+    print("[OmniWatch] EXIT requested via Settings menu")
+    try:
+        save_layout()
+    except Exception as e:
+        print(f"[OmniWatch] exit: save_layout failed: {e!r}")
+    try:
+        _save_buff_state_snapshot(force=True)
+    except Exception as e:
+        print(f"[OmniWatch] exit: buff snapshot save failed: {e!r}")
+    try:
+        pygame.quit()
+    except Exception as e:
+        print(f"[OmniWatch] exit: pygame.quit failed: {e!r}")
+    sys.exit(0)
+
+
+# Pre-fullscreen window rect, captured on the toggle TO fullscreen so
+# the toggle BACK can restore the exact size/position the user had.
+# None when the window is in its normal (non-fullscreen) state, and
+# (x, y, w, h) screen-coords tuple when fullscreened. We also use this
+# as the source of truth for which mode the button is in — the schema's
+# button_text mirrors it for the label flip ("FULL" ↔ "RESTORE") but
+# the rect itself drives the actual size decision.
+_fullscreen_saved_rect = None
+
+
+def _toggle_fullscreen():
+    """Toggle the OmniWatch window between full-monitor and the
+    previously-saved size/position.
+
+    Triggered by the Settings → General → "Full screen" button.
+    The window has no OS frame (NOFRAME from startup) so neither a
+    [□] button nor edge-resize is available — this is the only path
+    to a fullscreen view.
+
+    Implementation:
+      - Going TO fullscreen: capture the current window rect with
+        GetWindowRect into `_fullscreen_saved_rect`, then query the
+        current monitor's FULL screen rect (rcMonitor, not rcWork —
+        per user spec, we cover the taskbar too) with
+        GetMonitorInfoW, then SetWindowPos to fill it. The pygame
+        surface is recreated with set_mode((W, H), NOFRAME) so the
+        backing buffer matches the new window size.
+      - Going FROM fullscreen: read `_fullscreen_saved_rect`, set
+        window size + position back to it, recreate the pygame
+        surface, clear the saved rect.
+
+    DPI: the process is PER_MONITOR_AWARE_V2 (set at module top), so
+    GetMonitorInfoW returns physical pixel values regardless of the
+    OS scaling factor — the window genuinely fills the screen.
+
+    Button label: the schema's button_text mirrors the current state
+    ("FULL" when normal, "RESTORE" when fullscreen) by mutating the
+    SETTINGS_SCHEMA entry in place. The settings renderer reads
+    button_text on every frame so the label updates live.
+
+    Non-Windows / hwnd lookup failure → log + early-return. No
+    silent partial state.
+    """
+    global screen, WIDTH, HEIGHT, _fullscreen_saved_rect
+
+    if sys.platform != "win32":
+        print("[OmniWatch] full-screen toggle only supported on Windows")
+        return
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+        info = pygame.display.get_wm_info()
+        hwnd = info.get("window") or info.get("hwnd") or 0
+        if not hwnd:
+            print("[OmniWatch] full-screen toggle: no HWND available")
+            return
+
+        # Locate the schema entry so we can flip its button_text in
+        # place. Cached lookup via SETTINGS_BY_KEY since the schema
+        # list is built once at module load.
+        schema_entry = SETTINGS_BY_KEY.get("toggle_fullscreen")
+
+        if _fullscreen_saved_rect is None:
+            # ── Enter fullscreen ────────────────────────────────────
+            # 1) Snapshot current window rect for later restore.
+            rect = wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(
+                wintypes.HWND(hwnd), ctypes.byref(rect))
+            saved_x = rect.left
+            saved_y = rect.top
+            saved_w = rect.right - rect.left
+            saved_h = rect.bottom - rect.top
+
+            # 2) Find the monitor the window is currently on. Using
+            #    MONITOR_DEFAULTTONEAREST (2) so windows partially off
+            #    a monitor still pick a sensible target (the closest
+            #    one). The rcMonitor field is the FULL monitor rect
+            #    in physical pixels (taskbar included); rcWork would
+            #    be the work area excluding the taskbar. User asked
+            #    for full resolution, so we use rcMonitor.
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize",    wintypes.DWORD),
+                    ("rcMonitor", wintypes.RECT),
+                    ("rcWork",    wintypes.RECT),
+                    ("dwFlags",   wintypes.DWORD),
+                ]
+            hmon = ctypes.windll.user32.MonitorFromWindow(
+                wintypes.HWND(hwnd), 2)
+            if not hmon:
+                print("[OmniWatch] full-screen toggle: "
+                      "MonitorFromWindow returned 0")
+                return
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if not ctypes.windll.user32.GetMonitorInfoW(
+                    hmon, ctypes.byref(mi)):
+                print("[OmniWatch] full-screen toggle: "
+                      "GetMonitorInfoW failed")
+                return
+            mon_x = mi.rcMonitor.left
+            mon_y = mi.rcMonitor.top
+            mon_w = mi.rcMonitor.right  - mi.rcMonitor.left
+            mon_h = mi.rcMonitor.bottom - mi.rcMonitor.top
+
+            # 3) Recreate the pygame surface at monitor size. set_mode
+            #    invalidates the old surface; rebind `screen` and
+            #    update WIDTH/HEIGHT so the render path sees the new
+            #    dimensions. NOFRAME flag preserved so we stay
+            #    borderless.
+            screen = pygame.display.set_mode((mon_w, mon_h),
+                                             pygame.NOFRAME)
+            WIDTH, HEIGHT = mon_w, mon_h
+
+            # 4) Position the new window to cover the monitor.
+            #    SetWindowPos with HWND_TOP (0) keeps z-order natural;
+            #    SWP_NOZORDER avoids fighting always-on-top if it's
+            #    active. SWP_FRAMECHANGED tells Windows to recompute
+            #    the non-client area in case any style bits drift.
+            SetWindowPos = ctypes.windll.user32.SetWindowPos
+            SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                     ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int,
+                                     wintypes.UINT]
+            SetWindowPos.restype = wintypes.BOOL
+            SWP_NOZORDER     = 0x0004
+            SWP_NOACTIVATE   = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            SetWindowPos(
+                wintypes.HWND(hwnd), wintypes.HWND(0),
+                mon_x, mon_y, mon_w, mon_h,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+
+            # 5) Re-apply window flags that set_mode clears. opacity
+            #    and always-on-top both live on the HWND and survive
+            #    set_mode in practice, but transparent_background
+            #    uses a colorkey on the new surface that has to be
+            #    re-applied. Same pattern the old _apply_borderless
+            #    code used.
+            if setting("always_on_top"):
+                _apply_always_on_top(True)
+            try:
+                op = int(setting("window_opacity"))
+            except (TypeError, ValueError):
+                op = 100
+            if op != 100:
+                _apply_window_opacity(op)
+            if setting("transparent_background"):
+                _apply_transparent_background(True)
+
+            # 6) Stash the saved rect AFTER the resize succeeds — we
+            #    only commit to "we're fullscreen now" state if
+            #    everything above worked.
+            _fullscreen_saved_rect = (saved_x, saved_y, saved_w, saved_h)
+
+            # 7) Flip the button label.
+            if schema_entry is not None:
+                schema_entry["button_text"] = "RESTORE"
+
+            print(f"[OmniWatch] full-screen ON: filled monitor "
+                  f"{mon_w}x{mon_h} at ({mon_x},{mon_y})")
+
+        else:
+            # ── Restore from fullscreen ─────────────────────────────
+            saved_x, saved_y, saved_w, saved_h = _fullscreen_saved_rect
+
+            # Recreate pygame surface at the saved size.
+            screen = pygame.display.set_mode((saved_w, saved_h),
+                                             pygame.NOFRAME)
+            WIDTH, HEIGHT = saved_w, saved_h
+
+            # Reposition to the saved screen coords.
+            SetWindowPos = ctypes.windll.user32.SetWindowPos
+            SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                     ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int,
+                                     wintypes.UINT]
+            SetWindowPos.restype = wintypes.BOOL
+            SWP_NOZORDER     = 0x0004
+            SWP_NOACTIVATE   = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            SetWindowPos(
+                wintypes.HWND(hwnd), wintypes.HWND(0),
+                saved_x, saved_y, saved_w, saved_h,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+
+            # Re-apply persistent flags (see entry path comment).
+            if setting("always_on_top"):
+                _apply_always_on_top(True)
+            try:
+                op = int(setting("window_opacity"))
+            except (TypeError, ValueError):
+                op = 100
+            if op != 100:
+                _apply_window_opacity(op)
+            if setting("transparent_background"):
+                _apply_transparent_background(True)
+
+            _fullscreen_saved_rect = None
+            if schema_entry is not None:
+                schema_entry["button_text"] = "FULL"
+
+            print(f"[OmniWatch] full-screen OFF: restored to "
+                  f"{saved_w}x{saved_h} at ({saved_x},{saved_y})")
+
+    except Exception as e:
+        print(f"[OmniWatch] full-screen toggle failed: {e!r}")
+
+
 # point at the same opener — the file's _README explains the layout.
 _SETTINGS_ACTIONS = {
     "open_buff_blacklist":     _open_buff_config_in_editor,
@@ -4755,6 +7665,9 @@ _SETTINGS_ACTIONS = {
     "clear_gearswap_folder":   _clear_gearswap_folder,
     "reset_zone_timer":        _reset_zone_timer,
     "open_gear_settings":      _open_gear_settings,
+    "open_stats_layout":       _open_stats_layout_global,
+    "exit_omniwatch":          _exit_omniwatch,
+    "toggle_fullscreen":       _toggle_fullscreen,
 }
 
 def apply_setting_side_effects(key, value):
@@ -4765,7 +7678,9 @@ def apply_setting_side_effects(key, value):
       - "lua"     send SETTING|<key>|<value> to lua via port 5005
       - "both"    do both
     """
-    global dps_panel_visible, buttons_panel_visible
+    global dps_panel_visible, buttons_panel_visible, chat_panel_visible
+    global skillchain_panel_visible
+    global chat_composer_visible
     # Lua-side notifications: send SETTING|<key>|<value> on port 5005
     # (the same socket lua already uses for SETUP/LOCK/BUTTONS control
     # messages). The lua side handles SETTING tags in its gearswap
@@ -4793,12 +7708,16 @@ def apply_setting_side_effects(key, value):
     # Settings menu shows:
     if key == "show_dps":
         dps_panel_visible = bool(value)
+    elif key == "show_skillchain":
+        skillchain_panel_visible = bool(value)
     elif key == "show_hotbar":
         buttons_panel_visible = bool(value)
+    elif key == "show_chat":
+        chat_panel_visible = bool(value)
+    elif key == "show_chat_composer":
+        chat_composer_visible = bool(value)
     elif key == "always_on_top":
         _apply_always_on_top(bool(value))
-    elif key == "borderless_window":
-        _apply_borderless_window(bool(value))
     elif key == "window_opacity":
         _apply_window_opacity(value)
         # Re-apply transparent_bg state so colorkey survives the new alpha
@@ -5153,9 +8072,27 @@ def load_buff_config():
         _buff_priority_set        = {n.lower() for n in _buff_priority}
         _buff_aliases             = {k.lower(): v for k, v in _BUFF_CFG_TEMPLATE["aliases"].items()}
 
+def _capitalize_status_name(s):
+    """Title-case a buff/debuff name for display, preserving words that
+    already contain uppercase (acronyms, mixed-case like 'Magic Atk.
+    Boost', 'MP'). Only fully-lowercase words get their first letter
+    capitalized, so 'disease' -> 'Disease' but 'MP Drainkiss' is left
+    intact."""
+    if not s:
+        return s
+    out = []
+    for w in s.split(" "):
+        if w and w == w.lower():
+            out.append(w[:1].upper() + w[1:])
+        else:
+            out.append(w)
+    return " ".join(out)
+
 def display_name(buff_name):
-    """Return the display string for a buff (alias if defined, else the name)."""
-    return _buff_aliases.get(buff_name.lower(), buff_name)
+    """Return the display string for a buff (alias if defined, else the
+    name), capitalized for display."""
+    nm = _buff_aliases.get(buff_name.lower(), buff_name)
+    return _capitalize_status_name(nm)
 
 def is_hidden(buff_name):
     """Legacy hide-everywhere check. Backwards-compat for any caller that
@@ -5196,12 +8133,18 @@ _BUFF_TIMER_CFG_TEMPLATE = {
         "          These are YOUR buffs, songs, food, rolls, etc. that",
         "          you don't want a countdown bar for. Case-insensitive.",
         "",
+        "          FORMAT: each name MUST be in double quotes, separated",
+        "          by commas. Example:",
+        '              "hide": ["Signet", "Sneak", "Invisible"]',
+        "          NOT:  \"hide\": [Signet]   <- missing quotes = error",
+        "",
         "aliases:  map of full buff name -> short display name. Used to",
         "          compress long names so more fit on the panel.",
         "          (Display rendering of these aliases is a planned",
         "          enhancement; the structure exists for future use.)",
         "",
-        "Edits apply on next OmniWatch startup."
+        "Edits apply on next OmniWatch startup (or via the 'Reload timer",
+        "configs' action in Settings)."
     ],
     "hide": [],
     "aliases": {},
@@ -5236,17 +8179,41 @@ _recast_aliases     = {}
 def _load_simple_blacklist_config(path, template, label):
     """Generic loader for the buff_timer / recast configs. Both files
     have the same shape (`hide` list + `aliases` map). Returns
-    (hide_list, aliases_map). Writes the template if file is missing."""
+    (hide_list, aliases_map). Writes the template if file is missing.
+
+    On a JSON parse error (file exists but is malformed — e.g. an
+    unquoted value like `[signet]` instead of `["signet"]`), prints a
+    LOUD warning naming the file and the error rather than silently
+    falling back, so the user knows their edit was rejected and why.
+    """
+    cfg = template
     try:
         if not os.path.exists(path):
             with open(path, "w") as f:
                 json.dump(template, f, indent=2)
             print(f"[OmniWatch] Created default {label} config at {path}")
-            cfg = template
         else:
             with open(path) as f:
-                cfg = json.load(f)
-            print(f"[OmniWatch] Loaded {label} config from {path}")
+                raw = f.read()
+            try:
+                cfg = json.loads(raw)
+                print(f"[OmniWatch] Loaded {label} config from {path}")
+            except json.JSONDecodeError as je:
+                # Malformed JSON — the file exists and was edited, but
+                # can't be parsed. Make this LOUD: the most common cause
+                # is an unquoted name (hide: [signet] instead of
+                # hide: ["signet"]). Falling back to defaults silently
+                # is what made edits look like they "weren't read."
+                print("=" * 60)
+                print(f"[OmniWatch] *** {label} config has a JSON ERROR ***")
+                print(f"[OmniWatch]   File: {path}")
+                print(f"[OmniWatch]   Error: {je}")
+                print(f"[OmniWatch]   Your edits were NOT applied — using "
+                      f"defaults instead.")
+                print(f"[OmniWatch]   Common cause: names must be in "
+                      f'quotes, e.g. "hide": ["signet"] not [signet].')
+                print("=" * 60)
+                cfg = template
     except Exception as e:
         print(f"[OmniWatch] Could not load {label} config: {e}. "
               f"Using defaults.")
@@ -5415,6 +8382,33 @@ def _find_icon_dir():
     return fallback
 
 ICON_DIR = _find_icon_dir()
+
+# Sanity-check the resolved ICON_DIR at startup. Counting .bmp files
+# turns a "wrong folder" or "empty folder" misconfiguration into a
+# loud, obvious print — which is the failure mode that previously
+# manifested as "equipment viewer shows item IDs instead of icons,
+# no error in logs" (the loader walks _find_icon_dir's candidates,
+# the first existing folder wins, and if that folder is the empty
+# USER_DIR fallback or a stale install path, NO error fires anywhere).
+# A zero count means the user needs to either run icon_extractor in
+# Windower or correct the ICON_DIR resolution (move the addon back to
+# its expected location, set PARTYWATCH_ICON_DIR, etc.).
+try:
+    _bmp_count = sum(1 for f in os.listdir(ICON_DIR)
+                       if f.lower().endswith('.bmp'))
+    if _bmp_count == 0:
+        print(f"[OmniWatch] WARNING: ICON_DIR resolved to {ICON_DIR} but "
+              f"contains zero .bmp files. Equipment viewer will show "
+              f"item IDs instead of icons. To populate: in-game, equip "
+              f"each piece of gear once and icon_extractor.lua will "
+              f"write its .bmp to this folder. If you have icons "
+              f"elsewhere, set PARTYWATCH_ICON_DIR to that folder's "
+              f"parent.")
+    else:
+        print(f"[OmniWatch] ICON_DIR contains {_bmp_count} .bmp files.")
+except OSError as _e:
+    print(f"[OmniWatch] WARNING: could not enumerate ICON_DIR "
+          f"({ICON_DIR}): {_e}. Equipment viewer icons may not load.")
 
 # Sibling icon subfolders. Resolved as siblings of ICON_DIR (so they
 # inherit whatever root won the search above). UI_ICONS_DIR holds button
@@ -5608,19 +8602,37 @@ _spells_by_id = load_spells_resource()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Mob abilities database — scraped from BG-wiki and stored under
-# OmniWatch/data/mob_abilities.json. Keyed by family (lowercase).
-# Structure: {families: {fam_key: {tp_moves: [{name, class, type, target,
-# area, effect, shadows}, ...], description, abilities: [name,...]}}}
+# Mob abilities database — used to populate tooltip text for mob TP moves.
+#
+# Loading priority:
+#   1. Schema-v5 mob_individuals.json (preferred). The merge script
+#      (merge_abilities_into_individuals.py) folds the abilities data
+#      INTO mob_individuals.json under top-level keys ability_details
+#      and family_abilities. The mob-individuals loader picks those up
+#      and overwrites _mob_abilities_db. This is the modern path.
+#   2. Legacy external data/mob_abilities.json file (schema v4 era).
+#      Still supported for users who haven't run the merger yet.
+#   3. Empty fallback — tooltips show ability name only.
+#
+# Structure (post-load):
+#   _mob_abilities_db = {
+#       "families":  { family_lc: [name, ...] },
+#       "abilities": { name: {description, family, type, dispel,
+#                             utsusemi, range, notes}, ... }
+#   }
 # ═══════════════════════════════════════════════════════════════════════════
 _mob_abilities_db = {"families": {}, "abilities": {}}
 def load_mob_abilities():
-    """Load the mob_abilities.json file from the addon's data folder.
-    Silent no-op if the file is missing."""
+    """Load legacy external mob_abilities.json from the addon's data
+    folder if present. Silent no-op if absent — schema-v5 path inside
+    mob_individuals.json is the preferred source, and the warning that
+    used to fire here was misleading once the data moved."""
     path = os.path.join(DATA_ROOT, "mob_abilities.json")
     if not os.path.exists(path):
-        print(f"[OmniWatch] No mob_abilities.json at {path} — ability "
-              f"tooltips will be empty. Run build_mob_db.py to generate.")
+        # Don't print a warning. If schema-v5 mob_individuals.json
+        # exists, it'll populate _mob_abilities_db a moment later. If
+        # neither exists, tooltips will be empty — that's a soft
+        # degradation, not an error condition.
         return {"families": {}, "abilities": {}}
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -5630,7 +8642,7 @@ def load_mob_abilities():
         return {"families": {}, "abilities": {}}
     fams = data.get("families", {}) or {}
     abils = data.get("abilities", {}) or {}
-    print(f"[OmniWatch] Loaded mob_abilities.json: "
+    print(f"[OmniWatch] Loaded legacy mob_abilities.json: "
           f"{len(fams)} families, {len(abils)} abilities")
     return {"families": fams, "abilities": abils}
 
@@ -6070,6 +9082,31 @@ def save_layout():
             # happened) and a positive int when manually sized.
             "sim_window_pos":   list(sim_window_pos),
             "sim_window_size":  list(sim_window_size),
+            # Chat panel — anchor, font scale (reserved), pixel size,
+            # visibility, active tab. chat_panel_size is pixel-based
+            # (unlike most panels which use a scale factor) since chat
+            # content is text rather than icons. Active tab is saved
+            # so user comes back to wherever they were last reading.
+            "chat_anchor":         chat_anchor,
+            "chat_scale":          chat_scale,
+            "chat_panel_size":     list(chat_panel_dims),
+            "chat_panel_visible":  chat_panel_visible,
+            "chat_active_tab":     chat_active_tab,
+            "chat_composer_visible": chat_composer_visible,
+            "chat_composer_channel": chat_composer_channel,
+            "chat_composer_tell_to": chat_composer_tell_to,
+            # Skillchain panel — anchor, scale, visibility. The
+            # per-info show_* toggles aren't saved here; they're
+            # persisted per-job on the lua side (Skillchains.lua's
+            # per_job_settings) and re-applied on job change.
+            "skillchain_anchor":  skillchain_anchor,
+            "skillchain_scale":   skillchain_scale,
+            "skillchain_panel_visible": skillchain_panel_visible,
+            # Note: v1.2.x persisted "window_mode_layouts" — a dict of
+            # per-mode anchor snapshots that swapped on borderless
+            # toggle. Removed in v1.3.0 along with the framed/borderless
+            # toggle itself. Old keys in existing layout files are
+            # harmlessly ignored on load.
         }
         with open(LAYOUT_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -6087,7 +9124,11 @@ def load_layout():
     global recast_anchor, recast_scale
     global buff_anchor, buff_scale
     global dps_anchor, dps_scale, dps_panel_visible
+    global skillchain_anchor, skillchain_scale, skillchain_panel_visible
     global buttons_anchor, buttons_scale, buttons_panel_visible
+    global chat_anchor, chat_scale, chat_panel_visible, chat_active_tab
+    global chat_composer_visible, chat_composer_channel, chat_composer_tell_to
+    global chat_composer_tell_to_cursor
     global panels_locked
     try:
         if not os.path.exists(LAYOUT_FILE):
@@ -6112,6 +9153,27 @@ def load_layout():
         sa = data.get("stats_anchor")
         if sa and len(sa) == 3:
             stats_anchor = [str(sa[0]), int(sa[1]), int(sa[2])]
+            # Migrate legacy bl/br/tr anchors to tl. Older builds used
+            # anchor_for_pos to snap the stats panel to the nearest
+            # corner on drag release, which caused the visible top of
+            # the panel to jump when its height changed (setup mode,
+            # hidden cells). The current build always stores tl. Resolve
+            # the legacy anchor against the current window with a
+            # representative panel size so the panel appears in roughly
+            # the same place the user last left it, then re-store as tl.
+            if stats_anchor[0] != "tl":
+                try:
+                    _legacy_a, _legacy_ox, _legacy_oy = stats_anchor
+                    _sw, _sh = stats_panel_size(
+                        float(data.get("stats_scale", 1.0)),
+                        job=None, setup_mode=False)
+                    _abs_x, _abs_y = resolve_anchor(
+                        stats_anchor, _sw, _sh, WIDTH, HEIGHT)
+                    stats_anchor = ["tl", int(_abs_x), int(_abs_y)]
+                except Exception:
+                    # If anything goes wrong, fall through to default
+                    # anchor on next frame.
+                    stats_anchor = None
         stats_scale = float(data.get("stats_scale", 1.0))
 
         ta = data.get("target_anchor")
@@ -6143,6 +9205,57 @@ def load_layout():
         dps_scale = float(data.get("dps_scale", 1.0))
         if "dps_panel_visible" in data:
             dps_panel_visible = bool(data["dps_panel_visible"])
+
+        # Skillchain panel: anchor + scale + visibility.
+        sca = data.get("skillchain_anchor")
+        if sca and len(sca) == 3:
+            skillchain_anchor = [str(sca[0]), int(sca[1]), int(sca[2])]
+        skillchain_scale = float(data.get("skillchain_scale", 1.0))
+        if "skillchain_panel_visible" in data:
+            skillchain_panel_visible = bool(data["skillchain_panel_visible"])
+
+        # Chat panel: anchor + pixel size + visibility + active tab.
+        ca = data.get("chat_anchor")
+        if ca and len(ca) == 3:
+            chat_anchor = [str(ca[0]), int(ca[1]), int(ca[2])]
+        chat_scale = float(data.get("chat_scale", 1.0))
+        if "chat_panel_visible" in data:
+            chat_panel_visible = bool(data["chat_panel_visible"])
+        cps = data.get("chat_panel_size")
+        if isinstance(cps, list) and len(cps) == 2:
+            # In-place update so the function chat_panel_size() and any
+            # other reader sees the new dims.
+            try:
+                chat_panel_dims[0] = max(CHAT_PANEL_MIN_W, int(cps[0]))
+                chat_panel_dims[1] = max(CHAT_PANEL_MIN_H, int(cps[1]))
+            except (TypeError, ValueError):
+                pass
+        # Active tab index. Clamp to valid range — if a future build
+        # adds/removes tabs, a stale saved index won't crash.
+        if "chat_active_tab" in data:
+            try:
+                _idx = int(data["chat_active_tab"])
+                if 0 <= _idx < len(chat_tab_names):
+                    chat_active_tab = _idx
+            except (TypeError, ValueError):
+                pass
+        # Composer state: visibility, default channel, last tell target.
+        if "chat_composer_visible" in data:
+            chat_composer_visible = bool(data["chat_composer_visible"])
+        if "chat_composer_channel" in data:
+            try:
+                _ci = int(data["chat_composer_channel"])
+                if 0 <= _ci < len(CHAT_COMPOSER_CHANNELS):
+                    chat_composer_channel = _ci
+            except (TypeError, ValueError):
+                pass
+        if "chat_composer_tell_to" in data:
+            tt = data["chat_composer_tell_to"]
+            if isinstance(tt, str):
+                # Sanitize: alpha only, capped at 16
+                tt = "".join(c for c in tt if c.isalpha())[:16]
+                chat_composer_tell_to = tt
+                chat_composer_tell_to_cursor = len(tt)
 
         bta = data.get("buttons_anchor")
         if bta and len(bta) == 3:
@@ -6203,6 +9316,11 @@ def load_layout():
         if sws and len(sws) == 2:
             sim_window_size[0] = int(sws[0])
             sim_window_size[1] = int(sws[1])
+
+        # Note: v1.2.x stored a "window_mode_layouts" dict here for the
+        # per-mode anchor-snapshot swap on borderless toggle. v1.3.0
+        # dropped that feature; if the key is present in an old layout
+        # file we just ignore it (dict.get returns None on missing).
     except Exception as e:
         print(f"[OmniWatch] Could not load layout: {e}")
 
@@ -6254,6 +9372,25 @@ _pre_select_active_view_char()
 # persist visibly across launches.
 settings = load_settings()
 load_layout()
+# Reload the buff config too. It first loaded at module import (against
+# the GLOBAL path, before the character was known), but the menu link
+# and all editing happen on the PER-CHARACTER file. Without this reload
+# the addon kept the global file's aliases/blacklists in memory while
+# the user edited the per-char copy — so e.g. changing "Protect":"Prot"
+# to "Protect":"Protect" appeared to do nothing. Re-read now that
+# BUFF_CFG / BUFF_TIMER_CFG point at the active character's folder.
+try:
+    load_buff_config()
+except Exception as e:
+    print(f"[OmniWatch] buff config reload after char-select: {e!r}")
+try:
+    load_buff_timer_config()
+except Exception as e:
+    print(f"[OmniWatch] buff timer config reload after char-select: {e!r}")
+# Load chat routing config (omniwatch_chat_routing.json). Tells the
+# chat panel which tabs each event should appear in. Missing file =
+# use baked-in defaults (defined just above near _chat_routing).
+load_chat_routing()
 
 # Reload buttons config from the now-per-char path. Same reasoning as
 # settings/layout above: the initial `buttons_config = load_buttons_config()`
@@ -6272,6 +9409,13 @@ try:
 except Exception as _e:
     print(f"[OmniWatch] initial buff snapshot load failed: {_e!r}")
 
+# NOTE: stats panel layout is NOT loaded here at module-level — the
+# _load_stats_layout function is defined later in the file. The proper
+# load happens once a character is bound via _switch_active_view's
+# loader list (which fires on the first PLAYER packet from Lua). Until
+# then, the in-memory stats_layout_config holds the safe defaults
+# initialized when STATS_CELLS gets defined.
+
 # After layout loads, force the panel-visibility globals to match the
 # Settings menu values. Settings is the user-facing control; layout
 # persists position/scale. Without this sync, a Settings toggle from
@@ -6279,6 +9423,7 @@ except Exception as _e:
 # value — confusing.
 dps_panel_visible     = bool(setting("show_dps"))
 buttons_panel_visible = bool(setting("show_hotbar"))
+skillchain_panel_visible = bool(setting("show_skillchain"))
 
 # Apply always-on-top if it was persisted ON. We do this here (after
 # pygame's window is up — it was created earlier in the file at
@@ -6287,18 +9432,12 @@ buttons_panel_visible = bool(setting("show_hotbar"))
 if setting("always_on_top"):
     _apply_always_on_top(True)
 
-# Apply persisted borderless-window state. Recreates the pygame window
-# Note: borderless_window setting is NOT auto-applied at startup.
-# Unlike always_on_top and opacity, this setting needs the user to
-# explicitly toggle it each session — that way the window always opens
-# framed and maximize-able, then the user toggles borderless ON to
-# snap to fullscreen. We also reset the persisted value to False on
-# startup so the settings toggle starts in the "off" state visually.
-if setting("borderless_window"):
-    try:
-        set_setting("borderless_window", False)
-    except Exception:
-        pass
+# Note: v1.2.x had a startup block here that reset the persisted
+# "borderless_window" setting to False so each session started framed.
+# v1.3.0 made the window always-borderless (see set_mode call earlier),
+# so the setting was removed from the schema and the startup reset is
+# unnecessary. Any stale "borderless_window" key left in settings.json
+# from an upgrade is harmlessly ignored.
 
 # Apply persisted window opacity. Same reasoning as always_on_top:
 # the side-effect dispatcher isn't fired on initial load, so we apply
@@ -6355,7 +9494,23 @@ _ow_force_lua_sim_off()
 
 DEBUFF_KEYWORDS = [
     "Poison", "Paralyze", "Blind", "Silence", "Slow", "Petrification",
-    "Curse", "Doom", "Sleep", "Bind", "Weight", "Stun", "Bio", "Dia"
+    "Curse", "Doom", "Sleep", "Bind", "Weight", "Stun", "Bio", "Dia",
+    # Added: commonly-missed enfeebles that were landing in the BUFF
+    # column because keyword matching only caught the list above.
+    # "Disease" was the reported case (Mix: Vaccine / Worm-Eaten etc.).
+    "Disease", "Plague", "Amnesia", "Addle", "Gravity", "Bane",
+    "Requiem", "Threnody", "Elegy", "Lullaby", "Frost", "Burn",
+    "Choke", "Rasp", "Shock", "Drown", "Max HP Down", "Max MP Down",
+    "Flash", "Inundation", "Helix", "Distract", "Frazzle",
+    # Stat-down family (mob TP-move debuffs like Bubble Shower → STR
+    # Down). Each is "<Stat> Down"; listed explicitly rather than a bare
+    # "Down" so we don't false-match unrelated names.
+    "STR Down", "DEX Down", "VIT Down", "AGI Down", "INT Down",
+    "MND Down", "CHR Down",
+    # Combat-stat downs (also common mob TP-move debuffs).
+    "Attack Down", "Defense Down", "Evasion Down", "Accuracy Down",
+    "Magic Def. Down", "Magic Atk. Down", "Magic Acc. Down",
+    "Magic Def Down", "Magic Atk Down",
 ]
 
 # ── Colours ─────────────────────────────────────────────────────────────────
@@ -6558,7 +9713,7 @@ def classify(buff_names, buff_ids=None):
 
 def scaled_panel_dims(scale):
     """Return a dict of scaled geometry + fonts for a party panel at the given scale."""
-    s = scale
+    s = _eff(scale)
     bar_w        = int(BAR_W        * s)
     bar_h        = max(4, int(BAR_H * s))
     bar_gap      = max(6, int(BAR_GAP * s))
@@ -6572,8 +9727,22 @@ def scaled_panel_dims(scale):
     # entries fit per row when the user enables 'specific_buff_names'
     # (Honor March vs March is longer, so we win some space back). The
     # line height is paired with the font so they scale together.
-    buff_font_px = max(7, int(8 * s))
-    buff_line_h  = max(7, int((BUFF_LINE_H - 5) * s))
+    # User-configurable size via party_buff_font_size: Small for higher
+    # density, Large for at-a-glance readability. The multiplier is
+    # applied on top of the per-panel scale `s` so manual panel scale
+    # and font-size preference compose cleanly.
+    _buff_size_pref = (setting("party_buff_font_size")
+                       if "party_buff_font_size" in SETTINGS_BY_KEY
+                       else "medium")
+    _buff_size_mult = {"small": 0.85, "medium": 1.0, "large": 1.20}.get(
+        _buff_size_pref, 1.0)
+    # Sizing: the base px below sets Medium; Small/Large stay proportional
+    # via _buff_size_mult. Base was 8 (Medium~8px); bumped to 9 for
+    # slightly more readable text at the default. Lifts all three by the
+    # same ratio: Small~7.65px, Medium 9px, Large~10.8px. Line height base
+    # nudged from -5 to -4 so rows keep pace with the taller glyphs.
+    buff_font_px = max(7, int(9 * s * _buff_size_mult))
+    buff_line_h  = max(7, int((BUFF_LINE_H - 4) * s * _buff_size_mult))
     row_min_h    = int(ROW_MIN_H * s)
     row_pad_v    = int(ROW_PAD_V * s)
     panel_w      = bars_x_off + bar_w + int(16 * s) + buff_col_w + int(12 * s) + debuff_col_w + int(20 * s)
@@ -6586,11 +9755,11 @@ def scaled_panel_dims(scale):
         "buff_line_h": buff_line_h,
         "row_min_h": row_min_h, "row_pad_v": row_pad_v,
         "panel_w": panel_w,
-        "f_name":      get_font("Consolas", 16 * s, bold=True),
-        "f_small":     get_font("Consolas", 13 * s),
+        "f_name":      get_font("Consolas", 17 * s, bold=True),
+        "f_small":     get_font("Consolas", 14 * s),
         "f_buff":      get_font("Consolas", buff_font_px),
-        "f_label":     get_font("Consolas", 12 * s),
-        "f_bar_label": get_font("Consolas", 12 * s, bold=True),
+        "f_label":     get_font("Consolas", 13 * s),
+        "f_bar_label": get_font("Consolas", 13 * s, bold=True),
     }
 
 def row_height(member, scale=1.0):
@@ -6612,7 +9781,7 @@ def scaled_ally_dims(scale):
     height since there's less to display. Used for alliance party 1 and
     alliance party 2 (a10..a15, a20..a25).
     """
-    s = scale
+    s = _eff(scale)
     bar_w        = int(160 * s)        # narrower bars than main party
     bar_h        = max(3, int(8 * s))  # thinner too
     bar_gap      = max(4, int(11 * s))
@@ -6648,6 +9817,7 @@ def draw_ally_panel(surface, x, y, member, scale=1.0):
     d  = scaled_ally_dims(scale)
     rh = d["row_min_h"]
     pw = d["panel_w"]
+    _es = _eff(scale)   # effective scale for raw positioning offsets
 
     pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, rh), border_radius=4)
     pygame.draw.rect(surface, COL_BORDER, (x, y, pw, rh), 1, border_radius=4)
@@ -6668,9 +9838,9 @@ def draw_ally_panel(surface, x, y, member, scale=1.0):
 
     block_h = name_surf.get_height() + (job_surf.get_height() + 2 if job_surf else 0)
     block_y = y + (rh - block_h) // 2
-    surface.blit(name_surf, (x + int(8 * scale), block_y))
+    surface.blit(name_surf, (x + int(8 * _es), block_y))
     if job_surf:
-        surface.blit(job_surf, (x + int(8 * scale),
+        surface.blit(job_surf, (x + int(8 * _es),
                                 block_y + name_surf.get_height() + 2))
 
     # Three bars on the right, vertically centered.
@@ -6725,6 +9895,14 @@ RECAST_FLASH_SEC = 2.0  # how long the green ready-flash plays
 # wear-off warning instead of a green ready signal. Dict keyed by buff_id.
 _buff_flashes = {}
 BUFF_FLASH_SEC = 2.0
+
+# Worn-buff state. The "keep_worn_buffs" setting keeps buffs visible
+# after they wear off, grayed out at the bottom of the panel. We
+# don't track these in a separate dict any more — instead, when a
+# buff disappears from a BUFF_BATCH, we keep its entry in buff_state
+# and mark it worn=True. The same data the live timer was showing
+# (name, source, etc.) carries through unchanged. See BUFF_BATCH
+# parsing for the wear-detection logic.
 # When this many seconds remain on a buff, it begins flashing in-panel
 # (warning: about to expire). Distinct from the wear-off flash which
 # fires AFTER it's gone. user prefers a tight 2-second window so the
@@ -6752,7 +9930,7 @@ def _format_recast_time(secs):
 
 
 def scaled_recast_dims(scale):
-    s = scale
+    s = _eff(scale)
     return {
         "s":         s,
         "bar_w":     max(120, int(RECAST_PANEL_BAR_W * s)),
@@ -6948,7 +10126,7 @@ def _format_buff_time(secs):
 
 
 def scaled_buff_dims(scale):
-    s = scale
+    s = _eff(scale)
     return {
         "s":         s,
         "bar_w":     max(120, int(BUFF_PANEL_BAR_W * s)),
@@ -6999,7 +10177,7 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
     # without a known start time.
     seen_ids = set()
     for e in entries:
-        if e.get("flash"):
+        if e.get("flash") or e.get("worn"):
             continue
         bid = e.get("buff_id")
         if bid is None:
@@ -7019,7 +10197,8 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
     # Prune durations for buffs that left the panel.
     stale = [k for k in _buff_durations if k not in seen_ids
                                             and not any(
-                                                ent.get("flash") and
+                                                (ent.get("flash") or
+                                                 ent.get("worn")) and
                                                 ent.get("buff_id") == k
                                                 for ent in entries)]
     for k in stale:
@@ -7032,6 +10211,13 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
         secs = e.get("secs", 0.0)
         name = e.get("name", "?")
         is_other = name.startswith("~")
+        is_debuff = (e.get("source") == "debuff")
+        # Capitalize for display. Preserve the leading ~ (other-player
+        # marker) by capitalizing the part after it.
+        if is_other:
+            name = "~" + _capitalize_status_name(name[1:])
+        else:
+            name = _capitalize_status_name(name)
 
         if is_flash:
             # Wore-off flash: solid red bar blinking ~3 Hz.
@@ -7054,6 +10240,11 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
                          (bx + bar_w - time_surf.get_width() - 4, text_y))
         else:
             col = _buff_color(secs)
+            # Debuffs (Disease, etc.) get the debuff red regardless of
+            # remaining time, so they read as debuffs in the timer panel
+            # rather than looking like a normal (green) buff.
+            if is_debuff:
+                col = COL_DEBUFF
             bid = e.get("buff_id")
             peak = _buff_durations.get(bid, max(secs, 0.1))
             # Fill ratio: 1.0 fresh, 0.0 expired (decreasing).
@@ -7103,6 +10294,82 @@ ACCENT_BUTTONS  = (140, 200, 140)   # soft green — buttons (action)
 ACCENT_STATS    = (210, 200, 130)   # parchment — stats (reference)
 ACCENT_EQUIP    = (180, 160, 110)   # bronze — equipment
 ACCENT_TARGET   = (220, 180, 110)   # warm amber — target
+ACCENT_CHAT     = (140, 220, 180)   # mint — chat (communication/signal)
+ACCENT_SC       = (220, 130, 210)   # magenta — skillchain (resonance / flash)
+
+# Skillchain property → display color. Canonical FFXI element palette
+# via Ivaar's Skillchains addon (originally from Sammeh). Same colors
+# the player sees on element icons in the game UI, so muscle memory
+# carries over. Used by draw_skillchain_panel to color each resonating
+# property in the props row and each suggestion's resulting chain.
+SC_PROPERTY_COLORS = {
+    # Lv.4 (rare 4-property closes)
+    "Light":         (255, 255, 255),
+    "Darkness":      ( 80,  80, 220),
+    "Radiance":      (255, 255, 255),
+    "Umbra":         ( 80,  80, 220),
+    # Lv.3
+    "Gravitation":   (140,  90,  40),
+    "Fragmentation": (240, 160, 240),
+    "Fusion":        (255, 120, 120),
+    "Distortion":    (100, 170, 255),
+    # Lv.2 / Lv.1 — element-themed
+    "Compression":   ( 80,  80, 220),   # darkness-family
+    "Liquefaction":  (255,  90,  90),   # fire
+    "Induration":    (120, 230, 230),   # ice
+    "Reverberation": ( 90, 130, 240),   # water
+    "Transfixion":   (255, 255, 200),   # light-family
+    "Scission":      (150,  90,  60),   # earth
+    "Detonation":    (120, 230, 130),   # wind
+    "Impaction":     (220, 130, 240),   # lightning
+}
+
+# Magic-burst element groups by closing skillchain property. When a
+# chain closes, you can magic burst with ANY element in the closing
+# property's group — not just the element the SC is named after. This
+# is the real FFXI rule and the reason the burst row needs to expand
+# the property rather than echo it:
+#   Light / Radiance   → Fire, Wind, Lightning, Light
+#   Darkness / Umbra   → Ice, Earth, Water, Dark
+#   Lv.3 properties    → their two component elements
+#   Lv.1/2 properties  → their single element
+# Order within each list is the canonical FFXI element order so the
+# row reads consistently.
+SC_PROPERTY_BURST_ELEMENTS = {
+    # Lv.4
+    "Light":         ["Fire", "Wind", "Lightning", "Light"],
+    "Radiance":      ["Fire", "Wind", "Lightning", "Light"],
+    "Darkness":      ["Ice", "Earth", "Water", "Dark"],
+    "Umbra":         ["Ice", "Earth", "Water", "Dark"],
+    # Lv.3 (two elements each)
+    "Gravitation":   ["Earth", "Dark"],
+    "Fragmentation": ["Wind", "Lightning"],
+    "Fusion":        ["Fire", "Light"],
+    "Distortion":    ["Ice", "Water"],
+    # Lv.1 / Lv.2 (single element)
+    "Liquefaction":  ["Fire"],
+    "Induration":    ["Ice"],
+    "Detonation":    ["Wind"],
+    "Scission":      ["Earth"],
+    "Impaction":     ["Lightning"],
+    "Reverberation": ["Water"],
+    "Transfixion":   ["Light"],
+    "Compression":   ["Dark"],
+}
+
+# Element name → display color for the burst row. Reuses the SC
+# property palette where the element shares a name, plus the six
+# elements that don't appear as property names.
+SC_ELEMENT_COLORS = {
+    "Fire":      (255,  90,  90),
+    "Ice":       (120, 230, 230),
+    "Wind":      (120, 230, 130),
+    "Earth":     (200, 160, 110),
+    "Lightning": (220, 130, 240),
+    "Water":     ( 90, 130, 240),
+    "Light":     (255, 255, 255),
+    "Dark":      (140, 110, 220),
+}
 
 def draw_accent_stripe(surface, x, y, h, color, w=2):
     """Draw a vertical accent stripe `w` pixels wide at the left edge of
@@ -7655,6 +10922,84 @@ def dispatch_char_view_dropdown_click(mx, my):
     return True
 
 
+def _inventory_bag_label(bag_key):
+    """Return the human-readable label for a bag key (e.g. 'wardrobe3'
+    → 'Wardrobe 3'). Falls back to the key itself if unknown so search
+    results don't break on a bag that was added since INVENTORY_BAG_ORDER
+    was last updated."""
+    for k, lbl in INVENTORY_BAG_ORDER:
+        if k == bag_key:
+            return lbl
+    return bag_key.title()
+
+
+def _inventory_rank_matches(query):
+    """Walk every bag in inventory_state and return a ranked list of
+    matches for `query`. Each entry is (bag_key, item_dict, score).
+
+    Ranking (case-insensitive):
+      - Exact name match               → 100
+      - Name starts with query         → 80 - (0)            = 80
+      - Name contains query as token   → 70 - word_position
+      - Name contains query (substring)→ 50 - position_in_name
+
+    Higher score = better match. List is sorted descending by score,
+    then alphabetically by item name as a tiebreaker. Empty/whitespace
+    query returns empty.
+
+    The list is materialized fresh on each call — caller should cache
+    against the query string to avoid re-ranking every frame.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    matches = []
+    for bag_key, _label in INVENTORY_BAG_ORDER:
+        items = inventory_state.get(bag_key, [])
+        for it in items:
+            name = (it.get("name") or "").strip()
+            if not name:
+                continue
+            nl = name.lower()
+            if nl == q:
+                score = 100
+            elif nl.startswith(q):
+                score = 80
+            else:
+                # Token-start match (e.g. "shorinken" matches the second
+                # word of "Heishi Shorinken"): rank above substring,
+                # below prefix.
+                tokens = nl.split()
+                tok_pos = None
+                for i, tok in enumerate(tokens):
+                    if tok.startswith(q):
+                        tok_pos = i
+                        break
+                if tok_pos is not None:
+                    score = 70 - tok_pos
+                else:
+                    pos = nl.find(q)
+                    if pos < 0:
+                        continue
+                    score = 50 - min(pos, 49)
+            matches.append((bag_key, it, score))
+    # Sort by score desc, then by item name asc.
+    matches.sort(key=lambda m: (-m[2], (m[1].get("name") or "").lower()))
+    return matches
+
+
+def _inventory_get_search_results():
+    """Return the cached or freshly-ranked search results for the
+    current query. Cache key is (query, last_update_ts) so a new
+    inventory snapshot from lua also invalidates."""
+    global inventory_search_results, inventory_search_results_key
+    cache_key = (inventory_search_query, inventory_last_update_ts)
+    if inventory_search_results_key != cache_key:
+        inventory_search_results = _inventory_rank_matches(inventory_search_query)
+        inventory_search_results_key = cache_key
+    return inventory_search_results
+
+
 def draw_inventory_dropdown(surface):
     """Render the inventory dropdown panel below the 'Bags' button if
     inventory_dropdown_open is True. Populates inventory_dropdown_rects
@@ -7697,8 +11042,9 @@ def draw_inventory_dropdown(surface):
 
     cy = panel_y + pad
 
-    # ── View A: bag list ────────────────────────────────────────────────
+    # ── View A: bag list (or search results when query is set) ─────────
     if inventory_active_bag is None:
+        global inventory_search_box_rect, inventory_search_scroll
         # Header line: total items + freshness.
         total_items = sum(len(inventory_state.get(b, []))
                           for b, _ in INVENTORY_BAG_ORDER)
@@ -7710,6 +11056,193 @@ def draw_inventory_dropdown(surface):
         hdr_surf = title_font.render(hdr_text, True, (220, 200, 150))
         surface.blit(hdr_surf, (panel_x + pad, cy))
         cy += hdr_surf.get_height() + 4
+
+        # Search box: always present at the top of the bag-list view.
+        # Click to focus, type to filter, Escape to clear. When the
+        # query is non-empty the result list takes over the rest of
+        # the panel and the bag list is hidden.
+        search_h = row_h + 4
+        search_rect = pygame.Rect(panel_x + pad, cy,
+                                   panel_w - pad * 2, search_h)
+        inventory_search_box_rect = search_rect
+        # Background + border (border tint depends on focus).
+        border_color = ((180, 200, 240) if inventory_search_focused
+                        else (90, 90, 110))
+        pygame.draw.rect(surface, (20, 22, 28), search_rect, border_radius=3)
+        pygame.draw.rect(surface, border_color, search_rect, 1, border_radius=3)
+        # Magnifying-glass icon (text fallback if font lacks the glyph)
+        # then the query text or a dim placeholder.
+        icon_surf = label_font.render("⌕", True, (170, 180, 200))
+        if icon_surf.get_width() < 4:
+            icon_surf = label_font.render("?", True, (170, 180, 200))
+        surface.blit(icon_surf,
+            (search_rect.x + 6,
+             search_rect.y + (search_h - icon_surf.get_height()) // 2))
+        text_left = search_rect.x + 6 + icon_surf.get_width() + 4
+        if inventory_search_query:
+            q_surf = label_font.render(inventory_search_query, True,
+                                       (230, 230, 240))
+            surface.blit(q_surf,
+                (text_left,
+                 search_rect.y + (search_h - q_surf.get_height()) // 2))
+            # Caret on focus.
+            if inventory_search_focused and (int(time.time() * 2) % 2) == 0:
+                cx = text_left + q_surf.get_width() + 1
+                pygame.draw.line(surface, (220, 220, 230),
+                    (cx, search_rect.y + 3),
+                    (cx, search_rect.y + search_h - 3), 1)
+            # Clear-X at the right edge.
+            clear_w = 16
+            clear_rect = pygame.Rect(search_rect.right - clear_w - 2,
+                                      search_rect.y + 2,
+                                      clear_w, search_h - 4)
+            clear_surf = label_font.render("×", True, (180, 180, 200))
+            surface.blit(clear_surf,
+                (clear_rect.x + (clear_w - clear_surf.get_width()) // 2,
+                 clear_rect.y + (clear_rect.h - clear_surf.get_height()) // 2))
+            inventory_dropdown_rects.append((clear_rect,
+                {"kind": "search_clear"}))
+        else:
+            placeholder = "Search all bags…"
+            ph_surf = small_font.render(placeholder, True, COL_LABEL_DIM)
+            surface.blit(ph_surf,
+                (text_left,
+                 search_rect.y + (search_h - ph_surf.get_height()) // 2))
+            if inventory_search_focused and (int(time.time() * 2) % 2) == 0:
+                pygame.draw.line(surface, (220, 220, 230),
+                    (text_left, search_rect.y + 3),
+                    (text_left, search_rect.y + search_h - 3), 1)
+        # The search box itself is a click-target (focus).
+        inventory_dropdown_rects.append((search_rect,
+            {"kind": "search_focus"}))
+        cy += search_h + 4
+
+        # ── Results view (query non-empty): replaces bag list ─────────
+        if inventory_search_query.strip():
+            results = _inventory_get_search_results()
+            # Header showing match count.
+            res_hdr = f"{len(results)} match{'' if len(results) == 1 else 'es'}"
+            res_hdr_surf = small_font.render(res_hdr, True, COL_LABEL_DIM)
+            surface.blit(res_hdr_surf, (panel_x + pad, cy))
+            cy += res_hdr_surf.get_height() + 2
+
+            # Scrollable result list.
+            list_top    = cy
+            list_bottom = panel_y + panel_h - pad
+            available_rows = max(1, (list_bottom - list_top) // row_h)
+            max_scroll = max(0, len(results) - available_rows)
+            inventory_search_scroll = max(0, min(inventory_search_scroll,
+                                                  max_scroll))
+
+            if not results:
+                ph = small_font.render("(no matches)", True, COL_LABEL_DIM)
+                surface.blit(ph, (panel_x + pad, cy + 2))
+                return
+
+            visible = results[inventory_search_scroll
+                              :inventory_search_scroll + available_rows]
+            for bag_key, it, _score in visible:
+                nm  = it.get("name", "") or f"#{it.get('id', 0)}"
+                cnt = it.get("count", 1)
+                row_rect = pygame.Rect(panel_x + 2, cy,
+                                       panel_w - 4, row_h)
+                is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
+                if is_hover:
+                    pygame.draw.rect(surface, (40, 40, 52), row_rect)
+
+                # Check mark (left): ✓ if referenced in gearswap.
+                check_w = 14
+                if _item_in_gearswap(nm):
+                    ck = label_font.render("✓", True, (140, 200, 140))
+                    if ck.get_width() < 3:
+                        ck = label_font.render("*", True, (140, 200, 140))
+                    surface.blit(ck,
+                        (panel_x + pad,
+                         cy + (row_h - ck.get_height()) // 2))
+
+                # Bag tag (right edge): which bag this item is in.
+                # Compact label, dim color so the eye sees item names
+                # first and the location as secondary info.
+                bag_tag = _inventory_bag_label(bag_key)
+                # Truncate long bag names for the tag column.
+                if len(bag_tag) > 12:
+                    bag_tag = bag_tag[:11] + "…"
+                tag_surf = small_font.render(bag_tag, True, (170, 160, 200))
+                tag_x = panel_x + panel_w - tag_surf.get_width() - pad
+
+                # Count column (just left of the bag tag, when >1).
+                cnt_x = tag_x
+                if cnt > 1:
+                    cnt_surf = label_font.render(f"x{cnt}",
+                                                  True, COL_LABEL_DIM)
+                    cnt_x = (tag_x - cnt_surf.get_width() - 6)
+                    surface.blit(cnt_surf,
+                        (cnt_x,
+                         cy + (row_h - cnt_surf.get_height()) // 2))
+
+                # Name (link blue). Truncate if it would overlap the
+                # count/tag columns — measure-then-trim approach.
+                name_color = (130, 180, 230)
+                name_x = panel_x + pad + check_w
+                name_max_w = cnt_x - name_x - 6
+                name_text = nm
+                name_surf = label_font.render(name_text, True, name_color)
+                if name_surf.get_width() > name_max_w and name_max_w > 16:
+                    # Binary trim to fit.
+                    lo, hi = 1, len(name_text)
+                    while lo < hi:
+                        mid = (lo + hi + 1) // 2
+                        trial = name_text[:mid] + "…"
+                        if label_font.size(trial)[0] <= name_max_w:
+                            lo = mid
+                        else:
+                            hi = mid - 1
+                    name_text = name_text[:lo] + "…"
+                    name_surf = label_font.render(name_text,
+                                                   True, name_color)
+                name_y = cy + (row_h - name_surf.get_height()) // 2
+                surface.blit(name_surf, (name_x, name_y))
+                if is_hover:
+                    pygame.draw.line(surface, name_color,
+                        (name_x, name_y + name_surf.get_height() - 1),
+                        (name_x + name_surf.get_width(),
+                         name_y + name_surf.get_height() - 1))
+
+                # Bag tag last so it sits on top.
+                surface.blit(tag_surf,
+                    (tag_x,
+                     cy + (row_h - tag_surf.get_height()) // 2))
+
+                inventory_dropdown_rects.append((row_rect, {
+                    "kind": "open_item_url",
+                    "url":  _bgwiki_item_url(nm),
+                }))
+                cy += row_h
+
+            # Scroll buttons when overflow.
+            if max_scroll > 0:
+                up_rect = pygame.Rect(panel_x + panel_w - 44,
+                                      panel_y + 4, 18, 18)
+                dn_rect = pygame.Rect(panel_x + panel_w - 22,
+                                      panel_y + 4, 18, 18)
+                for r, lbl in ((up_rect, "▲"), (dn_rect, "▼")):
+                    pygame.draw.rect(surface, (60, 60, 75), r,
+                                     border_radius=2)
+                    ts = label_font.render(lbl, True, (220, 220, 230))
+                    if ts.get_width() < 4:
+                        ts = label_font.render(
+                            "^" if lbl == "▲" else "v",
+                            True, (220, 220, 230))
+                    surface.blit(ts,
+                        (r.x + (r.w - ts.get_width()) // 2,
+                         r.y + (r.h - ts.get_height()) // 2))
+                inventory_dropdown_rects.append((up_rect, {
+                    "kind": "search_scroll", "delta": -1,
+                }))
+                inventory_dropdown_rects.append((dn_rect, {
+                    "kind": "search_scroll", "delta": 1,
+                }))
+            return
 
         # Render one row per known bag with item count.
         for bag_key, bag_label in INVENTORY_BAG_ORDER:
@@ -7867,6 +11400,8 @@ def dispatch_inventory_dropdown_click(mx, my):
     panel drag/url handlers underneath."""
     global inventory_dropdown_open, inventory_active_bag
     global inventory_bag_scroll
+    global inventory_search_query, inventory_search_focused
+    global inventory_search_scroll, inventory_search_results_key
 
     # Always-eat the toggle button click — clicking 'Bags' should
     # never fall through to drag.
@@ -7874,6 +11409,7 @@ def dispatch_inventory_dropdown_click(mx, my):
         inventory_dropdown_open = not inventory_dropdown_open
         if not inventory_dropdown_open:
             inventory_active_bag = None    # reset to bag-list view next open
+            inventory_search_focused = False
         return True
 
     if not inventory_dropdown_open:
@@ -7886,8 +11422,10 @@ def dispatch_inventory_dropdown_click(mx, my):
             if kind == "open_bag":
                 inventory_active_bag = action["bag"]
                 inventory_bag_scroll[action["bag"]] = 0
+                inventory_search_focused = False
             elif kind == "back":
                 inventory_active_bag = None
+                inventory_search_focused = False
             elif kind == "scroll":
                 bag = action["bag"]
                 cur = inventory_bag_scroll.get(bag, 0)
@@ -7896,6 +11434,18 @@ def dispatch_inventory_dropdown_click(mx, my):
                 url = action.get("url", "")
                 if url:
                     open_url(url)
+            elif kind == "search_focus":
+                inventory_search_focused = True
+            elif kind == "search_clear":
+                inventory_search_query = ""
+                inventory_search_scroll = 0
+                inventory_search_results_key = None
+                # Keep focus so the user can immediately type a new
+                # query without a second click.
+                inventory_search_focused = True
+            elif kind == "search_scroll":
+                inventory_search_scroll = max(
+                    0, inventory_search_scroll + action["delta"])
             return True
 
     # Click anywhere inside the panel envelope — eat it so the click
@@ -7911,6 +11461,7 @@ def dispatch_inventory_dropdown_click(mx, my):
     # Click outside panel + outside button = close the dropdown.
     inventory_dropdown_open = False
     inventory_active_bag = None
+    inventory_search_focused = False
     return False
 
 
@@ -8007,7 +11558,8 @@ def _sim_compute_height():
         h += len(SIM_BUFF_BY_JOB.get(chosen_job, [])) * SIM_WIN_ROW_H
         h += SIM_WIN_ROW_H        # cancel
     h += 4
-    # Export Set button + Reset button + bottom pad.
+    # Import Set + Export Set + Reset buttons + bottom pad.
+    h += SIM_WIN_ROW_H            # import
     h += SIM_WIN_ROW_H            # export
     h += SIM_WIN_ROW_H            # reset
     h += SIM_WIN_PAD
@@ -8700,6 +12252,18 @@ def draw_sim_window(surface):
 
     cy += 4
 
+    # Import Set button. Opens an in-overlay file browser (rooted at the
+    # configured GearSwap data path) to pick a gear .lua file, then a typed
+    # set-path field; Lua sandbox-resolves the set into the sim equipment.
+    import_rect = pygame.Rect(wx + SIM_WIN_PAD, cy + 2,
+                              ww - SIM_WIN_PAD * 2, SIM_WIN_ROW_H - 4)
+    pygame.draw.rect(surface, (50, 80, 70), import_rect, border_radius=3)
+    i_surf = value_font.render("IMPORT SET", True, (220, 245, 235))
+    surface.blit(i_surf, (import_rect.x + (import_rect.width - i_surf.get_width()) // 2,
+                          import_rect.y + (import_rect.height - i_surf.get_height()) // 2))
+    sim_window_rects.append((import_rect, {"action": "import_open"}))
+    cy += SIM_WIN_ROW_H
+
     # Export Set button. Writes the current sim equipment+food to a
     # GearSwap-style .lua file under simulation/export/. Lua handles
     # the file write (it has access to addon_path and to live item names
@@ -8807,6 +12371,193 @@ def draw_sim_window(surface):
                               box.y + (box.height - i_surf.get_height()) // 2))
 
 
+def _sim_safe_text(s):
+    """Strip null bytes and control chars that pygame's font renderer
+    rejects (raises ValueError on any '\\x00'). Used for any dynamic text
+    in the import modal (paths, filenames, user input)."""
+    if not s:
+        return ""
+    s = str(s).replace("\x00", "")
+    return "".join(c for c in s if c == " " or c == "\t" or ord(c) >= 32)
+
+
+def _sim_import_list_dir(path):
+    """Return (folders, lua_files) for a directory, sorted. Each is a list
+    of (display_name, full_path). Returns ([],[]) on error."""
+    folders, files = [], []
+    try:
+        for nm in sorted(os.listdir(path), key=str.lower):
+            full = os.path.join(path, nm)
+            if os.path.isdir(full):
+                folders.append((nm, full))
+            elif nm.lower().endswith(".lua"):
+                files.append((nm, full))
+    except Exception:
+        pass
+    return folders, files
+
+
+def draw_sim_import_modal(surface):
+    """In-overlay file browser for importing a gear set into the sim.
+    Rooted at the configured GearSwap data path. Lists folders + .lua
+    files, lets the user pick a file and type a set path, then sends
+    SIM_IMPORT|<file>|<setpath> to Lua. Populates sim_import_rects."""
+    global sim_import_rects
+    sim_import_rects = []
+    if not sim_import_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(520, sw - 40)
+    mh = min(200, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim (also a click-catcher to close on outside click).
+    backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    backdrop.fill((0, 0, 0, 150))
+    surface.blit(backdrop, (0, 0))
+    sim_import_rects.append((pygame.Rect(0, 0, sw, sh), {"action": "imp_backdrop"}))
+
+    # Panel
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (70, 110, 95), panel, 1, border_radius=6)
+
+    title_font = _chat_get_font("body", 15) if "_chat_get_font" in globals() else pygame.font.SysFont("Arial", 15)
+    lbl_font   = pygame.font.SysFont("Arial", 13)
+    sm_font    = pygame.font.SysFont("Arial", 12)
+
+    pad = 12
+    cy = my + pad
+
+    # Title + close
+    t_surf = title_font.render("Import Gear Set", True, (220, 245, 235))
+    surface.blit(t_surf, (mx + pad, cy))
+    close_r = pygame.Rect(mx + mw - pad - 16, cy, 16, 16)
+    pygame.draw.rect(surface, (80, 50, 50), close_r, border_radius=3)
+    x_surf = lbl_font.render("X", True, (240, 220, 220))
+    surface.blit(x_surf, (close_r.x + (16 - x_surf.get_width()) // 2,
+                          close_r.y + (16 - x_surf.get_height()) // 2))
+    sim_import_rects.append((close_r, {"action": "imp_close"}))
+    cy += 26
+
+    # Browse button — opens the native OS file picker (same mechanism as
+    # the hotbar icon picker). Far simpler than an in-overlay browser and
+    # lets the user reach any path on disk.
+    browse_btn = pygame.Rect(mx + pad, cy, 100, 24)
+    pygame.draw.rect(surface, (55, 80, 70), browse_btn, border_radius=3)
+    surface.blit(lbl_font.render("Browse…", True, (220, 245, 235)),
+                 (browse_btn.x + (100 - lbl_font.size("Browse…")[0]) // 2,
+                  browse_btn.y + (24 - lbl_font.get_height()) // 2))
+    sim_import_rects.append((browse_btn, {"action": "imp_browse"}))
+    # Selected file (full name, wrapped/clipped) to the right of Browse.
+    sel_name = os.path.basename(sim_import_file) if sim_import_file else "(no file selected)"
+    sel_col = (190, 220, 205) if sim_import_file else (120, 125, 135)
+    surface.blit(sm_font.render(_sim_safe_text(sel_name), True, sel_col),
+                 (browse_btn.right + 10, cy + 5))
+    cy += 32
+    # Full path line (dim, clipped) so the user can confirm which file.
+    if sim_import_file:
+        clip_prev = surface.get_clip()
+        path_clip = pygame.Rect(mx + pad, cy, mw - pad * 2, 16)
+        surface.set_clip(path_clip)
+        p_surf = sm_font.render(_sim_safe_text(sim_import_file), True, (110, 120, 130))
+        pxp = path_clip.x
+        if p_surf.get_width() > path_clip.width:
+            pxp = path_clip.right - p_surf.get_width()
+        surface.blit(p_surf, (pxp, cy))
+        surface.set_clip(clip_prev)
+    cy += 22
+    surface.blit(sm_font.render("Set path:", True, (160, 175, 185)),
+                 (mx + pad, cy))
+    sp_box = pygame.Rect(mx + pad + 64, cy - 2, mw - pad * 2 - 64, 20)
+    focused_sp = (sim_import_field == "setpath")
+    pygame.draw.rect(surface, (16, 20, 26), sp_box, border_radius=3)
+    pygame.draw.rect(surface, (90, 140, 120) if focused_sp else (60, 70, 80),
+                     sp_box, 1, border_radius=3)
+    sp_txt = sim_import_setpath or "sets.engaged.HighHaste"
+    sp_txt = _sim_safe_text(sp_txt)
+    sp_col = (220, 230, 240) if sim_import_setpath else (110, 115, 125)
+    if focused_sp and sim_import_setpath:
+        # Draw text with a caret at the cursor position. Clamp cursor to
+        # the current text length (it can lag after external edits).
+        cpos = max(0, min(sim_import_setpath_cursor, len(sim_import_setpath)))
+        before = _sim_safe_text(sim_import_setpath[:cpos])
+        blink = (int(time.time() * 1.9) % 2 == 0)
+        shown = before + ("|" if blink else "") + _sim_safe_text(sim_import_setpath[cpos:])
+        sp_surf = sm_font.render(shown, True, sp_col)
+    else:
+        sp_surf = sm_font.render(sp_txt + ("|" if focused_sp else ""), True, sp_col)
+    surface.blit(sp_surf, (sp_box.x + 5, sp_box.y + (20 - sp_surf.get_height()) // 2))
+    sim_import_rects.append((sp_box, {"action": "imp_focus", "field": "setpath"}))
+    cy += 26
+
+    # Import button + status.
+    imp_btn = pygame.Rect(mx + pad, cy, 110, 22)
+    can_import = bool(sim_import_file and sim_import_setpath)
+    pygame.draw.rect(surface, (50, 95, 75) if can_import else (40, 50, 50),
+                     imp_btn, border_radius=3)
+    surface.blit(lbl_font.render("IMPORT", True,
+                 (225, 245, 235) if can_import else (110, 120, 120)),
+                 (imp_btn.x + (110 - lbl_font.size("IMPORT")[0]) // 2,
+                  imp_btn.y + (22 - lbl_font.get_height()) // 2))
+    if can_import:
+        sim_import_rects.append((imp_btn, {"action": "imp_confirm"}))
+    if sim_import_status:
+        surface.blit(sm_font.render(_sim_safe_text(sim_import_status), True, (200, 190, 150)),
+                     (imp_btn.right + 10, cy + 4))
+
+
+def dispatch_sim_import_click(mx, my):
+    """Resolve a click against the import modal. Returns True if consumed.
+    Only active while sim_import_open."""
+    global sim_import_open, sim_import_cwd, sim_import_file, sim_import_field
+    global sim_import_scroll, sim_import_status, sim_import_root
+    global sim_import_setpath_cursor
+    if not sim_import_open:
+        return False
+    for rect, payload in reversed(sim_import_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        act = payload.get("action")
+        if act == "imp_close":
+            sim_import_open = False
+            sim_import_field = None
+            return True
+        if act == "imp_backdrop":
+            # Click outside the panel content → close. (Panel rects are
+            # later in the list and matched first via reversed().)
+            sim_import_open = False
+            sim_import_field = None
+            return True
+        if act == "imp_focus":
+            sim_import_field = payload.get("field")
+            if sim_import_field == "setpath":
+                sim_import_setpath_cursor = len(sim_import_setpath)
+            return True
+        if act == "imp_browse":
+            # Open the native OS file picker. Blocks until the user picks
+            # or cancels (same as the icon picker). Store the chosen path.
+            chosen = _browse_for_gear_file()
+            if chosen:
+                sim_import_file = chosen
+                # Remember the folder as the next browse's starting point.
+                try:
+                    sim_import_root = os.path.dirname(chosen)
+                    _sim_save_import_root()
+                except Exception:
+                    pass
+                sim_import_status = ""
+            return True
+        if act == "imp_confirm":
+            if sim_import_file and sim_import_setpath:
+                _sim_send_import(sim_import_file, sim_import_setpath)
+                sim_import_status = "sent — check sim panel"
+            return True
+    return True   # swallow clicks anywhere over the modal (it's on top)
+
+
 def dispatch_sim_window_click(mx, my):
     """Resolve a click against sim_window_rects. Returns True if the
     click was handled (caller should not propagate to other handlers).
@@ -8889,6 +12640,15 @@ def dispatch_sim_window_click(mx, my):
                 sock_cmd_out.sendto(b"SIM|export", CMD_OUT_ADDR)
             except Exception as e:
                 print(f"[OmniWatch] sim export send failed: {e!r}")
+            return True
+        if action == "import_open":
+            # Open the in-overlay file browser modal. Seed cwd from the
+            # saved root (or wherever we last were).
+            global sim_import_open, sim_import_cwd, sim_import_status
+            sim_import_open = True
+            sim_import_status = ""
+            if not sim_import_cwd and sim_import_root:
+                sim_import_cwd = sim_import_root
             return True
         if action == "jp_step":
             cur = int(sim_state.get("jp_spent", 0))
@@ -9415,6 +13175,7 @@ def _format_dps_num(dps):
 
 def scaled_dps_dims(scale):
     """Per-scale font + size dictionary for the DPS panel."""
+    scale = _eff(scale)
     pad     = max(4, int(DPS_PANEL_PAD * scale))
     line_h  = max(11, int(DPS_PANEL_LINE_H * scale))
     head_h  = max(14, int(DPS_PANEL_HEAD_H * scale))
@@ -9451,12 +13212,13 @@ def dps_panel_size(scale):
     me = dps_state.get("me") or {}
     h = pad + head_h                       # title
     h += d["f_total"].get_height() + 2     # big DPS number
-    # Stats grid is 4 rows by default, plus a 5th SC row when there's
-    # been any skillchain activity. Must match the conditional row push
-    # in draw_dps_panel().
-    grid_rows = 4
+    # Stats grid is 5 rows by default (White/Ranged, WS/Magic, Hits/Crit,
+    # Acc/Mag, Evd alone). A 6th SC row appends when there's been any
+    # skillchain activity. Must match the conditional row push in
+    # draw_dps_panel().
+    grid_rows = 5
     if me.get("sc", 0) > 0 or me.get("skillchains", 0) > 0:
-        grid_rows = 5
+        grid_rows = 6
     h += line_h * grid_rows
     if me or any(dps_ws_state.get(s) for s in dps_state):
         ws_for_me = dps_ws_state.get("me", {})
@@ -10259,19 +14021,25 @@ def draw_dps_panel(surface, x, y, scale=1.0, locked=False):
                   cy + tot_surf.get_height() + 1))
     cy += dps_surf.get_height() + 2
 
-    # Stats grid: 2 columns × 4-5 rows. The skillchain row is added only
-    # when there's been a skillchain in the window — otherwise it'd just
-    # be a row of zeros taking space.
+    # Stats grid: 2 columns × 5 rows by default. Rows 1-2 are damage
+    # breakdown (white/ranged auto-attacks, then WS/magic active damage).
+    # Rows 3-4 are combat-quality stats. Row 5 is evasion (right column
+    # intentionally empty — too few stats remain for a full pair, and
+    # leaving an isolated value reads cleaner than padding with a
+    # contrived metric). The skillchain row is added only when there's
+    # been a skillchain in the window.
     col_w = (pw - pad * 3) // 2
     rows = [
         ("White",  _format_dmg(me.get("white", 0)),
-         "Magic",  _format_dmg(me.get("magic", 0))),
+         "Ranged", _format_dmg(me.get("ranged", 0))),
         ("WS",     _format_dmg(me.get("ws", 0)),
-         "Hits",   f"{me.get('hits', 0)}/{me.get('hits',0)+me.get('misses',0)}"),
-        ("Crit%",  f"{me.get('crit_pct', 0):.1f}",
-         "Acc%",   f"{me.get('melee_acc', 0):.1f}"),
-        ("Mag%",   f"{me.get('magic_acc', 0):.1f}",
-         "Evd%",   f"{me.get('evasion', 0):.1f}"),
+         "Magic",  _format_dmg(me.get("magic", 0))),
+        ("Hits",   f"{me.get('hits', 0)}/{me.get('hits',0)+me.get('misses',0)}",
+         "Crit%",  f"{me.get('crit_pct', 0):.1f}"),
+        ("Acc%",   f"{me.get('melee_acc', 0):.1f}",
+         "Mag%",   f"{me.get('magic_acc', 0):.1f}"),
+        ("Evd%",   f"{me.get('evasion', 0):.1f}",
+         "",       ""),
     ]
     if me.get("sc", 0) > 0 or me.get("skillchains", 0) > 0:
         rows.append((
@@ -10365,6 +14133,1646 @@ def draw_dps_panel(surface, x, y, scale=1.0, locked=False):
     return pw, ph
 
 
+# ── Chat panel ────────────────────────────────────────────────────────────
+# Scrolling chat log floating panel. Auto-scrolls to bottom; mouse wheel
+# scrolls up and pauses auto-scroll; "↓ N new" indicator appears at
+# bottom-right when new events arrive while scrolled up, click to jump.
+# Resize via corner grip changes pixel size directly (not text scale).
+#
+# Rendering strategy:
+#   1. Compute the visible-line window from chat_scroll_offset.
+#   2. Walk chat_events from newest backward, wrap each event, count
+#      lines until we've covered the visible window + scroll offset.
+#   3. Render those wrapped lines into the visible area, bottom-up.
+#   4. Overlay the "jump to bottom" badge if applicable.
+#
+# Performance: at 60fps with ~12 visible events, ~720 line-renders/sec
+# worst case. Wrap is cached per (event, panel_width); font.size() is
+# fast. No issues observed in profiling but watch perf if cache misses
+# spike (e.g. during rapid resize).
+
+def chat_panel_size(scale=1.0):
+    """Return current chat panel (w, h) in pixels.
+
+    Width and height come from chat_panel_dims which the user
+    controls via the corner-grip drag handler. Scale is currently
+    a no-op for the panel envelope — text size is fixed by font
+    selection. Reserved for future per-panel font scaling.
+    """
+    w = max(CHAT_PANEL_MIN_W, int(chat_panel_dims[0]))
+    h = max(CHAT_PANEL_MIN_H, int(chat_panel_dims[1]))
+    return w, h
+
+
+def _chat_format_timestamp(ts):
+    """HH:MM format from a unix-seconds float. Used dim/prefix only."""
+    return time.strftime("%H:%M", time.localtime(ts))
+
+
+# Cached fonts. Created lazily on first draw to avoid pygame init order
+# issues. Keys: ("body"|"meta"|"badge", size).
+_chat_fonts = {}
+
+def _chat_get_font(kind, size):
+    # Apply the global UI scale so chat text tracks the same multiplier
+    # as every other panel (4K/high-DPI legibility). Fixed call-site
+    # sizes get scaled here; the cache key uses the scaled size so
+    # different global scales don't collide in the font cache.
+    size = max(7, int(round(_eff(size))))
+    key = (kind, size)
+    f = _chat_fonts.get(key)
+    if f is None:
+        # The body font uses the global font helper so it picks up the
+        # same monospaced face the rest of the UI uses (Consolas with
+        # SysFont fallback). meta is slightly smaller; badge slightly
+        # bolder.
+        f = get_font("Consolas", size, bold=(kind == "badge"))
+        _chat_fonts[key] = f
+    return f
+
+
+def _chat_get_cjk_font(size):
+    """Return a font with CJK glyph coverage at the requested size.
+
+    Consolas can't render hiragana/katakana/kanji — it shows tofu
+    boxes. For chat lines containing Japanese characters (or other
+    non-ASCII content like accented player names), we fall back to
+    a font with full coverage.
+
+    Strategy (in order):
+      1. The bundled Noto Sans JP at chat/fonts/NotoSansJP-Regular.ttf
+         — this is the reliable path. Ships with OmniWatch under the
+         SIL OFL license. Covers all kana, JIS first+second level
+         kanji, and Latin/punctuation. Works regardless of which
+         system fonts the user has installed.
+      2. System CJK fonts if the bundled file isn't found (e.g. user
+         moved it or extraction was incomplete). Tries Yu Gothic UI,
+         Meiryo, MS Gothic — all bundled with modern Windows.
+      3. pygame's default font — last resort. Lacks CJK coverage so
+         Japanese characters will show as tofu boxes, but the panel
+         won't crash.
+
+    The first lookup at each size is logged so users can confirm
+    Japanese rendering will work without launching FFXI.
+    """
+    # Match the global UI scale applied in _chat_get_font so CJK and
+    # Latin chat text stay the same size.
+    size = max(7, int(round(_eff(size))))
+    key = ("cjk", size)
+    f = _chat_fonts.get(key)
+    if f is not None:
+        return f
+
+    # Try bundled font first. Path resolution mirrors the icon-loading
+    # convention earlier in this file — when frozen (PyInstaller .exe),
+    # we look in the .exe's directory + walking up; when running from
+    # source, relative to __file__.
+    chosen_name = None
+    if getattr(sys, "frozen", False):
+        _self_dir = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        _self_dir = os.path.dirname(os.path.abspath(__file__))
+    # Search the .py/exe folder and one level up (PyInstaller dumps
+    # the exe into <addon>/dist/ while chat/ lives at <addon>/chat/).
+    for _base in [_self_dir, os.path.dirname(_self_dir)]:
+        if not _base or not os.path.isdir(_base):
+            continue
+        for _rel in ("chat/fonts/NotoSansJP-Regular.ttf",
+                     "chat/fonts/NotoSansJP-Regular.otf"):
+            _path = os.path.join(_base, _rel.replace("/", os.sep))
+            if os.path.isfile(_path):
+                try:
+                    f = pygame.font.Font(_path, size)
+                    chosen_name = f"bundled ({_rel})"
+                    break
+                except (pygame.error, OSError) as _e:
+                    print(f"[OmniWatch] Bundled font load failed "
+                          f"({_path}): {_e!r}")
+        if f is not None:
+            break
+
+    # Fallback to system fonts.
+    if f is None:
+        system_candidates = [
+            "Yu Gothic UI", "Yu Gothic",
+            "Meiryo UI",    "Meiryo",
+            "MS UI Gothic", "MS Gothic",
+            "Noto Sans CJK JP", "Noto Sans JP",
+            "MS Mincho",
+        ]
+        for name in system_candidates:
+            path = pygame.font.match_font(name)
+            if path:
+                try:
+                    f = pygame.font.Font(path, size)
+                    chosen_name = f"system ({name})"
+                    break
+                except (pygame.error, OSError):
+                    continue
+
+    # Last resort: pygame default. No CJK glyphs — tofu boxes ahead.
+    if f is None:
+        f = pygame.font.SysFont(None, size)
+        chosen_name = "<pygame default — NO CJK SUPPORT>"
+
+    # Log selection once per size. If users see "<pygame default>"
+    # in their console output they know to install / drop in the
+    # bundled font file.
+    if size not in _chat_cjk_logged:
+        print(f"[OmniWatch] Chat CJK font @ {size}px: {chosen_name}")
+        _chat_cjk_logged.add(size)
+
+    _chat_fonts[key] = f
+    return f
+
+
+# Tracks which sizes we've already logged CJK font selection for, so
+# repeated calls don't spam the console.
+_chat_cjk_logged = set()
+
+
+def _chat_is_cjk_char(c):
+    """Should this character use the CJK fallback font?
+
+    Heuristic: ASCII (codepoint < 0x80) → Consolas. Anything above
+    → fallback. This errs on the side of using the fallback font
+    for accented Latin too (é, ü, ñ), which Yu Gothic UI renders
+    fine; the alternative (per-codepoint coverage check) is much
+    more code for marginal visual benefit.
+    """
+    return ord(c) >= 0x80
+
+
+def _chat_split_runs(text):
+    """Split text into runs of consistent script (ASCII vs CJK/non-ASCII).
+
+    Returns a list of (chunk_str, is_cjk) tuples. Adjacent characters
+    of the same script class are grouped into one chunk — fewer runs
+    means fewer font.render() calls per line. ASCII-only or pure-CJK
+    lines return a single run.
+    """
+    if not text:
+        return []
+    runs = []
+    cur_chunk = ""
+    cur_is_cjk = None
+    for c in text:
+        is_cjk = _chat_is_cjk_char(c)
+        if cur_is_cjk is None:
+            cur_is_cjk = is_cjk
+        if is_cjk != cur_is_cjk:
+            runs.append((cur_chunk, cur_is_cjk))
+            cur_chunk = ""
+            cur_is_cjk = is_cjk
+        cur_chunk += c
+    if cur_chunk:
+        runs.append((cur_chunk, cur_is_cjk))
+    return runs
+
+
+def _chat_strip_unrenderable(text):
+    """Remove codepoints that pygame fonts can't render as readable
+    glyphs. Specifically:
+
+      - C0 controls (0x00-0x1F) except tab and newline. These should
+        already be stripped on the lua side, but defense in depth.
+      - C1 controls (0x80-0x9F). FFXI's autotranslate sometimes
+        survives the SJIS decode as bytes in this range.
+      - Private Use Area (U+E000-U+F8FF). The Shift-JIS user-defined
+        area maps into the PUA, and autotranslate phrase wrappers
+        commonly land here when the decoder doesn't know what to do
+        with the bytes. Pygame's fallback font renders these as empty
+        boxes which look like garbage to the user.
+      - Specials (U+FFF0-U+FFFF) including the replacement character
+        U+FFFD when it appears as decoder residue (we keep U+FFFD
+        only in segments that came in pre-segmented, since those have
+        already been decoded once on the lua side — but at the render
+        level we treat all of these as unrenderable).
+      - Variation selectors and zero-width joiner residue
+        (U+FE00-U+FE0F, U+200B-U+200F).
+
+    The result is what the user actually sees. Original text in
+    chat_events is unchanged so diagnostics still show the raw bytes.
+    """
+    if not text:
+        return text
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if cp == 0x09 or cp == 0x0A:
+            out.append(ch)
+            continue
+        if cp < 0x20:
+            continue          # C0 control
+        if 0x7F <= cp <= 0x9F:
+            continue          # DEL + C1 controls
+        if 0xE000 <= cp <= 0xF8FF:
+            continue          # Private Use Area
+        if 0xFE00 <= cp <= 0xFE0F:
+            continue          # Variation selectors
+        if 0x200B <= cp <= 0x200F:
+            continue          # ZWJ / direction marks
+        if 0xFFF0 <= cp <= 0xFFFF:
+            continue          # Specials block (incl. U+FFFD)
+        out.append(ch)
+    return "".join(out)
+
+
+def _chat_render_mixed(text, body_font, cjk_font, color):
+    """Render a line that may contain mixed ASCII and CJK/non-ASCII.
+
+    Splits the text into script runs, renders each with the
+    appropriate font, then composes a single surface. ASCII-only
+    text falls through to a single body_font.render() — same cost
+    as the non-fallback path.
+
+    Returns a pygame.Surface (caller blits at the desired position).
+    """
+    if not text:
+        return body_font.render("", True, color)
+    # Strip codepoints pygame can't render as glyphs — FFXI auto-
+    # translate residue, control bytes, PUA junk. Done at the render
+    # funnel so every chat path benefits without changes upstream.
+    text = _chat_strip_unrenderable(text)
+    if not text:
+        return body_font.render("", True, color)
+    runs = _chat_split_runs(text)
+
+    # Diagnostic: dump up to 5 different non-ASCII texts that arrive at
+    # the renderer. The earlier one-shot version showed U+0702 (Syriac)
+    # from an unidentified source, so we want broader visibility. We
+    # also dump the full UTF-8 byte encoding of each chunk to identify
+    # whether the bytes look like valid Japanese (E3 8x xx, E4-E9 xx
+    # xx) or something else entirely.
+    global _chat_render_diag_count
+    if _chat_render_diag_count < 5:
+        for chunk, is_cjk in runs:
+            if is_cjk and chunk:
+                cps = [f"U+{ord(c):04X}" for c in chunk[:12]]
+                tail = "..." if len(chunk) > 12 else ""
+                bytes_hex = chunk.encode("utf-8", errors="replace").hex(" ")
+                # Truncate to first 60 bytes for log readability.
+                if len(bytes_hex) > 180:
+                    bytes_hex = bytes_hex[:180] + " ..."
+                print(f"[OmniWatch] CJK render #{_chat_render_diag_count + 1}: "
+                      f"text={chunk!r} "
+                      f"codepoints=[{', '.join(cps)}{tail}] "
+                      f"utf8_hex=[{bytes_hex}]")
+                # Also log the surrounding FULL text so we can see what
+                # came in as a whole and identify which chat line / UI
+                # element produced this.
+                full_cps = [f"U+{ord(c):04X}" for c in text[:30]]
+                print(f"[OmniWatch] CJK render #{_chat_render_diag_count + 1} "
+                      f"full text={text!r} (first 30 codepoints: "
+                      f"{', '.join(full_cps)})")
+                _chat_render_diag_count += 1
+                break
+
+    # Fast path: single run — render directly, no compositing.
+    if len(runs) == 1:
+        chunk, is_cjk = runs[0]
+        font = cjk_font if is_cjk else body_font
+        return font.render(chunk, True, color)
+    # Mixed: render each run, compose horizontally.
+    surfs = []
+    for chunk, is_cjk in runs:
+        font = cjk_font if is_cjk else body_font
+        surfs.append(font.render(chunk, True, color))
+    total_w = sum(s.get_width() for s in surfs)
+    max_h = max(s.get_height() for s in surfs)
+    composed = pygame.Surface((max(1, total_w), max(1, max_h)),
+                              pygame.SRCALPHA)
+    cur_x = 0
+    for s in surfs:
+        # Top-align (not baseline-align) for simplicity. The two
+        # fonts have similar metrics at the same size; tiny vertical
+        # mismatch is acceptable. If users complain about wobble, we
+        # can compute baselines per font and align by that.
+        composed.blit(s, (cur_x, 0))
+        cur_x += s.get_width()
+    return composed
+
+
+# Module-level counter for the CJK render diagnostic. Allows up to 5
+# different non-ASCII texts to be logged per session — enough to spot
+# patterns without flooding the console. Reset by reloading OmniWatch.
+_chat_render_diag_count = 0
+
+
+def _chat_measure_mixed(text, body_font, cjk_font):
+    """Measure pixel width of mixed-script text without rendering.
+
+    Used by the wrap routine. Walks runs the same way _chat_render_mixed
+    does, sums per-run widths. font.size(s)[0] is O(n) in n bytes; this
+    is fine for wrap measurement (called against trial strings during
+    word fit-checking).
+    """
+    if not text:
+        return 0
+    runs = _chat_split_runs(text)
+    w = 0
+    for chunk, is_cjk in runs:
+        font = cjk_font if is_cjk else body_font
+        w += font.size(chunk)[0]
+    return w
+
+
+def _chat_font_sizes():
+    """Return current body/meta/tab font sizes based on chat_font_size setting.
+
+    Setting is "small", "medium", or "large" — anything else falls back
+    to medium. Sizes are looked up in CHAT_FONT_SIZE_MAP. Reading the
+    setting once per draw keeps the panel responsive to setting changes
+    without needing render-side cache invalidation.
+    """
+    pref = setting("chat_font_size") if "chat_font_size" in SETTINGS_BY_KEY else "medium"
+    return CHAT_FONT_SIZE_MAP.get(pref, CHAT_FONT_SIZE_MAP["medium"])
+
+
+def _chat_composer_send():
+    """Format and dispatch the current composer text as a slash command.
+
+    Format depends on:
+      * Active channel (say/tell/reply/shout/yell/ls1/ls2)
+      * Whether the message starts with '/' (raw command escape: any
+        text starting with / is sent as-is, bypassing channel prefix
+        — works on ALL channels per design)
+      * For tell: requires a non-empty target name in the tell-target
+        field, otherwise refuses to send
+
+    Dispatch is the same UDP rail that hotbar button commands use:
+      socket.sendto("input <slash command>", ("127.0.0.1", 5011))
+    The lua side translates "input ..." into windower.send_command,
+    which feeds FFXI's chat system. We use SETTING|... or other prefix
+    schemes for non-FFXI ones; for chat we pass "input <cmd>" directly.
+
+    On success, clears the input field but preserves channel selection
+    (the user is likely to send another message on the same channel).
+    """
+    global chat_composer_text, chat_composer_cursor
+
+    text = chat_composer_text.strip()
+    if not text:
+        return
+
+    ch_idx = chat_composer_channel % len(CHAT_COMPOSER_CHANNELS)
+    _ch_key, _ch_label, ch_prefix = CHAT_COMPOSER_CHANNELS[ch_idx]
+
+    # Slash-command escape: any input starting with '/' is sent as a
+    # raw FFXI command on every channel. Bypasses the channel prefix.
+    # Useful for /lockstyle, /follow, /target, etc. without leaving
+    # the chat input.
+    if text.startswith("/"):
+        payload = "input " + text
+    elif _ch_key == "tell":
+        target = chat_composer_tell_to.strip()
+        if not target:
+            # Silent fail — the empty target field will visually nag
+            # the user. Could pop a transient message later.
+            return
+        payload = "input /t " + target + " " + text
+    else:
+        # Standard channel: prefix + message.
+        payload = "input " + ch_prefix + text
+
+    # Dispatch via the same UDP socket buttons use.
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.sendto(payload.encode("utf-8"), ("127.0.0.1", 5011))
+        s.close()
+    except Exception as e:
+        print(f"[OmniWatch] chat send failed: {e}")
+        return
+
+    # Clear input on successful dispatch. Keep tell-target so the user
+    # can fire follow-up tells to the same person without retyping.
+    chat_composer_text = ""
+    chat_composer_cursor = 0
+
+
+def _chat_composer_handle_keydown(event):
+    """Process a pygame KEYDOWN event for the composer.
+
+    Returns True if the event was consumed, False if it should fall
+    through to other handlers. Routes based on which composer field
+    is focused (main message vs tell-target).
+    """
+    global chat_composer_text, chat_composer_cursor
+    global chat_composer_tell_to, chat_composer_tell_to_cursor
+    global chat_composer_focused, chat_composer_tell_to_focused
+
+    key = event.key
+
+    # Enter on any focused field → send.
+    if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        _chat_composer_send()
+        return True
+
+    # Escape clears the focused field's content AND unfocuses.
+    # Matches the design: "Enter sends, Escape clears + unfocuses."
+    if key == pygame.K_ESCAPE:
+        if chat_composer_tell_to_focused:
+            chat_composer_tell_to = ""
+            chat_composer_tell_to_cursor = 0
+            chat_composer_tell_to_focused = False
+        if chat_composer_focused:
+            chat_composer_text = ""
+            chat_composer_cursor = 0
+            chat_composer_focused = False
+        return True
+
+    # Tab: switch focus between main and tell-target when on tell
+    # channel. Doesn't apply otherwise — fall through (allowing tab
+    # to be consumed by other handlers if any).
+    if key == pygame.K_TAB:
+        ch_idx = chat_composer_channel % len(CHAT_COMPOSER_CHANNELS)
+        is_tell = CHAT_COMPOSER_CHANNELS[ch_idx][0] == "tell"
+        if is_tell:
+            chat_composer_focused, chat_composer_tell_to_focused = (
+                chat_composer_tell_to_focused, chat_composer_focused)
+            return True
+        return False
+
+    # The rest operates on whichever field is focused.
+    if chat_composer_tell_to_focused:
+        # Edit the tell-target buffer.
+        if key == pygame.K_BACKSPACE:
+            if chat_composer_tell_to_cursor > 0:
+                cur = chat_composer_tell_to_cursor
+                chat_composer_tell_to = (
+                    chat_composer_tell_to[:cur - 1]
+                    + chat_composer_tell_to[cur:])
+                chat_composer_tell_to_cursor -= 1
+            return True
+        if key == pygame.K_DELETE:
+            cur = chat_composer_tell_to_cursor
+            chat_composer_tell_to = (
+                chat_composer_tell_to[:cur]
+                + chat_composer_tell_to[cur + 1:])
+            return True
+        if key == pygame.K_LEFT:
+            chat_composer_tell_to_cursor = max(
+                0, chat_composer_tell_to_cursor - 1)
+            return True
+        if key == pygame.K_RIGHT:
+            chat_composer_tell_to_cursor = min(
+                len(chat_composer_tell_to),
+                chat_composer_tell_to_cursor + 1)
+            return True
+        if key == pygame.K_HOME:
+            chat_composer_tell_to_cursor = 0
+            return True
+        if key == pygame.K_END:
+            chat_composer_tell_to_cursor = len(chat_composer_tell_to)
+            return True
+        # Other keys fall through — TEXTINPUT will handle character
+        # insertion for typed letters.
+        return False
+
+    if chat_composer_focused:
+        # Edit the main message buffer. Same operations as above but
+        # against chat_composer_text + chat_composer_cursor.
+        if key == pygame.K_BACKSPACE:
+            if chat_composer_cursor > 0:
+                cur = chat_composer_cursor
+                chat_composer_text = (chat_composer_text[:cur - 1]
+                                      + chat_composer_text[cur:])
+                chat_composer_cursor -= 1
+            return True
+        if key == pygame.K_DELETE:
+            cur = chat_composer_cursor
+            chat_composer_text = (chat_composer_text[:cur]
+                                  + chat_composer_text[cur + 1:])
+            return True
+        if key == pygame.K_LEFT:
+            chat_composer_cursor = max(0, chat_composer_cursor - 1)
+            return True
+        if key == pygame.K_RIGHT:
+            chat_composer_cursor = min(
+                len(chat_composer_text), chat_composer_cursor + 1)
+            return True
+        if key == pygame.K_HOME:
+            chat_composer_cursor = 0
+            return True
+        if key == pygame.K_END:
+            chat_composer_cursor = len(chat_composer_text)
+            return True
+        return False
+
+    return False
+
+
+def _chat_composer_handle_textinput(text):
+    """Insert typed text at the cursor of the focused composer field.
+
+    pygame's TEXTINPUT event fires for committed Unicode input,
+    including IME-composed sequences. `text` is the string to insert
+    (one character normally, but can be multi-char for IME results).
+    Inserts at the focused field's cursor position.
+    """
+    global chat_composer_text, chat_composer_cursor
+    global chat_composer_tell_to, chat_composer_tell_to_cursor
+
+    if not text:
+        return
+
+    if chat_composer_tell_to_focused:
+        # Tell-target field — FFXI names are letters only. Strip any
+        # non-alpha characters from the typed text (paste-protection).
+        # Cap at 16 chars (longest FFXI name is 15).
+        filtered = "".join(c for c in text if c.isalpha())
+        if not filtered:
+            return
+        room = max(0, 16 - len(chat_composer_tell_to))
+        if room == 0:
+            return
+        filtered = filtered[:room]
+        cur = chat_composer_tell_to_cursor
+        chat_composer_tell_to = (chat_composer_tell_to[:cur]
+                                 + filtered
+                                 + chat_composer_tell_to[cur:])
+        chat_composer_tell_to_cursor += len(filtered)
+        return
+
+    if chat_composer_focused:
+        # Main message field — accept anything. FFXI chat messages
+        # can be quite long; cap at 500 to avoid runaway input
+        # (FFXI's own limit is around 256 bytes after encoding).
+        room = max(0, 500 - len(chat_composer_text))
+        if room == 0:
+            return
+        insert = text[:room]
+        cur = chat_composer_cursor
+        chat_composer_text = (chat_composer_text[:cur]
+                              + insert
+                              + chat_composer_text[cur:])
+        chat_composer_cursor += len(insert)
+
+
+def _chat_composer_height():
+    """Pixel height of the composer row. Constant — same height
+    whether or not the tell target field is showing (the target
+    field is inline-left, not stacked)."""
+    return 30
+
+
+def _draw_chat_composer(surface, x, y, w, body_font, meta_font, cjk_font):
+    """Render the composer row (channel selector + input field + send).
+
+    Layout (left to right):
+        [< say >]                          channel selector — arrow,
+                                           channel name, arrow
+        [target]   (only when tell)        tell-target field
+        [............message field..............]   main input
+        [send]                             send button
+
+    Click targets are stashed in the _chat_composer_rect_* globals
+    so the mousedown handler can hit-test them without recomputing
+    geometry.
+    """
+    global _chat_composer_rect_arrow_l, _chat_composer_rect_arrow_r
+    global _chat_composer_rect_channel, _chat_composer_rect_input
+    global _chat_composer_rect_tell_to, _chat_composer_rect_send
+    global chat_composer_last_blink
+
+    h = _chat_composer_height()
+    pad_inner = 4
+
+    # Composer background fills the full width of the panel and
+    # leaves room for borders on left/right that the panel itself
+    # draws elsewhere.
+    bg = pygame.Surface((w, h), pygame.SRCALPHA)
+    bg.fill(CHAT_COMPOSER_BG)
+    surface.blit(bg, (x, y))
+    # Thin top border separating composer from scrollback above.
+    pygame.draw.line(surface, CHAT_BORDER_COLOR, (x, y), (x + w, y), 1)
+
+    # Get current channel info.
+    ch_idx = chat_composer_channel % len(CHAT_COMPOSER_CHANNELS)
+    _ch_key, ch_label, _ch_prefix = CHAT_COMPOSER_CHANNELS[ch_idx]
+    is_tell = (_ch_key == "tell")
+
+    # ── Channel selector: [<] channel-name [>] ──────────────────
+    # Compute widths so the components line up consistently regardless
+    # of channel name length. We allocate a fixed channel-name width
+    # based on the widest channel name in the list — keeps the input
+    # field's left edge from jumping when channels change.
+    arrow_font = body_font     # arrows are bigger and easier to click
+    name_font  = body_font
+    widest = max(name_font.size(label)[0]
+                 for _k, label, _p in CHAT_COMPOSER_CHANNELS)
+    arrow_w   = arrow_font.size("<")[0] + 8
+    chname_w  = widest + 6     # +6 for small horizontal padding
+    cx = x + 4
+    cy = y + (h - 18) // 2
+    # Left arrow
+    arr_l = pygame.Rect(cx, y + 2, arrow_w, h - 4)
+    _chat_composer_rect_arrow_l = arr_l
+    al_surf = arrow_font.render("<", True, CHAT_COMPOSER_ARROW_FG)
+    surface.blit(al_surf,
+                 (arr_l.x + (arr_l.w - al_surf.get_width()) // 2,
+                  arr_l.y + (arr_l.h - al_surf.get_height()) // 2))
+    cx += arrow_w
+    # Channel name (clickable — same as right arrow)
+    ch_rect = pygame.Rect(cx, y + 2, chname_w, h - 4)
+    _chat_composer_rect_channel = ch_rect
+    ch_surf = name_font.render(ch_label, True, CHAT_COMPOSER_CHANNEL_FG)
+    surface.blit(ch_surf,
+                 (ch_rect.x + (ch_rect.w - ch_surf.get_width()) // 2,
+                  ch_rect.y + (ch_rect.h - ch_surf.get_height()) // 2))
+    cx += chname_w
+    # Right arrow
+    arr_r = pygame.Rect(cx, y + 2, arrow_w, h - 4)
+    _chat_composer_rect_arrow_r = arr_r
+    ar_surf = arrow_font.render(">", True, CHAT_COMPOSER_ARROW_FG)
+    surface.blit(ar_surf,
+                 (arr_r.x + (arr_r.w - ar_surf.get_width()) // 2,
+                  arr_r.y + (arr_r.h - ar_surf.get_height()) // 2))
+    cx += arrow_w + 4
+
+    # ── Send button (right-aligned, reserved width) ────────────
+    send_label = "send"
+    send_w = body_font.size(send_label)[0] + 16
+    send_rect = pygame.Rect(x + w - send_w - 4, y + 3,
+                            send_w, h - 6)
+    _chat_composer_rect_send = send_rect
+    send_bg = pygame.Surface((send_rect.w, send_rect.h), pygame.SRCALPHA)
+    send_bg.fill((*CHAT_COMPOSER_SEND_BG, 235))
+    surface.blit(send_bg, send_rect.topleft)
+    pygame.draw.rect(surface, CHAT_COMPOSER_FIELD_BDR, send_rect, 1)
+    s_surf = body_font.render(send_label, True, CHAT_COMPOSER_SEND_FG)
+    surface.blit(s_surf,
+                 (send_rect.x + (send_rect.w - s_surf.get_width()) // 2,
+                  send_rect.y + (send_rect.h - s_surf.get_height()) // 2))
+
+    # ── Tell-target field (only when channel == tell) ──────────
+    # Placed inline-left of the message field. Width is fixed at
+    # ~100px which fits "Wormfood" comfortably and is short enough
+    # not to crowd the main field.
+    available_w = (send_rect.x - 4) - cx       # space between selector
+                                               # and send button
+    if is_tell:
+        tt_w = 110
+        tt_rect = pygame.Rect(cx, y + 3, tt_w, h - 6)
+        _chat_composer_rect_tell_to = tt_rect
+        # Background — focused vs unfocused
+        focused = chat_composer_tell_to_focused
+        tt_bg = pygame.Surface((tt_rect.w, tt_rect.h), pygame.SRCALPHA)
+        tt_bg.fill(CHAT_COMPOSER_FIELD_FOCUS if focused
+                   else CHAT_COMPOSER_FIELD_BG)
+        surface.blit(tt_bg, tt_rect.topleft)
+        bdr = (CHAT_COMPOSER_FIELD_BDR_F if focused
+               else CHAT_COMPOSER_FIELD_BDR)
+        pygame.draw.rect(surface, bdr, tt_rect, 1)
+        # Render text or placeholder
+        tt_text = chat_composer_tell_to
+        if tt_text:
+            tt_surf = _chat_render_mixed(tt_text, body_font,
+                                         cjk_font, CHAT_COMPOSER_TEXT)
+        else:
+            tt_surf = body_font.render("to:", True, CHAT_COMPOSER_PLACEHOLDER)
+        surface.blit(tt_surf,
+                     (tt_rect.x + 6,
+                      tt_rect.y + (tt_rect.h - tt_surf.get_height()) // 2))
+        # Cursor for tell-target field (only when focused)
+        if focused:
+            now = time.time()
+            blink_on = (int(now * 2) % 2) == 0
+            if blink_on:
+                cursor_x = tt_rect.x + 6
+                if tt_text:
+                    pre = tt_text[:chat_composer_tell_to_cursor]
+                    cursor_x += _chat_measure_mixed(pre, body_font, cjk_font)
+                cy_top = tt_rect.y + 4
+                cy_bot = tt_rect.bottom - 4
+                pygame.draw.line(surface, CHAT_COMPOSER_TEXT,
+                                 (cursor_x, cy_top), (cursor_x, cy_bot), 1)
+        cx += tt_w + 4
+    else:
+        _chat_composer_rect_tell_to = None
+
+    # ── Main message field ─────────────────────────────────────
+    field_w = (send_rect.x - 4) - cx
+    if field_w < 40:
+        # Panel too narrow — clip the field but still draw something.
+        field_w = max(40, field_w)
+    field_rect = pygame.Rect(cx, y + 3, field_w, h - 6)
+    _chat_composer_rect_input = field_rect
+    focused = chat_composer_focused
+    field_bg = pygame.Surface((field_rect.w, field_rect.h), pygame.SRCALPHA)
+    field_bg.fill(CHAT_COMPOSER_FIELD_FOCUS if focused
+                  else CHAT_COMPOSER_FIELD_BG)
+    surface.blit(field_bg, field_rect.topleft)
+    bdr = (CHAT_COMPOSER_FIELD_BDR_F if focused
+           else CHAT_COMPOSER_FIELD_BDR)
+    pygame.draw.rect(surface, bdr, field_rect, 1)
+
+    # Render text or placeholder. For horizontal scrolling within
+    # the field: compute the cursor pixel offset; if it would land
+    # past the visible field width, shift the view left so the
+    # cursor stays in view.
+    inner_x = field_rect.x + 6
+    inner_max_x = field_rect.right - 6
+    inner_w = inner_max_x - inner_x
+    cursor_px_in_text = _chat_measure_mixed(
+        chat_composer_text[:chat_composer_cursor], body_font, cjk_font)
+    # Scroll offset within the text: we want cursor_px_in_text to
+    # fall in [0, inner_w). If it would exceed inner_w, shift right.
+    scroll_off = max(0, cursor_px_in_text - inner_w + 4)
+
+    # Clip rendering to the field's interior so long text doesn't
+    # bleed over the send button.
+    prev_clip = surface.get_clip()
+    surface.set_clip(pygame.Rect(inner_x, field_rect.y + 1,
+                                 inner_w, field_rect.h - 2))
+    if chat_composer_text:
+        text_surf = _chat_render_mixed(chat_composer_text, body_font,
+                                       cjk_font, CHAT_COMPOSER_TEXT)
+        surface.blit(text_surf,
+                     (inner_x - scroll_off,
+                      field_rect.y + (field_rect.h - text_surf.get_height()) // 2))
+    else:
+        ph = body_font.render(
+            "Click to type, Enter to send, Esc to cancel",
+            True, CHAT_COMPOSER_PLACEHOLDER)
+        surface.blit(ph,
+                     (inner_x,
+                      field_rect.y + (field_rect.h - ph.get_height()) // 2))
+
+    # Cursor (only when main field focused)
+    if focused:
+        now = time.time()
+        blink_on = (int(now * 2) % 2) == 0
+        if blink_on:
+            cursor_x = inner_x + cursor_px_in_text - scroll_off
+            cy_top = field_rect.y + 4
+            cy_bot = field_rect.bottom - 4
+            pygame.draw.line(surface, CHAT_COMPOSER_TEXT,
+                             (cursor_x, cy_top), (cursor_x, cy_bot), 1)
+    surface.set_clip(prev_clip)
+
+
+def scaled_skillchain_dims(scale):
+    """Sizing constants for the skillchain panel. Mirrors the shape of
+    scaled_recast_dims and scaled_buff_dims so the panel reads as part
+    of the same family.
+
+    Returns a dict with row heights, bar dims, pad, and pre-built fonts
+    at the requested scale.
+    """
+    s = _eff(scale)
+    return {
+        "s":            s,
+        "panel_w":      max(240, int(300 * s)),
+        "head_h":       max(14,  int(18 * s)),
+        "row_h":        max(14,  int(17 * s)),
+        "bar_h":        max(8,   int(10 * s)),
+        "pad":          max(4,   int(6 * s)),
+        "f_head":       get_font("Consolas", max(10, int(13 * s)), bold=True),
+        "f_label":      get_font("Consolas", max(8,  int(11 * s))),
+        "f_prop":       get_font("Consolas", max(9,  int(12 * s)), bold=True),
+        "f_sugg_name":  get_font("Consolas", max(8,  int(11 * s))),
+        "f_sugg_lvl":   get_font("Consolas", max(8,  int(11 * s)), bold=True),
+    }
+
+
+def skillchain_panel_size(scale):
+    """Estimate (w, h) for the skillchain panel given the current
+    state and active settings. Variable height because the suggestion
+    list can be 0-30 entries.
+
+    Sizing layout (when all rows enabled, with active resonating state):
+      header                    head_h + pad
+      props row                 row_h
+      timer bar                 bar_h + small pad
+      step row                  row_h (if show_step)
+      magic burst row           row_h (if track_magic_burst and active)
+      sep line                  2px
+      suggestions               N * row_h (capped at MAX_SUGG_ROWS)
+    """
+    d = scaled_skillchain_dims(scale)
+    pad = d["pad"]; rh = d["row_h"]
+    w = d["panel_w"]
+
+    cs = skillchain_settings
+    # Empty/placeholder panel still needs to be discoverable in setup
+    # mode, so we keep a minimum height of header + 1 row.
+    if (skillchain_state is None
+            and not (skillchain_suggestions or False)):
+        return (w, pad + d["head_h"] + rh + pad)
+
+    h = pad + d["head_h"] + 2
+    # Props row (counts when track_sc and show_props are on AND we have props).
+    if cs.get("track_sc") and cs.get("show_props") and skillchain_state:
+        h += rh
+    # Timer bar (counts when track_sc and show_timer).
+    if cs.get("track_sc") and cs.get("show_timer") and skillchain_state:
+        h += d["bar_h"] + pad // 2 + 2
+    # Step row.
+    if cs.get("track_sc") and cs.get("show_step") and skillchain_state:
+        h += rh
+    # Magic burst row — only displays after a chain closes AND track_magic_burst.
+    if cs.get("track_magic_burst") and skillchain_state \
+            and skillchain_state.get("closed"):
+        h += rh
+    # Suggestions list. Cap rows so a SAM with 20+ matching WS doesn't
+    # produce a 600-pixel-tall panel.
+    MAX_SUGG_ROWS = 12
+    n_sugg = min(len(skillchain_suggestions), MAX_SUGG_ROWS)
+    if n_sugg > 0 and skillchain_state:
+        # Separator line + N rows.
+        h += 4 + n_sugg * rh
+    h += pad
+    return (w, h)
+
+
+def _sc_format_timer_text_and_color(state, now):
+    """Return (text, color, fill_ratio) for the timer bar based on
+    the current SC state and wall-clock time.
+
+    Phases (left-to-right in lua's wire):
+      delay_ts        wait period — bar fills, red color, "Wait Ns"
+      window_ts       SC window open — green, "Go! Ns"
+      after window_ts magic burst window (~5s after close) — blue,
+                      "Burst Ns" (only when closed=1)
+      otherwise       expired — caller hides the row
+    """
+    delay  = state["delay_ts"]
+    window = state["window_ts"]
+    closed = state["closed"]
+    if now < delay:
+        # Pre-SC-window wait phase. Bar fills from 0 → 1 over the
+        # delay period.
+        total = max(0.1, delay - state.get("received", now - 1))
+        rem   = delay - now
+        ratio = 1.0 - (rem / total)
+        return (f"Wait {rem:.1f}s", (230, 90, 80), max(0.0, min(1.0, ratio)))
+    elif now < window:
+        # SC window is open.
+        total = max(0.1, window - delay)
+        rem   = window - now
+        ratio = rem / total
+        return (f"Go! {rem:.1f}s", (110, 220, 130), max(0.0, min(1.0, ratio)))
+    elif closed and now < window + 10:
+        # Magic burst window (only if chain closed).
+        burst_total = 10.0
+        burst_rem   = (window + 10) - now
+        ratio = burst_rem / burst_total
+        return (f"Burst {burst_rem:.1f}s", (110, 170, 250),
+                max(0.0, min(1.0, ratio)))
+    else:
+        return (None, None, 0.0)
+
+
+def draw_skillchain_panel(surface, x, y, scale=1.0, locked=False):
+    """Render the skillchain panel at (x, y). Returns (w, h).
+
+    Reads global state: skillchain_state, skillchain_suggestions,
+    skillchain_settings, skillchain_main_job. The panel auto-hides
+    its rows based on the settings booleans — track_sc gates the
+    props / timer / step rows, track_magic_burst gates the burst
+    row, and the show_* per-info booleans gate individual rows
+    inside track_sc.
+    """
+    d = scaled_skillchain_dims(scale)
+    pad = d["pad"]; rh = d["row_h"]
+    pw, ph = skillchain_panel_size(scale)
+
+    pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, ph), border_radius=4)
+    pygame.draw.rect(surface, COL_BORDER, (x, y, pw, ph), 1, border_radius=4)
+
+    # Header strip — matches stats/equipment panel style: a darker
+    # filled rect across the top with neutral title text, plus a 1px
+    # separator line below it. The accent color is reserved for the
+    # left-edge stripe so the panel is identifiable at a glance
+    # without making the title text itself read as a color.
+    title_h = d["head_h"] + pad // 2 + 2
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, pw - 2, title_h - 1),
+                     border_radius=3)
+    draw_accent_stripe(surface, x, y, ph, ACCENT_SC)
+    pygame.draw.line(surface, COL_BORDER,
+                     (x + 1, y + title_h),
+                     (x + pw - 2, y + title_h))
+
+    head_label = "SKILLCHAIN"
+    if skillchain_state and skillchain_state.get("bound"):
+        head_label = f"SKILLCHAIN · CHAINBOUND LV.{skillchain_state['bound']}"
+    head_surf = d["f_head"].render(head_label, True, COL_EV_TITLE)
+    surface.blit(head_surf,
+        (x + pad + 3,
+         y + (title_h - head_surf.get_height()) // 2))
+
+    # Idle / placeholder state.
+    if skillchain_state is None and not skillchain_suggestions:
+        msg_surf = d["f_label"].render(
+            "no active chain", True, COL_LABEL_DIM)
+        surface.blit(msg_surf,
+            (x + pad + 3, y + pad + d["head_h"] + 2))
+        return (pw, ph)
+
+    cs = skillchain_settings
+    cur_y = y + pad + d["head_h"] + 2
+    now = time.time()
+
+    # Props row — colored chunks per element.
+    if (cs.get("track_sc") and cs.get("show_props")
+            and skillchain_state):
+        props = skillchain_state.get("props") or []
+        prefix_surf = d["f_label"].render("Prop: ", True, COL_LABEL_DIM)
+        surface.blit(prefix_surf,
+            (x + pad + 3, cur_y + (rh - prefix_surf.get_height()) // 2))
+        cx = x + pad + 3 + prefix_surf.get_width()
+        for i, prop in enumerate(props):
+            if i > 0:
+                sep_surf = d["f_prop"].render(" · ", True, COL_LABEL_DIM)
+                surface.blit(sep_surf,
+                    (cx, cur_y + (rh - sep_surf.get_height()) // 2))
+                cx += sep_surf.get_width()
+            color = SC_PROPERTY_COLORS.get(prop, (220, 220, 220))
+            prop_surf = d["f_prop"].render(prop, True, color)
+            surface.blit(prop_surf,
+                (cx, cur_y + (rh - prop_surf.get_height()) // 2))
+            cx += prop_surf.get_width()
+        cur_y += rh
+
+    # Timer bar.
+    if (cs.get("track_sc") and cs.get("show_timer")
+            and skillchain_state):
+        text, color, ratio = _sc_format_timer_text_and_color(
+            skillchain_state, now)
+        if text is not None:
+            bar_w = pw - 2 * (pad + 3) - 70
+            bar_x = x + pad + 3
+            bar_y = cur_y + 2
+            # Bar background.
+            pygame.draw.rect(surface, (40, 40, 50),
+                (bar_x, bar_y, bar_w, d["bar_h"]),
+                border_radius=2)
+            # Bar fill.
+            fill_w = max(0, int(bar_w * ratio))
+            if fill_w > 0:
+                pygame.draw.rect(surface, color,
+                    (bar_x, bar_y, fill_w, d["bar_h"]),
+                    border_radius=2)
+            # Border on top.
+            pygame.draw.rect(surface, (60, 60, 70),
+                (bar_x, bar_y, bar_w, d["bar_h"]),
+                1, border_radius=2)
+            # Right-aligned text.
+            txt_surf = d["f_label"].render(text, True, color)
+            surface.blit(txt_surf,
+                (x + pw - pad - 3 - txt_surf.get_width(),
+                 bar_y + (d["bar_h"] - txt_surf.get_height()) // 2))
+            cur_y += d["bar_h"] + pad // 2 + 2
+
+    # Step row.
+    if (cs.get("track_sc") and cs.get("show_step")
+            and skillchain_state):
+        step = skillchain_state.get("step", 0)
+        # Action that triggered this state — useful for parties to see
+        # what WS opened/closed. resource determines the lookup table
+        # but we don't have a resource→name table on the python side
+        # right now, so just show the step number and closed status.
+        step_text = f"Step: Lv.{step}"
+        if skillchain_state.get("closed"):
+            step_text += " (CLOSED)"
+        elif skillchain_state.get("bound"):
+            step_text += " (Chainbound)"
+        step_surf = d["f_label"].render(step_text, True, (220, 220, 230))
+        surface.blit(step_surf,
+            (x + pad + 3, cur_y + (rh - step_surf.get_height()) // 2))
+        cur_y += rh
+
+    # Magic burst row — only when the chain has closed.
+    if (cs.get("track_magic_burst") and skillchain_state
+            and skillchain_state.get("closed")):
+        # Expand the closing SC's properties into the FULL set of
+        # burstable elements. A Light close bursts Fire/Wind/Lightning/
+        # Light, a Darkness close bursts Ice/Earth/Water/Dark, Lv.3
+        # props cover two elements each, etc. We dedupe across multiple
+        # closing props while preserving canonical element order.
+        props = skillchain_state.get("props") or []
+        _ELEM_ORDER = ["Fire", "Ice", "Wind", "Earth",
+                       "Lightning", "Water", "Light", "Dark"]
+        burst_elems = set()
+        for prop in props:
+            for el in SC_PROPERTY_BURST_ELEMENTS.get(prop, [prop]):
+                burst_elems.add(el)
+        # Render in canonical order; unknown tokens (shouldn't occur)
+        # appended after.
+        ordered = [e for e in _ELEM_ORDER if e in burst_elems]
+        ordered += [e for e in burst_elems if e not in _ELEM_ORDER]
+
+        burst_prefix = d["f_label"].render("Burst: ", True, (130, 170, 240))
+        surface.blit(burst_prefix,
+            (x + pad + 3, cur_y + (rh - burst_prefix.get_height()) // 2))
+        cx = x + pad + 3 + burst_prefix.get_width()
+        for i, el in enumerate(ordered):
+            if i > 0:
+                sep_surf = d["f_label"].render("/", True, COL_LABEL_DIM)
+                surface.blit(sep_surf,
+                    (cx, cur_y + (rh - sep_surf.get_height()) // 2))
+                cx += sep_surf.get_width()
+            color = SC_ELEMENT_COLORS.get(el, (220, 220, 220))
+            ps = d["f_label"].render(el, True, color)
+            surface.blit(ps,
+                (cx, cur_y + (rh - ps.get_height()) // 2))
+            cx += ps.get_width()
+        cur_y += rh
+
+    # Suggestions list (capped). Grouped by descending level. Lua
+    # already sends them in the right order so we just render top-down.
+    MAX_SUGG_ROWS = 12
+    if skillchain_suggestions and skillchain_state:
+        # Separator line.
+        pygame.draw.line(surface, COL_BORDER,
+            (x + pad + 3, cur_y), (x + pw - pad - 3, cur_y), 1)
+        cur_y += 4
+        # Track the last level rendered so we can lightly group them
+        # visually (small vertical gap between Lv.4 block and Lv.3
+        # block, etc. — but only if there's room). Simple version: no
+        # extra gap; the level number itself differentiates them.
+        for i, (name, lvl, prop) in enumerate(
+                skillchain_suggestions[:MAX_SUGG_ROWS]):
+            # Left: WS / spell / ability name, truncated to fit.
+            name_surf = d["f_sugg_name"].render(name, True, (200, 200, 210))
+            surface.blit(name_surf,
+                (x + pad + 3, cur_y + (rh - name_surf.get_height()) // 2))
+            # Right: "Lv.N PropName" with the prop colored.
+            color = SC_PROPERTY_COLORS.get(prop, (220, 220, 220))
+            right_text = f"Lv.{lvl}  "
+            right_surf = d["f_sugg_lvl"].render(right_text, True, (180, 180, 190))
+            prop_surf  = d["f_sugg_lvl"].render(prop, True, color)
+            rx = x + pw - pad - 3 - prop_surf.get_width()
+            surface.blit(prop_surf,
+                (rx, cur_y + (rh - prop_surf.get_height()) // 2))
+            surface.blit(right_surf,
+                (rx - right_surf.get_width(),
+                 cur_y + (rh - right_surf.get_height()) // 2))
+            cur_y += rh
+        # If we truncated, show "..." in dim text on the last row.
+        if len(skillchain_suggestions) > MAX_SUGG_ROWS:
+            more_n = len(skillchain_suggestions) - MAX_SUGG_ROWS
+            more_surf = d["f_label"].render(
+                f"... +{more_n} more", True, COL_LABEL_DIM)
+            surface.blit(more_surf,
+                (x + pad + 3, cur_y - rh + 1))
+
+    return (pw, ph)
+
+
+def draw_chat_panel(surface, x, y, locked=False):
+    """Render the chat panel at (x, y).
+
+    Reads chat_events (newest-last deque), the active tab's filter and
+    scroll position, and chat_panel_dims. Sets _chat_jump_badge_rect and
+    chat_tab_rects each frame for the mousedown handler to consume.
+    """
+    global _chat_jump_badge_rect, chat_tab_rects
+
+    pw, ph = chat_panel_size()
+
+    # Background
+    bg_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+    bg_surf.fill(CHAT_BG_COLOR)
+    surface.blit(bg_surf, (x, y))
+
+    # Header strip
+    hdr_h = 18
+    hdr_surf = pygame.Surface((pw, hdr_h), pygame.SRCALPHA)
+    hdr_surf.fill(CHAT_HEADER_COLOR)
+    surface.blit(hdr_surf, (x, y))
+    title_font = _chat_get_font("meta", 11)
+    title = title_font.render(
+        f"Chat  ({chat_recv_text + chat_recv_battle} events)",
+        True, (200, 210, 220))
+    surface.blit(title, (x + 8, y + 3))
+
+    # Routing-config gear button at the right edge of the header.
+    # Clicking launches omniwatch_routing_gui.exe (or the .py fallback
+    # if exe isn't built yet). Hit-testing is done in the click
+    # handler via the rect stored in _chat_settings_button_rect.
+    global _chat_settings_button_rect
+    global _chat_clear_tab_button_rect, _chat_clear_all_button_rect
+    mouse_pos = pygame.mouse.get_pos()
+
+    gear_w = 56
+    gear_h = hdr_h - 2
+    gear_rect = pygame.Rect(x + pw - gear_w - 4, y + 1, gear_w, gear_h)
+    _chat_settings_button_rect = gear_rect
+    gear_hovered = gear_rect.collidepoint(mouse_pos)
+    gear_bg = (60, 70, 90, 220) if gear_hovered else (40, 46, 56, 200)
+    gear_surf = pygame.Surface((gear_rect.width, gear_rect.height),
+                                pygame.SRCALPHA)
+    gear_surf.fill(gear_bg)
+    surface.blit(gear_surf, gear_rect.topleft)
+    gear_text = title_font.render("Filters ⚙",
+                                   True,
+                                   (240, 240, 240) if gear_hovered
+                                   else (180, 190, 200))
+    gtx = gear_rect.x + (gear_rect.width - gear_text.get_width()) // 2
+    gty = gear_rect.y + (gear_rect.height - gear_text.get_height()) // 2
+    surface.blit(gear_text, (gtx, gty))
+
+    # Two clear buttons just AFTER the title text, on the LEFT side —
+    # deliberately far from the Filters button so they're not hit by
+    # accident.
+    #   "Clear Tab"  — removes only events visible in the active tab.
+    #   "Clear All"  — wipes the entire chat buffer (every tab).
+    def _draw_hdr_button(label, left_edge, width):
+        r = pygame.Rect(left_edge, y + 1, width, gear_h)
+        hov = r.collidepoint(mouse_pos)
+        bg = (70, 55, 55, 220) if hov else (40, 46, 56, 200)
+        s = pygame.Surface((r.width, r.height), pygame.SRCALPHA)
+        s.fill(bg)
+        surface.blit(s, r.topleft)
+        t = title_font.render(label, True,
+                              (240, 240, 240) if hov else (180, 190, 200))
+        surface.blit(t, (r.x + (r.width - t.get_width()) // 2,
+                         r.y + (r.height - t.get_height()) // 2))
+        return r
+
+    _gap = 4
+    _clr_tab_w = 60
+    _clr_all_w = 58
+    _clr_left = x + 8 + title.get_width() + 12   # just past the title text
+    _chat_clear_tab_button_rect = _draw_hdr_button(
+        "Clear Tab", _clr_left, _clr_tab_w)
+    _chat_clear_all_button_rect = _draw_hdr_button(
+        "Clear All", _chat_clear_tab_button_rect.right + _gap, _clr_all_w)
+
+    # Read font sizes once per draw based on chat_font_size setting.
+    # Tab strip height scales with tab font so the strip doesn't look
+    # cramped on Large or oversized on Small.
+    fs = _chat_font_sizes()
+    body_font_size = fs["body"]
+    meta_font_size = fs["meta"]
+    tab_font_size  = fs["tab"]
+
+    # ── Tab strip ───────────────────────────────────────────────
+    # Renders below the header bar. Each tab is sized to fit its
+    # full name + unread badge (if any). Rendered left-to-right;
+    # if total width exceeds the panel, later tabs are clipped.
+    # Default panel width is 800 to accommodate all 10 tabs at
+    # medium font size; users on Small can fit at narrower widths,
+    # Large may need 900+.
+    tab_h = max(20, tab_font_size + 10)
+    tab_font = _chat_get_font("body", tab_font_size)
+    tab_pad_x = 10                          # horizontal padding inside each tab
+    tab_gap   = 2                           # gap between tabs
+    tab_y = y + hdr_h
+    # Rebuild click-target list for this frame.
+    chat_tab_rects = []
+    badge_h = max(12, tab_font_size + 2)
+
+    # ── Measure every tab first ─────────────────────────────────
+    # We need the total width up front to know whether the strip
+    # overflows (and thus whether to show scroll arrows). Names are
+    # never abbreviated — overflow is handled by sideways scrolling.
+    global _chat_tab_hscroll, _chat_tab_arrow_rects
+    tab_meta = []   # list of (tab_idx, full, tab_w, badge_text, badge_w, name_w)
+    for tab_idx, (_short, full) in enumerate(chat_tab_names):
+        active = (tab_idx == chat_active_tab)
+        unread = chat_tab_unread.get(tab_idx, 0) if not active else 0
+        name_w = tab_font.size(full)[0]
+        badge_w = 0
+        badge_text = None
+        if unread > 0:
+            badge_text = str(unread) if unread < 1000 else "999+"
+            badge_w = tab_font.size(badge_text)[0] + 8
+        tab_w = tab_pad_x * 2 + name_w + (4 + badge_w if badge_w else 0)
+        tab_meta.append((tab_idx, full, tab_w, badge_text, badge_w, name_w))
+    total_tabs_w = sum(m[2] for m in tab_meta) + tab_gap * max(0, len(tab_meta) - 1)
+
+    # ── Reserve arrow zones / compute the scrollable strip ──────
+    # Strip spans from just inside the left edge to just inside the
+    # right edge. If the tabs overflow, we carve out an arrow button
+    # at each end and scroll the middle.
+    strip_left  = x + 2
+    strip_right = x + pw - 2
+    strip_w     = strip_right - strip_left
+    arrow_w     = tab_h        # square-ish arrow buttons
+    overflow    = total_tabs_w > strip_w
+
+    _chat_tab_arrow_rects = {"left": None, "right": None}
+    if overflow:
+        # Inner area between the two arrows.
+        inner_left  = strip_left + arrow_w
+        inner_right = strip_right - arrow_w
+        inner_w     = inner_right - inner_left
+        max_scroll  = max(0, total_tabs_w - inner_w)
+        # Clamp the persisted scroll into range.
+        if _chat_tab_hscroll < 0:
+            _chat_tab_hscroll = 0
+        elif _chat_tab_hscroll > max_scroll:
+            _chat_tab_hscroll = max_scroll
+        clip_left, clip_w = inner_left, inner_w
+        tab_x0 = inner_left - _chat_tab_hscroll
+    else:
+        # Everything fits — no arrows, no scroll.
+        _chat_tab_hscroll = 0
+        max_scroll = 0
+        clip_left, clip_w = strip_left, strip_w
+        tab_x0 = strip_left
+
+    # ── Draw tabs (clipped to the inner strip) ──────────────────
+    prev_clip = surface.get_clip()
+    surface.set_clip(pygame.Rect(clip_left, tab_y, clip_w, tab_h))
+    tab_x = tab_x0
+    for (tab_idx, full, tab_w, badge_text, badge_w, name_w) in tab_meta:
+        active = (tab_idx == chat_active_tab)
+        theme = (CHAT_TAB_PALETTE[tab_idx]
+                 if tab_idx < len(CHAT_TAB_PALETTE)
+                 else {"active":   CHAT_TAB_FG_ACTIVE,
+                       "inactive": CHAT_TAB_FG_INACTIVE})
+        # Skip drawing tabs fully outside the visible strip (perf + the
+        # clip already hides them, but this avoids needless blits).
+        if tab_x + tab_w < clip_left or tab_x > clip_left + clip_w:
+            tab_x += tab_w + tab_gap
+            continue
+        # Draw tab background.
+        bg = CHAT_TAB_BG_ACTIVE if active else CHAT_TAB_BG_INACTIVE
+        tab_bg = pygame.Surface((tab_w, tab_h), pygame.SRCALPHA)
+        tab_bg.fill(bg)
+        surface.blit(tab_bg, (tab_x, tab_y))
+        if active:
+            pygame.draw.line(surface, theme["active"],
+                             (tab_x, tab_y + tab_h - 1),
+                             (tab_x + tab_w - 1, tab_y + tab_h - 1), 2)
+        fg = theme["active"] if active else theme["inactive"]
+        name_surf = tab_font.render(full, True, fg)
+        surface.blit(name_surf,
+                     (tab_x + tab_pad_x,
+                      tab_y + (tab_h - name_surf.get_height()) // 2))
+        if badge_text:
+            bx_text = tab_x + tab_pad_x + name_w + 4
+            by_text = tab_y + (tab_h - badge_h) // 2
+            badge_surf = pygame.Surface((badge_w, badge_h), pygame.SRCALPHA)
+            badge_surf.fill((*CHAT_TAB_UNREAD_BG, 240))
+            surface.blit(badge_surf, (bx_text, by_text))
+            badge_surf2 = tab_font.render(badge_text, True, CHAT_TAB_UNREAD_FG)
+            surface.blit(badge_surf2,
+                         (bx_text + (badge_w - badge_surf2.get_width()) // 2,
+                          by_text + (badge_h - badge_surf2.get_height()) // 2 - 1))
+        # Record hit-target only for the portion within the strip. Clamp
+        # the rect to the visible area so a click on a half-scrolled tab
+        # at the edge still maps correctly (and clicks in the arrow zone
+        # don't fall through to a tab underneath).
+        vis_l = max(tab_x, clip_left)
+        vis_r = min(tab_x + tab_w, clip_left + clip_w)
+        if vis_r > vis_l:
+            chat_tab_rects.append(
+                (pygame.Rect(vis_l, tab_y, vis_r - vis_l, tab_h), tab_idx))
+        tab_x += tab_w + tab_gap
+    surface.set_clip(prev_clip)
+
+    # ── Scroll arrows (only when overflowing) ───────────────────
+    if overflow:
+        arrow_mid_y = tab_y + tab_h // 2
+        # Left arrow — enabled only if scrolled right of start.
+        l_active = _chat_tab_hscroll > 0
+        l_rect = pygame.Rect(strip_left, tab_y, arrow_w, tab_h)
+        l_bg = pygame.Surface((arrow_w, tab_h), pygame.SRCALPHA)
+        l_bg.fill(CHAT_TAB_BG_INACTIVE)
+        surface.blit(l_bg, (l_rect.x, l_rect.y))
+        l_col = (CHAT_TAB_FG_ACTIVE if l_active else (90, 95, 105))
+        _ax = l_rect.centerx
+        pygame.draw.polygon(surface, l_col, [
+            (_ax + 3, arrow_mid_y - 5),
+            (_ax + 3, arrow_mid_y + 5),
+            (_ax - 4, arrow_mid_y)])
+        _chat_tab_arrow_rects["left"] = l_rect if l_active else None
+        # Right arrow — enabled only if more tabs lie past the right edge.
+        r_active = _chat_tab_hscroll < max_scroll
+        r_rect = pygame.Rect(strip_right - arrow_w, tab_y, arrow_w, tab_h)
+        r_bg = pygame.Surface((arrow_w, tab_h), pygame.SRCALPHA)
+        r_bg.fill(CHAT_TAB_BG_INACTIVE)
+        surface.blit(r_bg, (r_rect.x, r_rect.y))
+        r_col = (CHAT_TAB_FG_ACTIVE if r_active else (90, 95, 105))
+        _bx = r_rect.centerx
+        pygame.draw.polygon(surface, r_col, [
+            (_bx - 3, arrow_mid_y - 5),
+            (_bx - 3, arrow_mid_y + 5),
+            (_bx + 4, arrow_mid_y)])
+        _chat_tab_arrow_rects["right"] = r_rect if r_active else None
+
+    # Border (1px outline around whole panel)
+    pygame.draw.rect(surface, CHAT_BORDER_COLOR, (x, y, pw, ph), 1)
+    # Mint accent stripe down the left edge — matches the per-panel
+    # accent convention used by every other OmniWatch panel.
+    draw_accent_stripe(surface, x, y, ph, ACCENT_CHAT)
+    # Line under the tab strip to separate from content
+    pygame.draw.line(surface, CHAT_BORDER_COLOR,
+                     (x, y + hdr_h + tab_h),
+                     (x + pw, y + hdr_h + tab_h), 1)
+
+    # ── Content area (filtered by active tab) ───────────────────
+    # Reserve space at the bottom for the composer row if visible.
+    composer_h = _chat_composer_height() if chat_composer_visible else 0
+    content_x = x + 6
+    content_y = y + hdr_h + tab_h + 4
+    content_w = pw - 12
+    content_h = ph - hdr_h - tab_h - 8 - composer_h
+
+    body_font = _chat_get_font("body", body_font_size)
+    meta_font = _chat_get_font("meta", meta_font_size)
+    cjk_font  = _chat_get_cjk_font(body_font_size)
+
+    line_h = body_font.get_linesize()
+    if line_h <= 0:
+        line_h = body_font_size + 2
+
+    visible_lines = max(1, content_h // line_h)
+
+    # Reserve horizontal space for the timestamp prefix.
+    ts_text = "00:00 "
+    ts_w = meta_font.size(ts_text)[0]
+    text_x = content_x + ts_w + 4
+    text_max_w = content_w - ts_w - 4
+
+    # Apply the active tab's filter as we walk events. The All tab's
+    # filter trivially accepts everything; specialized tabs evaluate
+    # a mode set lookup. Filter call cost is negligible (set lookup).
+    active_filter = chat_tab_filters[chat_active_tab]
+    active_scroll = chat_tab_scroll.get(chat_active_tab, 0)
+
+    # Walk events newest -> oldest, applying filter, wrap each, until
+    # we have visible_lines + scroll covered.
+    events = list(chat_events)
+
+    # Scroll anchoring: when the user has scrolled UP, new events arriving
+    # at the bottom must NOT slide their view. active_scroll is measured
+    # in visible-lines-from-bottom, so if N new physical lines were
+    # appended since last frame while scrolled up, bump active_scroll by N
+    # to keep the same messages in view. At the bottom (active_scroll==0)
+    # we leave it 0 so autoscroll keeps showing the newest line. Done
+    # BEFORE the walk so `needed` below accounts for the bumped offset.
+    if active_scroll > 0:
+        true_total = 0
+        for ev in events:
+            try:
+                if not active_filter(ev):
+                    continue
+            except Exception:
+                continue
+            w = _chat_wrap_cached(ev, body_font, cjk_font, text_max_w)
+            true_total += len(w) if w else 1
+        prev_total = _chat_tab_line_total.get(chat_active_tab)
+        if prev_total is not None and true_total > prev_total:
+            active_scroll = active_scroll + (true_total - prev_total)
+            chat_tab_scroll[chat_active_tab] = active_scroll
+        _chat_tab_line_total[chat_active_tab] = true_total
+    else:
+        _chat_tab_line_total[chat_active_tab] = None
+
+    physical_lines_total = 0
+    rendered_segments = []
+    needed = visible_lines + max(0, active_scroll)
+    for ev in reversed(events):
+        try:
+            if not active_filter(ev):
+                continue
+        except Exception:
+            continue
+        wrapped = _chat_wrap_cached(ev, body_font, cjk_font, text_max_w)
+        mode = ev.get("mode", 0)
+        ts_str = _chat_format_timestamp(ev.get("ts", 0))
+
+        # Detect wrap shape: list[str] = plain text wrap, list[list]
+        # = segmented (colored spans) wrap. Drives the rendering path
+        # for this event.
+        is_segmented = (wrapped
+                        and isinstance(wrapped[0], list))
+
+        # For splittable chat modes (say/tell/shout/yell), use the
+        # per-mode message color and the sender-orange split. For
+        # everything else (battle, system, unknown), use the regular
+        # palette color and no split. Segmented events bypass both
+        # paths since per-segment colors override.
+        sender_text, _msg_text_full = (None, None)
+        if not is_segmented:
+            sender_text, _msg_text_full = _chat_split_sender_cached(ev)
+        # GearSwap output (macro-set echoes + "X is now Y" state lines)
+        # arrives on mode 1, so the mode-based color below would tint it
+        # /say-white. Detect it the same way the classifier routes it and
+        # force gold to match the Gearswap tab theme.
+        _ev_text = ev.get("text") or ""
+        _is_gearswap_line = (
+            any(_ev_text.startswith(p) for p in _GEARSWAP_TEXT_PREFIXES_R)
+            or _GEARSWAP_STATE_PATTERN_R.match(_ev_text) is not None
+        )
+        if _is_gearswap_line:
+            body_color = CHAT_GEARSWAP_BODY_COLOR
+            sender_text = None      # no sender/orange split for addon output
+        elif sender_text is not None:
+            body_color = CHAT_MSG_COLOR_BY_MODE.get(mode, CHAT_COLOR_DEFAULT)
+        else:
+            # Pass the full event (not just mode) so source-based color
+            # routing applies to synthetic buff/debuff events.
+            body_color = _chat_color_for_mode(ev)
+
+        # wrapped[0] is the FIRST physical line. Sender (if any) only
+        # appears on that first line. Subsequent wrapped lines are
+        # all message body, rendered in body_color uniformly.
+        first_physical = wrapped[0] if wrapped else ""
+        for i, ln in enumerate(reversed(wrapped)):
+            is_top_of_event = (i == len(wrapped) - 1)
+            # `is_top_of_event` here means "first physical line of the
+            # event" (we walked the wrapped list in reverse to render
+            # bottom-up, so the LAST element in our reversed iteration
+            # is the original wrapped[0]).
+            seg = {
+                "color":  body_color,
+                "text":   ln,
+                "ts":     ts_str if is_top_of_event else "",
+                "spans":  ln if is_segmented else None,
+            }
+            # Mark the first-physical-line of a splittable event with
+            # the sender region info so the renderer can do two-color
+            # blit. We compute the sender pixel-width here (once per
+            # event per width change, since wrap+split are cached).
+            if (not is_segmented) and is_top_of_event \
+                    and sender_text is not None \
+                    and ln == first_physical:
+                # Edge case: extremely narrow panel could wrap the
+                # sender text itself. Only enable split rendering if
+                # the sender text is fully contained in this first
+                # wrapped line. Otherwise fall back to single color.
+                if ln.startswith(sender_text):
+                    seg["sender_text"] = sender_text
+                    # Color the sender's name. Default is orange
+                    # (CHAT_SENDER_COLOR), but if this is the player
+                    # talking (sender text contains their character
+                    # name), use the fixed self-identity blue so the
+                    # player's own name reads consistently across
+                    # every chat type — see CHAT_SELF_NAME_COLOR.
+                    if (player_self_name
+                            and player_self_name in sender_text):
+                        seg["sender_color"] = CHAT_SELF_NAME_COLOR
+                    else:
+                        seg["sender_color"] = CHAT_SENDER_COLOR
+                    seg["msg_offset"] = len(sender_text)
+            rendered_segments.append(seg)
+            physical_lines_total += 1
+            if physical_lines_total >= needed + 10:
+                break
+        if physical_lines_total >= needed + 10:
+            break
+
+    # Clamp scroll to available filtered history.
+    max_scroll = max(0, physical_lines_total - visible_lines)
+    if active_scroll > max_scroll:
+        active_scroll = max_scroll
+        chat_tab_scroll[chat_active_tab] = active_scroll
+    if active_scroll < 0:
+        active_scroll = 0
+        chat_tab_scroll[chat_active_tab] = 0
+
+    # Slice the visible window. rendered_segments is newest-first.
+    start_idx = active_scroll
+    end_idx   = min(physical_lines_total, start_idx + visible_lines)
+    window = rendered_segments[start_idx:end_idx]
+
+    # Render bottom-up. window[0] goes at bottom, window[-1] at top.
+    bottom_y = content_y + content_h - line_h
+    for offset, seg in enumerate(window):
+        ly = bottom_y - offset * line_h
+        if ly < content_y:
+            break
+        if seg["ts"]:
+            ts_surf = meta_font.render(seg["ts"], True, CHAT_TIMESTAMP_COLOR)
+            surface.blit(ts_surf,
+                         (content_x,
+                          ly + (line_h - ts_surf.get_height()) // 2))
+        # Three render paths:
+        #   1. Segmented: walk per-span and blit each in its own color.
+        #   2. Splittable sender (say/tell): two-color blit with orange
+        #      sender + body color message.
+        #   3. Plain single-color body.
+        spans = seg.get("spans")
+        sender_marker = seg.get("sender_text")
+        if spans is not None:
+            # Walk spans left-to-right. Each span gets its own color
+            # via _chat_render_mixed (which also handles CJK fallback).
+            #
+            # Two color overrides on top of the static class→color
+            # lookup: (1) "default"-class spans on a player-chat mode
+            # get the per-mode body color instead of gray, so message
+            # bodies pick up the channel tint (purple tells, pink
+            # yells, light-yellow shouts, etc.) even when lua emits
+            # the line as pre-segmented spans rather than as a single
+            # splittable string. (2) ch_*-class spans that contain
+            # the player's own character name render in a fixed blue
+            # so the player's name reads as one consistent identity
+            # color regardless of channel — other senders keep their
+            # channel-themed ch_* colors so channels remain visually
+            # distinct at a glance.
+            cur_x = text_x
+            # Track outgoing-tell context: once we see a sender region
+            # that ends with '>>' (the unique outgoing-tell wire marker)
+            # and contains the player's name, treat following default
+            # spans as the tell body even if the mode field disagrees.
+            # Source path differences (text-event vs 0x017 packet) can
+            # land an outgoing tell at mode 0, 4, or 12 depending on
+            # the addon load order and Windower version; this content-
+            # based detection works regardless.
+            _saw_outgoing_tell_marker = False
+            for span_text, span_color_class in spans:
+                if not span_text:
+                    continue
+                color = CHAT_SEGMENT_COLORS.get(span_color_class,
+                                                CHAT_COLOR_DEFAULT)
+                # Detect outgoing-tell marker BEFORE the color decision
+                # so a default-class span that contains the '>>' marker
+                # gets colored as the tell body, not as gray default.
+                # The lua chat module commonly emits outgoing tells as
+                # 'Wormfood' (sender span) + '>> y' (default body span
+                # containing the marker AND the body text in one span),
+                # so the marker check has to happen first to catch it.
+                if span_text and ">>" in span_text:
+                    _saw_outgoing_tell_marker = True
+                # Override 1: default-class span on a chat mode → body color.
+                if (span_color_class == "default"
+                        and mode in CHAT_MSG_COLOR_BY_MODE):
+                    color = CHAT_MSG_COLOR_BY_MODE[mode]
+                # Override 1b: default-class span on an outgoing-tell
+                # line → mode 12 (tell-sent) body color. Catches both
+                # the case where '>>' is in this span itself and the
+                # case where '>>' was in an earlier span and the body
+                # follows in a separate default span. Either way the
+                # marker is True by now.
+                elif (span_color_class == "default"
+                        and _saw_outgoing_tell_marker
+                        and 12 in CHAT_MSG_COLOR_BY_MODE):
+                    color = CHAT_MSG_COLOR_BY_MODE[12]
+                # Override 2: ch_*-class sender span containing player's
+                # own name → fixed self-identity blue. Substring check
+                # so it works for both incoming and outgoing tell
+                # formats ("Wormfood : ", ">>Wormfood : ", "Wormfood>> ").
+                elif (span_color_class is not None
+                        and isinstance(span_color_class, str)
+                        and span_color_class.startswith("ch_")
+                        and player_self_name
+                        and player_self_name in span_text):
+                    color = CHAT_SELF_NAME_COLOR
+                span_surf = _chat_render_mixed(span_text, body_font,
+                                                cjk_font, color)
+                surface.blit(span_surf, (cur_x, ly))
+                cur_x += span_surf.get_width()
+        elif sender_marker:
+            # Pass 1: sender in orange.
+            sender_surf = _chat_render_mixed(sender_marker, body_font,
+                                             cjk_font, seg["sender_color"])
+            surface.blit(sender_surf, (text_x, ly))
+            # Pass 2: message body in mode color, positioned right
+            # after the sender region. Slice the segment text using
+            # msg_offset so we render only the post-sender portion.
+            msg_part = seg["text"][seg["msg_offset"]:]
+            if msg_part:
+                msg_surf = _chat_render_mixed(msg_part, body_font,
+                                              cjk_font, seg["color"])
+                surface.blit(msg_surf,
+                             (text_x + sender_surf.get_width(), ly))
+        else:
+            body_surf = _chat_render_mixed(seg["text"], body_font,
+                                           cjk_font, seg["color"])
+            surface.blit(body_surf, (text_x, ly))
+
+    # Jump-to-bottom badge: shown when active tab is scrolled up.
+    _chat_jump_badge_rect = None
+    if active_scroll > 0:
+        badge_text = f"  ↓ scrolled up {active_scroll} lines  "
+        badge_font = _chat_get_font("badge", 11)
+        bw, bh = badge_font.size(badge_text)
+        bw += 12
+        bh += 6
+        bx = x + pw - bw - 8
+        # Badge sits just above the composer row (or above the panel
+        # bottom edge when composer is hidden). Without this offset the
+        # badge would overlap the composer's send button.
+        by = y + ph - bh - 6 - (composer_h if chat_composer_visible else 0)
+        badge_surf = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        badge_surf.fill((*CHAT_BADGE_BG, 235))
+        surface.blit(badge_surf, (bx, by))
+        pygame.draw.rect(surface, CHAT_BORDER_COLOR, (bx, by, bw, bh), 1)
+        text_surf = badge_font.render(badge_text, True, CHAT_BADGE_FG)
+        surface.blit(text_surf,
+                     (bx + (bw - text_surf.get_width()) // 2,
+                      by + (bh - text_surf.get_height()) // 2))
+        _chat_jump_badge_rect = pygame.Rect(bx, by, bw, bh)
+
+    # ── Composer row (bottom of panel) ──────────────────────────
+    # Renders last so it sits above the scrollback's last line in
+    # z-order (the scrollback is clipped to content_h which excludes
+    # the composer band, so there's no actual overlap, but rendering
+    # order keeps things tidy).
+    if chat_composer_visible:
+        comp_y = y + ph - composer_h
+        _draw_chat_composer(surface, x, comp_y, pw,
+                            body_font, meta_font, cjk_font)
+
+
 # ── Button panel ─────────────────────────────────────────────────────────
 # 6 wide × 2 tall grid of user-configurable buttons. Each button runs the
 # command in buttons_config[idx] when clicked. Layout: BTN_W per button,
@@ -10380,7 +15788,7 @@ BTN_HDR_H   = 18      # header row above the button grid (page name + arrows)
 
 def buttons_panel_size(scale=1.0):
     """Total panel size at `scale`. Returns (w, h)."""
-    s = max(0.5, min(2.5, float(scale)))
+    s = max(0.5, min(2.5, float(_eff(scale))))
     cell_w = max(28, int(BTN_W * s))
     cell_h = max(20, int(BTN_H * s))
     gap    = max(2, int(BTN_GAP * s))
@@ -10403,7 +15811,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
           panel_idx > 0) or buttons_rects (for panel_idx == 0).
     """
     global buttons_rects, buttons_panel_rects
-    s = max(0.5, min(2.5, float(scale)))
+    s = max(0.5, min(2.5, float(_eff(scale))))
     cell_w = max(28, int(BTN_W * s))
     cell_h = max(20, int(BTN_H * s))
     gap    = max(2, int(BTN_GAP * s))
@@ -10722,6 +16130,48 @@ def _refresh_ui_icon_listing():
     icons added since startup show up."""
     global _ui_icons_listing_cache
     _ui_icons_listing_cache = None
+
+
+def _browse_for_gear_file():
+    """Open a native OS file picker to choose a GearSwap gear .lua file.
+    Returns the absolute path, or "" if cancelled. Modeled on
+    _browse_for_icon_file (tkinter filedialog — stdlib, works in the
+    frozen exe). Returns "" on any failure rather than raising."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        # Seed the dialog at the last-used folder if we have one.
+        initial = ""
+        try:
+            if sim_import_file and os.path.isfile(sim_import_file):
+                initial = os.path.dirname(sim_import_file)
+            elif sim_import_root and os.path.isdir(sim_import_root):
+                initial = sim_import_root
+        except Exception:
+            initial = ""
+        path = filedialog.askopenfilename(
+            parent=root,
+            title="Select a GearSwap gear file",
+            initialdir=initial or None,
+            filetypes=[
+                ("Lua files", "*.lua"),
+                ("All files", "*.*"),
+            ],
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        return path or ""
+    except Exception as e:
+        print(f"[OmniWatch] gear file picker failed: {e!r}")
+        return ""
 
 
 def _browse_for_icon_file():
@@ -12259,7 +17709,11 @@ def _tc_ability_info(mob_ref, family_key, mobdb_entry=None):
     # 2. Family JSON (structured tp_moves).
     if not names and _mob_abilities_db and family_key:
         fam = _mob_abilities_db.get("families", {}).get(family_key)
-        if fam:
+        # v5: families[key] is a flat list of names.
+        # v4: families[key] is a dict with .tp_moves = [{name, ...}, ...]
+        if isinstance(fam, list):
+            names = list(fam)
+        elif isinstance(fam, dict):
             tp = fam.get("tp_moves") or []
             names = [e.get("name", "") for e in tp if e.get("name")]
     # 3. Legacy mob_ref abilities list.
@@ -12288,6 +17742,7 @@ def target_card_size(scale, ability_count, has_aggro_row=True, has_detect_row=Tr
     them in that case (keeps PC cards compact).
     `comments_chars` is the length of mob_ref['comments']. Reserved for
     the Misc row (mob + trust only)."""
+    scale = _eff(scale)
     w = int(TC_WIDTH * scale)
     # Each visible status column adds to the width.
     if has_debuffs:
@@ -12359,7 +17814,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     - statuses:    dict of effect_id → status info for the current mob, or None
     - cast_state:  {"casting": {...} or None, "last_cast": {...} or None}
     """
-    s = scale
+    s = _eff(scale)
     abilities = (mob_ref or {}).get("abilities", []) or []
     aggro_row = mobdb_entry is not None
 
@@ -12435,7 +17890,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     has_cast = (cs_casting is not None) or (cs_last_cast is not None)
 
     _comments_chars = len(((mob_ref or {}).get("comments") or "").strip())
-    w, h = target_card_size(s, _abil_count, aggro_row, aggro_row,
+    w, h = target_card_size(scale, _abil_count, aggro_row, aggro_row,
                             has_debuffs=has_debuffs, has_buffs=has_buffs,
                             has_cast=has_cast, ability_chars=_abil_chars,
                             kind=_info_kind, comments_chars=_comments_chars)
@@ -12462,6 +17917,17 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     t_surf  = f_title.render(title_label, True, COL_TC_LABEL)
     card.blit(t_surf, (int(TC_PAD * s),
                        title_h // 2 - t_surf.get_height() // 2))
+
+    # TH (Treasure Hunter) readout — only when a TH level has been
+    # detected on this mob (proc-driven; requires THF main or /THF).
+    # Auto-hidden at 0. Sits just right of the title label, gold.
+    _th = int(info.get("th_level", 0) or 0)
+    if _th > 0:
+        f_th = get_font("Consolas", 9 * s, bold=True)
+        th_surf = f_th.render(f"TH - {_th}", True, (255, 215, 80))
+        card.blit(th_surf,
+                  (int(TC_PAD * s) + t_surf.get_width() + int(8 * s),
+                   title_h // 2 - th_surf.get_height() // 2))
 
     dist = info.get("distance", 0.0) or 0.0
     if dist > 0:
@@ -12727,7 +18193,12 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
                 desc = ""
                 if _mob_abilities_db and family:
                     fam_rec = (_mob_abilities_db.get("families", {}) or {}).get(family)
-                    if fam_rec:
+                    # fam_rec is expected to be a dict shaped like
+                    # {"description": "...", "tp_moves": [...]}. Some
+                    # malformed scrape data files have produced a bare
+                    # list for certain families; guard against that so
+                    # one bad family entry doesn't take down draw_target_card.
+                    if isinstance(fam_rec, dict):
                         desc = fam_rec.get("description", "") or ""
                 mm = re.search(r"Main Job:\s*([A-Z]{3})", desc)
                 if mm:
@@ -13065,39 +18536,91 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
         # Abilities: spells-style wrapped row. Source priority:
         #   1. Per-mob `abilities` from mobdb_entry (the editable
         #      mob_individuals.json field). If present, looked up
-        #      against the family's tp_moves to recover rich detail
-        #      (effect, class, shadows) for hover tooltips.
-        #   2. mob_abilities.json family entry's tp_moves — used as
-        #      a fallback when per-mob abilities are empty.
-        #   3. legacy mob_ref abilities list (NM seed DB).
+        #      against the abilities map to recover rich detail
+        #      (description, type, range, etc.) for hover tooltips.
+        #   2. Schema-v5: flat abilities lookup. ability_details[name]
+        #      gives {description, family, type, dispel, utsusemi,
+        #      range, notes}. Used for both per-mob lookup AND as the
+        #      data source for family fallback.
+        #   3. Legacy schema-v4: families[fam].tp_moves list (kept for
+        #      backward compatibility with old external mob_abilities.json).
+        #   4. legacy mob_ref abilities list (NM seed DB).
         # Also records per-item screen-space rects for hover tooltips.
         ability_entries = []
-        # Build family rich-data lookup once for both paths.
-        fam_tp_moves = []
-        if _mob_abilities_db and _family_raw:
-            fam_rec = _mob_abilities_db.get("families", {}).get(_family_raw)
-            if fam_rec:
-                fam_tp_moves = fam_rec.get("tp_moves") or []
         # Per-mob list (the user's editable source of truth).
         mob_abils = []
         if mobdb_entry:
             mob_abils = mobdb_entry.get("abilities") or []
 
+        # Build a lookup helper that resolves a name → rich dict using
+        # whichever schema is loaded. Returns None if the name is not
+        # in the database.
+        flat_abilities = (_mob_abilities_db or {}).get("abilities", {})
+        def _lookup_ability_rich(nm):
+            if not nm:
+                return None
+            # Strip trailing parenthetical notes like
+            # "Doom(Dynamis NM and Campaign NM only)" before lookup —
+            # the wiki page is just "Doom".
+            head = nm.split("(", 1)[0].strip()
+            # Schema v5: flat lookup. Try exact, then case-insensitive.
+            if flat_abilities:
+                if head in flat_abilities:
+                    return flat_abilities[head]
+                head_l = head.lower()
+                for k, v in flat_abilities.items():
+                    if k.lower() == head_l:
+                        return v
+            # Schema v4 fallback: scan family's tp_moves list.
+            if _family_raw:
+                fam_rec = (_mob_abilities_db or {}).get(
+                    "families", {}).get(_family_raw)
+                if isinstance(fam_rec, dict):
+                    tps = fam_rec.get("tp_moves") or []
+                    for tp in tps:
+                        if (tp.get("name") or "").lower() == head.lower():
+                            return tp
+            return None
+
+        # Family-level fallback list. Schema v5 stores families as
+        # {fam_lc: [name, ...]} (flat list of names). Schema v4 stored
+        # them as {fam_lc: {tp_moves: [{name, ...}, ...]}}.
+        fam_ability_names = []
+        if _family_raw:
+            fam_rec = (_mob_abilities_db or {}).get(
+                "families", {}).get(_family_raw)
+            if isinstance(fam_rec, list):
+                # v5: flat list of names.
+                fam_ability_names = list(fam_rec)
+            elif isinstance(fam_rec, dict):
+                # v4: tp_moves list of dicts.
+                fam_ability_names = [
+                    (m.get("name") or "")
+                    for m in (fam_rec.get("tp_moves") or [])
+                    if m.get("name")
+                ]
+
         if mob_abils:
-            # Index family tp_moves by name for fast rich-record lookup.
-            by_name = {(m.get("name") or "").lower(): m for m in fam_tp_moves}
             for nm in mob_abils:
-                rich = by_name.get(nm.lower())
+                rich = _lookup_ability_rich(nm)
                 if rich:
-                    ability_entries.append(rich)
+                    # Ensure name field reflects what the mob has (which
+                    # might include the parenthetical hint).
+                    entry = dict(rich)
+                    entry["name"] = nm
+                    ability_entries.append(entry)
                 else:
-                    # No family record for this ability (rare — likely a
-                    # custom ability the user typed in or a mob with no
-                    # family-level data). Fall back to a name-only entry
-                    # so it still renders and tooltip shows just the name.
+                    # No detail record — render name-only.
                     ability_entries.append({"name": nm})
-        elif fam_tp_moves:
-            ability_entries = fam_tp_moves
+        elif fam_ability_names:
+            for nm in fam_ability_names:
+                rich = _lookup_ability_rich(nm)
+                if rich:
+                    entry = dict(rich)
+                    entry["name"] = nm
+                    ability_entries.append(entry)
+                else:
+                    ability_entries.append({"name": nm})
         elif abilities:
             # Legacy string list; wrap into the same record shape so the renderer
             # and tooltip can treat both paths uniformly.
@@ -13234,16 +18757,33 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
 
         # Pulsing yellow "Casting X" (sine wave on alpha over ~1.2s cycle).
         if cs_casting:
-            verb = "Casting" if cs_casting.get("kind") == "spell" else "Using"
+            is_spell = cs_casting.get("kind") == "spell"
+            verb = "Casting" if is_spell else "Using"
             txt  = f"{verb} {cs_casting.get('name', '?')}"
             t_since = max(0.0, _now - cs_casting.get("started", _now))
-            # Pulse between 140 and 255 alpha.
-            phase = (t_since / 1.2) * 2 * math.pi
-            pulse = int(140 + 115 * (0.5 + 0.5 * math.sin(phase)))
-            pulse = max(0, min(255, pulse))
-            cs_surf = f_cast.render(txt, True, (240, 220, 90))
-            cs_surf.set_alpha(pulse)
-            card.blit(cs_surf, (pad_l, line1_y))
+            # TP moves are near-instant — cap the "Using X" flash so it
+            # doesn't linger. Past TP_FLASH_MAX the flash fades out over
+            # the final 0.5s and then disappears. Spells skip this cap
+            # (their cast bar runs until CAST_DONE).
+            show_flash = True
+            cap_alpha  = 255
+            if not is_spell:
+                if t_since >= TP_FLASH_MAX:
+                    show_flash = False
+                elif t_since >= (TP_FLASH_MAX - 0.5):
+                    frac = (TP_FLASH_MAX - t_since) / 0.5
+                    cap_alpha = max(0, min(255, int(255 * frac)))
+            if show_flash:
+                # Pulse between 140 and 255 alpha.
+                phase = (t_since / 1.2) * 2 * math.pi
+                pulse = int(140 + 115 * (0.5 + 0.5 * math.sin(phase)))
+                pulse = max(0, min(255, pulse))
+                # The TP-move fade caps the pulse alpha during the last
+                # 0.5s so it eases out instead of cutting abruptly.
+                pulse = min(pulse, cap_alpha)
+                cs_surf = f_cast.render(txt, True, (240, 220, 90))
+                cs_surf.set_alpha(pulse)
+                card.blit(cs_surf, (pad_l, line1_y))
 
         # Fading red "Casts X" / "Used X". Fades over last CAST_DONE_FADE.
         if cs_last_cast:
@@ -13270,6 +18810,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
 
 def equip_panel_size(scale):
     """Return (panel_w, panel_h, slot_size, title_h) at the given scale."""
+    scale = _eff(scale)
     slot_size = max(20, int(EV_SLOT_SIZE * scale))
     title_h   = max(16, int(EV_TITLE_H   * scale))
     panel_w   = EV_COLS * slot_size + 2
@@ -13282,6 +18823,462 @@ def equip_panel_size(scale):
 # gear, buffs, and base-stat tables on the lua side. Cells we don't yet
 # compute show "--".
 # ═══════════════════════════════════════════════════════════════════════════
+
+###############################################################################
+# Stats panel customizable layout
+###############################################################################
+# Users can hide cells and reorder them WITHIN sections (sections themselves
+# stay in fixed order). Per-job and global layouts are supported, stored in
+# omniwatch_stats_layout.json under the per-character config dir.
+#
+# Sections are explicit (primary / haste / multiattack / accatt / defense /
+# caster / elemental). Cells belong to exactly one section. Within a section,
+# cells flow left-to-right, top-to-bottom at the section's cells-per-row count.
+#
+# All cells have stable keys (the existing internal value keys: "str",
+# "fast cast", "fire", etc.). The "Resist" and "Speed" composite cells use
+# synthetic keys "_resist" and "_speed" with the underscore prefix to
+# disambiguate from real stat keys.
+#
+# Cell list is the source of truth. STATS_GRID_ROWS and STATS_ELEM_ROWS are
+# kept as fallback for default ordering only — the renderer no longer uses
+# them directly.
+
+# Each entry: (key, display_label, section, cell_class).
+# cell_class: "normal" (regular grid cell) or "elem" (wider elemental cell).
+STATS_CELLS = [
+    # Primary attributes
+    ("str", "STR", "primary", "normal"),
+    ("dex", "DEX", "primary", "normal"),
+    ("vit", "VIT", "primary", "normal"),
+    ("agi", "AGI", "primary", "normal"),
+    ("int", "INT", "primary", "normal"),
+    ("mnd", "MND", "primary", "normal"),
+    ("chr", "CHR", "primary", "normal"),
+    # Haste & weapon-skill spacing
+    ("haste",                 "Gear Haste",    "haste", "normal"),
+    ("magic haste",           "Magic Haste",   "haste", "normal"),
+    ("ja haste",              "JA Haste",      "haste", "normal"),
+    ("total haste",           "Total Haste",   "haste", "normal"),
+    ("tp per hit",            "TP/Hit",        "haste", "normal"),
+    ("hits to ws",            "Hit\u2192WS",   "haste", "normal"),
+    ("weapon skill damage",   "WSD",           "haste", "normal"),
+    # Dual-wield & multi-attack
+    ("dual wield",            "DW Gear",       "multiattack", "normal"),
+    ("dw trait",              "DW Traits",     "multiattack", "normal"),
+    ("dw needed",             "DW To Cap",     "multiattack", "normal"),
+    ("double attack",         "DA",            "multiattack", "normal"),
+    ("triple attack",         "TA",            "multiattack", "normal"),
+    ("quadruple attack",      "QA",            "multiattack", "normal"),
+    ("store tp",              "STP",           "multiattack", "normal"),
+    # Accuracy / attack / ranged
+    ("accuracy",       "Acc1",     "accatt", "normal"),
+    ("accuracy2",      "Acc2",     "accatt", "normal"),
+    ("attack",         "Att1",     "accatt", "normal"),
+    ("attack2",        "Att2",     "accatt", "normal"),
+    ("snapshot",       "Snapshot", "accatt", "normal"),
+    ("ranged accuracy","RAcc",     "accatt", "normal"),
+    ("ranged attack",  "RAtt",     "accatt", "normal"),
+    # Damage taken / defenses
+    ("damage taken",          "DT",   "defense", "normal"),
+    ("physical damage taken", "PDT",  "defense", "normal"),
+    ("magic damage taken",    "MDT",  "defense", "normal"),
+    ("breath damage taken",   "BDT",  "defense", "normal"),
+    ("magic evasion",         "MEva", "defense", "normal"),
+    ("evasion",               "Eva",  "defense", "normal"),
+    ("defense",               "Def",  "defense", "normal"),
+    # Caster mods & sustain
+    ("fast cast",         "Fast Cast",   "caster", "normal"),
+    ("quick magic",       "Quick Magic", "caster", "normal"),
+    ("magic accuracy",    "MAcc",        "caster", "normal"),
+    ("magic attack bonus","MAB",         "caster", "normal"),
+    ("regen",             "Regen",       "caster", "normal"),
+    ("refresh",           "Refresh",     "caster", "normal"),
+    ("regain",            "Regain",      "caster", "normal"),
+    # Elemental affinity (wider cells)
+    ("fire",    "Fire",      "elemental", "elem"),
+    ("thunder", "Lightning", "elemental", "elem"),
+    ("earth",   "Earth",     "elemental", "elem"),
+    ("wind",    "Wind",      "elemental", "elem"),
+    ("ice",     "Ice",       "elemental", "elem"),
+    ("water",   "Water",     "elemental", "elem"),
+    ("light",   "Light",     "elemental", "elem"),
+    ("dark",    "Dark",      "elemental", "elem"),
+    # Composite cells (right side of elemental row).
+    # Drawn specially; "elem" sizing puts them in the elemental row area.
+    ("_resist", "Resist", "elemental_special", "elem"),
+    ("_speed",  "SPEED",  "elemental_special", "elem"),
+    # Empty spacer cells. In setup mode they render as labeled "empty"
+    # placeholders the user can drag around. Outside setup mode they
+    # render as truly invisible blanks — the slot they occupy stays
+    # empty in the grid (no border, no content) so user-placed gaps
+    # between cells are preserved. Default count is 4 to fill out the
+    # trailing partial row of the panel. The section field is
+    # informational only (not used in the v2 linear renderer).
+    ("_empty1", "empty", "empty", "normal"),
+    ("_empty2", "empty", "empty", "normal"),
+    ("_empty3", "empty", "empty", "normal"),
+    ("_empty4", "empty", "empty", "normal"),
+]
+
+# Quick lookup by key.
+STATS_CELLS_BY_KEY = {c[0]: c for c in STATS_CELLS}
+
+# Stats panel layout uses a SINGLE-LIST linear flow model (v2.0+):
+# cells form one ordered list and the renderer packs them into
+# STATS_COLS_PER_ROW columns left-to-right, top-to-bottom. Hidden cells
+# don't render (the layout reflows). Any cell can be at any position
+# regardless of which "section" it originally belonged to. The section
+# field in STATS_CELLS is preserved for default-ordering reference but
+# no longer constrains placement.
+STATS_COLS_PER_ROW = 7
+
+
+def _default_stats_layout():
+    """Build the default layout config (everything visible, default order).
+
+    Default order is STATS_CELLS in declaration order. Section grouping
+    is preserved as the initial visual structure since we iterate
+    STATS_CELLS in section order — but the user can drag cells anywhere
+    after that.
+    """
+    return {"hidden": [], "order": [c[0] for c in STATS_CELLS]}
+
+
+# In-memory cache of the stats layout config, populated from disk.
+# Structure: {"version": 1, "global": {...}, "per_job": {"BLM": {...}, ...}}
+stats_layout_config = {"version": 1, "global": _default_stats_layout(), "per_job": {}}
+
+
+def _flatten_legacy_order(order_field):
+    """Convert a legacy per-section order dict to a flat list.
+
+    v1.x saved order as {"primary": [...], "haste": [...], ...}.
+    v2.0+ uses a single list. Auto-migrate on read so users with saved
+    v1 configs don't lose their hide-lists or reorderings.
+
+    Iterates STATS_CELLS in the original section order and pulls cells
+    from each section's saved list; cells not in saved data fall to the
+    end in default order.
+    """
+    if isinstance(order_field, list):
+        # Already flat (v2.0+).
+        return [k for k in order_field if k in STATS_CELLS_BY_KEY]
+    if not isinstance(order_field, dict):
+        return [c[0] for c in STATS_CELLS]
+    # Legacy section dict — flatten in section iteration order.
+    flat = []
+    seen = set()
+    # The original section order from v1 layout — hardcoded since
+    # STATS_SECTIONS is gone in v2.
+    legacy_section_order = [
+        "primary", "haste", "multiattack", "accatt",
+        "defense", "caster", "elemental", "elemental_special",
+    ]
+    for sid in legacy_section_order:
+        sec_cells = order_field.get(sid) or []
+        for k in sec_cells:
+            if k in STATS_CELLS_BY_KEY and k not in seen:
+                flat.append(k)
+                seen.add(k)
+    # Append any cells the saved data didn't cover (new cells added
+    # in this version, or simply missing from old config).
+    for c in STATS_CELLS:
+        if c[0] not in seen:
+            flat.append(c[0])
+    return flat
+
+
+def _resolve_stats_layout(job):
+    """Return the effective layout for a given main job string ('BLM', etc).
+
+    Resolution model:
+      - hidden cells are the UNION of global.hidden and per_job[job].hidden
+        (per-job is additive — hiding a cell globally also hides it on
+        every job, and a job can hide additional cells on top)
+      - order: per-job's order takes precedence; falls back to global's;
+        falls back to default. Cells missing from a saved order get
+        appended at the end in default position.
+
+    The returned `order` is always a flat list (v2.0+ schema). Legacy
+    v1 per-section dicts are auto-flattened.
+    """
+    cfg = stats_layout_config or {}
+    global_layout = cfg.get("global") or _default_stats_layout()
+    per_job = cfg.get("per_job") or {}
+    job_layout = per_job.get(job) if job else None
+
+    hidden = set(global_layout.get("hidden") or [])
+    if job_layout:
+        hidden |= set(job_layout.get("hidden") or [])
+
+    # Pick the order source: per-job > global > default. Each gets
+    # flattened in case it's a legacy v1 dict.
+    if job_layout and job_layout.get("order"):
+        order = _flatten_legacy_order(job_layout["order"])
+    elif global_layout.get("order"):
+        order = _flatten_legacy_order(global_layout["order"])
+    else:
+        order = [c[0] for c in STATS_CELLS]
+
+    # Append any new cells defined in STATS_CELLS that aren't in the
+    # saved order (handles version upgrades where new stats are added).
+    seen = set(order)
+    for c in STATS_CELLS:
+        if c[0] not in seen:
+            order.append(c[0])
+
+    return {"hidden": hidden, "order": order}
+
+
+def _save_stats_layout():
+    """Persist the in-memory stats_layout_config to disk.
+
+    Strips the in-memory-only _setup_pending key before writing so
+    session edits don't leak to disk if something fails to pop it
+    elsewhere in the pipeline. The disk format only contains
+    version, global, and per_job.
+    """
+    try:
+        # Build a clean copy without _setup_pending. Don't mutate the
+        # in-memory dict — other code paths may still need it (though
+        # callers should pop it before calling save explicitly).
+        to_write = {k: v for k, v in stats_layout_config.items()
+                    if not k.startswith("_")}
+        path = STATS_LAYOUT_FILE
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(to_write, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[OmniWatch] stats layout save failed: {e!r}")
+        import traceback
+        traceback.print_exc()
+
+
+def _load_stats_layout():
+    """Load the stats layout config from disk, merging with defaults."""
+    global stats_layout_config
+    try:
+        print(f"[OmniWatch] stats layout LOAD from: {STATS_LAYOUT_FILE}")
+        if not os.path.exists(STATS_LAYOUT_FILE):
+            print(f"[OmniWatch] stats layout file does NOT exist — using defaults")
+            stats_layout_config = {
+                "version": 1,
+                "global": _default_stats_layout(),
+                "per_job": {},
+            }
+            return
+        with open(STATS_LAYOUT_FILE, "r") as f:
+            data = json.load(f)
+        # Sanity-shape the loaded data.
+        if not isinstance(data, dict):
+            data = {}
+        if "version" not in data:
+            data["version"] = 1
+        if "global" not in data or not isinstance(data["global"], dict):
+            data["global"] = _default_stats_layout()
+        if "per_job" not in data or not isinstance(data["per_job"], dict):
+            data["per_job"] = {}
+        stats_layout_config = data
+        # Log what we loaded so the user can see if the on-disk file
+        # has the expected hides.
+        g_hidden = data.get("global", {}).get("hidden") or []
+        per_job_summary = ", ".join(
+            f"{j}={len(d.get('hidden') or [])}h"
+            for j, d in (data.get("per_job") or {}).items()
+        ) or "(none)"
+        print(f"[OmniWatch] stats layout LOADED. "
+              f"global.hidden={g_hidden}, per_job={per_job_summary}")
+    except Exception as e:
+        print(f"[OmniWatch] stats layout load failed: {e!r}")
+        stats_layout_config = {
+            "version": 1,
+            "global": _default_stats_layout(),
+            "per_job": {},
+        }
+
+
+def _stats_session_deltas(current_job):
+    """Compute what's NEW in the session-pending layout vs the on-disk state.
+
+    Returns ({hidden_added, hidden_removed}, new_order_or_None).
+
+    `new_order_or_None` is the full new ordered list if it differs from
+    disk, or None if order is unchanged. Used by _save_stats_layout_as
+    to apply ONLY user's session edits to the target slot.
+    """
+    pending = stats_layout_config.get("_setup_pending")
+    if not pending or pending.get("for_job") != current_job:
+        return ({"added": set(), "removed": set()}, None)
+
+    # Disk-resolved state (what was there BEFORE this session).
+    cfg = stats_layout_config or {}
+    global_layout = cfg.get("global") or _default_stats_layout()
+    per_job = cfg.get("per_job") or {}
+    job_layout = per_job.get(current_job) if current_job else None
+    disk_hidden = set(global_layout.get("hidden") or [])
+    if job_layout:
+        disk_hidden |= set(job_layout.get("hidden") or [])
+
+    pending_hidden = set(pending["layout"].get("hidden") or [])
+    hidden_added   = pending_hidden - disk_hidden
+    hidden_removed = disk_hidden - pending_hidden
+
+    # Order delta: full new list if it differs from disk-resolved order.
+    pending_order = pending["layout"].get("order")
+    if isinstance(pending_order, list):
+        clean_pending = [k for k in pending_order if k in STATS_CELLS_BY_KEY]
+    else:
+        clean_pending = _flatten_legacy_order(pending_order)
+    # Resolve disk order: prefer per-job's, else global's, else default.
+    if job_layout and job_layout.get("order"):
+        disk_order = _flatten_legacy_order(job_layout["order"])
+    elif global_layout.get("order"):
+        disk_order = _flatten_legacy_order(global_layout["order"])
+    else:
+        disk_order = [c[0] for c in STATS_CELLS]
+    new_order = clean_pending if clean_pending != disk_order else None
+
+    return ({"added": hidden_added, "removed": hidden_removed}, new_order)
+
+
+def _save_stats_layout_as(target, current_job):
+    """Save session edits to the target slot (Option C semantics).
+
+    target: 'global' or a job name ('COR', 'BLM', etc.)
+    current_job: the user's currently-active main job
+
+    Behavior:
+      - Hidden cells the user TOGGLED ON this session get added to
+        target.hidden
+      - Hidden cells the user TOGGLED OFF this session get removed from
+        target.hidden (if they were there)
+      - If the user reordered any cells, the new linear order is
+        written to target.order (replaces any prior order at this slot)
+      - OTHER layers are NOT touched
+      - After save, the session-pending layout is cleared
+    """
+    deltas, new_order = _stats_session_deltas(current_job)
+
+    # Resolve target slot.
+    if target == "global":
+        slot = stats_layout_config.setdefault("global", _default_stats_layout())
+    else:
+        per_job = stats_layout_config.setdefault("per_job", {})
+        slot = per_job.setdefault(target, {"hidden": [], "order": []})
+
+    # Apply hidden deltas.
+    existing_hidden = set(slot.get("hidden") or [])
+    existing_hidden |= deltas["added"]
+    existing_hidden -= deltas["removed"]
+    slot["hidden"] = sorted(existing_hidden)
+
+    # Apply order change if any.
+    if new_order is not None:
+        slot["order"] = list(new_order)
+
+    # Clear session pending — edits are now committed.
+    stats_layout_config.pop("_setup_pending", None)
+
+    _save_stats_layout()
+
+
+def _save_session_to_current_job(current_job):
+    """Auto-save session edits to the CURRENT job on setup mode exit.
+
+    Same semantics as _save_stats_layout_as(current_job, current_job).
+    No-op if there are no session edits.
+    """
+    if not current_job:
+        print(f"[OmniWatch] stats auto-save SKIPPED: no current_job "
+              f"(player_self_mjob={current_job!r})")
+        return
+    pending = stats_layout_config.get("_setup_pending")
+    if not pending or pending.get("for_job") != current_job:
+        print(f"[OmniWatch] stats auto-save SKIPPED: no pending edits "
+              f"for {current_job}")
+        return
+    print(f"[OmniWatch] stats auto-save: writing pending edits to "
+          f"per_job.{current_job}")
+    _save_stats_layout_as(current_job, current_job)
+    print(f"[OmniWatch] stats auto-save done. File: {STATS_LAYOUT_FILE}")
+
+
+def _toggle_stats_cell_hidden(cell_key, current_job):
+    """Click-to-toggle a cell's hidden state in the SESSION-PENDING layout.
+
+    Edits the live in-memory layout. The user clicks 'Save as ...' to
+    persist the result (or exits setup mode for auto-save to current
+    job). We don't auto-save on every click because that would mean
+    every click commits — preventing experimentation.
+
+    Chains from the existing pending state when present (so multiple
+    toggles compose correctly) rather than re-deriving from disk each
+    time.
+    """
+    layout = _get_active_stats_layout(current_job)
+    hidden = set(layout["hidden"])
+    if cell_key in hidden:
+        hidden.discard(cell_key)
+    else:
+        hidden.add(cell_key)
+    payload = {
+        "hidden": sorted(hidden),
+        "order":  list(layout["order"]),
+    }
+    stats_layout_config["_setup_pending"] = {"for_job": current_job, "layout": payload}
+
+
+def _reorder_stats_cell(cell_key, target_idx, current_job):
+    """Move a cell to a new position in the linear order.
+
+    cell_key: which cell is being moved
+    target_idx: 0-based index in the flat order list (where to insert)
+
+    Chains from existing session-pending state so multiple reorders
+    compose correctly. The cell can move to ANY position in the list
+    regardless of which section it originally belonged to.
+    """
+    if cell_key not in STATS_CELLS_BY_KEY:
+        return
+    layout = _get_active_stats_layout(current_job)
+    order = list(layout["order"])
+    if cell_key not in order:
+        # Cell isn't in the order yet (new cell). Insert at target.
+        target_idx = max(0, min(len(order), target_idx))
+        order.insert(target_idx, cell_key)
+    else:
+        old_idx = order.index(cell_key)
+        order.remove(cell_key)
+        # Adjust target_idx for the removal: if target was after old,
+        # removing the cell shifts everything down by 1.
+        if target_idx > old_idx:
+            target_idx -= 1
+        target_idx = max(0, min(len(order), target_idx))
+        order.insert(target_idx, cell_key)
+    payload = {
+        "hidden": sorted(layout["hidden"]),
+        "order":  order,
+    }
+    stats_layout_config["_setup_pending"] = {"for_job": current_job, "layout": payload}
+
+
+def _get_active_stats_layout(current_job):
+    """Resolution including the in-progress setup-mode edits.
+
+    If there's a _setup_pending layout for this job, use it; otherwise
+    fall back to the standard resolution chain. Returns hidden as a set
+    and order as a flat list.
+    """
+    pending = stats_layout_config.get("_setup_pending")
+    if pending and pending.get("for_job") == current_job:
+        return {
+            "hidden": set(pending["layout"]["hidden"]),
+            "order":  list(pending["layout"]["order"]),
+        }
+    return _resolve_stats_layout(current_job)
+
 
 # The main grid. Each entry is (display_label, stat_key). stat_key may be
 # None for computed/combined cells — those are resolved in resolve_stat_value().
@@ -13396,20 +19393,49 @@ STATS_PAD        = 4
 STATS_TITLE_H    = 22
 STATS_SECTION_GAP = 4
 
-def stats_panel_size(scale, _unused=None):
-    """Return (panel_w, panel_h) for the fixed 7x5 + 4x2 grid at scale."""
+def stats_panel_size(scale, _unused=None, job=None, setup_mode=False):
+    """Return (panel_w, panel_h) for the stats panel at scale.
+
+    v2.0+ uses a uniform-cell linear flow:
+      - All cells are STATS_CELL_W wide
+      - STATS_COLS_PER_ROW cells per row
+      - Hidden cells reflow automatically (NORMAL mode)
+      - Hidden cells take their default slot dimmed (SETUP mode)
+      - Setup mode reserves extra space for the tray + Save-as button
+    """
+    scale = _eff(scale)
     cell_w  = max(32, int(STATS_CELL_W * scale))
     cell_h  = max(20, int(STATS_CELL_H * scale))
-    elem_w  = max(44, int(STATS_ELEM_CELL_W * scale))
     pad     = max(3,  int(STATS_PAD    * scale))
     title_h = max(16, int(STATS_TITLE_H * scale))
     gap     = max(2,  int(STATS_SECTION_GAP * scale))
 
-    main_w = STATS_GRID_COLS * cell_w
-    elem_w_total = STATS_ELEM_COLS * elem_w
-    panel_w = max(main_w, elem_w_total) + pad * 2
-    panel_h = (title_h + len(STATS_GRID_ROWS) * cell_h + gap
-               + len(STATS_ELEM_ROWS) * cell_h + pad * 2)
+    panel_w = STATS_COLS_PER_ROW * cell_w + pad * 2
+
+    try:
+        layout = _get_active_stats_layout(job)
+    except Exception:
+        layout = {"hidden": set(), "order": [c[0] for c in STATS_CELLS]}
+    hidden = layout["hidden"]
+    order  = layout["order"]
+
+    # Count cells we'll actually render.
+    if setup_mode:
+        n_cells = len(order)             # all cells (hidden ones dimmed)
+    else:
+        n_cells = sum(1 for k in order if k not in hidden)
+
+    rows = (n_cells + STATS_COLS_PER_ROW - 1) // STATS_COLS_PER_ROW if n_cells else 0
+    panel_h = title_h + rows * cell_h + pad * 2
+    # Minimum height — keep at least one cell row visible to make panel
+    # discoverable even when fully empty.
+    panel_h = max(panel_h, title_h + cell_h + pad * 2)
+
+    if setup_mode:
+        tray_h = max(20, int(28 * scale))
+        save_btn_h = max(18, int(22 * scale))
+        panel_h += gap + tray_h + gap + save_btn_h + pad
+
     return panel_w, panel_h
 
 
@@ -13431,7 +19457,12 @@ def _fmt_stat_value(key, val):
         txt = f"{val:+.1f}" if key not in NO_SIGN_CELLS else f"{val:.1f}"
     else:
         v_int = int(val)
-        if key in NO_SIGN_CELLS:
+        if key == "dw needed":
+            # int() already carries the '-' for negatives (over-cap =
+            # surplus DW, "drop this much"); positives show no '+' so the
+            # number reads as "need this much more". Zero stays "0".
+            txt = f"{v_int}"
+        elif key in NO_SIGN_CELLS:
             txt = f"{v_int}"
         else:
             txt = f"{v_int:+d}" if v_int != 0 else "0"
@@ -13451,12 +19482,16 @@ def _fmt_stat_value(key, val):
                 return txt, (255, 110, 110)
 
     # Color: green = beneficial, red = detrimental.
-    # Special-case: "dw needed" is a delta-to-target. 0 means capped
-    # (good), positive means more DW gear required (informational, not
-    # bad). Display as green when 0, neutral when >0.
+    # "dw needed" is a delta-to-target:
+    #   negative → you're OVER the DW cap, wearing more DW than needed.
+    #              Shown red as a -N so you know how much DW you could drop
+    #              for other stats with no loss of attack speed.
+    #   zero     → exactly at cap (ideal) → green.
+    #   positive → need that much more DW from gear (informational) → yellow.
     if key == "dw needed":
-        if num <= 0: col = (140, 220, 140)
-        else:        col = (220, 200, 140)   # warm yellow = "more needed"
+        if   num < 0: col = (230, 110, 110)   # red = over-capped (wasted DW)
+        elif num == 0: col = (140, 220, 140)  # green = exactly capped
+        else:         col = (220, 200, 140)   # warm yellow = "more needed"
         return txt, col
     if key in INVERT_SIGN_CELLS:
         if   num < 0: col = (140, 220, 140)
@@ -13504,15 +19539,55 @@ def _resolve_stat_value(key, stats):
     return None
 
 
-def draw_stats_panel(surface, x, y, job, stats, scale=1.0):
-    """Render the fixed 7×5 + 4×2 stats grid at (x, y)."""
+def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
+    """Render the stats panel with section-aware flow layout.
+
+    Cells are organized into sections (primary / haste / multiattack /
+    accatt / defense / caster / elemental). Within each section cells
+    flow left-to-right at the section's cells_per_row count. Sections
+    are stacked top-to-bottom with a small gap.
+
+    In NORMAL mode:
+      - Hidden cells (per `layout["hidden"]`) are skipped — remaining
+        cells reflow to fill. Empty sections collapse entirely.
+      - Panel height matches visible content.
+
+    In SETUP mode:
+      - Hidden cells are still rendered, but DIMMED, so the user can
+        see and click them to un-hide.
+      - Hidden cells tray rendered below the main grid showing every
+        hidden cell as a clickable chip.
+      - "Save as ▼" button rendered at the bottom for committing
+        session edits to global or a specific job.
+      - Click rectangles are recorded into module globals
+        _stats_cell_click_rects, _stats_tray_click_rects, and
+        _stats_save_as_button_rect for the event loop to consume.
+    """
+    # Reset click trackers each frame in setup mode so stale regions
+    # don't fire when the panel size/layout changes.
+    global _stats_cell_click_rects, _stats_tray_click_rects
+    global _stats_save_as_button_rect, _stats_save_as_dropdown_rects
+    if setup_mode:
+        _stats_cell_click_rects = []
+        _stats_tray_click_rects = []
+        _stats_save_as_button_rect = None
+        # Dropdown rects are only reset when the dropdown is CLOSED;
+        # while open we need them to persist for click handling.
+        if not _stats_save_as_open:
+            _stats_save_as_dropdown_rects = []
+
+    # Apply global UI scale to content. Pass the RAW scale to
+    # stats_panel_size (it applies _eff itself) so the global multiplier
+    # is never applied twice.
+    _raw_scale = scale
+    scale = _eff(scale)
+
     cell_w  = max(32, int(STATS_CELL_W * scale))
     cell_h  = max(20, int(STATS_CELL_H * scale))
-    elem_w  = max(44, int(STATS_ELEM_CELL_W * scale))
     pad     = max(3,  int(STATS_PAD    * scale))
     title_h = max(16, int(STATS_TITLE_H * scale))
     gap     = max(2,  int(STATS_SECTION_GAP * scale))
-    panel_w, panel_h = stats_panel_size(scale)
+    panel_w, panel_h = stats_panel_size(_raw_scale, job=job, setup_mode=setup_mode)
 
     pygame.draw.rect(surface, COL_PANEL,    (x, y, panel_w, panel_h), border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, panel_w, panel_h), 1, border_radius=4)
@@ -13520,12 +19595,9 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0):
     # Title bar.
     pygame.draw.rect(surface, COL_EV_HEADER,
                      (x + 1, y + 1, panel_w - 2, title_h - 1), border_radius=3)
-    # Accent stripe AFTER the title bar so it remains visible across the
-    # title bar's left edge (otherwise the title bar paints over it).
     draw_accent_stripe(surface, x, y, panel_h, ACCENT_STATS)
     title_font = get_font("Consolas", 12 * scale, bold=True)
-    tlabel = "STATISTICS"
-    t_surf = title_font.render(tlabel, True, COL_EV_TITLE)
+    t_surf = title_font.render("STATISTICS", True, COL_EV_TITLE)
     surface.blit(t_surf, (x + 6, y + (title_h - t_surf.get_height()) // 2))
     pygame.draw.line(surface, COL_SLOT_BDR,
                      (x + 1, y + title_h),
@@ -13534,93 +19606,71 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0):
     f_label = get_font("Consolas", 9  * scale)
     f_value = get_font("Consolas", 11 * scale, bold=True)
 
-    # ── Main 7×5 grid ────────────────────────────────────────────────────────
-    grid_y0 = y + title_h + pad
-    for ri, row in enumerate(STATS_GRID_ROWS):
-        ry = grid_y0 + ri * cell_h
-        for ci, (label, key) in enumerate(row):
-            cx = x + pad + ci * cell_w
-            # Subtle cell separators every other column/row.
-            pygame.draw.rect(surface, (45, 50, 60),
-                             (cx, ry, cell_w, cell_h), 1)
-
-            # Top line: label.
-            lbl = f_label.render(label, True, (160, 170, 185))
-            surface.blit(lbl, (cx + (cell_w - lbl.get_width()) // 2, ry + 1))
-
-            # Bottom line: value.
-            val = _resolve_stat_value(key, stats)
-            txt, col = _fmt_stat_value(key, val)
-            v_surf = f_value.render(txt, True, col)
-            surface.blit(v_surf,
-                         (cx + (cell_w - v_surf.get_width()) // 2,
-                          ry + cell_h - v_surf.get_height() - 1))
-
-    # ── Elemental 4×2 grid below ────────────────────────────────────────────
-    # Each element label gets tinted with that element's traditional FFXI
-    # menu color so the row reads at a glance. Colors are softened from
-    # pure RGB so they don't clash with the dark panel background.
+    # Elemental label colors (FFXI-style tints).
     ELEM_COLOR = {
-        "fire":    (240, 130, 90),    # red-orange
-        "ice":     (140, 200, 240),   # pale cyan
-        "wind":    (160, 220, 160),   # green
-        "earth":   (200, 170, 110),   # tan
-        "thunder": (210, 180, 240),   # violet
-        "water":   (130, 170, 230),   # blue
-        "light":   (240, 230, 180),   # warm white
-        "dark":    (175, 155, 200),   # muted purple
+        "fire":    (240, 130, 90),
+        "ice":     (140, 200, 240),
+        "wind":    (160, 220, 160),
+        "earth":   (200, 170, 110),
+        "thunder": (210, 180, 240),
+        "water":   (130, 170, 230),
+        "light":   (240, 230, 180),
+        "dark":    (175, 155, 200),
     }
-    elem_y0 = grid_y0 + len(STATS_GRID_ROWS) * cell_h + gap
-    for ri, row in enumerate(STATS_ELEM_ROWS):
-        ry = elem_y0 + ri * cell_h
-        for ci, (label, key) in enumerate(row):
-            cx = x + pad + ci * elem_w
-            pygame.draw.rect(surface, (45, 50, 60),
-                             (cx, ry, elem_w, cell_h), 1)
 
-            label_color = ELEM_COLOR.get(key, (160, 170, 185))
-            lbl = f_label.render(label, True, label_color)
-            surface.blit(lbl, (cx + (elem_w - lbl.get_width()) // 2, ry + 1))
+    layout = _get_active_stats_layout(job)
+    hidden = layout["hidden"]
+    order  = layout["order"]
 
+    def _draw_normal_cell(cx, cy, cw, ch, key, label, is_hidden=False):
+        """Draw a regular stats cell at (cx, cy) of size (cw, ch).
+
+        When is_hidden=True (only happens in setup mode where hidden
+        cells are still rendered for re-click), the cell is drawn with
+        reduced alpha to communicate its hidden state.
+        """
+        if is_hidden:
+            tmp = pygame.Surface((cw, ch), pygame.SRCALPHA)
+            pygame.draw.rect(tmp, (45, 50, 60, 80), (0, 0, cw, ch), 1)
+            lbl_color = ELEM_COLOR.get(key, (160, 170, 185))
+            lbl = f_label.render(label, True, lbl_color)
+            tmp.blit(lbl, ((cw - lbl.get_width()) // 2, 1))
+            val = _resolve_stat_value(key, stats)
+            txt, col = _fmt_stat_value(key, val)
+            v_surf = f_value.render(txt, True, col)
+            tmp.blit(v_surf, ((cw - v_surf.get_width()) // 2,
+                              ch - v_surf.get_height() - 1))
+            tmp.set_alpha(95)
+            surface.blit(tmp, (cx, cy))
+            pygame.draw.line(surface, (180, 60, 60),
+                             (cx + 4, cy + 4),
+                             (cx + cw - 4, cy + ch - 4), 1)
+        else:
+            pygame.draw.rect(surface, (45, 50, 60), (cx, cy, cw, ch), 1)
+            lbl_color = ELEM_COLOR.get(key, (160, 170, 185))
+            lbl = f_label.render(label, True, lbl_color)
+            surface.blit(lbl, (cx + (cw - lbl.get_width()) // 2, cy + 1))
             val = _resolve_stat_value(key, stats)
             txt, col = _fmt_stat_value(key, val)
             v_surf = f_value.render(txt, True, col)
             surface.blit(v_surf,
-                         (cx + (elem_w - v_surf.get_width()) // 2,
-                          ry + cell_h - v_surf.get_height() - 1))
+                         (cx + (cw - v_surf.get_width()) // 2,
+                          cy + ch - v_surf.get_height() - 1))
+        if setup_mode:
+            _stats_cell_click_rects.append({
+                "key":  key,
+                "rect": (cx, cy, cw, ch),
+            })
 
-    # ── Resist + Speed boxes: right of elements, stacked vertically ────────
-    # Original layout was a single SPEED box spanning both element rows.
-    # We split it: top half = "Resist" (elemental resistance from Carols
-    # and Bar spells), bottom half = "Speed" (movement speed, original).
-    # Both use the same label/value font sizes as the regular stat cells
-    # so the right-hand column visually matches the rest of the table.
-    elem_total_w = STATS_ELEM_COLS * elem_w
-    main_total_w = STATS_GRID_COLS * cell_w
-    box_x = x + pad + elem_total_w
-    box_w = max(0, main_total_w - elem_total_w)
-    full_h = len(STATS_ELEM_ROWS) * cell_h
-    if box_w > 30:  # only draw if there's room
-        # Slightly larger than f_value but still proportional, for the
-        # case where there's a SINGLE element resist (icon + value beside
-        # it). When multiple elements are squeezed in, we use f_value
-        # directly to leave room for the icons.
-        f_value_lg = get_font("Consolas", 13 * scale, bold=True)
+    def _draw_resist_cell_v2(cx, cy, cw, ch, is_hidden=False):
+        """Draw the Resist composite cell with color-coded element text.
 
-        # ── Resist (top half) ──────────────────────────────────────────
-        resist_h = full_h // 2
-        resist_y = elem_y0
-        pygame.draw.rect(surface, (45, 50, 60),
-                         (box_x, resist_y, box_w, resist_h), 1)
-        # Label at top of cell (matches regular stat cells).
-        r_lbl = f_label.render("Resist", True, (160, 170, 185))
-        surface.blit(r_lbl,
-                     (box_x + (box_w - r_lbl.get_width()) // 2,
-                      resist_y + 1))
-
-        # Pull active resists from stats['resist'] dict. Keys are
-        # element names (fire/ice/wind/earth/thunder/water/light/dark).
-        # Filter to non-zero entries — empty dict = label only.
+        v2.0+ replaces the icon-based design (which needed extra width)
+        with compact color-coded text. Each active element renders as
+        e.g. 'Fire+25' tinted to that element's color. If multiple are
+        active, names stack vertically (one per line) up to cell height.
+        """
+        # Pull active resists from stats['resist'] dict.
         resist_dict = stats.get("resist") if isinstance(stats, dict) else None
         active = []
         if isinstance(resist_dict, dict):
@@ -13632,86 +19682,388 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0):
                 if iv != 0:
                     active.append((k, iv))
 
-        # Vertical region BELOW the label, where icon(s) + value go.
-        body_y = resist_y + r_lbl.get_height() + 2
-        body_h = resist_h - (r_lbl.get_height() + 2) - 1
-
-        if not active:
-            # Empty: label-only state, nothing more to draw.
-            pass
-        elif len(active) == 1:
-            # Single element: icon + value side-by-side, centered in body.
-            elem_name, elem_val = active[0]
-            icon_size = max(12, int(body_h * 0.85))
-            icon_surf = get_mob_icon_scaled(elem_name, icon_size)
-            if icon_surf is None and elem_name == "thunder":
-                icon_surf = get_mob_icon_scaled("lightning", icon_size)
-            elif icon_surf is None and elem_name == "lightning":
-                icon_surf = get_mob_icon_scaled("thunder", icon_size)
-
-            v_txt = ("+" if elem_val > 0 else "") + str(elem_val)
-            v_surf = f_value_lg.render(v_txt, True,
-                                       (140, 230, 140) if elem_val > 0
-                                       else (230, 140, 140))
-            gap_px = max(3, int(3 * scale))
-            content_w = (icon_surf.get_width() if icon_surf else 0) \
-                        + gap_px + v_surf.get_width()
-            cx_start = box_x + (box_w - content_w) // 2
-            cy_mid   = body_y + body_h // 2
-            if icon_surf is not None:
-                surface.blit(icon_surf,
-                             (cx_start,
-                              cy_mid - icon_surf.get_height() // 2))
-                v_x = cx_start + icon_surf.get_width() + gap_px
-            else:
-                v_x = cx_start
-            surface.blit(v_surf,
-                         (v_x, cy_mid - v_surf.get_height() // 2))
+        # Build the surface (so we can dim it if hidden).
+        target = surface
+        if is_hidden:
+            tmp = pygame.Surface((cw, ch), pygame.SRCALPHA)
+            target = tmp
+            pygame.draw.rect(tmp, (45, 50, 60, 80), (0, 0, cw, ch), 1)
         else:
-            # Multiple elements: row of small icons across the body,
-            # summed value below them.
-            shown = active[:4]
-            n = len(shown)
-            icon_size = max(10, min(int(body_h * 0.50),
-                                    (box_w - 12) // n))
-            total_icon_w = icon_size * n + 2 * (n - 1)
-            ix = box_x + (box_w - total_icon_w) // 2
-            iy = body_y
-            for elem_name, _ in shown:
-                isurf = get_mob_icon_scaled(elem_name, icon_size)
-                if isurf is None and elem_name == "thunder":
-                    isurf = get_mob_icon_scaled("lightning", icon_size)
-                elif isurf is None and elem_name == "lightning":
-                    isurf = get_mob_icon_scaled("thunder", icon_size)
-                if isurf is not None:
-                    surface.blit(isurf, (ix, iy))
-                ix += icon_size + 2
-            total_val = sum(v for _, v in active)
-            v_txt = ("+" if total_val > 0 else "") + str(total_val)
-            v_surf = f_value.render(v_txt, True,
-                                    (140, 230, 140) if total_val > 0
-                                    else (230, 140, 140))
-            surface.blit(v_surf,
-                         (box_x + (box_w - v_surf.get_width()) // 2,
-                          iy + icon_size + 1))
+            pygame.draw.rect(target, (45, 50, 60), (cx, cy, cw, ch), 1)
 
-        # ── Speed (bottom half) ────────────────────────────────────────
-        speed_y = elem_y0 + resist_h
-        speed_h = full_h - resist_h
-        pygame.draw.rect(surface, (45, 50, 60),
-                         (box_x, speed_y, box_w, speed_h), 1)
-        # Label at top of cell.
-        sp_lbl = f_label.render("SPEED", True, (160, 170, 185))
-        surface.blit(sp_lbl,
-                     (box_x + (box_w - sp_lbl.get_width()) // 2,
-                      speed_y + 1))
-        # Value at bottom.
-        sp_val = _resolve_stat_value("movement speed", stats)
-        sp_txt, sp_col = _fmt_stat_value("movement speed", sp_val)
-        sv_surf = f_value.render(sp_txt, True, sp_col)
-        surface.blit(sv_surf,
-                     (box_x + (box_w - sv_surf.get_width()) // 2,
-                      speed_y + speed_h - sv_surf.get_height() - 1))
+        # Origin for drawing — temp surface uses (0,0) origin, real
+        # surface uses (cx, cy).
+        ox = 0 if is_hidden else cx
+        oy = 0 if is_hidden else cy
+
+        # Label "Resist" at top.
+        r_lbl = f_label.render("Resist", True, (160, 170, 185))
+        target.blit(r_lbl, (ox + (cw - r_lbl.get_width()) // 2, oy + 1))
+
+        if active:
+            # Element rows: "Fire+25" in red, "Ice+15" in blue, etc.
+            # If too many to fit, show first N and a "+more" tail.
+            line_y = oy + r_lbl.get_height() + 1
+            # Use the value font for visibility but no bold to avoid clutter.
+            ef = get_font("Consolas", 9 * scale, bold=True)
+            line_h = ef.get_height()
+            max_lines = max(1, (ch - r_lbl.get_height() - 2) // line_h)
+            shown = active[:max_lines]
+            for elem_name, val in shown:
+                color = ELEM_COLOR.get(elem_name, (220, 220, 230))
+                # Use FFXI's common short labels.
+                short = {"thunder": "Lit"}.get(elem_name, elem_name.title()[:4])
+                sign = "+" if val > 0 else ""
+                line = f"{short}{sign}{val}"
+                ls = ef.render(line, True, color)
+                target.blit(ls, (ox + (cw - ls.get_width()) // 2, line_y))
+                line_y += line_h
+            # If there's still more, show "+N" hint.
+            if len(active) > max_lines:
+                extra = len(active) - max_lines
+                hf = get_font("Consolas", 8 * scale)
+                hs = hf.render(f"+{extra}", True, (200, 200, 100))
+                target.blit(hs, (ox + (cw - hs.get_width()) // 2, line_y - 2))
+
+        if is_hidden:
+            target.set_alpha(95)
+            surface.blit(target, (cx, cy))
+            pygame.draw.line(surface, (180, 60, 60),
+                             (cx + 4, cy + 4),
+                             (cx + cw - 4, cy + ch - 4), 1)
+        if setup_mode:
+            _stats_cell_click_rects.append({
+                "key":  "_resist",
+                "rect": (cx, cy, cw, ch),
+            })
+
+    def _draw_speed_cell_v2(cx, cy, cw, ch, is_hidden=False):
+        """Draw the SPEED composite cell at (cx, cy)."""
+        if is_hidden:
+            tmp = pygame.Surface((cw, ch), pygame.SRCALPHA)
+            pygame.draw.rect(tmp, (45, 50, 60, 80), (0, 0, cw, ch), 1)
+            sp_lbl = f_label.render("SPEED", True, (160, 170, 185))
+            tmp.blit(sp_lbl, ((cw - sp_lbl.get_width()) // 2, 1))
+            sp_val = _resolve_stat_value("movement speed", stats)
+            sp_txt, sp_col = _fmt_stat_value("movement speed", sp_val)
+            sv_surf = f_value.render(sp_txt, True, sp_col)
+            tmp.blit(sv_surf, ((cw - sv_surf.get_width()) // 2,
+                               ch - sv_surf.get_height() - 1))
+            tmp.set_alpha(95)
+            surface.blit(tmp, (cx, cy))
+            pygame.draw.line(surface, (180, 60, 60),
+                             (cx + 4, cy + 4),
+                             (cx + cw - 4, cy + ch - 4), 1)
+        else:
+            pygame.draw.rect(surface, (45, 50, 60), (cx, cy, cw, ch), 1)
+            sp_lbl = f_label.render("SPEED", True, (160, 170, 185))
+            surface.blit(sp_lbl,
+                         (cx + (cw - sp_lbl.get_width()) // 2, cy + 1))
+            sp_val = _resolve_stat_value("movement speed", stats)
+            sp_txt, sp_col = _fmt_stat_value("movement speed", sp_val)
+            sv_surf = f_value.render(sp_txt, True, sp_col)
+            surface.blit(sv_surf,
+                         (cx + (cw - sv_surf.get_width()) // 2,
+                          cy + ch - sv_surf.get_height() - 1))
+        if setup_mode:
+            _stats_cell_click_rects.append({
+                "key":  "_speed",
+                "rect": (cx, cy, cw, ch),
+            })
+
+    # ── Linear flow rendering (v2.0+) ─────────────────────────────────
+    # All cells uniform width. STATS_COLS_PER_ROW per row. In setup
+    # mode hidden cells render dimmed (still take their slot for
+    # click-to-restore). In normal mode they're skipped and remaining
+    # cells flow up.
+    cur_y = y + title_h + pad
+    if setup_mode:
+        cells_to_render = list(order)
+    else:
+        cells_to_render = [k for k in order if k not in hidden]
+
+    for idx, key in enumerate(cells_to_render):
+        row = idx // STATS_COLS_PER_ROW
+        col = idx % STATS_COLS_PER_ROW
+        cx = x + pad + col * cell_w
+        cy = cur_y + row * cell_h
+        meta = STATS_CELLS_BY_KEY.get(key)
+        if meta is None:
+            continue
+        label = meta[1]
+        if key.startswith("_empty"):
+            # Empty spacer cells. In setup mode they render as a faint
+            # outlined box with "empty" label so the user can see and
+            # drag them. Outside setup mode they render as nothing —
+            # the slot they occupy stays visibly blank in the grid.
+            if setup_mode:
+                is_hidden_empty = (key in hidden)
+                if is_hidden_empty:
+                    # Hidden empty — dim further with diagonal slash like
+                    # other hidden cells. Stays clickable to restore.
+                    tmp = pygame.Surface((cell_w, cell_h), pygame.SRCALPHA)
+                    pygame.draw.rect(tmp, (60, 70, 85, 80),
+                                     (0, 0, cell_w, cell_h), 1)
+                    ef = get_font("Consolas", 9 * scale)
+                    etxt = ef.render("empty", True, (110, 120, 135))
+                    tmp.blit(etxt,
+                             ((cell_w - etxt.get_width()) // 2,
+                              (cell_h - etxt.get_height()) // 2))
+                    tmp.set_alpha(95)
+                    surface.blit(tmp, (cx, cy))
+                    pygame.draw.line(surface, (180, 60, 60),
+                                     (cx + 4, cy + 4),
+                                     (cx + cell_w - 4, cy + cell_h - 4), 1)
+                else:
+                    pygame.draw.rect(surface, (60, 70, 85),
+                                     (cx, cy, cell_w, cell_h), 1)
+                    ef = get_font("Consolas", 9 * scale)
+                    etxt = ef.render("empty", True, (110, 120, 135))
+                    surface.blit(etxt,
+                                 (cx + (cell_w - etxt.get_width()) // 2,
+                                  cy + (cell_h - etxt.get_height()) // 2))
+                _stats_cell_click_rects.append({
+                    "key":  key,
+                    "rect": (cx, cy, cell_w, cell_h),
+                })
+            # else: render nothing — slot stays blank.
+            continue
+        if key == "_resist":
+            _draw_resist_cell_v2(cx, cy, cell_w, cell_h,
+                                 is_hidden=(key in hidden))
+        elif key == "_speed":
+            _draw_speed_cell_v2(cx, cy, cell_w, cell_h,
+                                is_hidden=(key in hidden))
+        else:
+            _draw_normal_cell(cx, cy, cell_w, cell_h, key, label,
+                              is_hidden=(key in hidden))
+
+    # Update cur_y for the tray/save-as block below.
+    rows_rendered = (len(cells_to_render) + STATS_COLS_PER_ROW - 1) // STATS_COLS_PER_ROW
+    cur_y = cur_y + rows_rendered * cell_h
+
+    # Placeholder cells in the trailing partial row (setup mode only).
+    # When the last row isn't full (e.g. 52 cells = 7 full rows + 3 in
+    # row 8 leaves 4 empty slots), draw faint '+' boxes in the empty
+    # slots so users can see where they're free to drop cells. Skipped
+    # in normal play to keep the panel clean.
+    if setup_mode and len(cells_to_render) > 0:
+        filled_in_last_row = len(cells_to_render) % STATS_COLS_PER_ROW
+        if filled_in_last_row > 0:
+            last_row_idx = rows_rendered - 1
+            ph_cy = cur_y - cell_h   # top of the last (partial) row
+            ph_font = get_font("Consolas", int(16 * scale), bold=True)
+            ph_color = (60, 70, 85)        # faint outline
+            plus_color = (75, 90, 110)     # faint '+' text
+            for ph_col in range(filled_in_last_row, STATS_COLS_PER_ROW):
+                ph_cx = x + pad + ph_col * cell_w
+                # Outline.
+                pygame.draw.rect(surface, ph_color,
+                                 (ph_cx, ph_cy, cell_w, cell_h), 1)
+                # Center the '+' symbol.
+                plus_surf = ph_font.render("+", True, plus_color)
+                surface.blit(plus_surf,
+                             (ph_cx + (cell_w - plus_surf.get_width()) // 2,
+                              ph_cy + (cell_h - plus_surf.get_height()) // 2))
+                # Register click region. Use a synthetic key like
+                # "__ph_<index>" so drag-to-here works — _reorder_stats_cell
+                # treats this as "insert at end of order list".
+                # The MOUSEBUTTONUP handler looks for closest cell rect;
+                # placeholders count as drop targets for the trailing
+                # positions.
+                _stats_cell_click_rects.append({
+                    "key":  f"__placeholder_{ph_col}",
+                    "rect": (ph_cx, ph_cy, cell_w, cell_h),
+                    "is_placeholder": True,
+                })
+
+    # ── Setup-mode UI: hidden cells tray + Save as button ────────────────
+    if setup_mode:
+        # Tray sits below the grid area. Header text + chips for each
+        # currently-hidden cell. Click chip = un-hide that cell.
+        tray_h = max(20, int(28 * scale))
+        save_btn_h = max(18, int(22 * scale))
+        tray_y = cur_y + gap
+        tray_x = x + pad
+        tray_w = panel_w - 2 * pad
+
+        # Tray background.
+        pygame.draw.rect(surface, (30, 35, 45),
+                         (tray_x, tray_y, tray_w, tray_h))
+        pygame.draw.rect(surface, (60, 70, 90),
+                         (tray_x, tray_y, tray_w, tray_h), 1)
+
+        # Header text.
+        hf = get_font("Consolas", 9 * scale, bold=True)
+        if hidden:
+            header_surf = hf.render(
+                "Hidden cells (click to restore):",
+                True, (180, 180, 180))
+        else:
+            header_surf = hf.render(
+                "Hidden cells (no cells hidden — click a cell above to hide)",
+                True, (130, 130, 130))
+        surface.blit(header_surf, (tray_x + 4, tray_y + 2))
+
+        # Render chips for each hidden cell.
+        if hidden:
+            chip_font = get_font("Consolas", 9 * scale, bold=True)
+            chip_y = tray_y + header_surf.get_height() + 2
+            chip_x = tray_x + 4
+            for key in sorted(hidden):
+                meta = STATS_CELLS_BY_KEY.get(key)
+                if not meta:
+                    continue
+                label = meta[1]
+                txt = chip_font.render(label, True, (220, 220, 220))
+                chip_pad = max(4, int(4 * scale))
+                chip_w = txt.get_width() + chip_pad * 2
+                chip_h = txt.get_height() + 2
+                # Wrap to a new row inside the tray if needed.
+                if chip_x + chip_w > tray_x + tray_w - 4:
+                    # Tray is only ONE chip row tall by design — if we
+                    # overflow, draw a "+N more" instead and stop.
+                    remaining = sum(1 for h in sorted(hidden)
+                                    if STATS_CELLS_BY_KEY.get(h) and
+                                    sorted(hidden).index(h)
+                                    >= sorted(hidden).index(key))
+                    overflow_txt = chip_font.render(
+                        f"+{remaining}", True, (200, 200, 100))
+                    surface.blit(overflow_txt, (chip_x, chip_y + 1))
+                    break
+                # Chip background.
+                pygame.draw.rect(surface, (60, 70, 90),
+                                 (chip_x, chip_y, chip_w, chip_h),
+                                 border_radius=3)
+                pygame.draw.rect(surface, (110, 130, 160),
+                                 (chip_x, chip_y, chip_w, chip_h), 1,
+                                 border_radius=3)
+                surface.blit(txt, (chip_x + chip_pad, chip_y + 1))
+                _stats_tray_click_rects.append({
+                    "key":  key,
+                    "rect": (chip_x, chip_y, chip_w, chip_h),
+                })
+                chip_x += chip_w + 4
+
+        # Save-as button to the right of the tray, below the panel.
+        btn_y = tray_y + tray_h + gap
+        btn_w = max(80, int(110 * scale))
+        btn_h = save_btn_h
+        btn_x = x + panel_w - pad - btn_w
+        pygame.draw.rect(surface, (50, 80, 120),
+                         (btn_x, btn_y, btn_w, btn_h), border_radius=3)
+        pygame.draw.rect(surface, (120, 160, 200),
+                         (btn_x, btn_y, btn_w, btn_h), 1, border_radius=3)
+        bf = get_font("Consolas", 10 * scale, bold=True)
+        btn_label = bf.render("Save as \u25BC", True, (230, 240, 250))
+        surface.blit(btn_label,
+                     (btn_x + (btn_w - btn_label.get_width()) // 2,
+                      btn_y + (btn_h - btn_label.get_height()) // 2))
+        _stats_save_as_button_rect = (btn_x, btn_y, btn_w, btn_h)
+
+        # Brief hint text to the left of the button.
+        hint_font = get_font("Consolas", 8 * scale)
+        hint_surf = hint_font.render(
+            "Click cells to hide \u2022 drag to reorder \u2022 "
+            "use Save as to persist (exit discards)",
+            True, (140, 140, 140))
+        surface.blit(hint_surf, (x + pad, btn_y + (btn_h - hint_surf.get_height()) // 2))
+
+        # If the dropdown is open, render it OVER everything below the
+        # button. Anchored to the button. List: Current job (top),
+        # Global, then every job from FFXI_JOBS.
+        if _stats_save_as_open:
+            _stats_save_as_dropdown_rects = []
+            dd_items = []
+            if job:
+                dd_items.append(("__current__", f"Current job ({job})"))
+            dd_items.append(("global", "Global"))
+            # Sorted list of all jobs.
+            for j in SIM_JOB_LIST:
+                dd_items.append((j, j))
+            row_h = max(16, int(18 * scale))
+            dd_w = max(140, btn_w * 2)
+            dd_h = row_h * len(dd_items) + 4
+            dd_x = btn_x + btn_w - dd_w   # right-aligned to button
+            dd_y = btn_y + btn_h + 2
+            # Clamp dd_y to stay on screen — if it goes off bottom,
+            # show ABOVE the button instead.
+            screen_h = surface.get_height()
+            if dd_y + dd_h > screen_h - 4:
+                dd_y = btn_y - dd_h - 2
+            pygame.draw.rect(surface, (25, 30, 38),
+                             (dd_x, dd_y, dd_w, dd_h), border_radius=4)
+            pygame.draw.rect(surface, (90, 110, 150),
+                             (dd_x, dd_y, dd_w, dd_h), 1, border_radius=4)
+            ddf = get_font("Consolas", 10 * scale)
+            for i, (target, label) in enumerate(dd_items):
+                ry = dd_y + 2 + i * row_h
+                # Highlight on first item if it's "current job".
+                if target == "__current__":
+                    pygame.draw.rect(surface, (50, 70, 100),
+                                     (dd_x + 2, ry, dd_w - 4, row_h))
+                lbl = ddf.render(label, True, (220, 220, 230))
+                surface.blit(lbl, (dd_x + 8, ry + (row_h - lbl.get_height()) // 2))
+                _stats_save_as_dropdown_rects.append({
+                    "target": target,
+                    "rect":   (dd_x, ry, dd_w, row_h),
+                })
+
+        # Cell drag-in-progress overlay: drop indicator + ghost cell.
+        # Renders LAST so it draws on top of normal cells and even the
+        # dropdown. Skipped when drag hasn't started yet (small wobble
+        # within click threshold) — only shows once the user clearly
+        # intends to drag.
+        if _stats_cell_drag is not None and _stats_cell_drag.get("started"):
+            drag_key = _stats_cell_drag["key"]
+            drag_meta = STATS_CELLS_BY_KEY.get(drag_key)
+            if drag_meta:
+                cur_mx = _stats_cell_drag["cur_x"]
+                cur_my = _stats_cell_drag["cur_y"]
+                # v2.0+ linear flow: ALL cells (including placeholders)
+                # are candidate drop targets. No section filter.
+                if _stats_cell_click_rects:
+                    best = None
+                    for entry in _stats_cell_click_rects:
+                        rx, ry, rw, rh = entry["rect"]
+                        cx = rx + rw / 2
+                        cy = ry + rh / 2
+                        d2 = (cur_mx - cx) ** 2 + (cur_my - cy) ** 2
+                        if best is None or d2 < best[0]:
+                            best = (d2, entry, rx, ry, rw, rh)
+                    if best is not None:
+                        _, entry, rx, ry, rw, rh = best
+                        is_ph = entry.get("is_placeholder", False)
+                        if is_ph:
+                            # Placeholder = drop-at-end. Highlight the
+                            # whole placeholder cell rather than a thin
+                            # bar (since "before/after" is ambiguous on
+                            # an empty slot).
+                            pygame.draw.rect(surface, (255, 200, 80),
+                                             (rx, ry, rw, rh), 2,
+                                             border_radius=2)
+                        else:
+                            if cur_mx < rx + rw / 2:
+                                bar_x = rx
+                            else:
+                                bar_x = rx + rw
+                            pygame.draw.rect(surface, (255, 200, 80),
+                                             (bar_x - 1, ry, 3, rh))
+                # Ghost: a translucent copy of the dragged cell at cursor.
+                drect = _stats_cell_drag["rect"]
+                gw, gh = drect[2], drect[3]
+                ghost = pygame.Surface((gw, gh), pygame.SRCALPHA)
+                pygame.draw.rect(ghost, (80, 110, 160, 200),
+                                 (0, 0, gw, gh), border_radius=2)
+                pygame.draw.rect(ghost, (180, 200, 230, 255),
+                                 (0, 0, gw, gh), 1, border_radius=2)
+                gf = get_font("Consolas", 9 * scale, bold=True)
+                gtxt = gf.render(drag_meta[1], True, (240, 240, 250))
+                ghost.blit(gtxt,
+                           ((gw - gtxt.get_width()) // 2,
+                            (gh - gtxt.get_height()) // 2))
+                ghost.set_alpha(200)
+                surface.blit(ghost, (cur_mx - gw // 2, cur_my - gh // 2))
 
 
 def draw_equip_viewer(surface, x, y, slots, scale=1.0):
@@ -13723,45 +20075,26 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
     """
     global equip_slot_rects
     equip_slot_rects = {}
-    panel_w, panel_h, slot_size, title_h = equip_panel_size(scale)
+    _raw_scale = scale
+    scale = _eff(scale)
+    panel_w, panel_h, slot_size, title_h = equip_panel_size(_raw_scale)
 
     # Outer panel
     pygame.draw.rect(surface, COL_PANEL,    (x, y, panel_w, panel_h), border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, panel_w, panel_h), 1, border_radius=4)
 
     # Title bar
-    title_font = get_font("Consolas", 12 * scale)
+    title_font = get_font("Consolas", 12 * scale, bold=True)
     pygame.draw.rect(surface, COL_EV_HEADER, (x + 1, y + 1, panel_w - 2, title_h - 1), border_radius=3)
     # Accent stripe AFTER the title bar so it paints over the title-bar's
     # left edge — otherwise the title bar (which spans the full inner
     # width starting at x+1) covers the stripe near the top of the panel.
     draw_accent_stripe(surface, x, y, panel_h, ACCENT_EQUIP)
-    # Show the gearswap set name when known. Two channels can populate it:
-    #
-    #   SET   - the literal set/file path gearswap selected. Authoritative.
-    #           Pushed by gearswap via `//ow set <path>` immediately after
-    #           it commits a gear swap, so it always reflects what's on
-    #           the character right now.
-    #   STATE - a "<state>.<mode>.<weapon>" fallback for older configs
-    #           that don't call //ow set. Pushed via `//ow state <s>`.
-    #
-    # We prefer SET over STATE: STATE re-evaluates on events that don't
-    # swap any gear (aftermath gain/loss, sub-state transitions, etc.),
-    # which would otherwise make the header cycle between the real set
-    # and a stale fallback after every weapon-skill or buff change.
-    #
-    # If only STATE is available we still display it (some users haven't
-    # added `//ow set` to their gearswap), but trim the trailing weapon
-    # segment of the dotted label since that's the noisy bit.
-    if gearswap_set:
-        title_text = gearswap_set
-    elif gearswap_state:
-        if "." in gearswap_state:
-            title_text = gearswap_state.rsplit(".", 1)[0]
-        else:
-            title_text = gearswap_state
-    else:
-        title_text = "EQUIPMENT"
+    # Title is always literally "EQUIPMENT". The header used to reflect
+    # the active gearswap set or state, but that was noisy and the
+    # gearswap_set/state values are still tracked elsewhere for other
+    # purposes.
+    title_text = "EQUIPMENT"
     # Truncate to fit available width (panel minus padding).
     avail_w = panel_w - 12
     t_render = title_font.render(title_text, True, COL_EV_TITLE)
@@ -13772,6 +20105,57 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
         title_text = (_cut + "…") if _cut else title_text[:1]
         t_render = title_font.render(title_text, True, COL_EV_TITLE)
     surface.blit(t_render, (x + 6, y + (title_h - t_render.get_height()) // 2))
+    # Divider line under the title bar, matching the STATISTICS panel
+    # so headers across panels share the same visual treatment.
+    pygame.draw.line(surface, COL_SLOT_BDR,
+                     (x + 1, y + title_h),
+                     (x + panel_w - 2, y + title_h))
+
+    # ── Icons-missing indicator ──────────────────────────────────────
+    # If load_icon_surface has recorded misses this session, paint a
+    # small red badge at the right edge of the title bar. This is the
+    # ONLY visible diagnostic on packaged .exe builds, where the user
+    # can't see stdout. The detail (which item ids, where ICON_DIR
+    # resolved to) is in the session log at %APPDATA%\OmniWatch\logs\.
+    #
+    # Also exposes a hit-rect via equip_slot_rects[-1] so the existing
+    # mouse-tooltip machinery can paint help text on hover — telling
+    # the user exactly what to do.
+    global _icon_missing_logged
+    if _icon_missing_ids:
+        n = len(_icon_missing_ids)
+        badge_text = f"[{n} ICONS MISSING]" if n > 1 else "[ICON MISSING]"
+        badge_font = get_font("Consolas", max(9, int(10 * scale)), bold=True)
+        badge_surf = badge_font.render(badge_text, True, (255, 80, 80))
+        # Right-align in the title bar with a small margin.
+        bx = x + panel_w - badge_surf.get_width() - 6
+        by = y + (title_h - badge_surf.get_height()) // 2
+        # Only paint if there's room beside the title text. If the
+        # gearswap set name is wide enough to overlap, the badge wins
+        # (visibility of the error matters more than the set name).
+        surface.blit(badge_surf, (bx, by))
+        # Expose hover hit-rect using a sentinel key (-1 = "the badge")
+        # so the existing tooltip path can paint help text on hover.
+        equip_slot_rects[-1] = pygame.Rect(bx, by,
+                                           badge_surf.get_width(),
+                                           badge_surf.get_height())
+        # Log the detail line ONCE per session — the cache means we
+        # don't spam if the user toggles the viewer on/off, but we DO
+        # capture which ids are missing so Cooper can debug from the
+        # user's session log.
+        if not _icon_missing_logged:
+            _icon_missing_logged = True
+            sample = sorted(_icon_missing_ids)[:10]
+            print(f"[OmniWatch] Equipment viewer icons missing: "
+                  f"{n} item ids have no .bmp on disk. "
+                  f"First {len(sample)}: {sample}")
+            print(f"[OmniWatch]   ICON_DIR resolved to: {ICON_DIR}")
+            print(f"[OmniWatch]   To fix: equip the missing items "
+                  f"in-game so icon_extractor.lua writes their .bmp, "
+                  f"or set PARTYWATCH_ICON_DIR env var to the correct "
+                  f"OmniWatch addon root if your icons folder is "
+                  f"elsewhere on disk.")
+
     pygame.draw.line(surface, COL_SLOT_BDR,
                      (x + 1, y + title_h),
                      (x + panel_w - 2, y + title_h))
@@ -13830,6 +20214,59 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
                                sy + (slot_size - lbl.get_height()) // 2))
 
 
+def draw_help_tooltip(surface, mx, my, lines, screen_w, screen_h):
+    """Draw a multi-line help tooltip near (mx, my).
+
+    `lines` is a list of strings. Empty strings render as blank spacers.
+    Used by the equipment-viewer icons-missing badge to show remediation
+    instructions on hover, and a candidate for any future "explain this
+    UI element" hover help.
+
+    Layout mirrors draw_item_tooltip: dark padded panel, soft border,
+    flips to opposite side of cursor if it would go off-screen.
+    """
+    if not lines:
+        return
+    pad_x, pad_y = 8, 6
+    f = get_font("Consolas", 12)
+    line_surfs = []
+    max_w = 0
+    for ln in lines:
+        if ln == "":
+            # Blank spacer line: half-height, no glyph.
+            line_surfs.append(None)
+        else:
+            s = f.render(ln, True, (220, 220, 230))
+            line_surfs.append(s)
+            if s.get_width() > max_w:
+                max_w = s.get_width()
+    line_h = f.get_linesize()
+    total_h = pad_y * 2 + sum(line_h if ls else line_h // 2
+                              for ls in line_surfs)
+    total_w = max_w + pad_x * 2
+
+    tx = mx + 14
+    ty = my + 14
+    if tx + total_w > screen_w:
+        tx = max(0, mx - total_w - 14)
+    if ty + total_h > screen_h:
+        ty = max(0, screen_h - total_h - 2)
+
+    shadow = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
+    shadow.fill((0, 0, 0, 220))
+    surface.blit(shadow, (tx, ty))
+    pygame.draw.rect(surface, (120, 80, 80),
+                     (tx, ty, total_w, total_h), 1, border_radius=4)
+
+    cy = ty + pad_y
+    for ls in line_surfs:
+        if ls is not None:
+            surface.blit(ls, (tx + pad_x, cy))
+            cy += line_h
+        else:
+            cy += line_h // 2
+
+
 def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     """Draw a minimal tooltip at (mx, my) for the given item info dict.
     Shows just the item name — keeps things clean since deeper stats aren't
@@ -13868,21 +20305,62 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
 
 def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
     """Draw a tooltip for a mob ability hovered in the target card.
-    `entry` is a dict from mob_abilities.json tp_moves, with keys:
-    name, class, type, target, area, effect, shadows.
-    Wraps effect text to a reasonable width."""
+
+    `entry` is a dict with optional keys. Two schemas are supported:
+
+      Schema v5 (FFXIclopedia scrape):
+        name         — ability name (always present)
+        description  — main effect text
+        family       — mob family that uses the ability
+        type         — Physical / Breath / Enfeebling / etc.
+        dispel       — N/A / Erasable / etc.
+        utsusemi     — Ignores shadows / 1 shadow / etc.
+        range        — Melee / 10' cone / 20' radial / single target / etc.
+        notes        — extra context (NM-only, conditional, etc.)
+
+      Schema v4 (legacy BG-wiki/tp_moves):
+        name, class, type, target, area, effect, shadows
+
+    The renderer reads both, picking whichever fields are populated.
+    The two schemas overlap in semantics:
+      v5.description ↔ v4.effect      (body text)
+      v5.range       ↔ v4.target/area (where the ability hits)
+      v5.utsusemi    ↔ v4.shadows     (shadow interaction)
+    Wraps body text to a reasonable width.
+    """
     if not entry:
         return
     name = entry.get("name", "")
     if not name:
         return
-    effect = (entry.get("effect") or "").strip()
+
+    # Body text: prefer v5 "description", fall back to v4 "effect".
+    body_text = (entry.get("description")
+                 or entry.get("effect")
+                 or "").strip()
+
+    # Meta line. Build from whichever schema fields are present.
+    # The label-key pairs below describe the v5 → display mapping;
+    # v4 fallbacks are appended if v5 fields are absent.
     meta_bits = []
-    for k in ("class", "type", "target", "area", "shadows"):
-        v = (entry.get(k) or "").strip()
+    def _add(label, val):
+        v = (val or "").strip()
         if v:
-            meta_bits.append(f"{k.title()}: {v}")
+            meta_bits.append(f"{label}: {v}")
+
+    # v5 primary fields.
+    _add("Family",   entry.get("family"))
+    _add("Type",     entry.get("type")  or entry.get("class"))
+    _add("Range",    entry.get("range") or entry.get("target")
+                     or entry.get("area"))
+    _add("Shadows",  entry.get("utsusemi") or entry.get("shadows"))
+    _add("Dispel",   entry.get("dispel"))
+
     meta_line = " | ".join(meta_bits) if meta_bits else ""
+
+    # Notes get their own paragraph below the body since they're
+    # often longer / mob-specific. Both schemas use "notes".
+    notes_text = (entry.get("notes") or "").strip()
 
     pad_x, pad_y = 8, 6
     max_width_px = 420  # tooltip cap
@@ -13927,8 +20405,13 @@ def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
                 cur = piece
         if cur:
             meta_surfs.append(f_meta.render(cur, True, (180, 200, 230)))
-    body_lines = _wrap(effect, f_body, wrap_w) if effect else []
+    body_lines = _wrap(body_text, f_body, wrap_w) if body_text else []
     body_surfs = [f_body.render(ln, True, (230, 230, 230)) for ln in body_lines]
+    # Notes rendered slightly dimmer and italic-feeling (lighter weight)
+    # under the body to visually distinguish.
+    notes_lines = _wrap(notes_text, f_body, wrap_w) if notes_text else []
+    notes_surfs = [f_body.render(ln, True, (175, 195, 165))
+                   for ln in notes_lines]
 
     # Content width — whichever line is widest, clamped to max_width_px.
     content_w = name_surf.get_width()
@@ -13936,6 +20419,8 @@ def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
         content_w = max(content_w, ms.get_width())
     for bs in body_surfs:
         content_w = max(content_w, bs.get_width())
+    for ns in notes_surfs:
+        content_w = max(content_w, ns.get_width())
     content_w = min(content_w, wrap_w)
 
     total_w = content_w + pad_x * 2
@@ -13944,6 +20429,8 @@ def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
         total_h += ms.get_height() + 2
     if body_surfs:
         total_h += 4 + sum(s.get_height() for s in body_surfs) + 2 * (len(body_surfs) - 1)
+    if notes_surfs:
+        total_h += 6 + sum(s.get_height() for s in notes_surfs) + 2 * (len(notes_surfs) - 1)
 
     # Position: bottom-right of cursor by default, flip if off-screen.
     tx = mx + 14
@@ -13970,6 +20457,13 @@ def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
         for bs in body_surfs:
             surface.blit(bs, (tx + pad_x, yy))
             yy += bs.get_height() + 2
+    if notes_surfs:
+        # Extra gap before notes so it visually separates from the
+        # body description.
+        yy += 4
+        for ns in notes_surfs:
+            surface.blit(ns, (tx + pad_x, yy))
+            yy += ns.get_height() + 2
 
 
 
@@ -13985,9 +20479,34 @@ else:
           "(Settings → Inventory → Gearswap folder)")
 
 
+# Deferred stats-layout load. By this point in module execution:
+#   1) _load_stats_layout (defined at ~13620) is available
+#   2) Per-char path constants are already resolved if the startup
+#      character-heuristic picked one
+# We can't load this earlier because the function isn't defined yet
+# at the time of the other module-level loaders. And the per-char
+# switch shortcut (`_switch_active_view` early-return) skips its
+# loader list when the heuristic already picked the right character,
+# so we can't rely on that path firing either. This deferred call
+# closes the gap.
+try:
+    _load_stats_layout()
+except Exception as _e:
+    print(f"[OmniWatch] deferred stats layout load failed: {_e!r}")
+
+
 # ── Main loop ────────────────────────────────────────────────────────────────
 running = True
 clock   = pygame.time.Clock()
+
+# Job-change detection state for chat routing. We poll the player's
+# main_job once per second (cheap dict lookup) and reload the per-job
+# routing config when it changes. Job is sourced from _inv_for_sim,
+# which Lua populates via inventory snapshots. Empty string = no job
+# known yet; the routing system falls back to global config.
+_last_job_check_ts  = 0.0
+_last_seen_main_job = None
+JOB_CHECK_INTERVAL  = 1.0    # seconds; cheap enough to do often
 
 while running:
     screen.fill(COL_BG)
@@ -14006,6 +20525,23 @@ while running:
     if now - last_flash > 0.5:
         flash      = not flash
         last_flash = now
+
+    # Job-change polling for chat routing. _inv_for_sim["main_job"] is
+    # populated by inventory snapshot processing. When it changes from
+    # the last seen value, reload the per-job routing JSON. Throttled
+    # to once per second to avoid burning cycles every frame.
+    if now - _last_job_check_ts >= JOB_CHECK_INTERVAL:
+        _last_job_check_ts = now
+        # Strip the "JOBxx" level suffix to get just the job code.
+        # Format from _inv_for_sim is e.g. "NIN" or "" (no suffix here
+        # since this dict stores the raw 3-letter abbreviation).
+        cur_job = (_inv_for_sim.get("main_job") or "").strip().upper()
+        if cur_job != _last_seen_main_job:
+            _last_seen_main_job = cur_job
+            try:
+                load_chat_routing_for_job(cur_job)
+            except Exception as _e:
+                print(f"[OmniWatch] Job-change routing reload failed: {_e}")
 
     # ── Receive UDP data ─────────────────────────────────────────────────────
     try:
@@ -14327,6 +20863,11 @@ while running:
                 # for the target-card icon lookup, so PCs show race/sex
                 # icons just like mobs show family icons.
                 pc_race_key = p[14].strip() if len(p) > 14 else ""
+                # 16th field: TH (Treasure Hunter) level on this mob.
+                # 0 = none detected / not a mob / stale. Shown as
+                # "TH - N" in the card header when > 0.
+                try:    th_level = int(p[15]) if len(p) > 15 else 0
+                except: th_level = 0
                 return {
                     "name":         p[0],
                     "id":           tid,
@@ -14343,6 +20884,7 @@ while running:
                     "pc_sub_job":   pc_sub_job,
                     "pc_title":     pc_title,
                     "pc_race_key":  pc_race_key,
+                    "th_level":     th_level,
                 }
 
             new_main = _parse_segment(main_raw)
@@ -14430,7 +20972,15 @@ while running:
                     actor_id = int(parts[5])
                     is_buff  = (parts[6] == "1")
                     sp       = _spells_by_id.get(spell_id) or {}
-                    sp_name  = sp.get("name") or f"Spell #{spell_id}"
+                    # 8th field (optional): an explicit display name, sent
+                    # by the Lua side for mob self-buffs (where spell_id is
+                    # actually an ability id, so the spell table can't
+                    # resolve it). Use it when present; otherwise fall back
+                    # to spell-id resolution for the normal debuff APPLY.
+                    if len(parts) >= 8 and parts[7]:
+                        sp_name = parts[7]
+                    else:
+                        sp_name = sp.get("name") or f"Spell #{spell_id}"
                     mob_statuses.setdefault(tgt, {})[eff_id] = {
                         "spell_id":   spell_id,
                         "spell_name": sp_name,
@@ -14563,6 +21113,25 @@ while running:
                 panels_locked = not setup_mode
                 print(f"[OmniWatch] setup_mode = {setup_mode}, "
                       f"panels_locked = {panels_locked}")
+                # Stats-layout transitions:
+                #   - Entering setup mode: reload from disk so any
+                #     external edits to omniwatch_stats_layout.json are
+                #     picked up.
+                #   - Exiting setup mode: DISCARD in-memory session
+                #     edits. The only commit path is the "Save as" button
+                #     in setup mode — exiting without clicking it means
+                #     the user wanted to throw away their experimenting.
+                try:
+                    if prev_setup != setup_mode:
+                        if setup_mode:
+                            # Entering — fresh load from disk.
+                            _load_stats_layout()
+                        else:
+                            # Exiting — drop session edits. Subsequent
+                            # rendering falls back to whatever's on disk.
+                            stats_layout_config.pop("_setup_pending", None)
+                except Exception as _e:
+                    print(f"[OmniWatch] stats layout transition failed: {_e!r}")
                 # When setup mode toggles, force recast and buff panels to
                 # re-derive their position from their saved anchor. This
                 # protects against any drift that could accumulate during
@@ -14635,6 +21204,15 @@ while running:
                         # Mock party / alliance: leave alone for the
                         # same reason — windower party update will
                         # replace them.
+                        # Skillchain mock: clear only if the state is
+                        # still our mock (target_id == -1). Real lua
+                        # state always has a positive target_id (mob
+                        # ids), so a real combat resonating state that
+                        # arrived during setup is preserved.
+                        if (skillchain_state is not None
+                                and skillchain_state.get("target_id") == -1):
+                            skillchain_state = None
+                            skillchain_suggestions = []
                         print("[OmniWatch] cleared mock target / "
                               "weather data on setup exit")
             elif tag == "LOCK":
@@ -14665,6 +21243,23 @@ while running:
                 if vlow != "reload":
                     print(f"[OmniWatch] buttons_panel_visible = "
                           f"{buttons_panel_visible}")
+            elif tag == "BUFFCFG":
+                # Re-read the party-panel buff config (omniwatch_buffs.json)
+                # and the buff-timer config at runtime. Without this, the
+                # JSON's aliases/blacklists were only read when the Python
+                # overlay PROCESS started — a Lua `//ow reload` reloads the
+                # addon but not the overlay, so edits to aliases (e.g.
+                # "Protect": "Prot" → "Protect") appeared to do nothing.
+                if value.lower() == "reload":
+                    try:
+                        load_buff_config()
+                    except Exception as e:
+                        print(f"[OmniWatch] BUFFCFG reload (buffs): {e!r}")
+                    try:
+                        load_buff_timer_config()
+                    except Exception as e:
+                        print(f"[OmniWatch] BUFFCFG reload (timer): {e!r}")
+                    print("[OmniWatch] buff configs reloaded")
     except Exception:
         pass
 
@@ -14861,13 +21456,62 @@ while running:
                 # before being sent). Pop them into _buff_flashes for the
                 # red expiry-flash. Note: old-version mocks have negative ids,
                 # which still flow through as keys here.
+                #
+                # Wear-off model: when a buff disappears from new_buffs we
+                # set _buff_flashes (the 2-second red blink). If the
+                # keep_worn_buffs setting is on, we also carry the old
+                # entry forward into new_buffs with worn=True so the
+                # render path can show it as a grayed-out "worn" entry
+                # at the bottom of the panel. This preserves the exact
+                # name the live timer was using — no separate name-stash,
+                # no song-tier confusion.
+                #
+                # Already-worn entries are carried forward AS-IS (still
+                # worn, same worn_at) so they keep their position in the
+                # render and don't re-fire the flash.
+                # Determine which buffs are still alive in this tick by
+                # matching (buff_id, expires_at_unix) against the new
+                # batch. expires_at_unix is server-pushed (stable per
+                # instance) but Lua emits it with up to ±1s jitter due
+                # to os.time()/os.clock() drift on each tick's reading.
+                # Use a 3-second tolerance window for the match.
+                _alive_by_bid = {}
+                for v in new_buffs.values():
+                    bid = v.get("buff_id")
+                    exp = v.get("expires_at_unix")
+                    if bid is None:
+                        continue
+                    _alive_by_bid.setdefault(bid, []).append(
+                        int(exp) if exp else None)
+
+                def _is_alive(old_bid, old_exp):
+                    candidates = _alive_by_bid.get(old_bid)
+                    if not candidates:
+                        return False
+                    old_exp_int = int(old_exp) if old_exp else None
+                    for cand in candidates:
+                        if cand is None and old_exp_int is None:
+                            return True
+                        if cand is None or old_exp_int is None:
+                            continue
+                        if abs(cand - old_exp_int) <= 3:
+                            return True
+                    return False
+
+                # Wear-off model: when a buff disappears we fire the
+                # 2-second red flash. No persistent worn entries — the
+                # feature was removed because same-bid song stacking +
+                # dummy-song overwrites made the worn list too
+                # unreliable to be useful.
                 for old_key, old_val in buff_state.items():
-                    if old_key not in new_buffs:
-                        _buff_flashes[old_key] = {
-                            "name": old_val.get("name", "?"),
-                            "ready_at": _now,
-                            "source": old_val.get("source", "self"),
-                        }
+                    if _is_alive(old_val.get("buff_id"),
+                                 old_val.get("expires_at_unix")):
+                        continue
+                    _buff_flashes[old_key] = {
+                        "name": old_val.get("name", "?"),
+                        "ready_at": _now,
+                        "source": old_val.get("source", "self"),
+                    }
                 buff_state = new_buffs
     except Exception:
         pass
@@ -15047,6 +21691,38 @@ while running:
         # Swallow + log: don't let a malformed packet kill the frame.
         print(f"[OmniWatch] inventory drain error: {e!r}")
 
+    # Drain chat-text socket. CHAT_BATCH packets from chat/drain.lua
+    # carry one or more event lines per datagram. Reassembly across
+    # multiple datagrams in a batch isn't strictly needed at the
+    # ingest layer (each datagram is independent, events appended in
+    # arrival order). See _parse_chat_batch for wire format details.
+    try:
+        while True:
+            cdata, _ = sock_chat.recvfrom(32768)
+            raw = cdata.decode("utf-8", errors="replace")
+            if not raw:
+                continue
+            _ingest_chat_packet(raw, "text")
+    except BlockingIOError:
+        pass
+    except Exception as e:
+        print(f"[OmniWatch] chat (text) drain error: {e!r}")
+
+    # Drain battle socket. Empty until step 5 (action packet tap) lands.
+    # Wired now so the receiver is complete and we don't have to revisit
+    # the main loop later just to add the second source.
+    try:
+        while True:
+            bdata, _ = sock_battle.recvfrom(32768)
+            raw = bdata.decode("utf-8", errors="replace")
+            if not raw:
+                continue
+            _ingest_chat_packet(raw, "battle")
+    except BlockingIOError:
+        pass
+    except Exception as e:
+        print(f"[OmniWatch] chat (battle) drain error: {e!r}")
+
     # Drain DPS socket. Replaces dps_state/ws/mob wholesale per packet.
     # The 'TOGGLE_PANEL' control message flips dps_panel_visible. The
     # 'DPS_EMPTY' message clears state without hiding the panel.
@@ -15108,6 +21784,13 @@ while running:
                         # to 0 so the parser still accepts those.
                         sc_total    = int(fields[19]) if len(fields) > 19 else 0
                         skillchains = int(fields[20]) if len(fields) > 20 else 0
+                        # v3 wire format: ranged_total as field 21. This is
+                        # the ranged-damage subtype split out from white,
+                        # so 'white' here means melee-only and 'ranged' is
+                        # bows/guns. The lua 'total' field still includes
+                        # both. Older lua emits 21 fields; default to 0 so
+                        # the panel shows "Ranged 0" rather than crashing.
+                        ranged      = int(fields[21]) if len(fields) > 21 else 0
                     except (ValueError, IndexError) as e:
                         parse_failures.append(
                             (ln_idx, f"DPS parse error: {e}", ln))
@@ -15115,6 +21798,7 @@ while running:
                     new_state[src] = {
                         "scope": scope, "window": window,
                         "white": white, "magic": magic, "ws": ws,
+                        "ranged": ranged,
                         "sc": sc_total, "skillchains": skillchains,
                         "hits": hits, "misses": misses, "crits": crits,
                         "spells_landed": sp_ld, "spells_resisted": sp_rs,
@@ -15251,6 +21935,108 @@ while running:
     except Exception as _e:
         # Real exception worth seeing.
         print(f"[OmniWatch DPS] receive loop exception: {_e!r}")
+
+    # Drain skillchain socket. Wire format documented in
+    # Skillchains.lua header. Lines are independent (each datagram is
+    # one line; SUGGEST_BEGIN/END bracket atomic list rebuilds but
+    # arrive as separate datagrams).
+    _sc_pending_suggestions = None   # set when SUGGEST_BEGIN seen; flushed on END
+    try:
+        while True:
+            scdata, _ = sock_skillchain.recvfrom(16384)
+            raw = scdata.decode(errors="replace").strip()
+            if not raw:
+                continue
+            for ln in raw.split("\n"):
+                ln = ln.strip()
+                if not ln:
+                    continue
+                fields = ln.split("|")
+                tag = fields[0]
+                if tag == "SC" and len(fields) >= 10:
+                    try:
+                        _new_sc = {
+                            "target_id": int(fields[1]),
+                            "step":      int(fields[2]),
+                            "delay_ts":  int(fields[3]),
+                            "window_ts": int(fields[4]),
+                            "props":     [p for p in fields[5].split(",") if p],
+                            "closed":    fields[6] == "1",
+                            "bound":     int(fields[7]),
+                            "action_id": int(fields[8]),
+                            "resource":  fields[9],
+                            "received":  time.time(),
+                        }
+                        # Preserve 'received' across heartbeat resends of the
+                        # SAME chain. The red (wait) phase total is
+                        # (delay - received); overwriting received every 0.5s
+                        # resend shifted the denominator and made the red bar
+                        # stutter. Only take a fresh 'received' when the chain
+                        # is genuinely new/changed (different target, step, or
+                        # window endpoint); otherwise keep the original anchor.
+                        _prev = skillchain_state
+                        if (_prev
+                                and _prev.get("target_id") == _new_sc["target_id"]
+                                and _prev.get("step")      == _new_sc["step"]
+                                and _prev.get("window_ts") == _new_sc["window_ts"]):
+                            _new_sc["received"] = _prev.get("received",
+                                                            _new_sc["received"])
+                        skillchain_state = _new_sc
+                    except (ValueError, IndexError):
+                        # Malformed packet; skip silently rather than
+                        # blanking the panel.
+                        pass
+                elif tag == "SC_EMPTY":
+                    skillchain_state = None
+                    # No resonating state means nothing to chain from,
+                    # so there can't be any follow-up suggestions. Clear
+                    # them — otherwise a stale list from a previous fight
+                    # shows a "potential weaponskill" before the player
+                    # has opened any chain.
+                    skillchain_suggestions = []
+                    _sc_pending_suggestions = None
+                elif tag == "SUGGEST_BEGIN":
+                    _sc_pending_suggestions = []
+                elif tag == "SUGGEST" and _sc_pending_suggestions is not None:
+                    # Lua sent "Name|Lv.N Property" — extract the
+                    # human-readable parts. We keep the full string
+                    # for rendering plus parse the level/property out
+                    # of "Lv.N Property" so the renderer can color the
+                    # property name independently from the name.
+                    if len(fields) >= 3:
+                        name = fields[1]
+                        lvl_prop = fields[2]
+                        # lvl_prop looks like "Lv.3 Light"
+                        lvl, prop = 0, ""
+                        try:
+                            after_dot = lvl_prop.split("Lv.", 1)[1]
+                            lvl_str, _, prop = after_dot.partition(" ")
+                            lvl = int(lvl_str.strip())
+                            prop = prop.strip()
+                        except (IndexError, ValueError):
+                            pass
+                        _sc_pending_suggestions.append((name.strip(), lvl, prop))
+                elif tag == "SUGGEST_END":
+                    if _sc_pending_suggestions is not None:
+                        # Atomic swap into the rendered list.
+                        skillchain_suggestions = _sc_pending_suggestions
+                        _sc_pending_suggestions = None
+                elif tag == "JOB" and len(fields) >= 2:
+                    skillchain_main_job = fields[1].strip().upper() or None
+                elif tag == "SETTINGS" and len(fields) >= 2:
+                    # CSV of nine bools in fixed order — mirror the
+                    # order in Skillchains.lua's emit_settings.
+                    csv = fields[1].split(",")
+                    keys = ["show_panel", "track_sc", "track_magic_burst",
+                            "show_props", "show_timer", "show_step",
+                            "show_weapon", "show_spell", "show_pet"]
+                    for i, k in enumerate(keys):
+                        if i < len(csv):
+                            skillchain_settings[k] = (csv[i] == "1")
+    except BlockingIOError:
+        pass
+    except Exception as _e:
+        print(f"[OmniWatch SC] receive loop exception: {_e!r}")
 
     # Prune stale casting entries (safety: 15s without a finish).
     _now = time.time()
@@ -15625,13 +22411,26 @@ while running:
         # to anchor-derived position to avoid None deref later.
         equip_pos = list(resolve_anchor(equip_anchor, ew, eh, WIDTH, HEIGHT))
 
-    # Stats panel: default to bottom-left, offset to the right of the
+    # Stats panel: default to top-left, offset to the right of the
     # equipment panel so they don't overlap on first run.
+    #
+    # tl (not bl) is deliberate. The stats panel height changes when
+    # entering/leaving setup mode (tray + save-as button appear) and
+    # when cells are hidden/shown. With a bottom anchor, those size
+    # changes shift the visible top up and down — the panel appears
+    # to "jump" when toggling setup mode. tl pins the visible top-left,
+    # so size changes grow/shrink downward from a fixed point. Same
+    # reasoning the recast/buff/dps panels use tl by default.
     stats_scale = max(MIN_SCALE, min(MAX_SCALE, stats_scale))
-    _stats_joblist = None  # layout is fixed; arg unused
-    sw, sh = stats_panel_size(stats_scale, _stats_joblist)
+    # Pass current main job to stats_panel_size so the computed panel
+    # dimensions reflect the active layout (hidden cells reduce height).
+    # Without this the anchor positioning math would use the
+    # "all-cells-visible" size and the panel would visually drift.
+    sw, sh = stats_panel_size(stats_scale, job=player_self_mjob, setup_mode=setup_mode)
     if stats_anchor is None:
-        stats_anchor = ["bl", PANEL_X + ew + 8, PANEL_X]
+        # Default offset places it to the right of the equipment panel,
+        # below the header so it doesn't overlap the clock.
+        stats_anchor = ["tl", PANEL_X + ew + 8, HEADER_H + 4]
     if dragging_key != "__stats__":
         sx, sy = resolve_anchor(stats_anchor, sw, sh, WIDTH, HEIGHT)
         if stats_pos is None:
@@ -15754,6 +22553,7 @@ while running:
         m      = members_by_name[name]
         px, py = panel_positions[name]
         scale  = panel_scales.get(name, 1.0)
+        escale = _eff(scale)   # effective scale for raw positioning offsets
         d      = scaled_panel_dims(scale)
         rh     = row_height(m, scale)
         pw     = d["panel_w"]
@@ -15763,7 +22563,7 @@ while running:
         draw_accent_stripe(screen, px, py, rh, ACCENT_PARTY)
 
         bx = px + d["bars_x_off"]
-        by = py + int(10 * scale)
+        by = py + int(10 * escale)
 
         # Name + job/level stacked vertically, centred in the name column.
         # Pulse red if any current target (main or sub) is locked onto OR
@@ -15835,13 +22635,13 @@ while running:
                    + (job_surf.get_height() + 2 if job_surf else 0)
                    + (pet_h + 2 if pet_surfs else 0))
         block_y = py + (rh - total_h) // 2
-        screen.blit(name_surf, (px + int(8 * scale), block_y))
+        screen.blit(name_surf, (px + int(8 * escale), block_y))
         cur_y = block_y + name_surf.get_height() + 2
         if job_surf:
-            screen.blit(job_surf, (px + int(8 * scale), cur_y))
+            screen.blit(job_surf, (px + int(8 * escale), cur_y))
             cur_y += job_surf.get_height() + 2
         if pet_surfs:
-            ix = px + int(8 * scale)
+            ix = px + int(8 * escale)
             for ps in pet_surfs:
                 screen.blit(ps, (ix, cur_y))
                 ix += ps.get_width()
@@ -15920,7 +22720,7 @@ while running:
             buffs, debuffs = classify(m_buffs)
             buff_ids_b = buff_ids_d = None
 
-        div_x = px + d["buff_x_off"] - int(8 * scale)
+        div_x = px + d["buff_x_off"] - int(8 * escale)
         pygame.draw.line(screen, COL_DIVIDER, (div_x, py + 8), (div_x, py + rh - 8))
 
         # How many lines fit in this panel at the current size? Leave a sliver
@@ -15932,8 +22732,8 @@ while running:
         # ICON_PX is the rendered icon size. GAP_PX is between cells in
         # both axes. Both scale with the panel scale so grid mode keeps
         # working at zoomed-up panels too.
-        ICON_PX = max(12, int(16 * scale))
-        GAP_PX  = max(1,  int(2  * scale))
+        ICON_PX = max(12, int(16 * escale))
+        GAP_PX  = max(1,  int(2  * escale))
 
         def _render_column_text(items, col_key, col_x, text_color):
             """Original text rendering with scroll + '+N more' overflow."""
@@ -15952,14 +22752,30 @@ while running:
                     screen.blit(d["f_buff"].render(item, True, text_color),
                                 (col_x, py + d["row_pad_v"] // 2 + j * d["buff_line_h"]))
             else:
-                visible = items[scroll : scroll + (max_lines - 1)]
-                for j, item in enumerate(visible):
-                    screen.blit(d["f_buff"].render(item, True, text_color),
-                                (col_x, py + d["row_pad_v"] // 2 + j * d["buff_line_h"]))
-                remaining = n - (scroll + (max_lines - 1))
-                more_text = f"+{remaining} more" if remaining > 0 else "(end)"
-                screen.blit(d["f_buff"].render(more_text, True, COL_LABEL_DIM),
-                            (col_x, py + d["row_pad_v"] // 2 + (max_lines - 1) * d["buff_line_h"]))
+                # There are more items than fit. If we're scrolled to the
+                # bottom, there's nothing further below — so use ALL
+                # max_lines for items (don't burn the last line on a
+                # marker, which was hiding the final buff as "+1 more").
+                # Only when items remain BELOW the current view do we
+                # reserve the bottom line for the "+N more" indicator.
+                at_bottom = (scroll >= n - max_lines)
+                if at_bottom:
+                    visible = items[scroll : scroll + max_lines]
+                    for j, item in enumerate(visible):
+                        screen.blit(d["f_buff"].render(item, True, text_color),
+                                    (col_x, py + d["row_pad_v"] // 2
+                                     + j * d["buff_line_h"]))
+                else:
+                    visible = items[scroll : scroll + (max_lines - 1)]
+                    for j, item in enumerate(visible):
+                        screen.blit(d["f_buff"].render(item, True, text_color),
+                                    (col_x, py + d["row_pad_v"] // 2
+                                     + j * d["buff_line_h"]))
+                    remaining = n - (scroll + (max_lines - 1))
+                    more_text = f"+{remaining} more"
+                    screen.blit(d["f_buff"].render(more_text, True, COL_LABEL_DIM),
+                                (col_x, py + d["row_pad_v"] // 2
+                                 + (max_lines - 1) * d["buff_line_h"]))
 
         def _render_column_grid(items, ids, col_key, col_x, col_w, text_color):
             """Pack ICON_PX squares row-by-row into the column width.
@@ -16217,16 +23033,24 @@ while running:
     # buff_state is keyed by SLOT in v2/v3 wire (multi-instance support
     # for same-named buffs like multiple Marches) and by BUFF_ID in v1
     # legacy wire. Either way, v["buff_id"] holds the actual id.
-    _buff_all = [
-        {"buff_id": v["buff_id"], "name": v["name"], "secs": v["secs"],
-         "source": v.get("source", "self"),
-         "full_duration": v.get("full_duration")}
-        for _k, v in buff_state.items()
-    ]
+    _buff_live = []
+    # Buff timer hide list (from omniwatch_buff_timer.json "hide").
+    # Case-insensitive name match, per the config README. Built into a
+    # set each frame so a long hide list stays O(1) per buff.
+    _hide_set = {n.strip().lower() for n in _buff_timer_hide if n.strip()}
+    for _k, v in buff_state.items():
+        _nm = (v.get("name") or "")
+        if _hide_set and _nm.strip().lower() in _hide_set:
+            continue   # user hid this buff from the timer panel
+        _buff_live.append({
+            "buff_id": v["buff_id"], "name": v["name"], "secs": v["secs"],
+            "source": v.get("source", "self"),
+            "full_duration": v.get("full_duration"),
+        })
     if buff_sort_order == "desc":
-        _buff_entries = sorted(_buff_all, key=lambda e: -e["secs"])
+        _buff_entries = sorted(_buff_live, key=lambda e: -e["secs"])
     else:  # 'asc' default — soonest-expiring leftmost
-        _buff_entries = sorted(_buff_all, key=lambda e: e["secs"])
+        _buff_entries = sorted(_buff_live, key=lambda e: e["secs"])
 
     # Append wear-off flashes (entries that left buff_state on the most
     # recent BUFF_BATCH). They render red and blink for BUFF_FLASH_SEC.
@@ -16238,6 +23062,9 @@ while running:
     for bid in _buff_expired_flashes:
         del _buff_flashes[bid]
     for bid, fval in _buff_flashes.items():
+        _fnm = (fval.get("name") or "")
+        if _hide_set and _fnm.strip().lower() in _hide_set:
+            continue   # hidden buff — don't flash its wear-off either
         _buff_entries.append({
             "buff_id": bid, "name": fval["name"], "secs": 0.0,
             "source": fval.get("source", "self"),
@@ -16320,6 +23147,170 @@ while running:
         draw_dps_panel(screen, dps_pos[0], dps_pos[1],
                         dps_scale, panels_locked)
         draw_resize_grip(screen, dps_pos[0] + dp_w, dps_pos[1] + dp_h)
+
+    # ── Skillchain panel ─────────────────────────────────────────────────
+    # Active SC display: resonating properties on target, SC window
+    # countdown, magic burst window when chain closes, and a list of
+    # WS/spells/pet abilities that can continue the chain (computed by
+    # Skillchains.lua based on the player's equipped gear + current
+    # job + active aeonic Aftermath buffs).
+    #
+    # The whole panel is gated by skillchain_settings["show_panel"]
+    # (the master "Show skillchain panel" toggle) AND the local
+    # skillchain_panel_visible (toggled from the settings menu /
+    # //ow sc). Both gates so the user can flip it locally or via
+    # in-game command without conflict.
+    # Auto-hide when inactive: if the user enabled autohide_skillchain
+    # and there's no active chain + no continuation suggestions (and not
+    # in setup mode), skip the panel entirely. It reappears the moment a
+    # chain opens. Mirrors autohide_recast / autohide_buff_timer.
+    _sc_inactive = (skillchain_state is None
+                    and not skillchain_suggestions
+                    and setting("autohide_skillchain")
+                    and not setup_mode)
+    if skillchain_panel_visible and skillchain_settings.get("show_panel") \
+            and not _sc_inactive:
+        # Setup mode mock injection: when laying out panels with no real
+        # combat data, inject a representative resonating state so the
+        # panel renders all rows (props, timer bar, step, suggestions).
+        # Without this, setup mode would show only the "no active chain"
+        # placeholder and the user couldn't see how tall the panel gets
+        # with a suggestion list, or where the timer bar sits relative
+        # to the other rows. Real packets always win — the check is
+        # "state is None", not "we're in setup", so if combat starts
+        # while you're in setup mode the real state takes over.
+        if setup_mode and skillchain_state is None:
+            skillchain_state = {
+                "target_id": -1,             # negative = mock sentinel
+                "step":       2,             # Lv.2 close — exercises step row
+                "delay_ts":   int(time.time()) - 1,    # delay already passed
+                "window_ts":  int(time.time()) + 5,    # ~5s of window left
+                "props":      ["Fusion", "Liquefaction"],
+                "closed":     False,
+                "bound":      0,
+                "action_id":  10,            # Final Heaven
+                "resource":   "weapon_skills",
+                "received":   time.time() - 1,
+            }
+            skillchain_suggestions = [
+                # A representative spread across chain levels so users
+                # see how the list renders. Names match WS that any
+                # melee job might recognize; the renderer doesn't
+                # care whether they're actually equipped.
+                ("Resolution",       3, "Light"),
+                ("Tachi: Fudo",      3, "Light"),
+                ("Tachi: Kasha",     2, "Fusion"),
+                ("Tachi: Gekko",     2, "Distortion"),
+                ("Tachi: Yukikaze",  1, "Induration"),
+                ("Tachi: Jinpu",     1, "Detonation"),
+            ]
+        # Keep the setup-mode timer animating. We use a phase-edge
+        # approach: set each phase's timestamps ONCE on entry, then let
+        # the formatter naturally count down with `time.time()`. A
+        # previous implementation recomputed the timestamps every frame
+        # using int() truncation, which made `window_ts - now` jump
+        # backward by fractional seconds each frame and produced visible
+        # bar jitter. Phase progression: 3s Wait → 7s Window → 5s Burst,
+        # repeating. Real state from UDP supersedes the mock the moment
+        # a real packet arrives (the lua-side dedupes and re-emits every
+        # ~500ms while resonating, so real combat wins immediately).
+        if setup_mode and skillchain_state is not None \
+                and skillchain_state.get("target_id") == -1:
+            _now_t = time.time()
+            _cycle_s = 15.0
+            _phase_t = _now_t % _cycle_s
+            if _phase_t < 3.0:
+                _phase = "wait"
+            elif _phase_t < 10.0:
+                _phase = "window"
+            else:
+                _phase = "burst"
+            # Cycle epoch — which 15-second slot we're inside. If we
+            # cross into a new cycle (e.g. burst phase ending and going
+            # back to wait), the phase string alone wouldn't trigger a
+            # rewrite — track the epoch too so we re-init.
+            _epoch = int(_now_t / _cycle_s)
+            _current_key = f"{_epoch}:{_phase}"
+            if skillchain_state.get("_mock_phase_key") != _current_key:
+                # New phase — set timestamps for this phase's full
+                # duration. After this, the formatter's `now <
+                # window_ts` check naturally counts down without us
+                # touching the timestamps again.
+                _epoch_start = _epoch * _cycle_s
+                if _phase == "wait":
+                    # Wait spans [epoch_start, epoch_start+3]. Set
+                    # delay_ts to the wait's end time so the
+                    # formatter's "now < delay" check evaluates true
+                    # for the full 3 seconds.
+                    skillchain_state["delay_ts"]  = _epoch_start + 3.0
+                    skillchain_state["window_ts"] = _epoch_start + 10.0
+                    skillchain_state["received"]  = _epoch_start
+                    skillchain_state["closed"]    = False
+                elif _phase == "window":
+                    # Window spans [epoch_start+3, epoch_start+10].
+                    # Delay is in the past, window_ts is the end of
+                    # the window. The formatter's `now < window_ts`
+                    # branch shows the green bar.
+                    skillchain_state["delay_ts"]  = _epoch_start + 3.0
+                    skillchain_state["window_ts"] = _epoch_start + 10.0
+                    skillchain_state["received"]  = _epoch_start
+                    skillchain_state["closed"]    = False
+                else:  # burst
+                    # Burst spans [epoch_start+10, epoch_start+15].
+                    # window_ts is in the past (5s ago by phase end);
+                    # the formatter's `closed and now < window_ts + 10`
+                    # branch shows the blue bar with ratio = remaining
+                    # over 10s. We use window_ts = epoch_start+10 so
+                    # the burst window is exactly 5 seconds visible.
+                    skillchain_state["delay_ts"]  = _epoch_start + 3.0
+                    skillchain_state["window_ts"] = _epoch_start + 10.0
+                    skillchain_state["received"]  = _epoch_start
+                    skillchain_state["closed"]    = True
+                skillchain_state["_mock_phase_key"] = _current_key
+
+        skillchain_scale = max(MIN_SCALE, min(MAX_SCALE, skillchain_scale))
+        sc_w, sc_h = skillchain_panel_size(skillchain_scale)
+        if skillchain_anchor is None:
+            # Default placement: top-left below the equipment / stats
+            # panels, indented from the left edge. Uses tl anchor for
+            # the same reasons stats panel uses tl — the panel height
+            # changes as suggestion count grows, so a bottom anchor
+            # would shift the visible top around.
+            skillchain_anchor = ["tl", PANEL_X, HEADER_H + 240]
+        if dragging_key != "__skillchain__":
+            sx, sy = resolve_anchor(skillchain_anchor, sc_w, sc_h, WIDTH, HEIGHT)
+            if skillchain_pos is None:
+                skillchain_pos = [sx, sy]
+            else:
+                skillchain_pos[0], skillchain_pos[1] = sx, sy
+        elif skillchain_pos is None:
+            skillchain_pos = list(resolve_anchor(
+                skillchain_anchor, sc_w, sc_h, WIDTH, HEIGHT))
+
+        draw_skillchain_panel(screen, skillchain_pos[0], skillchain_pos[1],
+                              skillchain_scale, panels_locked)
+
+    # ── Chat panel ──────────────────────────────────────────────────────
+    # Floating chat log. Default anchor is bottom-left, mirroring FFXI's
+    # own chat log placement. Toggleable via the chat_panel_visible
+    # setting / dev-section toggle. Pixel-resizable (chat_panel_dims) via
+    # corner grip — distinct from other panels which scale uniformly.
+    if chat_panel_visible:
+        ch_w, ch_h = chat_panel_size()
+        if chat_anchor is None:
+            # Default: bottom-left, small margin from corner.
+            chat_anchor = ["bl", 16, 16]
+        if dragging_key != "__chat__":
+            cxp, cyp = resolve_anchor(chat_anchor, ch_w, ch_h, WIDTH, HEIGHT)
+            if chat_pos is None:
+                chat_pos = [cxp, cyp]
+            else:
+                chat_pos[0], chat_pos[1] = cxp, cyp
+        elif chat_pos is None:
+            chat_pos = list(resolve_anchor(chat_anchor, ch_w, ch_h, WIDTH, HEIGHT))
+
+        draw_chat_panel(screen, chat_pos[0], chat_pos[1], panels_locked)
+        draw_resize_grip(screen, chat_pos[0] + ch_w, chat_pos[1] + ch_h)
 
     # ── Button panel ─────────────────────────────────────────────────────────
     # 6×2 grid of user-configurable buttons. Default anchor sits below
@@ -16411,7 +23402,8 @@ while running:
     # ── Stats panel (draggable + resizable) ──────────────────────────────────
     if setting("show_statistics"):
         draw_stats_panel(screen, stats_pos[0], stats_pos[1],
-                         player_self_mjob, player_stats, stats_scale)
+                         player_self_mjob, player_stats, stats_scale,
+                         setup_mode=setup_mode)
         draw_resize_grip(screen, stats_pos[0] + sw, stats_pos[1] + sh)
 
     # ── Target card (fades out after TC_FADE_SEC of no target) ──────────────
@@ -16515,6 +23507,7 @@ while running:
 
     # ── Simulation window (developer tool, above almost everything) ─────────
     draw_sim_window(screen)
+    draw_sim_import_modal(screen)
 
     # ── Cursor: show a hand when hovering over a hyperlink ──────────────────
     mpos = pygame.mouse.get_pos()
@@ -16551,9 +23544,30 @@ while running:
     if not _suppress_tooltip:
         for _sidx, _srect in equip_slot_rects.items():
             if _srect.collidepoint(mpos):
-                _tt_info = equip_rich.get(_sidx)
-                if _tt_info:
-                    draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info, WIDTH, HEIGHT)
+                # Sentinel key -1 = the "icons missing" badge in the
+                # equipment-viewer title bar. Show a help tooltip
+                # pointing the user at the session log + remediation
+                # instead of trying to render an item tooltip.
+                if _sidx == -1:
+                    _help_lines = [
+                        "Some gear icons couldn't be loaded.",
+                        f"Missing: {len(_icon_missing_ids)} item id(s).",
+                        "",
+                        "What to do:",
+                        "  1. Equip each missing piece in-game once",
+                        "     so icon_extractor writes its .bmp.",
+                        "  2. If icons exist elsewhere, set env var",
+                        "     PARTYWATCH_ICON_DIR to your addon root.",
+                        "",
+                        "Detail in session log at:",
+                        f"  {_SESSION_LOG_PATH or '(no log path)'}",
+                    ]
+                    draw_help_tooltip(screen, mpos[0], mpos[1],
+                                      _help_lines, WIDTH, HEIGHT)
+                else:
+                    _tt_info = equip_rich.get(_sidx)
+                    if _tt_info:
+                        draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info, WIDTH, HEIGHT)
                 break
 
     # ── Tooltip: if the cursor is over a mob ability name, show its data. ───
@@ -16589,17 +23603,18 @@ while running:
                 screen.blit(_bs, (_tx + _pad, _ty + _pad))
                 break
 
-    # ── Setup mode banner ────────────────────────────────────────────────────
-    # When setup_mode is True, draw a top-of-screen strip telling the user
-    # they're in setup mode and how to exit. Subtle but unmissable.
+    # ── Position mode banner ─────────────────────────────────────────────────
+    # When setup_mode (internal name; user-facing name is "position mode") is
+    # True, draw a top-of-screen strip telling the user they're in it and how
+    # to exit. Subtle but unmissable.
     if setup_mode:
         banner_h = 26
         banner = pygame.Surface((WIDTH, banner_h), pygame.SRCALPHA)
         banner.fill((180, 60, 130, 200))   # magenta-ish, semi-translucent
         screen.blit(banner, (0, 0))
         bf = get_font("Consolas", 13, bold=True)
-        msg = ("OmniWatch — SETUP MODE — drag panels to position. "
-               "//ow setup again to exit.")
+        msg = ("OmniWatch — POSITION MODE — drag panels to position. "
+               "//ow position again to exit.")
         bs = bf.render(msg, True, (255, 255, 255))
         screen.blit(bs, ((WIDTH - bs.get_width()) // 2,
                           (banner_h - bs.get_height()) // 2))
@@ -16628,12 +23643,23 @@ while running:
 
         elif event.type == pygame.VIDEORESIZE:
             WIDTH, HEIGHT = event.w, event.h
-            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
+            # Preserve NOFRAME — without it, a programmatic resize
+            # (via SetWindowPos) would re-add the OS title bar.
+            # VIDEORESIZE is rarely triggered in v1.3.0+ (no resize
+            # handles on a borderless window) but we handle it
+            # defensively so anything that drives the window through
+            # the WM still keeps it decorationless.
+            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
             # Anchors handle repositioning automatically on the next frame.
             # No save needed — nothing on disk changes.
 
         elif event.type == pygame.MOUSEWHEEL:
             mx, my = pygame.mouse.get_pos()
+
+            # Import modal is on top of everything — swallow the wheel so
+            # it doesn't scroll panels behind the modal.
+            if sim_import_open:
+                continue
 
             # Sim window first — when open, its scrollbar takes priority
             # over the panels behind it. Same wheel-step convention as
@@ -16679,6 +23705,33 @@ while running:
                         inventory_bag_scroll[bag] = max(0, cur - event.y)
                         continue
 
+            # Inventory search results: same envelope hit-test as the
+            # bag-detail branch above, but routes wheel events to the
+            # search results scroll offset instead of the bag scroll.
+            # Active when in bag-list view with a non-empty query.
+            if (inventory_dropdown_open
+                    and inventory_active_bag is None
+                    and inventory_search_query.strip()):
+                _inv_geom = _inventory_panel_geometry()
+                if _inv_geom is not None:
+                    _inv_env = pygame.Rect(*_inv_geom)
+                    if _inv_env.collidepoint(mx, my):
+                        inventory_search_scroll = max(
+                            0, inventory_search_scroll - event.y)
+                        continue
+
+            # Chat panel scroll. event.y > 0 = wheel up = view earlier
+            # messages (positive offset). event.y < 0 = wheel down =
+            # advance toward latest. Per-tab independent scroll state,
+            # so wheel updates only the active tab's position.
+            if chat_panel_visible and chat_pos is not None:
+                _chw, _chh = chat_panel_size()
+                _chat_rect = pygame.Rect(chat_pos[0], chat_pos[1], _chw, _chh)
+                if _chat_rect.collidepoint(mx, my):
+                    cur = chat_tab_scroll.get(chat_active_tab, 0)
+                    chat_tab_scroll[chat_active_tab] = max(0, cur + event.y * 3)
+                    continue
+
             # Scroll the buff or debuff column the mouse is hovering over.
             if my < HEADER_H:
                 continue
@@ -16708,6 +23761,133 @@ while running:
                 break
 
         elif event.type == pygame.KEYDOWN:
+            # Import-modal text fields (root path / set path) — highest
+            # priority when the modal is open and a field is focused.
+            if sim_import_open and sim_import_field:
+                if event.key == pygame.K_ESCAPE:
+                    sim_import_field = None
+                    continue
+                # Only the set-path field is editable now (the root field
+                # was replaced by the native Browse button). All edits are
+                # cursor-aware so Left/Right/Home/End move the caret and
+                # Backspace/Delete/typing act at the caret.
+                if sim_import_field == "setpath":
+                    cur = sim_import_setpath_cursor
+                    if event.key == pygame.K_BACKSPACE:
+                        if cur > 0:
+                            sim_import_setpath = (sim_import_setpath[:cur - 1]
+                                                  + sim_import_setpath[cur:])
+                            sim_import_setpath_cursor = cur - 1
+                        continue
+                    if event.key == pygame.K_DELETE:
+                        sim_import_setpath = (sim_import_setpath[:cur]
+                                              + sim_import_setpath[cur + 1:])
+                        continue
+                    if event.key == pygame.K_LEFT:
+                        sim_import_setpath_cursor = max(0, cur - 1)
+                        continue
+                    if event.key == pygame.K_RIGHT:
+                        sim_import_setpath_cursor = min(len(sim_import_setpath),
+                                                        cur + 1)
+                        continue
+                    if event.key == pygame.K_HOME:
+                        sim_import_setpath_cursor = 0
+                        continue
+                    if event.key == pygame.K_END:
+                        sim_import_setpath_cursor = len(sim_import_setpath)
+                        continue
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    if sim_import_field == "setpath":
+                        # Enter on set path = confirm import if a file is picked.
+                        if sim_import_file and sim_import_setpath:
+                            _sim_send_import(sim_import_file, sim_import_setpath)
+                            sim_import_status = "sent — check sim panel"
+                    sim_import_field = None
+                    continue
+                # Ctrl+V paste into the set-path field at the caret. Windows
+                # clipboard via pygame.scrap returns UTF-16-LE with interleaved
+                # null bytes — decoding as UTF-8 produced "extra characters".
+                # Decode correctly, strip nulls/control chars, insert at caret.
+                if (event.key == pygame.K_v
+                        and (event.mod & pygame.KMOD_CTRL)):
+                    try:
+                        pygame.scrap.init()
+                        raw = pygame.scrap.get(pygame.SCRAP_TEXT)
+                        text = ""
+                        if raw:
+                            try:
+                                text = raw.decode("utf-16-le")
+                            except Exception:
+                                text = raw.decode("utf-8", "ignore")
+                            text = text.replace("\x00", "")
+                            text = "".join(c for c in text
+                                            if c == " " or ord(c) >= 32).strip()
+                        if text and sim_import_field == "setpath":
+                            cur = sim_import_setpath_cursor
+                            new = (sim_import_setpath[:cur] + text
+                                   + sim_import_setpath[cur:])[:120]
+                            sim_import_setpath = new
+                            sim_import_setpath_cursor = min(len(new), cur + len(text))
+                    except Exception:
+                        pass
+                    continue
+                # Other printable keys arrive via TEXTINPUT below; consume
+                # nothing else here so modifiers still work.
+
+            # Chat composer keyboard input — highest priority when a
+            # composer field is focused. Routes typing, navigation,
+            # send, and cancel without falling through to global
+            # hotkeys (which would fire unwanted actions while typing).
+            if chat_composer_focused or chat_composer_tell_to_focused:
+                _handled = _chat_composer_handle_keydown(event)
+                if _handled:
+                    continue
+                # If the composer didn't handle the key, fall through
+                # to other handlers — for now this only happens on
+                # modifier keys (shift, ctrl alone) which don't need
+                # consumption. Other text input arrives via TEXTINPUT
+                # below, not KEYDOWN.
+
+            # Inventory search keyboard input. Active only when the
+            # bags dropdown is open AND the search box has focus.
+            # Routes printable characters into the query, handles
+            # Backspace and Escape, and caps the query length to keep
+            # the input box from overflowing. Other keys fall through
+            # so global hotkeys still fire on unfocused-but-open state.
+            if inventory_dropdown_open and inventory_search_focused:
+                if event.key == pygame.K_ESCAPE:
+                    inventory_search_query = ""
+                    inventory_search_focused = False
+                    inventory_search_scroll = 0
+                    inventory_search_results_key = None
+                    continue
+                if event.key == pygame.K_BACKSPACE:
+                    if inventory_search_query:
+                        inventory_search_query = inventory_search_query[:-1]
+                        inventory_search_scroll = 0
+                        inventory_search_results_key = None
+                    continue
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    # Enter on a single-result query opens that item's
+                    # BG-Wiki page; otherwise just keeps focus.
+                    results = _inventory_get_search_results()
+                    if len(results) == 1:
+                        nm = (results[0][1].get("name") or "").strip()
+                        if nm:
+                            open_url(_bgwiki_item_url(nm))
+                    continue
+                # Printable character — append (cap at 64 chars to
+                # avoid layout overflow on absurd input). event.unicode
+                # is empty for non-printable keys, so this naturally
+                # filters out arrow keys, function keys, etc.
+                ch = event.unicode
+                if (ch and ch.isprintable()
+                        and len(inventory_search_query) < 64):
+                    inventory_search_query += ch
+                    inventory_search_scroll = 0
+                    inventory_search_results_key = None
+                continue
+
             # Config wizard inline-dropdown name input. When the
             # "+ Add Ally" form is open, route ALL keystrokes to it
             # before any other handler (sim editor, hotbar, hotkeys).
@@ -16792,15 +23972,17 @@ while running:
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mx, my = event.pos
 
-            # Borderless window drag: Shift+LMB anywhere in the window
-            # initiates a "drag-to-move". We record the starting mouse
-            # position (in screen coords) and the starting window
-            # position; MOUSEMOTION events with `_borderless_drag` set
-            # call SetWindowPos to keep the window under the cursor.
-            # Disabled when the window is framed (the OS title bar
-            # provides standard drag-to-move in that case).
-            if (setting("borderless_window")
-                    and (pygame.key.get_mods() & pygame.KMOD_SHIFT)
+            # Window drag: Shift+LMB anywhere in the window initiates
+            # a "drag-to-move". We record the starting mouse position
+            # (in screen coords) and the starting window position;
+            # MOUSEMOTION events with `_borderless_drag` set call
+            # SetWindowPos to keep the window under the cursor.
+            #
+            # v1.3.0+: this is the ONLY way to move the OmniWatch window
+            # since there's no OS title bar. Always-on regardless of
+            # settings; the Shift modifier prevents accidental drags
+            # during normal panel-drag interactions.
+            if ((pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     and sys.platform == "win32"):
                 try:
                     import ctypes
@@ -16826,7 +24008,7 @@ while running:
                         }
                         continue
                 except Exception as e:
-                    print(f"[OmniWatch] borderless drag start failed: {e!r}")
+                    print(f"[OmniWatch] window drag start failed: {e!r}")
                     # Fall through to normal click handling
 
             # Highest priority: config wizard modal. When visible, it
@@ -16836,6 +24018,90 @@ while running:
             if cfgwiz_visible:
                 dispatch_cfgwiz_click(mx, my)
                 continue
+
+            # Stats-panel setup-mode interactions. Only active while in
+            # setup mode. Priority order:
+            #   1) Save-as dropdown items (if open — eats click)
+            #   2) Save-as button (toggle dropdown)
+            #   3) Tray chips (click chip to un-hide that cell)
+            #   4) Cell click (toggle hidden state)
+            # Click anywhere else with the dropdown open closes it.
+            if setup_mode:
+                consumed = False
+                # Dropdown items first (only when open).
+                if _stats_save_as_open and _stats_save_as_dropdown_rects:
+                    for entry in _stats_save_as_dropdown_rects:
+                        rx, ry, rw, rh = entry["rect"]
+                        if rx <= mx < rx + rw and ry <= my < ry + rh:
+                            target = entry["target"]
+                            if target == "__current__":
+                                target = player_self_mjob or "global"
+                            try:
+                                _save_stats_layout_as(target,
+                                                      player_self_mjob)
+                                print(f"[OmniWatch] stats layout saved "
+                                      f"to '{target}'. "
+                                      f"File: {STATS_LAYOUT_FILE}")
+                            except Exception as ex:
+                                print(f"[OmniWatch] save-as failed: "
+                                      f"{ex!r}")
+                                import traceback
+                                traceback.print_exc()
+                            _stats_save_as_open = False
+                            consumed = True
+                            break
+                    if not consumed:
+                        # Click outside dropdown items closes it.
+                        _stats_save_as_open = False
+                        consumed = True
+                # Save-as button (only if dropdown not just consumed).
+                if (not consumed) and _stats_save_as_button_rect:
+                    bx, by, bw, bh = _stats_save_as_button_rect
+                    if bx <= mx < bx + bw and by <= my < by + bh:
+                        _stats_save_as_open = not _stats_save_as_open
+                        _stats_save_as_open_at = time.time()
+                        consumed = True
+                # Tray chips.
+                if not consumed:
+                    for entry in _stats_tray_click_rects:
+                        rx, ry, rw, rh = entry["rect"]
+                        if rx <= mx < rx + rw and ry <= my < ry + rh:
+                            _toggle_stats_cell_hidden(entry["key"],
+                                                     player_self_mjob)
+                            consumed = True
+                            break
+                # Cell click — but defer toggle to MOUSEBUTTONUP so we
+                # can distinguish click (toggle hidden) from drag
+                # (reorder). Record a pending drag here; if cursor
+                # moves > threshold before release, we transition to
+                # actual drag. Otherwise on release we treat it as a
+                # click and toggle.
+                if not consumed:
+                    for entry in _stats_cell_click_rects:
+                        rx, ry, rw, rh = entry["rect"]
+                        if rx <= mx < rx + rw and ry <= my < ry + rh:
+                            # Placeholders are drop-target-only; can't be
+                            # dragged or clicked to toggle (there's no
+                            # cell behind them). Consume the click so it
+                            # doesn't fall through to panel drag, but
+                            # don't initiate a drag from one.
+                            if entry.get("is_placeholder"):
+                                consumed = True
+                                break
+                            _stats_cell_drag = {
+                                "key":     entry["key"],
+                                "down_x":  mx,
+                                "down_y":  my,
+                                "rect":    entry["rect"],
+                                "started": False,
+                                # Track cursor position for ghost render.
+                                "cur_x":   mx,
+                                "cur_y":   my,
+                            }
+                            consumed = True
+                            break
+                if consumed:
+                    continue
 
             # Highest priority: character-view dropdown. Has to come
             # before the settings handler because the char button sits
@@ -16875,6 +24141,11 @@ while running:
                     sim_window_drag = (mx - sim_window_pos[0],
                                        my - sim_window_pos[1])
                     continue
+                # Import modal is on top of the sim window — give it
+                # first crack at the click.
+                if sim_import_open:
+                    if dispatch_sim_import_click(mx, my):
+                        continue
                 if dispatch_sim_window_click(mx, my):
                     continue
                 # Click outside the sim window — fall through. Don't
@@ -17085,6 +24356,195 @@ while running:
             # skip drag/resize hit testing entirely. Hyperlinks already
             # ran above, so the click was already handled if it was on
             # one. Lock prevents accidental nudge during gameplay.
+            #
+            # NOTE: chat tab clicks and the chat jump-to-bottom badge
+            # are handled BEFORE this gate (they're functional UI, not
+            # drag/resize). The lock affects only panel positioning.
+
+            # Chat tab strip click: switch active tab. Functional UI,
+            # bypasses the panels_locked gate. Zeros that tab's unread
+            # count and restores its remembered scroll position
+            # automatically since draw_chat_panel reads
+            # chat_tab_scroll[chat_active_tab].
+            # First, the left/right scroll arrows (when the strip overflows)
+            # — each click advances the strip by ~one tab-width's worth.
+            if chat_panel_visible and _chat_tab_arrow_rects:
+                _arrow_step = 120   # px per click; ~1-2 tabs
+                _la = _chat_tab_arrow_rects.get("left")
+                _ra = _chat_tab_arrow_rects.get("right")
+                if _la is not None and _la.collidepoint(mx, my):
+                    _chat_tab_hscroll = max(0, _chat_tab_hscroll - _arrow_step)
+                    continue
+                if _ra is not None and _ra.collidepoint(mx, my):
+                    _chat_tab_hscroll = _chat_tab_hscroll + _arrow_step
+                    continue
+            if chat_panel_visible and chat_tab_rects:
+                _tab_hit = None
+                for _rect, _tidx in chat_tab_rects:
+                    if _rect.collidepoint(mx, my):
+                        _tab_hit = _tidx
+                        break
+                if _tab_hit is not None:
+                    chat_active_tab = _tab_hit
+                    chat_tab_unread[_tab_hit] = 0
+                    if _chat_trace:
+                        print(f"[chat] tab click -> idx={_tab_hit} "
+                              f"({chat_tab_names[_tab_hit][0]})")
+                    # Always-on tab-switch diagnostic: count how many
+                    # events in chat_events match this tab's filter.
+                    # Logged to session log. Helps debug "I clicked
+                    # tab X and saw nothing" reports: if the count is
+                    # > 0, the events are present and the bug is
+                    # render-side; if 0, the bug is upstream (routing,
+                    # classification, or ingest).
+                    try:
+                        _pred = chat_tab_filters[_tab_hit]
+                        _total = len(chat_events)
+                        _matched = 0
+                        for _ev in chat_events:
+                            try:
+                                if _pred(_ev):
+                                    _matched += 1
+                            except Exception:
+                                pass
+                        print(f"[chat-tab] switched to "
+                              f"{chat_tab_names[_tab_hit][0]!r} "
+                              f"(idx={_tab_hit}): {_matched}/{_total} "
+                              f"events match this tab's filter.")
+                    except Exception as _e:
+                        print(f"[chat-tab] switch diagnostic error: {_e}")
+                    continue
+                # Diagnostic: if cursor IS over the chat panel rect AND
+                # over the tab strip vertical band, but no rect matched,
+                # something's wrong with chat_tab_rects placement.
+                if chat_pos is not None:
+                    _chw, _chh = chat_panel_size()
+                    _tab_strip_top = chat_pos[1] + 18      # hdr_h
+                    _tab_strip_bot = _tab_strip_top + 20   # tab_h
+                    if (chat_pos[0] <= mx < chat_pos[0] + _chw
+                            and _tab_strip_top <= my < _tab_strip_bot):
+                        if _chat_trace:
+                            print(f"[chat] click in tab band ({mx},{my}) "
+                                  f"but no tab rect matched. "
+                                  f"chat_tab_rects has {len(chat_tab_rects)} "
+                                  f"entries:")
+                            for _r, _ti in chat_tab_rects:
+                                print(f"   tab {_ti} rect={_r}")
+
+            # Chat jump-to-bottom badge: also functional UI; bypasses
+            # the lock gate for the same reason. Set by draw_chat_panel
+            # each frame when scrolled up; clicking resets scroll to
+            # bottom for the currently-active tab.
+            if _chat_jump_badge_rect is not None \
+               and _chat_jump_badge_rect.collidepoint(mx, my):
+                chat_tab_scroll[chat_active_tab] = 0
+                continue
+
+            # Clear-tab button: remove events that match the active tab's
+            # filter, leaving other tabs' content intact.
+            if _chat_clear_tab_button_rect is not None \
+               and _chat_clear_tab_button_rect.collidepoint(mx, my):
+                try:
+                    _filt = chat_tab_filters[chat_active_tab]
+                    def _matches(ev):
+                        try:
+                            return bool(_filt(ev))
+                        except Exception:
+                            return False
+                    _kept = _collections.deque(
+                        (ev for ev in chat_events if not _matches(ev)),
+                        maxlen=chat_events.maxlen)
+                    chat_events.clear()
+                    chat_events.extend(_kept)
+                    chat_tab_scroll[chat_active_tab] = 0
+                    _chat_tab_line_total[chat_active_tab] = None
+                    if chat_active_tab in chat_tab_unread:
+                        chat_tab_unread[chat_active_tab] = 0
+                except Exception as _e:
+                    print(f"[OmniWatch] clear tab failed: {_e}")
+                continue
+
+            # Clear-all button: wipe the entire chat buffer (all tabs).
+            if _chat_clear_all_button_rect is not None \
+               and _chat_clear_all_button_rect.collidepoint(mx, my):
+                try:
+                    chat_events.clear()
+                    for _ti in range(len(chat_tab_names)):
+                        chat_tab_scroll[_ti] = 0
+                        _chat_tab_line_total[_ti] = None
+                        if _ti in chat_tab_unread:
+                            chat_tab_unread[_ti] = 0
+                except Exception as _e:
+                    print(f"[OmniWatch] clear all failed: {_e}")
+                continue
+
+            # Routing settings button in the chat header. Launches the
+            # standalone routing config GUI. We try the .exe in the
+            # same dir as OmniWatch.exe first; if not present, fall back
+            # to running the .py via the current Python. Either way the
+            # GUI runs detached so it doesn't block the overlay.
+            if _chat_settings_button_rect is not None \
+               and _chat_settings_button_rect.collidepoint(mx, my):
+                _launch_routing_gui()
+                continue
+
+            # Chat composer click handlers — channel selector, send,
+            # focus the input fields. Also functional UI, bypasses lock.
+            if chat_panel_visible and chat_composer_visible:
+                # Right arrow / channel-name click → next channel.
+                # Left arrow → previous channel.
+                if (_chat_composer_rect_arrow_r is not None
+                        and _chat_composer_rect_arrow_r.collidepoint(mx, my)) \
+                   or (_chat_composer_rect_channel is not None
+                        and _chat_composer_rect_channel.collidepoint(mx, my)):
+                    chat_composer_channel = (
+                        (chat_composer_channel + 1) % len(CHAT_COMPOSER_CHANNELS))
+                    # Switching off tell clears the tell-target field's
+                    # focus state so we don't keep blinking a cursor in
+                    # an invisible field.
+                    if chat_composer_channel != 1:
+                        chat_composer_tell_to_focused = False
+                    continue
+                if _chat_composer_rect_arrow_l is not None \
+                        and _chat_composer_rect_arrow_l.collidepoint(mx, my):
+                    chat_composer_channel = (
+                        (chat_composer_channel - 1) % len(CHAT_COMPOSER_CHANNELS))
+                    if chat_composer_channel != 1:
+                        chat_composer_tell_to_focused = False
+                    continue
+                # Send button → fire send. Helper does all the heavy
+                # lifting (format, dispatch, clear input on success).
+                if _chat_composer_rect_send is not None \
+                        and _chat_composer_rect_send.collidepoint(mx, my):
+                    _chat_composer_send()
+                    continue
+                # Tell-target field → focus that field, unfocus main.
+                if _chat_composer_rect_tell_to is not None \
+                        and _chat_composer_rect_tell_to.collidepoint(mx, my):
+                    chat_composer_tell_to_focused = True
+                    chat_composer_focused = False
+                    continue
+                # Main input field → focus main, unfocus tell-target.
+                if _chat_composer_rect_input is not None \
+                        and _chat_composer_rect_input.collidepoint(mx, my):
+                    chat_composer_focused = True
+                    chat_composer_tell_to_focused = False
+                    continue
+                # Click anywhere ELSE while a field is focused unfocuses.
+                # We only clear focus on clicks INSIDE the chat panel
+                # rect — clicks outside the panel are normal panel-drag
+                # behavior and shouldn't kill composer focus (otherwise
+                # you couldn't drag other panels while typing).
+                if chat_pos is not None and (chat_composer_focused
+                                             or chat_composer_tell_to_focused):
+                    _chw, _chh = chat_panel_size()
+                    if (chat_pos[0] <= mx < chat_pos[0] + _chw
+                            and chat_pos[1] <= my < chat_pos[1] + _chh):
+                        chat_composer_focused = False
+                        chat_composer_tell_to_focused = False
+                        # don't continue — allow click to be handled
+                        # as a normal panel interaction (e.g. resize grip)
+
             if panels_locked and not setup_mode:
                 continue
 
@@ -17128,8 +24588,7 @@ while running:
             # 3. Stats panel.
             if hit is None and stats_pos is not None:
                 sx2, sy2 = stats_pos
-                _jlist = None  # fixed layout
-                spw, sph = stats_panel_size(stats_scale, _jlist)
+                spw, sph = stats_panel_size(stats_scale, job=player_self_mjob, setup_mode=setup_mode)
                 if (sx2 + spw - RESIZE_GRIP) <= mx < (sx2 + spw) and \
                    (sy2 + sph - RESIZE_GRIP) <= my < (sy2 + sph):
                     hit = ("stats", "__stats__", sx2, sy2, "resize", spw, sph, stats_scale)
@@ -17185,6 +24644,39 @@ while running:
                 elif dxp <= mx < dxp + _dpw and dyp <= my < dyp + _dph:
                     hit = ("dps", "__dps__", dxp, dyp, "move",
                            _dpw, _dph, dps_scale)
+
+            # 5a. Skillchain panel. Move-only (no resize grip; size is
+            # driven by suggestion count and toggles, not user drag).
+            # Skip when autohidden so an invisible panel isn't draggable.
+            _sc_autohidden = (skillchain_state is None
+                              and not skillchain_suggestions
+                              and setting("autohide_skillchain")
+                              and not setup_mode)
+            if hit is None and skillchain_panel_visible \
+                    and skillchain_settings.get("show_panel") \
+                    and not _sc_autohidden \
+                    and skillchain_pos is not None:
+                sxp, syp = skillchain_pos
+                _scw, _sch = skillchain_panel_size(skillchain_scale)
+                if sxp <= mx < sxp + _scw and syp <= my < syp + _sch:
+                    hit = ("skillchain", "__skillchain__", sxp, syp, "move",
+                           _scw, _sch, skillchain_scale)
+
+            # 5b. Chat panel. Pixel-resizable (different from the
+            # other panels which use a scale factor). We still pass
+            # chat_scale through drag_start_scale so the resize handler
+            # has a uniform shape; the chat branch ignores it and
+            # writes to chat_panel_dims directly.
+            if hit is None and chat_panel_visible and chat_pos is not None:
+                cxp, cyp = chat_pos
+                _chw, _chh = chat_panel_size()
+                if (cxp + _chw - RESIZE_GRIP) <= mx < (cxp + _chw) and \
+                   (cyp + _chh - RESIZE_GRIP) <= my < (cyp + _chh):
+                    hit = ("chat", "__chat__", cxp, cyp, "resize",
+                           _chw, _chh, chat_scale)
+                elif cxp <= mx < cxp + _chw and cyp <= my < cyp + _chh:
+                    hit = ("chat", "__chat__", cxp, cyp, "move",
+                           _chw, _chh, chat_scale)
 
             # 6. Buff panel. Skip when autohidden (no entries +
             # autohide_buff_timer setting + not in setup mode) so users
@@ -17359,7 +24851,78 @@ while running:
                 if hot_hit:
                     continue
 
+            # Right-click on chat-panel header strip dumps the routing
+            # diagnostic to the session log. Lets a user with the
+            # packaged .exe capture the state when they think filters
+            # aren't working, then send the log to Cooper. The "header
+            # strip" is the top 18 pixels of the chat panel (above the
+            # tab strip). Functional UI — bypasses panels_locked.
+            if chat_panel_visible and chat_pos is not None:
+                _chw, _chh = chat_panel_size()
+                _hdr_top = chat_pos[1]
+                _hdr_bot = chat_pos[1] + 18    # header strip height
+                if (chat_pos[0] <= mx < chat_pos[0] + _chw
+                        and _hdr_top <= my < _hdr_bot):
+                    dump_chat_routing_state()
+                    continue
+
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            # End stats cell drag/click (setup mode only).
+            if _stats_cell_drag is not None:
+                drag = _stats_cell_drag
+                _stats_cell_drag = None  # clear first; any error below
+                                         # shouldn't leave drag state stuck
+                if not drag["started"]:
+                    # Short-distance release = click. Toggle hidden.
+                    _toggle_stats_cell_hidden(drag["key"], player_self_mjob)
+                else:
+                    # Real drag. Linear flow model (v2.0+): cell can drop
+                    # ANYWHERE — find the click rect whose center is
+                    # closest to the cursor (including placeholders, which
+                    # act as drop targets for end-of-list positions).
+                    mx, my = event.pos
+                    target_idx = None
+                    best = None
+                    for entry in _stats_cell_click_rects:
+                        rx, ry, rw, rh = entry["rect"]
+                        cx = rx + rw / 2
+                        cy = ry + rh / 2
+                        d2 = (mx - cx) ** 2 + (my - cy) ** 2
+                        if best is None or d2 < best[0]:
+                            best = (d2, entry, rx, rw)
+                    if best is not None:
+                        d2, entry, rx, rw = best
+                        target_key = entry["key"]
+                        is_ph = entry.get("is_placeholder", False)
+                        # Build the rendered-order list (linear order
+                        # filtered by visibility, same as the renderer
+                        # used to lay out cells this frame).
+                        try:
+                            layout_now = _get_active_stats_layout(player_self_mjob)
+                            full_order = list(layout_now["order"])
+                            hidden_now = layout_now["hidden"]
+                        except Exception:
+                            full_order = []
+                            hidden_now = set()
+                        # Rendered list in setup mode = ALL cells (hidden
+                        # ones dimmed in their default slots). So target
+                        # index in the rendered list maps directly to the
+                        # full_order index.
+                        if is_ph:
+                            # Placeholder drop → insert at end.
+                            target_idx = len(full_order)
+                        else:
+                            if target_key in full_order:
+                                base_idx = full_order.index(target_key)
+                                if mx < rx + rw / 2:
+                                    target_idx = base_idx
+                                else:
+                                    target_idx = base_idx + 1
+                    if target_idx is not None:
+                        _reorder_stats_cell(drag["key"], target_idx,
+                                            player_self_mjob)
+                continue
+
             # End borderless window drag (if active).
             if _borderless_drag is not None:
                 _borderless_drag = None
@@ -17385,10 +24948,18 @@ while running:
                                                    pw, ph, WIDTH, HEIGHT)
                 elif dragging_key == "__stats__":
                     if stats_pos is not None:
-                        _jlist = None  # fixed layout
-                        pw, ph = stats_panel_size(stats_scale, _jlist)
-                        stats_anchor = anchor_for_pos(stats_pos[0], stats_pos[1],
-                                                       pw, ph, WIDTH, HEIGHT)
+                        # Force tl anchor for the stats panel regardless of
+                        # where it was dropped on screen. anchor_for_pos
+                        # picks the nearest corner and was flipping the
+                        # anchor between tl/tr and bl/br as the panel's
+                        # midpoint crossed the screen halves — which then
+                        # caused the visible top to jump because the panel
+                        # height varies with setup mode and hidden cells.
+                        # tl with offsets = panel's current top-left keeps
+                        # the visible position stable across size changes.
+                        stats_anchor = ["tl",
+                                        int(stats_pos[0]),
+                                        int(stats_pos[1])]
                 elif dragging_key == "__target__":
                     if target_pos is not None:
                         _ref = lookup_mob(target_sticky["name"]) if target_sticky else None
@@ -17470,6 +25041,25 @@ while running:
                         dps_anchor = ["tl",
                                       max(0, int(dps_pos[0])),
                                       max(0, int(dps_pos[1]))]
+                elif dragging_key == "__skillchain__":
+                    if skillchain_pos is not None:
+                        # Always tl. Suggestion count varies so the
+                        # panel grows downward — anything but a top
+                        # anchor would shift the visible top.
+                        skillchain_anchor = ["tl",
+                                             max(0, int(skillchain_pos[0])),
+                                             max(0, int(skillchain_pos[1]))]
+                elif dragging_key == "__chat__":
+                    if chat_pos is not None:
+                        # Default chat to bottom-left anchor since that's
+                        # where it lives by default and where users
+                        # typically expect chat to stay during window
+                        # resizes (FFXI's own chat is bottom-anchored).
+                        # Compute as offset from bottom-left corner.
+                        _chw, _chh = chat_panel_size()
+                        chat_anchor = ["bl",
+                                       max(0, int(chat_pos[0])),
+                                       max(0, HEIGHT - int(chat_pos[1]) - _chh)]
                 elif dragging_key == "__buttons__":
                     if buttons_pos is not None:
                         buttons_anchor = ["tl",
@@ -17528,6 +25118,42 @@ while running:
                 save_layout()
             dragging_key = None
             drag_mode    = None
+
+        elif event.type == pygame.TEXTINPUT:
+            # Unicode text input — typed character ready to insert.
+            # Import-modal fields take priority when focused.
+            if sim_import_open and sim_import_field:
+                ch = event.text or ""
+                # Drop null bytes / control chars the font renderer rejects.
+                ch = ch.replace("\x00", "")
+                ch = "".join(c for c in ch if c == " " or ord(c) >= 32)
+                if ch and sim_import_field == "setpath":
+                    if len(sim_import_setpath) < 120:
+                        cur = sim_import_setpath_cursor
+                        sim_import_setpath = (sim_import_setpath[:cur] + ch
+                                              + sim_import_setpath[cur:])
+                        sim_import_setpath_cursor = cur + len(ch)
+                continue
+            # Only routed to the composer when a composer field is
+            # focused. event.text is the typed char(s); for IME
+            # composition (typical when entering Japanese/CJK via
+            # an IME) it can be a full composed string.
+            if chat_composer_focused or chat_composer_tell_to_focused:
+                _chat_composer_handle_textinput(event.text)
+                continue
+
+        elif event.type == pygame.MOUSEMOTION and _stats_cell_drag is not None:
+            # Stats cell drag-in-progress (only valid in setup mode).
+            # Track cursor for ghost render. Promote to "started" once
+            # cursor exceeds threshold from original mouse-down position.
+            mx, my = event.pos
+            _stats_cell_drag["cur_x"] = mx
+            _stats_cell_drag["cur_y"] = my
+            if not _stats_cell_drag["started"]:
+                dx = mx - _stats_cell_drag["down_x"]
+                dy = my - _stats_cell_drag["down_y"]
+                if (dx * dx + dy * dy) > (_STATS_DRAG_THRESHOLD ** 2):
+                    _stats_cell_drag["started"] = True
 
         elif event.type == pygame.MOUSEMOTION and sim_window_resize is not None:
             # Resize the sim window. Compute new size from start + mouse
@@ -17631,6 +25257,16 @@ while running:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
                         new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
                         dps_pos[0], dps_pos[1] = new_x, new_y
+                elif dragging_key == "__skillchain__":
+                    if skillchain_pos is not None:
+                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        skillchain_pos[0], skillchain_pos[1] = new_x, new_y
+                elif dragging_key == "__chat__":
+                    if chat_pos is not None:
+                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        chat_pos[0], chat_pos[1] = new_x, new_y
                 elif dragging_key == "__buttons__":
                     if buttons_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
@@ -17720,6 +25356,20 @@ while running:
                         target_w    = max(60, mx - dxp)
                         new_scale   = drag_start_scale * (target_w / max(1, start_w))
                         dps_scale   = max(MIN_SCALE, min(MAX_SCALE, new_scale))
+                elif dragging_key == "__chat__":
+                    # Chat resizes in PIXELS (both width and height
+                    # independently), not via a uniform scale factor.
+                    # Text remains the same size — the panel just
+                    # exposes more or fewer lines. Mirrors sim_window
+                    # which also resizes in pixels.
+                    if chat_pos is not None:
+                        cxp, cyp = chat_pos
+                        new_w = max(CHAT_PANEL_MIN_W, mx - cxp)
+                        new_h = max(CHAT_PANEL_MIN_H, my - cyp)
+                        chat_panel_dims[0] = new_w
+                        chat_panel_dims[1] = new_h
+                        # Wrap cache invalidates implicitly on next
+                        # draw_chat_panel call (different width key).
                 elif dragging_key == "__buttons__":
                     if buttons_pos is not None:
                         bxp, byp       = buttons_pos
