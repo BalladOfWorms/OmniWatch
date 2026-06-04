@@ -89,21 +89,26 @@ OmniWatch settings live in two places, depending on what you want to change:
 
 ### In-game settings menu (most common)
 
-Click the gear icon at the top of the overlay. The dropdown is grouped by panel:
+Click the gear icon at the top of the overlay. The dropdown groups settings by panel. Most sections expose just a single **CONFIGURE** button (light blue) that opens a focused subdialog for that panel's options — this keeps the dropdown short and scannable.
 
-- **General** — exit OmniWatch, full screen, always-on-top, window opacity, global UI scale (0.5×–3.0× — shrink everything for 4K or enlarge for readability), transparent background
-- **Header** — reset zone timer, adjust Vana'diel time, show 'Bags' button, gearswap folder picker
-- **Party** — show alliance, show pets, show buffs, show debuffs, compact icon grid, edit buff/debuff blacklists, edit buff aliases
-- **Equipment** — show equipment panel
-- **Statistics** — show stats panel
-- **Recast Timer** — show recast, autohide, edit blacklist, edit aliases
-- **Buff Timer** — show buff timer, autohide, edit blacklist, edit aliases
-- **Chat Panel** — show chat panel, font size, show input bar (composer)
-- **Skillchain** — show skillchain panel, auto-hide when inactive, track skillchains, track magic burst
-- **Target Card** — show target, show sub-target, buffs/debuffs toggles per card
-- **DPS Tracker** — show DPS, rolling window seconds, track party damage, open log files
-- **HotBar** — show hotbar, edit hotbar
-- **Developer** — sim mode toggle and other dev-mode tools
+- **General** — Full screen, Always on top, **Display** [CONFIGURE] (window opacity, global UI scale 0.5×–3.0×, transparent background, toggle nub visibility), Setup mode
+- **Misc** — Checklist, Simulation mode
+- **Header** — **Header** [CONFIGURE] (show time / weather / events / location, **Show OS clock**, **Show clock seconds**, **Clock time zone**, server choice, points tracker focus), **Currency cycler** [CONFIGURE] (per-currency toggles + cycle interval), **Inventory** [CONFIGURE] (inventory button + gearswap folder), Reset zone timer
+- **Party Panel** — **Party Panel** [CONFIGURE] (show alliance, show pets, show buffs, show debuffs, compact icon grid, edit buff/debuff blacklists, edit buff aliases)
+- **Equipment** — **Equipment** [CONFIGURE] (show panel, show ring cooldown, ring cycle interval 2–15s, per-ring inclusion toggles for Warp / Dem / Holla / Mea / Echad / Trizek / Reraise / Endorsement / Emporox)
+- **Statistics** — **Statistics** [CONFIGURE] (show panel, gear settings wizard, edit stats layout)
+- **Recast Timer** — **Recast Timer** [CONFIGURE] (show, auto-hide, edit blacklist)
+- **Buff Timer** — **Buff Timer** [CONFIGURE] (show, auto-hide, edit blacklist)
+- **Chat Panel** — **Chat Panel** [CONFIGURE] (show, font size, show input bar)
+- **Skillchain** — **Skillchain** [CONFIGURE] (show, auto-hide, track skillchains, track magic burst)
+- **Target Card** — **Target Card** [CONFIGURE] (show main / sub-target, per-card buffs/debuffs)
+- **DPS Tracker** — **DPS Tracker** [CONFIGURE] (show, sparkline, track party damage, capture window, open CSV/JSON logs)
+- **HotBar** — **HotBar** [CONFIGURE] (show, hotbars shown 1–3, edit hotbar)
+- (bottom) — Open log folder (purple), Exit OmniWatch (red)
+
+Header visibility toggles (show time / weather / events / location) hide whole blocks at once — when "show time" is off, the clock, day-of-week, and moon phase all disappear together with their dividers; the header collapses cleanly rather than leaving phantom gaps.
+
+Closing a Configure subdialog automatically returns you to the settings dropdown so you can keep adjusting other panels without re-clicking the gear icon.
 
 Most toggles take effect immediately; a few (sim mode, gearswap folder) ask for a reload.
 
@@ -199,6 +204,29 @@ All 16 gear slots displayed in canonical equipment-panel order. Per slot:
 The viewer also shows:
 - **Set bonuses** active across your gear (e.g. 2/5 Hashishin set bonus active)
 - **Master Trial / Empyrean / Dynamis-D / Reforged Artifact / Relic / Mythic** awareness — items that have hidden trait bonuses (Wing Gorget regain, etc.) are recognized and contribute to the stats panel
+
+**Teleport-ring cooldown timer** in the title bar. A small inline indicator cycles through the four enchanted teleport rings + Reraise Ring + bonus rings, showing each ring's current state every N seconds:
+
+- **Green** — ring name (e.g. `Warp Ring`) means ready to use
+- **Red** — ring name + countdown (e.g. `Trizek Ring 1:23:45`) means still cooling down; format is MM:SS for cooldowns under an hour, HH:MM:SS for longer
+
+Tracked rings (item ids in parentheses, cooldown after each):
+
+| Ring | ID | Cooldown |
+|---|---|---|
+| Warp Ring | 28540 | 10 min |
+| Dem Ring | 26177 | 10 min |
+| Holla Ring | 26176 | 10 min |
+| Mea Ring | 26178 | 10 min |
+| Echad Ring | 27556 | 2 hr — instant Adoulin warp |
+| Trizek Ring | 27557 | 2 hr — instant Ru'Lude warp |
+| Reraise Ring | 26169 | 20 hr — single-charge reraise |
+| Endorsement Ring | 28469 | 2 hr — exp/cp bonus |
+| Emporox's Ring | 28470 | 2 hr — sparks bonus |
+
+Use detection is done lua-side by deep-walking action packets for the ring's item id when the player is the actor — no inventory polling, no name lookup, no extdata parsing. State persists for the addon session (reload loses the timestamps; the next use resyncs).
+
+Configure visibility, rotation speed (2–15s), and per-ring inclusion in the **Equipment Configure modal** (settings → Equipment → CONFIGURE). Disabled rings are skipped during cycle advance, so the rotation only shows what you actually want to see.
 
 ### Recast tracker
 
@@ -310,8 +338,9 @@ Full character stat grid in `/checkparam` style. Each cell is computed from skil
 
 **BLU spell-trait math**: when you're on BLU, the panel resolves your equipped set spells against canonical bluguide data and computes:
 - Trait points per category (DW, Fast Cast, MAB, Acc Bonus, MDB, Store TP, Conserve MP, etc.)
-- Tier reached after applying JP gift bonuses (+8/+16 to gift-eligible categories)
-- Per-spell stat bonuses (STR/DEX/VIT/AGI/INT/MND/CHR) summed into the primary-stat cells
+- Tier reached after applying JP gift bonuses. Gifts add +8 per gift to gift-eligible categories, but only once a trait is already unlocked by spell points alone (≥ its first 8-point threshold) — you can't use a gift to reach tier I from fewer than 8 spell points, matching the game.
+- **Subjob trait contributions** are modeled the way bluGuide and the game handle them: a subjob granting the same trait contributes *points* (e.g. /DNC = 8 Accuracy-Bonus points, /RNG = 16), and the effective tier comes from `max(spell_points + gift, subjob_points)` — the BLU set and the subjob are the same trait, so the higher single source wins rather than the two stacking. For the four traits the stat engine also derives from the subjob (Accuracy / Attack / Evasion / Defense Bonus), the subjob's value is already in the base, so the BLU contribution is added as max-not-sum to avoid double-counting.
+- Per-spell primary-stat bonuses (STR/DEX/VIT/AGI/INT/MND/CHR) summed into the primary-stat cells — and, for the attributes that feed a combat stat, converted at the game's rates on top: **DEX → accuracy** (`×0.75`), **STR → attack** (`×0.75` H2H else `×1.0`, with off-hand/ranged mirrors), **VIT → defense** (`×1.5`), **AGI → ranged accuracy** (`×0.75`) and **evasion** (`×0.5`). Magic accuracy from INT/MND/CHR is left as a raw stat only, since in-game it's the dStat (caster-vs-target) mechanic rather than a flat self-bonus.
 
 `//ow blu` prints the full diagnostic — equipped spells, points per category, tier reached, gift bonus applied.
 
@@ -354,16 +383,27 @@ Items are grouped by bag and searchable by name. **GearSwap reference detection*
 
 ### Header strip
 
-Top of the overlay, always visible:
-- **Vana'diel game clock** with day-of-week, time, current element-of-day, current moon phase
-- **Current zone** + region (e.g. "Western Adoulin — Adoulin", "Yorcia Weald — Ulbuka")
-- **Character switcher** — click your character name to switch which character's config files are active. Lets you pre-tweak settings for an alt while logged in on your main.
-- **Settings gear** — opens the dropdown
-- **Inventory button**
-- **DPS toggle, recast toggle, sim toggle** (when enabled)
-- **Crash log** access (settings menu) — opens the most recent crash log if the overlay has had a recent error
+Top of the overlay, always visible. Left to right:
 
-The clock and zone are fed from the lua side; if either freezes, check that the addon is loaded with `//lua list`.
+- **Vana'diel game clock** — day-of-week, HH:MM time, current element of day, and moon phase. Hide the whole cluster with **Show time** in the Header Configure modal.
+- **Weather** — current and next weather symbols for your zone. Hide with **Show weather**.
+- **Events button** — opens the events modal (campaign / Domain Invasion phases, plus airship and ferry schedules with auto-cycling countdowns). Hide with **Show events**.
+- **Points tracker** — one of EXP / CP / Exemplar at a time; pick which in the Header Configure modal.
+- **Currency cycler** — auto-rotates through enabled currencies (Gil, Sparks, Accolades, Gallimaufry, Temenos, Apollyon, Beads, Tokens, Ichor). Pick which to show and the rotation interval (2–10 seconds) in the **Currency cycler** Configure modal.
+- **Inventory button** — opens the inventory dropdown.
+- **OS clock** — local-time HH:MM (or HH:MM:SS) clock sitting just to the left of the zone block. Driven by your computer's clock, not Vana'diel time. Click to open the **Stopwatch + Countdown** modal. Configurable in the Header Configure modal: **Show OS clock**, **Show clock seconds**, and **Clock time zone** (`Local` for your computer time, or one of `UTC / PST / MST / CST / EST / BRT / GMT / CET / EET / JST / KST / AEST` for tracking event times in other zones — `Local` is DST-aware; named zones use standard time offsets).
+- **Right side** — zone timer, region, zone name, mini map, coords. Hide the entire right block with **Show location**.
+- **Character switcher** — click your character name to switch which character's config files are active. Useful for pre-tweaking settings for an alt while logged in on your main.
+- **Settings gear** — opens the dropdown.
+
+The clock, zone, weather, and events data are fed from the lua side; if anything freezes, check the addon is loaded with `//lua list`.
+
+**Stopwatch + Countdown modal** (click the OS clock to open):
+
+- **Stopwatch** — counts upward in `H:MM:SS.t` (tenths of a second). Buttons: Start/Pause and Reset. Pausing banks the elapsed time so Start later resumes from where it left off.
+- **Countdown** — set a duration with `[-1m][-10s][+10s][+1m]` adjusters. Buttons: Start/Pause and Reset. At zero, the digits flash red briefly and the system plays a short beep (Windows: `winsound.Beep`; other platforms: terminal BEL). Starting after a finished countdown reloads the last set duration so you can restart the same length with one click.
+
+**Running-timer header takeover**: closing the modal while a timer is running doesn't stop the timer — the header clock slot keeps showing the running value (amber for stopwatch, red for countdown remaining) so you can see progress without re-opening the modal. Click the header reopens it. If both happen to be running, countdown wins the slot. Pause or Reset returns the header to OS time.
 
 ## Configuration details
 

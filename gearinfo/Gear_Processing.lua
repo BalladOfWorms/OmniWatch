@@ -167,7 +167,30 @@ function find_all_values(item)
 		-- Check Unity gear for stat and value.
 		for k, v in pairs(Unity_rank) do
 			if item.id == k then
-				value = math.floor(((v['rank']['max'] - v['rank']['min'])/ 11) * (11 - (settings.player.rank -1))) + v['rank']['min']
+				-- Unity rank stat scaling. Rank 1 = max stat, rank 11 = min
+				-- (per FFXIAH: "Adorned Helm +1 gets 5-15 attack, rank 1
+				-- gets 15, rank 11 gets 5"). There are 11 ranks but TEN
+				-- intervals between rank 1 and rank 11, so the span is
+				-- divided by 10 (not 11) to land exactly on both endpoints
+				-- and step evenly. fraction = (11 - rank) / 10, giving
+				-- 1.0 at rank 1 (full max) down to 0.0 at rank 11 (min).
+				--
+				-- Round-half via floor(x + 0.5) - Lua 5.1 has no round().
+				-- Safe here because Unity stat values are always >= 0
+				-- (floor(x+0.5) only mis-rounds negatives, which never
+				-- occur for these ranges).
+				--
+				-- The old formula divided the span by 11 and floored:
+				-- that lost a point at rank 1 on any span not divisible by
+				-- 11 (e.g. acc 8-23 gave 22 instead of 23, because
+				-- (15/11)*11 = 14.9999... floored to 14) AND never reached
+				-- the true min at rank 11. This corrects both.
+				local _ur   = settings.player.rank or 1
+				if _ur < 1  then _ur = 1  end
+				if _ur > 11 then _ur = 11 end
+				local _vmin = v['rank']['min']
+				local _vmax = v['rank']['max']
+				value = math.floor(_vmin + (_vmax - _vmin) * (11 - _ur) / 10 + 0.5)
 				if edited_item[v['Unity Ranking']] then
 					-- edited_item[v['Unity Ranking']] = edited_item[v['Unity Ranking']] + v.rank[settings.rank]
 					edited_item[v['Unity Ranking']] = edited_item[v['Unity Ranking']] + value
@@ -331,8 +354,22 @@ function check_for_augments(item)
 					-- (eva/def/magic acc/DEX/etc.) flows through normally.
 					for _, line in ipairs(resolved_lines) do
 						for i, j in pairs(desypher_description(line, item_t)) do
-							if i == 'Accuracy' or i == 'Attack' then
-								-- skip — handled per-hand by OmniWatch
+							if i == 'Accuracy' or i == 'Attack'
+							   or i == 'Magic Accuracy'
+							   or i == 'Magic Atk. Bonus' then
+								-- skip — handled by OmniWatch's own path-aug
+								-- parse (which adds these to stats directly
+								-- from ow_path_augments). Accuracy/Attack are
+								-- re-added per-hand; Magic Accuracy / Magic
+								-- Atk. Bonus flow through that same single
+								-- path. Letting them through HERE too would
+								-- double-count: GearInfo's compute would
+								-- include them in Gear_info['Magic Accuracy'],
+								-- which OmniWatch ALSO copies through after
+								-- the gear scan — so a DREMA weapon's path
+								-- Magic Accuracy+50 showed as +100. (Regular
+								-- acc/att never doubled because they were
+								-- already skipped here.)
 							elseif temp[i] then
 								temp[i] = temp[i] + j
 							else
@@ -585,13 +622,33 @@ function desypher_description(discription_string, item_t)
 	
 	for k, v in pairs(valid_strings) do
 		-- v = DEF etc
-		pattern = "("..v.."):?%s?([+-]?%d+)"
-		for key , val in discription_string:gmatch(pattern) do
-			
-			if temp_key[key] then
-				temp_table[temp_key[key]] = tonumber(val)
+		-- Capture an optional trailing '%' so we can distinguish a flat
+		-- stat ("Attack+60") from a percentage stat ("Attack+10%"). Relic
+		-- weapons' Aftermath grants "Attack+10%" (a multiplier) and
+		-- "Subtle Blow+10"; the old pattern matched "Attack+10" and — via
+		-- the OVERWRITE assignment below — clobbered the weapon's base
+		-- "Attack+60", so the panel showed 10 instead of 60 (the relic-only
+		-- "missing 50 Attack" bug; empyrean/aeonic/dynamis have no
+		-- "Attack+N%" token so they were unaffected). Flat Attack/Accuracy
+		-- are NOT percentages, so a '%'-suffixed match for those is the
+		-- Aftermath multiplier, not base — skip it. Other stats in
+		-- valid_strings that ARE legitimately percentages (Haste, PDT/MDT,
+		-- crit rate, etc.) are untouched: we only gate Attack and Accuracy.
+		pattern = "("..v.."):?%s?([+-]?%d+)(%%?)"
+		for key, val, pct in discription_string:gmatch(pattern) do
+			local resolved_key = temp_key[key] or key
+			local is_percent = (pct == '%')
+			local flat_only = (resolved_key == 'Attack'
+			                   or resolved_key == 'Accuracy')
+			if is_percent and flat_only then
+				-- Percentage Attack/Accuracy (relic Aftermath multiplier)
+				-- — not a flat stat. Don't let it overwrite the base value.
 			else
-				temp_table[key] = tonumber(val)	
+				if temp_key[key] then
+					temp_table[temp_key[key]] = tonumber(val)
+				else
+					temp_table[key] = tonumber(val)
+				end
 			end
 			-- if item_t then
 				-- if item_t.id == 20540 then

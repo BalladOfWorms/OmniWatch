@@ -611,6 +611,27 @@ class App:
         self.blacklist_buffer = ""
         self.blacklist_rects = {}      # name → remove-button rect
         self.blacklist_input_rect = None
+        # Horizontal scroll state for the blacklist chip row. The row
+        # has finite width and can hold ~8-15 chips depending on name
+        # length; longer lists overflow past the right edge. _hscroll
+        # is the pixel offset shifting chips left so off-screen names
+        # come into view. Persists across redraws; clamped to
+        # [0, max_scroll] each frame after content width is known.
+        # Arrow rects are written by _draw_panel and consumed by
+        # handle_click; both None until the row has actually rendered.
+        self._blacklist_hscroll = 0
+        self._blacklist_arrow_left_rect = None
+        self._blacklist_arrow_right_rect = None
+        # Set during _draw_panel to the rect of the entire chip row,
+        # for routing mousewheel events to horizontal scroll when the
+        # cursor is over this band. None until first draw.
+        self._blacklist_row_rect = None
+        # Total content width (sum of chip widths + gaps) and visible
+        # window width, recomputed each frame from the live blacklist.
+        # Stored on the instance so handle_scroll can clamp without
+        # re-walking the chip list.
+        self._blacklist_content_w = 0
+        self._blacklist_visible_w = 0
         self.quick_channel_rects = {}  # channel name → toggle rect
         self.dirty = False
         self.status = ""
@@ -665,6 +686,8 @@ class App:
         self.editing_buffer = ""
         self.dirty = False
         self.scroll = 0
+        # Reset blacklist hscroll on job switch — different file, fresh view.
+        self._blacklist_hscroll = 0
         self.status = f"Now editing: {self.path.name}"
 
     # ── Drawing ──────────────────────────────────────────────────────
@@ -813,27 +836,160 @@ class App:
         self.button_rects["blacklist_add"] = add_btn
 
         # Current blacklist as removable chips, flowing right.
+        #
+        # The row has a fixed visible area between the Add button and
+        # the right edge of the window. Short blacklists fit without
+        # any extra UI; long ones overflow off the right edge and
+        # would otherwise become invisible/un-removable (the old code
+        # broke on first chip that wouldn't fit — chips past that
+        # point were still in the JSON but had no GUI representation,
+        # making removal possible only by hand-editing the file).
+        #
+        # Fix: when total chip-width exceeds the visible area, reserve
+        # arrow regions on each side and apply a horizontal scroll
+        # offset (self._blacklist_hscroll). Mirrors the chat-tab strip
+        # scroll pattern: ◀ at left, ▶ at right, disabled (dim) when
+        # at the start/end. Mousewheel anywhere over the chip row also
+        # scrolls. Chips outside the visible window are clipped (not
+        # rendered) AND their hit-test rects are NOT recorded, so a
+        # click can't accidentally remove a chip you can't see.
         self.blacklist_rects.clear()
-        cx = add_btn.right + 12
-        for name in self.blacklist:
-            chip_w = self.font_small.get_rect(name).width + 26
-            if cx + chip_w > WINDOW_W - PAD:
-                break   # don't overflow the row; rest are still saved
-            chip = pygame.Rect(cx, row2_y, chip_w, 22)
-            pygame.draw.rect(self.screen, (70, 50, 50), chip,
-                             border_radius=4)
-            pygame.draw.rect(self.screen, COLOR_BORDER, chip,
-                             width=1, border_radius=4)
-            draw_text(self.screen, self.font_small, name,
-                      (chip.x + 6, chip.y + 5), (230, 190, 190))
-            # × remove target.
-            xr = pygame.Rect(chip.right - 16, chip.y + 2, 14, 18)
-            xhov = xr.collidepoint(mouse)
-            draw_text(self.screen, self.font_small, "×",
-                      (xr.x + 3, xr.y + 3),
-                      (255, 140, 140) if xhov else (200, 120, 120))
-            self.blacklist_rects[name] = xr
+        arrow_w = 18
+        chip_area_left  = add_btn.right + 12
+        chip_area_right = WINDOW_W - PAD
+
+        # First pass: measure total content width WITHOUT rendering.
+        # This tells us whether we overflow and how much hscroll is
+        # meaningful (max_scroll). Walking the list twice is cheap;
+        # the inner per-chip work is just a font measure.
+        chip_widths = []
+        total_w = 0
+        for i, name in enumerate(self.blacklist):
+            cw = self.font_small.get_rect(name).width + 26
+            chip_widths.append(cw)
+            total_w += cw
+            if i < len(self.blacklist) - 1:
+                total_w += 6   # gap between chips, not after last
+
+        visible_w_no_arrows = chip_area_right - chip_area_left
+        overflow = total_w > visible_w_no_arrows
+        if overflow:
+            # Reserve space for the two arrows on either end.
+            visible_w = visible_w_no_arrows - (arrow_w * 2 + 8)
+            content_x0 = chip_area_left + arrow_w + 4
+            content_x1 = chip_area_right - arrow_w - 4
+        else:
+            visible_w = visible_w_no_arrows
+            content_x0 = chip_area_left
+            content_x1 = chip_area_right
+
+        # Clamp hscroll. max_scroll is total content minus visible
+        # area; if no overflow, max is 0 (forces hscroll back to 0
+        # when the list shrinks below the threshold via × removal).
+        max_scroll = max(0, total_w - visible_w)
+        if self._blacklist_hscroll > max_scroll:
+            self._blacklist_hscroll = max_scroll
+        if self._blacklist_hscroll < 0:
+            self._blacklist_hscroll = 0
+        # Persist for the click handler (so it knows arrow step size
+        # in terms of content width without having to re-measure).
+        self._blacklist_content_w = total_w
+        self._blacklist_visible_w = visible_w
+        # Rect covering the ENTIRE chip row (arrows + chip area) so
+        # the mousewheel handler can route wheel events over this
+        # band to horizontal scroll instead of the global vertical
+        # scroll. Set regardless of overflow — over a non-overflowing
+        # row, wheel still gets routed here (and is a no-op because
+        # max_scroll is 0), which is harmless and avoids surprising
+        # the user with vertical scroll when their wheel happens to
+        # pass over a short chip list.
+        self._blacklist_row_rect = pygame.Rect(
+            chip_area_left, row2_y, chip_area_right - chip_area_left, 22)
+
+        # Render chips, clipped to the content area so partial chips
+        # at the edges don't bleed into the arrows. Pygame's set_clip
+        # restricts subsequent blits to the given rect.
+        prev_clip = self.screen.get_clip()
+        clip_rect = pygame.Rect(content_x0, row2_y - 1,
+                                content_x1 - content_x0, 24)
+        self.screen.set_clip(clip_rect)
+
+        cx = content_x0 - self._blacklist_hscroll
+        for i, name in enumerate(self.blacklist):
+            chip_w = chip_widths[i]
+            chip_right = cx + chip_w
+            # Skip chips entirely outside the visible window. We still
+            # advance cx so the next chip lands at the right offset.
+            visible = (chip_right > content_x0) and (cx < content_x1)
+            if visible:
+                chip = pygame.Rect(cx, row2_y, chip_w, 22)
+                pygame.draw.rect(self.screen, (70, 50, 50), chip,
+                                 border_radius=4)
+                pygame.draw.rect(self.screen, COLOR_BORDER, chip,
+                                 width=1, border_radius=4)
+                draw_text(self.screen, self.font_small, name,
+                          (chip.x + 6, chip.y + 5), (230, 190, 190))
+                # × remove target. Only register the hit-test rect if
+                # the × is FULLY visible (not clipped) — otherwise a
+                # click could land on a half-shown × and remove the
+                # wrong chip from the user's point of view.
+                xr = pygame.Rect(chip.right - 16, chip.y + 2, 14, 18)
+                if (xr.x >= content_x0 and xr.right <= content_x1):
+                    xhov = xr.collidepoint(mouse)
+                    draw_text(self.screen, self.font_small, "×",
+                              (xr.x + 3, xr.y + 3),
+                              (255, 140, 140) if xhov else (200, 120, 120))
+                    self.blacklist_rects[name] = xr
+                else:
+                    # Still draw the × glyph (it's inside the chip and
+                    # the clip handles partial display), just don't
+                    # register the hit rect.
+                    draw_text(self.screen, self.font_small, "×",
+                              (xr.x + 3, xr.y + 3),
+                              (200, 120, 120))
             cx += chip_w + 6
+        self.screen.set_clip(prev_clip)
+
+        # ── Scroll arrows (only when overflow) ───────────────────
+        # Mirrors the chat-tab-strip arrow style at OmniWatch.py
+        # draw_chat_panel: triangle polygon, dim when disabled (at
+        # start/end of scroll range), bright when active. The arrow
+        # backgrounds match the chip area so the arrows feel like
+        # part of the row rather than a separate widget.
+        self._blacklist_arrow_left_rect = None
+        self._blacklist_arrow_right_rect = None
+        if overflow:
+            arrow_mid_y = row2_y + 11
+            # Left arrow — enabled only when scrolled past the start.
+            l_active = self._blacklist_hscroll > 0
+            l_rect = pygame.Rect(chip_area_left, row2_y, arrow_w, 22)
+            pygame.draw.rect(self.screen, COLOR_PANEL, l_rect,
+                             border_radius=3)
+            l_col = (COLOR_TEXT_BRIGHT if l_active else (90, 95, 105))
+            _ax = l_rect.centerx
+            pygame.draw.polygon(self.screen, l_col, [
+                (_ax + 3, arrow_mid_y - 5),
+                (_ax + 3, arrow_mid_y + 5),
+                (_ax - 4, arrow_mid_y)])
+            # Only register the click target when the arrow is active —
+            # clicking an inactive arrow should be a no-op, not consume
+            # the click (matches chat-tab-strip behavior).
+            if l_active:
+                self._blacklist_arrow_left_rect = l_rect
+            # Right arrow — enabled when more content lies past the end.
+            r_active = self._blacklist_hscroll < max_scroll
+            r_rect = pygame.Rect(chip_area_right - arrow_w, row2_y,
+                                 arrow_w, 22)
+            pygame.draw.rect(self.screen, COLOR_PANEL, r_rect,
+                             border_radius=3)
+            r_col = (COLOR_TEXT_BRIGHT if r_active else (90, 95, 105))
+            _bx = r_rect.centerx
+            pygame.draw.polygon(self.screen, r_col, [
+                (_bx - 3, arrow_mid_y - 5),
+                (_bx - 3, arrow_mid_y + 5),
+                (_bx + 4, arrow_mid_y)])
+            if r_active:
+                self._blacklist_arrow_right_rect = r_rect
 
         # ── Row 3: status line ──────────────────────────────────────
         row3_y = rect.y + 62
@@ -1068,6 +1224,27 @@ class App:
             self.blacklist_focused = True
             return
 
+        # Footer: blacklist scroll arrows. Step size is one "chip's
+        # worth" — heuristic: ~80px is roughly a 6-char name + chrome.
+        # Tested fine on typical FFXI names (5-12 chars). When the
+        # blacklist is short enough not to overflow, both arrow rects
+        # are None, so these branches won't fire.
+        _step = 80
+        if self._blacklist_arrow_left_rect is not None \
+                and self._blacklist_arrow_left_rect.collidepoint(pos):
+            self._blacklist_hscroll = max(0, self._blacklist_hscroll - _step)
+            return
+        if self._blacklist_arrow_right_rect is not None \
+                and self._blacklist_arrow_right_rect.collidepoint(pos):
+            # Clamp against max_scroll. We have _blacklist_content_w
+            # and _blacklist_visible_w cached from the last draw, so
+            # the math is one line. No re-measure needed.
+            _max = max(0, self._blacklist_content_w
+                       - self._blacklist_visible_w)
+            self._blacklist_hscroll = min(_max,
+                                          self._blacklist_hscroll + _step)
+            return
+
         # Footer: blacklist chip removal.
         for name, xr in self.blacklist_rects.items():
             if xr.collidepoint(pos):
@@ -1116,6 +1293,24 @@ class App:
 
     def handle_scroll(self, delta):
         if self.dropdown.active:
+            return
+        # Mousewheel over the blacklist chip row scrolls THAT row
+        # horizontally rather than the main config view vertically.
+        # This makes navigating a long blacklist feel natural without
+        # having to aim for the small arrow buttons. Step size mirrors
+        # the click step (80px ≈ one chip), scaled by wheel delta so
+        # quick spins move faster. Wheel-up (positive delta) reveals
+        # earlier names (scroll left); wheel-down reveals later names.
+        # Falls through to vertical scroll when the cursor is anywhere
+        # other than the chip row.
+        if self._blacklist_row_rect is not None \
+                and self._blacklist_row_rect.collidepoint(
+                    pygame.mouse.get_pos()):
+            _step = 80
+            _max = max(0, self._blacklist_content_w
+                       - self._blacklist_visible_w)
+            self._blacklist_hscroll = max(
+                0, min(_max, self._blacklist_hscroll - delta * _step))
             return
         self.scroll -= delta * SCROLL_STEP
         self.scroll = max(0, min(self.scroll,
@@ -1176,6 +1371,11 @@ class App:
         self.editing_tab = None
         self.editing_buffer = ""
         self.dirty = False
+        # Cancel reloads from disk — chip list may have been different
+        # before edits started. Reset hscroll so the user sees the
+        # start of the post-revert list rather than a mid-scroll
+        # position carried over from the abandoned edit session.
+        self._blacklist_hscroll = 0
         self.status = "Reverted to saved config."
 
     def do_reset(self):

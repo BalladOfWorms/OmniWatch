@@ -75,8 +75,32 @@ local ACCEPTED_MODES = {
     [4]  = true,    -- /party (assumed)
     [5]  = true,    -- /linkshell 1 (CONFIRMED)
     [7]  = true,    -- /emote (assumed)
-    [26] = true,    -- /yell (CONFIRMED)
+    [26] = true,    -- /yell (CONFIRMED). The 0x017 PACKET path is canonical
+                    -- for yells: it resolves autotranslate phrases cleanly
+                    -- and carries the FULL message (the incoming-TEXT path,
+                    -- mode 11, MANGLES autotranslate — FD-byte phrases come
+                    -- through corrupted, losing message text). The zone is
+                    -- decoded from packet offset 0x06-0x07 (see zone_id /
+                    -- _zone_name_for below) and added as a "[Zone]" segment,
+                    -- so the packet path gives BOTH clean text AND the zone
+                    -- tag. emit.lua DROPS the text-path yell (mode 11) to
+                    -- avoid a mangled duplicate. Zone offset verified against
+                    -- real packet captures: Mytoy=zone 235 (EB 00), Konoyume
+                    -- =244 (F4 00), little-endian at data:byte(7)/byte(8).
     [27] = true,    -- /linkshell 2 (assumed)
+    -- Mode 35 = FFXI Assist Channel (cross-zone broadcast chat with
+    -- the `..Name..(E) : message` language-preference wrapper, common
+    -- in hub cities). CONFIRMED via session log diagnostic — mode 35
+    -- was reaching this handler but getting caught by the unknown-mode
+    -- branch and tagged chat_npc → System. Adding here so it falls
+    -- through to the channel classifier table below, where it's
+    -- correctly tagged chat_assist → Assist tab.
+    [35] = true,    -- Assist Channel (CONFIRMED)
+    [33] = true,    -- Unity Concord chat (CONFIRMED via user report).
+                    -- Same gating logic as mode 35: needs to be in
+                    -- ACCEPTED_MODES so it reaches the channel
+                    -- classifier table below where it's tagged
+                    -- chat_unity → routed to the Unity tab.
 }
 
 -- ── Helpers ─────────────────────────────────────────────────────────────
@@ -96,6 +120,21 @@ local function _load_resources()
         _res = res
     end
     return _res
+end
+
+-- Resolve a zone id (from the 0x017 packet's 0x06-0x07 field) to its
+-- English zone name via windower resources, for the /yell "[Zone]" tag.
+-- FFXI yells carry the originator's current zone so listeners know
+-- where the yeller is; the client shows it as "Sender[Zone]: msg". We
+-- rebuild that tag as its own colored segment. Returns the zone name
+-- (e.g. "Lower Jeuno") or '' if the id is 0/unknown.
+local function _zone_name_for(zone_id)
+    if not zone_id or zone_id == 0 then return '' end
+    local res = _load_resources()
+    if not res or not res.zones then return '' end
+    local z = res.zones[zone_id]
+    if z and z.en then return z.en end
+    return ''
 end
 
 -- Resolve a single 6-byte AT sequence (FD A B C D FD) to its English
@@ -603,6 +642,13 @@ function M.process(id, data)
         sender_name = sender_name .. string.char(b)
     end
 
+    -- Zone id (offset 0x06-0x07, little-endian unsigned short). Only
+    -- meaningful for /yell, where it's the originator's current zone
+    -- (used to build the "[Zone]" tag below). For other modes it's
+    -- padding and resolves to '' (zone 0 / unknown), so reading it
+    -- unconditionally is harmless.
+    local zone_id = (data:byte(7) or 0) + (data:byte(8) or 0) * 256
+
     -- Message: from offset 0x17 (data:byte(24)), null-terminated.
     local message_raw = ''
     for i = 24, #data do
@@ -789,7 +835,24 @@ function M.process(id, data)
     elseif mode == 7               then channel = 'chat_emote'; sender_color = 'ch_emote'
     elseif mode == 26              then channel = 'chat_yell';  sender_color = 'ch_yell'
     elseif mode == 27              then channel = 'chat_ls2';   sender_color = 'ch_ls2'
-    else                                channel = 'chat_other'; sender_color = 'ch_other'
+    -- FFXI Assist Channel — cross-zone broadcast chat with the
+    -- language-preference auto-translate wrapper (`..Name..(E) :`).
+    -- Mode 35 (0x23) carries these on Asura; verified via chatdebug
+    -- capture in Lower Jeuno. The python side has a dedicated
+    -- "Assist" tab (between World and LS1) that subscribes to
+    -- chat_assist by default, giving these their own filterable
+    -- stream with a distinct color so they don't get confused with
+    -- real /yell or /shout. Users who want to hide assist chatter
+    -- can either route chat_assist to nothing in the routing GUI,
+    -- or just not look at the Assist tab.
+    elseif mode == 35              then channel = 'chat_assist'; sender_color = 'ch_assist'
+    -- Unity Concord chat — mode 33. Carries broadcasts from your
+    -- Unity Leader and (depending on event state) other Unity-wide
+    -- announcements. Distinct from regular chat — it's Concord
+    -- system + same-Unity-member chatter mixed. Gets its own tab so
+    -- it doesn't bury actual player chat in World.
+    elseif mode == 33              then channel = 'chat_unity';  sender_color = 'ch_unity'
+    else                                channel = 'chat_other';  sender_color = 'ch_other'
     end
 
     -- Build colored segments. Format varies by mode:
@@ -840,20 +903,48 @@ function M.process(id, data)
         }
     else
         -- say / shout / yell / fallthrough. Body color is explicit
-        -- per-channel for shout/yell so it doesn't depend on the
-        -- Python mode-color override (which could mistint yell as
-        -- tell-purple if the mode mapping is off). Say stays default.
+        -- per-channel for say/shout/yell so it doesn't depend on
+        -- the Python 'default' color (gray) or the mode-color
+        -- override (which could mistint yell as tell-purple if the
+        -- mode mapping is off). Each channel gets its own body_*
+        -- class for predictable rendering.
         local body_color = 'default'
         if channel == 'chat_yell' then
             body_color = 'body_yell'
         elseif channel == 'chat_shout' then
             body_color = 'body_shout'
+        elseif channel == 'chat_say' then
+            body_color = 'body_say'
         end
-        segments = {
-            {text = sender_name,      color = sender_color},
-            {text = ' : ',            color = 'default'},
-            {text = message,          color = body_color},
-        }
+        -- /yell carries the originator's zone — rebuild the "[Zone]" tag
+        -- as its own segment between the sender name and the colon, the
+        -- way the client shows it ("Sender[Zone]: msg"). Painted with the
+        -- paler zone_tag color so the speaker name reads first. Only when
+        -- it's a yell AND the zone resolved (zone 0 / unknown → omit, so
+        -- a yell with no zone info just shows "Sender : msg").
+        if channel == 'chat_yell' then
+            local zname = _zone_name_for(zone_id)
+            if zname ~= '' then
+                segments = {
+                    {text = sender_name,           color = sender_color},
+                    {text = '[' .. zname .. ']',   color = 'zone_tag'},
+                    {text = ' : ',                 color = 'default'},
+                    {text = message,               color = body_color},
+                }
+            else
+                segments = {
+                    {text = sender_name,      color = sender_color},
+                    {text = ' : ',            color = 'default'},
+                    {text = message,          color = body_color},
+                }
+            end
+        else
+            segments = {
+                {text = sender_name,      color = sender_color},
+                {text = ' : ',            color = 'default'},
+                {text = message,          color = body_color},
+            }
+        end
     end
 
     -- Flat text for rendering fallback if segments path fails.

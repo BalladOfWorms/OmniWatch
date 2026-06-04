@@ -8,10 +8,35 @@ import re
 import sys
 import webbrowser
 import urllib.parse
+
+# ──────────────────────────────────────────────────────────────────────
+# BUILD STAMP — change this every time the .exe is rebuilt so we can
+# instantly tell whether a running process has the latest code or a
+# stale build. Visible in the addon log on startup and via the
+# omniwatch_build_stamp.txt file written next to the exe. Bump this
+# string on every significant code change.
+# ──────────────────────────────────────────────────────────────────────
+OMNIWATCH_BUILD_STAMP = "v1.6.1-blu-stats (2026-06-03)"
+print("=" * 70)
+print(f"  OmniWatch build: {OMNIWATCH_BUILD_STAMP}")
+print(f"  If this banner doesn't appear, the rebuild used a stale .py")
+print("=" * 70)
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__))
+                           if "__file__" in dir() else ".",
+                           "omniwatch_build_stamp.txt"),
+              "w", encoding="utf-8") as _bs:
+        _bs.write(OMNIWATCH_BUILD_STAMP + "\n")
+except Exception:
+    pass
+import urllib.request
 import datetime
 import traceback
 import collections as _collections
 import base64
+import threading
+import html
+import xml.etree.ElementTree as ET
 
 # ---------------------------------------------------------------------------
 # Crash logger
@@ -634,6 +659,11 @@ player_stats = {}
 player_self_name  = ""
 player_self_mjob  = ""
 player_self_sjob  = ""
+player_self_server = ""           # FFXI world name (e.g. "Asura"). Populated
+                                  # from the PLAYER packet's optional 5th
+                                  # field; the Lua side needs to be updated
+                                  # to send it. Read by _di_current_server()
+                                  # to filter the whereisdi.com response.
 
 # equip_rich[slot_idx] = {"item_id", "name", "ilvl", "jobs", "category",
 #                         "level", "augments": [str]}
@@ -720,6 +750,61 @@ sim_window_scroll    = 0             # vertical content scroll when h < natural
 #   sim_import_field  : which text field has focus: None | "root" | "setpath"
 sim_import_open     = False
 sim_import_root     = ""
+
+# ── Currency settings modal state ───────────────────────────────────────
+# Opened from the "Configure" button in the Header section of the settings
+# menu. Renders a centered popup with: six toggleable checkboxes (one per
+# currency), a +/- spinner for the cycle interval, and a Close button.
+# Click anywhere outside the panel also closes.
+#
+# State is just an open/closed flag — the toggles and interval value are
+# stored in the settings system, so we read/write them via setting() and
+# settings[key] = v during user interaction.
+currency_settings_modal_open  = False
+currency_settings_modal_rects = []   # list of (Rect, action_dict), refilled per frame
+
+# ── Party panel settings modal state ────────────────────────────────────
+# Same pattern as currency_settings_modal_*. Opened from the
+# "Configure" button in the Party Panel section of settings; consolidates
+# the nine party-related toggles into one focused subdialog instead of
+# strewing them across the main settings dropdown. All controls
+# read/write the underlying settings system directly — no separate state.
+party_settings_modal_open  = False
+party_settings_modal_rects = []     # (Rect, action_dict) refilled per frame
+
+# ── Display settings modal state ────────────────────────────────────────
+# Same pattern as currency_settings_modal_* / party_settings_modal_*.
+# Opened from the "Configure" button in the General section; consolidates
+# window-appearance toggles (opacity, UI scale, transparent background)
+# plus a Hide display action that mirrors the floating nub's click.
+display_settings_modal_open  = False
+display_settings_modal_rects = []   # (Rect, action_dict) refilled per frame
+
+# ── Header settings modal state ──────────────────────────────────────
+# Reset zone timer, Vana'diel time offset, FFXI server picker, points
+# tracker toggle + type. Same pattern as the other Configure modals.
+header_settings_modal_open  = False
+header_settings_modal_rects = []
+
+# ── Inventory settings modal state ──────────────────────────────────
+# Inventory dropdown visibility + GearSwap folder picker.
+inventory_settings_modal_open  = False
+inventory_settings_modal_rects = []
+
+# ── Statistics settings modal state ────────────────────────────────────
+# Three-row modal: show/hide panel + gear-settings wizard + stats-
+# layout JSON editor.
+statistics_settings_modal_open  = False
+statistics_settings_modal_rects = []
+
+# ── Profile naming modal state ────────────────────────────────────────
+# Tiny single-input modal for "save current layout as new profile".
+# Opens from the char-view dropdown's "+ Save current as new profile…"
+# row; closes on Enter (commits the name and saves the profile) or
+# Esc / backdrop (cancels).
+profile_name_modal_open  = False
+profile_name_modal_text  = ""
+profile_name_modal_rects = []
 sim_import_cwd      = ""
 sim_import_file     = None
 sim_import_setpath  = ""
@@ -1639,6 +1724,15 @@ CHAT_FONT_SIZE_MAP = {
 # they see on screen.
 chat_scroll_offset   = 0
 
+# Scrollbar drag tracking for the chat panel. Same shape as the
+# checklist drag state. Per-frame thumb/track rects + max_scroll are
+# captured during draw and consumed by the mousedown + motion
+# handlers.
+_chat_scroll_drag = None
+_chat_scrollbar_thumb_rect = None
+_chat_scrollbar_track_rect = None
+_chat_scrollbar_max_scroll = 0
+
 # ── Tabs ───────────────────────────────────────────────────────────
 # Each tab has a name, a filter predicate (event_dict → bool), its
 # own scroll position, and an unread count incremented when the
@@ -1680,6 +1774,14 @@ chat_tab_names = [
                                  # an answering machine so tells aren't
                                  # buried in World while you're away
     ("World",     "World"),
+    ("Assist",    "Assist"),     # FFXI assist channel chatter (cross-zone
+                                 # broadcasts with language preference tag).
+                                 # Mode 35 + similar variants route here.
+                                 # Filterable / hide-able like any other tab.
+    ("Unity",     "Unity"),       # Unity Concord chat — mode 33 carries
+                                  # Unity-wide broadcasts (event announcements,
+                                  # chat from same Unity Leader). Separate tab
+                                  # so it doesn't get lost in World.
     ("LS1",       "Linkshell 1"),
     ("LS2",       "Linkshell 2"),
     ("Party",     "Party"),
@@ -1699,8 +1801,8 @@ chat_tab_names = [
 # After load, chat_tab_names[i] entries for custom_1 / custom_2 are
 # rewritten in-place with the user's chosen label.
 _CUSTOM_TAB_IDS = {
-    "custom_1": 9,    # index in chat_tab_names — keep in sync above
-    "custom_2": 10,   # (shifted +1 by the Tell tab inserted at index 0)
+    "custom_1": 11,   # index in chat_tab_names — keep in sync above
+    "custom_2": 12,   # (shifted +1 again by the Unity tab insertion)
 }
 _chat_tab_label_overrides = {}    # id → label, persisted via _meta
 
@@ -1774,11 +1876,39 @@ CHAT_COMPOSER_CHANNELS = [
     ("say",    "say",    "/s "),
     ("tell",   "tell",   "/t "),       # needs a target prefix at send
     ("reply",  "reply",  "/r "),
+    ("party",  "party",  "/p "),       # party chat
     ("shout",  "shout",  "/sh "),
     ("yell",   "yell",   "/yell "),
     ("ls1",    "ls1",    "/l "),
     ("ls2",    "ls2",    "/l2 "),
+    ("unity",  "unity",  "/u "),       # Unity Concord chat (/u sends; /cm u
+                                       #   only toggles the display). Echoes
+                                       #   back on mode 211 ("{You} ...").
+    ("assist", "assist", "/ae "),      # Assist Channel (English: /ae or
+                                       #   /assiste; the JP channel is /aj).
+                                       #   Asura is an English world, so /ae.
+                                       #   Only sendable in hub cities / the
+                                       #   listed Assist-enabled zones — FFXI
+                                       #   rejects it elsewhere (silent fail).
 ]
+
+# Maps each composer channel key to a CHAT_SEGMENT_COLORS class, so the
+# channel-selector label in the composer is tinted to match that
+# channel's chat color (e.g. party = pale teal, unity = gold, ls1 =
+# green). Reply uses the tell color (it's a tell reply). Any key not
+# listed falls back to the neutral CHAT_COMPOSER_CHANNEL_FG.
+CHAT_COMPOSER_CHANNEL_COLOR_CLASS = {
+    "say":    "ch_say",
+    "tell":   "ch_tell_composer",
+    "reply":  "ch_tell_composer",   # reply is a tell — share the pink label
+    "party":  "ch_party",
+    "shout":  "ch_shout",
+    "yell":   "ch_yell",
+    "ls1":    "ch_ls1",
+    "ls2":    "ch_ls2",
+    "unity":  "ch_unity",
+    "assist": "ch_assist",
+}
 
 # Composer-specific colors. Reuse panel palette where possible.
 CHAT_COMPOSER_BG          = (16, 18, 24, 240)
@@ -1829,6 +1959,47 @@ _chat_settings_button_rect = None
 # first draw; set each frame by draw_chat_panel.
 _chat_clear_tab_button_rect = None
 _chat_clear_all_button_rect = None
+_chat_show_all_button_rect  = None
+# Per-tab right-click popup state. Right-clicking a tab opens a
+# small floating menu at the click position offering "Hide tab".
+# The user must then click "Hide tab" to actually hide. Click
+# anywhere else dismisses the popup without changes — same
+# pattern as a desktop OS context menu.
+#   _chat_tab_rclick_tab     — tab index the popup is anchored to
+#   _chat_tab_rclick_anchor  — screen (x, y) where it appeared
+#   _chat_tab_rclick_rects   — per-frame click-test rects:
+#                              list of (rect, action) tuples
+_chat_tab_rclick_tab    = None
+_chat_tab_rclick_anchor = None
+_chat_tab_rclick_rects  = []
+
+# ── Clickable sender names (per-frame hit-test) ──────────────────────────
+# Rebuilt every draw of the chat panel. Entries are dicts:
+#   {"rect": pygame.Rect, "name": str, "actor_class": str}
+# Populated by the sender-rendering branch with the rect of the
+# sender NAME portion (NOT the colon, NOT the zone tag, NOT the
+# message body). Read by the mousedown handler:
+#   * left-click → populate the chat composer with /tell <name>
+#   * right-click → open the chat-name context menu over the rect
+# Reset to [] at the top of each draw so a hidden chat panel can't
+# leave stale rects clickable from elsewhere on screen.
+_chat_clickable_senders = []
+
+# Name of the sender currently under the mouse, or None. Used so the
+# rendering branch can paint the name in CHAT_NAME_HOVER_COLOR instead
+# of its normal sender color, giving visual feedback that it's clickable.
+# Set by the mousemotion handler (cheap collidepoint walk over
+# _chat_clickable_senders); read on the NEXT draw.
+_chat_name_hover = None
+
+# Context menu state. Open when the user right-clicks a sender name.
+# Layout:
+#   {"name": str, "actor_class": str, "rect": pygame.Rect,
+#    "items": [{"label": str, "action": str, "rect": Rect|None}, ...]}
+# Items are populated when the menu opens; each item's `rect` is set
+# during draw so the next mousedown can hit-test them. Cleared (= None)
+# by: choosing an item, clicking outside the menu, or pressing Escape.
+_chat_name_context_menu = None
 
 # Mode → color map. Modes derived from in-game capture (see emit.lua
 # header comments). Unknown modes fall back to CHAT_COLOR_DEFAULT.
@@ -1857,6 +2028,13 @@ CHAT_MODE_PALETTE = {
     11:  (255, 150, 200),   # /yell — pink, attention-getting
     12:  (180, 140, 230),   # /tell sent — purple (dimmer than received)
     13:  (150, 200, 255),   # /emote — blueish
+    15:  (150, 200, 255),   # /emote (mode-15 social emote variant) — same
+                           #   blue as 13. Mode 15 is overloaded (battle
+                           #   text + social emotes); emit.lua's _is_emote
+                           #   carve-out passes only the social-emote lines
+                           #   through, and they route to chat_emote/World.
+                           #   Without this entry they'd fall to default
+                           #   gray instead of the emote blue.
     28:  (200, 200, 200),   # enemy spell cast on you
     29:  (200, 200, 200),   # melee battle
     30:  (200, 200, 200),   # mob ability use
@@ -1932,13 +2110,25 @@ CHAT_SEGMENT_COLORS = {
     # axes — touching this table would recolor sender names, which is
     # not what we want when adjusting body colors.
     "ch_say":     (240, 240, 240),   # /say — white
-    "ch_shout":   (255, 180, 100),   # /shout — orange
+    "ch_shout":   (210, 105,  30),   # /shout — dark orange (distinct from yell)
     "ch_yell":    (255, 200, 100),   # /yell — orange-yellow
     "ch_tell":    (140, 220, 255),   # /tell — light blue
     "ch_party":   (180, 230, 220),   # /party — pale teal
     "ch_ls1":     (144, 238, 144),   # /linkshell 1 — light green
     "ch_ls2":     (60,  150, 60),    # /linkshell 2 — dark green (matches tab)
     "ch_emote":   (238, 130, 238),   # /em — violet
+    # Unity Concord — sender name in the Unity tab's gold-amber so the
+    # speaker color matches the tab title, for BOTH PC member chat and
+    # NPC dialogue (the chat_packets mode-33 PC path already uses this
+    # class; the brace-split below applies it to the mode-212 NPC path).
+    "ch_unity":   (220, 180, 100),   # Unity — gold-amber (matches Unity tab)
+    "ch_assist":  (130, 220, 210),   # Assist Channel — teal (matches Assist tab)
+    # Composer-label-only pink for the tell/reply channels, matching the
+    # Tell tab color (255,170,230). Kept as its own class so it tints the
+    # composer selector WITHOUT recoloring incoming tell sender names
+    # (those still use ch_tell). Tell message bodies are white (set via
+    # CHAT_MSG_COLOR_BY_MODE below).
+    "ch_tell_composer": (255, 170, 230),   # tell/reply composer label — pink
     "ch_other":   (200, 200, 200),   # fallback grey
     "ch_system":  (170, 190, 210),   # system/checkparam — soft blue-grey
     # Explicit body color classes so chat_packets.lua can color a
@@ -1947,8 +2137,21 @@ CHAT_SEGMENT_COLORS = {
     # on a value that the override would tint tell-purple. Using a
     # fixed class guarantees the canonical channel color regardless
     # of the mode byte.
-    "body_yell":  (255, 150, 200),   # /yell body — pink
-    "body_shout": (255, 240, 150),   # /shout body — light yellow
+    "body_yell":  (240, 240, 240),   # /yell body — white (sender stays colored)
+    "body_shout": (240, 240, 240),   # /shout body — white (sender stays colored)
+    # /say body — white. Originally the say path used 'default' as
+    # the body color, which resolved to gray-white (200, 200, 200);
+    # bumped to a true white (240, 240, 240) so /say messages from
+    # other players stand out from system text (which uses default).
+    "body_say":   (240, 240, 240),
+    # Yell zone tag — chat_packets.lua emits "[ZoneName]" as its own
+    # segment between sender name and the colon, using this class. Paler
+    # than ch_yell so the eye reads "speaker first, zone second" rather
+    # than the bracket competing with the name. Matches the same color
+    # used in the text-path bracket-split renderer (CHAT_YELL_ZONE_COLOR
+    # constant) — kept in sync so packet-sourced and text-sourced yells
+    # look identical.
+    "zone_tag":   (255, 220, 130),   # /yell [Zone] tag — pale yellow
 }
 
 # Timestamp prefix dim color.
@@ -1988,17 +2191,19 @@ CHAT_TAB_UNREAD_FG     = (250, 250, 250)
 CHAT_TAB_PALETTE = [
     {"active": (255, 170, 230), "inactive": (185, 120, 165)},  # 0  Tell     — pink (FFXI tell color)
     {"active": (255, 200, 100), "inactive": (180, 140,  80)},  # 1  World    — orange-yellow
-    {"active": (130, 230, 130), "inactive": ( 90, 160,  90)},  # 2  LS1      — light green
-    {"active": ( 60, 150,  60), "inactive": ( 45, 105,  45)},  # 3  LS2      — dark green
-    {"active": (140, 220, 255), "inactive": (100, 160, 190)},  # 4  Party    — cyan
-    {"active": (235,  80,  80), "inactive": (165,  60,  60)},  # 5  Battle   — red
-    {"active": (120, 200, 255), "inactive": ( 85, 145, 185)},  # 6  Buffs    — sky blue
-    {"active": (220, 130, 220), "inactive": (160,  95, 160)},  # 7  Debuffs  — magenta-purple
-    {"active": (255, 110, 110), "inactive": (180,  80,  80)},  # 8  Mob      — soft red
-    {"active": ( 70, 110, 215), "inactive": ( 50,  78, 150)},  # 9  Custom 1 — dark blue
-    {"active": (255, 150,  60), "inactive": (185, 110,  50)},  # 10 Custom 2 — orange
-    {"active": (200, 200, 200), "inactive": (140, 140, 140)},  # 11 System   — light gray
-    {"active": (255, 215,  80), "inactive": (180, 150,  55)},  # 12 Gearswap — gold
+    {"active": (130, 220, 210), "inactive": ( 90, 160, 150)},  # 2  Assist   — teal (cross-zone assist)
+    {"active": (220, 180, 100), "inactive": (160, 130,  75)},  # 3  Unity    — gold-amber (concord)
+    {"active": (130, 230, 130), "inactive": ( 90, 160,  90)},  # 4  LS1      — light green
+    {"active": ( 60, 150,  60), "inactive": ( 45, 105,  45)},  # 5  LS2      — dark green
+    {"active": (140, 220, 255), "inactive": (100, 160, 190)},  # 6  Party    — cyan
+    {"active": (235,  80,  80), "inactive": (165,  60,  60)},  # 7  Battle   — red
+    {"active": (120, 200, 255), "inactive": ( 85, 145, 185)},  # 8  Buffs    — sky blue
+    {"active": (220, 130, 220), "inactive": (160,  95, 160)},  # 9  Debuffs  — magenta-purple
+    {"active": (255, 110, 110), "inactive": (180,  80,  80)},  # 10 Mob      — soft red
+    {"active": ( 70, 110, 215), "inactive": ( 50,  78, 150)},  # 11 Custom 1 — dark blue
+    {"active": (255, 150,  60), "inactive": (185, 110,  50)},  # 12 Custom 2 — orange
+    {"active": (200, 200, 200), "inactive": (140, 140, 140)},  # 13 System   — light gray
+    {"active": (255, 215,  80), "inactive": (180, 150,  55)},  # 14 Gearswap — gold
 ]
 
 
@@ -2020,6 +2225,16 @@ CHAT_TAB_PALETTE = [
 # spoken-aloud message regardless of range. Emote modes (13, 14) are
 # still guessed — verify with hex capture if emotes don't show up.
 CHAT_MODE_SET_WORLD    = {1, 3, 11, 13}
+# Confirmed via chatdebug capture:
+#   mode 1  → /say  (own + immediate)
+#   mode 3  → /shout (own — text-mode 3, not text-mode 10)
+#   mode 11 → /yell
+#   mode 13 → emote fallthrough
+# Text-mode 10 (other players' /shouts) is DROPPED at the lua side
+# in emit.lua's DROPPED_CHAT_MODES set, because those shouts also
+# arrive via the 0x017 chat-packet path → chat_packets.lua →
+# chat_shout. Suppressing here would create a duplicate; suppressing
+# at the lua level prevents the dupe from ever crossing the wire.
 CHAT_MODE_SET_LS1      = {6, 205}              # LS1 chat (text mode 6),
                                                 #   LS message-of-the-day
                                                 #   on login (205, empirical)
@@ -2038,8 +2253,12 @@ CHAT_MODE_SET_PARTY    = {5}                   # /party — chat only
 #   mode 15 = targeted social emote ("Aquathea bows courteously to ...")
 CHAT_MODE_SET_EMOTE    = {7, 9, 15}
 CHAT_MODE_SET_BATTLE   = {                     # combat-derived messages
-    20, 21, 22, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    20, 21, 22, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39,
     50, 56, 59, 60, 61, 62, 63, 64, 65, 101,
+    # NOTE: mode 35 was previously in this set but it's actually
+    # the FFXI Assist Channel (cross-zone chat with the (E) language
+    # tag, format `..Name..(E) : message`), not a battle-text mode.
+    # Routed to chat_assist via the dedicated classifier branch.
 }
 # NPC dialog — confirmed mode 144 ("Yoskolo : Welcome to the Merry
 # Minstrel's Meadhouse.") and mode 150 (NPC conversation, e.g.
@@ -2061,6 +2280,21 @@ CHAT_MODE_SET_SYSTEM   = {                     # system / RoE / sparks / drops
                                                 # flares up!" (Ambuscade tome).
                                                 # Confirmed via trace.
 }
+
+# Modes that carry area-broadcast loot/RoE/exp gains from OTHER
+# players ("Kly obtains 5,000 gil.", "Drakaros gains 976 experience
+# points."). These are zone-wide noise in busy areas. Lines on these
+# modes get a text-pattern check: if the line opens with a name
+# that ISN'T the player's own and the verb is loot-like, the line
+# gets re-tagged chat_loot_other (hidden by default; users who want
+# to see other-player gains can route it to a tab via the routing
+# GUI). The player's OWN gains land in System as before.
+#
+# Confirmed modes via chatdebug:
+#   127 — "Kly obtains 5,000 gil"  (loot / gil drops)
+#   131 — "Drakaros gains 976 experience points"  (exp gains)
+# Add more if/when observed.
+CHAT_MODE_SET_LOOT_NOISE_MODES = {127, 131}
 
 
 # ── Tab filter predicates ─────────────────────────────────────────
@@ -2256,6 +2490,23 @@ _SKILLCHAIN_PATTERN_R = _re_routing.compile(
     r"|\bSkillchain\b"
 )
 
+# Unity NPC parameter-broadcast dumps. The Unity Concord NPC periodically
+# emits raw parameter packets (msg-ids ~0x01F0-0x01FF) that arrive on the
+# Unity chat path as a body of comma-separated hex groups, e.g.
+#   "0a,01f1,0000000a,0000002f,00000121,00000001,00000001,"
+# and frequently with an EMPTY-sender colon prefix from the packet path:
+#   " : 0a,01f1,0000000a,..."
+# These are NOT chat — they're the binary parameter payload leaking as
+# text. We .search() (not match) for the comma-hex run anchored at the
+# END of the line, allowing any "sender : " prefix in front. The run must
+# start with a short-hex group IMMEDIATELY followed by a comma and include
+# at least one 8-digit hex group — so ordinary chat ("Thoroar[BastokMark]:
+# msg", "Name : {Mhaura}?") can't match (no leading "hhhh," + 8-hex run).
+_PARAM_DUMP_PATTERN_R = _re_routing.compile(
+    r"(?:^|\s|:)[0-9a-fA-F]{1,4},(?:[0-9a-fA-F]{1,8},)*"
+    r"[0-9a-fA-F]{8}(?:,[0-9a-fA-F]{1,8})*,?\s*$"
+)
+
 # Chat kinds that should short-circuit text-pattern classification.
 # These are SPECIFIC player-chat channels — the lua side has already
 # identified them by player-chat mode bytes (0/1/3/4/5/7/26/27 in
@@ -2265,6 +2516,21 @@ _SKILLCHAIN_PATTERN_R = _re_routing.compile(
 _CHAT_KIND_SPECIFIC = frozenset({
     "chat_say", "chat_tell", "chat_shout", "chat_yell",
     "chat_party", "chat_ls1", "chat_ls2", "chat_emote",
+    # chat_assist — the FFXI Assist Channel, tagged by chat_packets.lua
+    # when mode 35 arrives (cross-zone hub chat with the `..Name..(E):`
+    # language-preference wrapper). Was previously missing from this
+    # set, so when chat_packets sent kind='chat_assist' the Python
+    # classifier didn't recognize it as authoritative and fell through
+    # to text-pattern checks, eventually defaulting to chat_other →
+    # System. Adding here makes the packet-path tag honored directly.
+    # (The incoming-text path uses a separate mode==222 short-circuit
+    # in the classifier below; these are the two paths assist arrives on.)
+    "chat_assist",
+    # chat_unity — Unity Concord chat (mode 33). Same pattern as
+    # chat_assist: chat_packets.lua tags the packet, the kind needs
+    # to be in this set so the Python classifier honors the tag
+    # directly instead of falling through to defaults.
+    "chat_unity",
 })
 
 # Parses cast-start / ability-ready lines into actor / verb / ability /
@@ -2497,6 +2763,52 @@ def _chat_classify_event(ev):
             return (actor, kind)
         # Generic chat_ kinds fall through to text patterns below.
 
+    # FFXI Assist Channel — mode 222 carries cross-zone broadcast
+    # chat in major hub cities (the `..Name..(E) : message` format).
+    # Mode 35 carries the same content via the chat-packet path
+    # (chat_packets.lua already tags those with chat_assist before
+    # we get here — that branch hits the source=="chat" specific-
+    # kind shortcut above). The 222 short-circuit catches the
+    # incoming-text path's version of the same chat. Routed to the
+    # dedicated Assist tab between World and LS1.
+    #
+    # Short-circuited HERE (before any text-pattern checks below) so
+    # an assist line that happens to mention loot keywords, examine
+    # phrases, or other catch-patterns doesn't get redirected. The
+    # mode byte is the authoritative signal — text content is just
+    # the message body.
+    if mode == 222:
+        return (actor, "chat_assist")
+
+    # Unity Concord chat — mode 212 (the incoming-text path) carries both
+    # Unity member chat ("{Name} body", including 1-char "." check-ins)
+    # AND Unity NPC dialogue ("{Yoran-Oran} ..."). Route ALL of it to
+    # chat_unity → Unity tab. This MUST be here: the ingestion-side
+    # brace-split that colors the sender gold only runs when kind ==
+    # 'chat_unity', and the chat_packets mode-33 path is intentionally
+    # dropped (it duplicated mode 212), so without this route mode-212
+    # Unity lines get no kind and Unity chat vanishes entirely.
+    # Short-circuited before the text-pattern matchers so a Unity line
+    # mentioning loot/quest words can't be pulled into System/Battle.
+    if mode == 212:
+        return (actor, "chat_unity")
+
+    # Mode 211 — your OWN outgoing Unity chat ("{Wormfood} ..."). Echoes
+    # on 211, not 212/33. Same destination as 212 → Unity tab, gold name.
+    if mode == 211:
+        return (actor, "chat_unity")
+
+    # Emote modes (7/9/15 on Asura) → chat_emote → World. Short-
+    # circuited BEFORE text-pattern checks below so an emote line
+    # ("Knightedge waves") with mob-like phrasing doesn't get
+    # misrouted to Battle or System via a pattern false-positive.
+    # Confirmed via chatdebug capture: mode 15 carries social
+    # emotes like `..Knightedge.. waves` and was leaking to System
+    # before this early bail because the text-pattern fallback in
+    # the unknown-mode branch caught them.
+    if mode in CHAT_MODE_SET_EMOTE:
+        return (actor, "chat_emote")
+
     # Real FFXI text. First check the text-pattern overrides (Gearswap
     # state-set echoes piggyback on mode 1, indistinguishable by mode).
     for prefix in _GEARSWAP_TEXT_PREFIXES_R:
@@ -2568,11 +2880,9 @@ def _chat_classify_event(ev):
     if mode in CHAT_MODE_SET_BATTLE:
         return (actor, "raw_battle")
 
-    # Emotes (modes 7/9/15 on Asura) → World. Confirmed from the
-    # packet log: self-emote, numeric/party emote, targeted social
-    # emote all land here.
-    if mode in CHAT_MODE_SET_EMOTE:
-        return (actor, "chat_emote")
+    # Emote check is now done EARLIER in the classifier, before
+    # text-pattern matching, so it can't be stolen by a stray
+    # pattern. The early bail covers modes 7/9/15.
 
     # NPC dialog (mode 144) → chat_npc → System. Lets users filter
     # NPC chatter (shopkeepers, quest NPCs) separately from real chat.
@@ -2590,7 +2900,32 @@ def _chat_classify_event(ev):
     if mode in CHAT_MODE_SET_LS2:    return (actor, "chat_ls2")
     if mode in CHAT_MODE_SET_PARTY:  return (actor, "chat_party")
     if mode == 4 or mode == 12:      return (actor, "chat_tell")
-    if mode in CHAT_MODE_SET_SYSTEM: return ("system", "system")
+    if mode in CHAT_MODE_SET_SYSTEM:
+        # Some "system" modes (127 for loot, 131 for exp) carry BOTH
+        # the player's own gains AND area-wide gains from OTHER
+        # players. The mode alone doesn't tell us which. If the line
+        # opens with another player's name and uses a loot-like verb
+        # ("obtains" / "gains" / "found" / "loots"), treat it as
+        # area-noise and route to chat_loot_other (hidden by default;
+        # users who want to see it can route it via the GUI). Own
+        # gains stay in System where they always were.
+        if mode in CHAT_MODE_SET_LOOT_NOISE_MODES:
+            stripped = (text or "").lstrip()
+            for verb in (" obtains ", " gains ", " found ", " loots "):
+                vi = stripped.find(verb)
+                if vi <= 0:
+                    continue
+                name_token = stripped[:vi].strip()
+                # Empty / multi-word / matches player → leave to
+                # normal system routing (player's own gain or a line
+                # we can't parse confidently).
+                if (not name_token
+                        or " " in name_token
+                        or name_token == player_self_name):
+                    break
+                # Otherwise: someone else's gain → area noise.
+                return ("other", "chat_loot_other")
+        return ("system", "system")
 
     # System message text-pattern detection. Runs AFTER all mode-based
     # classification, so /say lines starting with "The cat..." reach
@@ -2699,6 +3034,27 @@ _CHAT_ROUTING_DEFAULTS = {
         # put NPC dialog in its own tab.
         "chat_npc":    ["System"],
         "chat_other":  ["System"],
+        # Assist Channel — FFXI's cross-zone broadcast (the
+        # `..Name..(E) :` format common in major hub cities). Has
+        # its own dedicated tab between World and LS1 so users can
+        # follow the chatter (or mute it entirely) independent of
+        # their /yell preferences. Sourced from mode 35 on the lua
+        # side; chat_packets.lua tags those packets with chat_assist.
+        "chat_assist": ["Assist"],
+        # Unity Concord chat (mode 33 → tagged by chat_packets.lua).
+        # Default-routes to the dedicated Unity tab so Concord-wide
+        # broadcasts and Unity-Leader chatter stay separate from
+        # regular chat.
+        "chat_unity":  ["Unity"],
+        # Area-broadcast loot / RoE / exp gains from OTHER players
+        # (e.g. "Kly obtains 5,000 gil", "Drakaros gains 976
+        # experience points"). Splits out from chat_system via the
+        # text-pattern check in _chat_classify_event for modes
+        # 127/131. Defaults to no tab (hidden) so System stays
+        # clean. Users who want to see local loot/exp rolls can map
+        # this to a Custom tab via the routing GUI. Your OWN gains
+        # still land in System unchanged.
+        "chat_loot_other": [],
         # Bazaar sale notices ("<Name> bought your <item>...") —
         # informational, default to System. Route to a Custom tab
         # when actively selling if you want a dedicated stream.
@@ -2805,6 +3161,12 @@ _CHAT_ROUTING_DEFAULTS = {
 # At lookup time we walk: per-job → global → baked-in defaults.
 _chat_routing_global = _CHAT_ROUTING_DEFAULTS
 _chat_routing_perjob = {}
+
+# When True, the classifier prints one line per mode-222 event so we
+# can confirm assist-channel routing is firing. Toggle via the
+# //ow chatroutedebug slash command (lua side just bumps this via UDP).
+# Off by default; flipping it on does not affect routing, only logging.
+_ow_chat_route_debug = False   # diag — flip on to confirm routing paths
 # Global channel-hide toggles + sender blacklist, loaded from the
 # routing JSON's _meta section (set by the GUI footer controls).
 #   _chat_channel_hidden: set of channel names the user switched off
@@ -2993,6 +3355,17 @@ def _chat_route_event(ev):
 
     target_dim = _chat_target_dim(ev)
     tab_names = _chat_routing_lookup(actor, channel, target_dim)
+    if _ow_chat_route_debug and channel in (
+            "chat_assist", "chat_emote", "chat_other", "chat_npc"):
+        # Show full path: what came in, what the classifier said,
+        # what routing decided, whether the channel-hide table is
+        # eating it, and whether any tab subscribed.
+        hidden = channel in _chat_channel_hidden
+        print(f"[OmniWatch] route: src={ev.get('source')!r} "
+              f"mode={ev.get('mode')} kind={ev.get('kind')!r} "
+              f"actor={actor!r} → channel={channel!r} "
+              f"hidden={hidden} tabs={tab_names!r} "
+              f"text={(ev.get('text') or '')[:40]!r}")
     if not tab_names:
         return set()
     out = set()
@@ -3288,16 +3661,34 @@ assert len(chat_tab_filters) == len(chat_tab_names), \
 # and your eye lands on the speaker, then the message tells you the
 # channel by color.
 CHAT_SENDER_COLOR = (255, 170,  80)            # orange — speaker name
+# Zone-tag color for /yell senders: FFXI yells arrive shaped
+# "Sender[ZoneName]: msg" because the server appends the originator's
+# current zone in brackets right after the name. Rather than render that
+# whole region in CHAT_SENDER_COLOR (which makes the zone tag visually
+# dominate the speaker name), we paint just the "[Zone]" portion in a
+# lighter, paler yellow so the eye lands on the speaker first and reads
+# the zone as a secondary attribution. Only applied when both a sender
+# region AND a bracketed zone tag are detected in the first line of a
+# mode-11 (/yell) event.
+CHAT_YELL_ZONE_COLOR = (255, 235, 175)         # light pale yellow — yell zone tag
+# Hover color for clickable sender names. Painted on the sender name
+# portion when the mouse is over it, signaling that left-click composes
+# a /tell to that name and right-click opens a context menu. Brighter +
+# slightly cyan-shifted from the normal sender orange so the hover is
+# obvious without being garish. Applied to ALL clickable names regardless
+# of channel (say/tell/shout/yell/ls/party) — keeps the hover behavior
+# consistent across the panel.
+CHAT_NAME_HOVER_COLOR = (255, 245, 200)        # bright cream — sender hover
 # GearSwap output body color — gold, matching the Gearswap tab theme.
 # Applied to macro-set echoes and "X is now Y" state lines, which
 # arrive on mode 1 and would otherwise render /say-white.
 CHAT_GEARSWAP_BODY_COLOR = (255, 215, 80)
 CHAT_MSG_COLOR_BY_MODE = {
     1:  (240, 240, 240),                       # /say — white
-    3:  (255, 240, 150),                       # /shout — light yellow
-    4:  (200, 160, 255),                       # /tell received — light purple
-    11: (255, 150, 200),                       # /yell — pink
-    12: (180, 140, 230),                       # /tell sent — purple (dimmer than received)
+    3:  (240, 240, 240),                       # /shout — white (was light yellow); sender stays colored
+    4:  (240, 240, 240),                       # /tell received — white (was light purple)
+    11: (240, 240, 240),                       # /yell — white (was pink); sender stays colored
+    12: (240, 240, 240),                       # /tell sent — white (was purple)
     # mode 13 (/emote) intentionally absent: emotes don't follow the
     # "Sender: message" wire format, so the splitter would fail anyway.
     # They render single-color via CHAT_MODE_PALETTE[13] (blueish).
@@ -3561,6 +3952,14 @@ def _ingest_chat_packet(raw, stream_label):
         # text (kept deliberately narrow after an earlier broad byte-edit
         # regressed normal lines). Isolated to this one event's text.
         _txt = ev.get("text") or ""
+        # Drop Unity NPC parameter-broadcast dumps — comma-separated hex
+        # groups ("0a,01f1,0000000a,...") that the Unity NPC emits and
+        # that leak onto the Unity chat path as raw text. Not chat; skip
+        # the event entirely so it never reaches any tab. Gated on a chat
+        # source so it can't eat a (hypothetical) battle-synth line.
+        if (ev.get("source") == "chat" and _txt
+                and _PARAM_DUMP_PATTERN_R.search(_txt)):
+            continue
         if "\u30fb" in _txt and _SKILLCHAIN_PATTERN_R.match(_txt):
             ev["text"] = _txt.replace("\u30fb", " ")
         # Colorize cast-start / readies text. Incoming_text events
@@ -3573,7 +3972,88 @@ def _ingest_chat_packet(raw, stream_label):
         if (ev.get("source") == "chat"
                 and not ev.get("segments")):
             txt = ev.get("text") or ""
-            if _CAST_READY_PATTERN_R.search(txt):
+            # Unity chat (mode 212, NPC dialogue + PC member chat) arrives
+            # as a flat line with no segments, so the speaker name has no
+            # color. Split it into a gold-amber sender segment (matching
+            # the Unity tab title) and a white body. Two sender forms:
+            #   "{Yoran-Oran} <body>"  — NPC dialogue (brace-wrapped)
+            #   "Name : <body>"         — PC member chat (body may be a
+            #                             single "." / "@" check-in, kept)
+            # Unmatched forms stay flat (a plain line beats a mis-split).
+            #
+            # Keyed on the MODE byte (212), NOT ev["kind"]: kind comes
+            # straight from the wire packet field, which is EMPTY for
+            # incoming-text lines (the chat_unity channel is decided later
+            # by _chat_classify_event and never written back to ev["kind"]
+            # before this point). Checking mode==212 is the authoritative,
+            # always-populated Unity signal — keying on kind here left the
+            # names un-colored because the test was never true.
+            if ev.get("mode") in (212, 211) and txt:
+                u_segs = None
+                if txt.startswith("{"):
+                    # The sender name is the LEADING brace group, and a real
+                    # member/NPC line has the shape "{Name} <body>" — a
+                    # space immediately follows the name's closing brace.
+                    # Autotranslate phrases ALSO use literal { }, so we must
+                    # NOT assume the first "}" closes a name: a message that
+                    # is purely/mostly an AT phrase (e.g. "{Good evening!}"
+                    # with no space-separated body) would otherwise be
+                    # mis-split, treating the AT text as the "name" and
+                    # dropping the message body — the reported "only the
+                    # sender name shows" bug for autotranslate users.
+                    #
+                    # Rule: only split when the closing brace is followed by
+                    # a SPACE and a non-empty body. The body keeps its own
+                    # braces (an AT phrase inside the body renders as-is).
+                    # If the closing brace is at end-of-string, or isn't
+                    # followed by " <body>", leave the line flat so the
+                    # whole message (AT phrase included) still displays.
+                    _close = txt.find("}")
+                    if (_close > 1
+                            and _close + 1 < len(txt)
+                            and txt[_close + 1] == " "
+                            and txt[_close + 2:].strip() != ""):
+                        _name = txt[1:_close]
+                        _body = txt[_close + 2:]   # keep body verbatim (may hold {AT})
+                        u_segs = [(_name, "ch_unity"),
+                                  (" ", "default"),
+                                  (_body, "body_say")]   # white body
+                    # else: AT-only or no real body → leave flat (renders whole)
+                else:
+                    _ci = txt.find(" : ")
+                    if _ci > 0:
+                        u_segs = [(txt[:_ci], "ch_unity"),
+                                  (" : ", "default"),
+                                  (txt[_ci + 3:], "body_say")]
+                if u_segs:
+                    ev["segments"] = u_segs
+            # Assist Channel sender split (text path, mode 222). The
+            # cross-zone Assist chat arrives as "Name(E) : body" (the "(E)"
+            # is the language-preference tag FFXI appends). On the PACKET
+            # path (mode 35) chat_packets.lua already builds a teal
+            # ch_assist sender segment, but the incoming-TEXT path (mode
+            # 222) emits a flat line with no segments, so its sender fell
+            # back to the default gold CHAT_SENDER_COLOR instead of the
+            # teal Assist-tab color. Build the segment here, mirroring the
+            # Unity split above: sender region (name + "(E)") in ch_assist,
+            # " : " neutral, body default. Keyed on mode 222 (the
+            # authoritative, always-populated text-path Assist signal).
+            if ev.get("mode") == 222 and txt and not ev.get("segments"):
+                _ci = txt.find(" : ")
+                if _ci > 0:
+                    ev["segments"] = [
+                        (txt[:_ci],     "ch_assist"),
+                        (" : ",         "default"),
+                        (txt[_ci + 3:], "default"),
+                    ]
+            # Colorize cast-start / readies text. Incoming_text events
+            # arrive as flat strings with empty segments; if the text
+            # matches the cast/readies shape, rebuild as colored segments
+            # so it visually matches the packet-synth combat lines (actor
+            # in their class color, spell in spell color, target in their
+            # class color). Battle-source synth events already carry
+            # colored segments and are skipped.
+            if not ev.get("segments") and _CAST_READY_PATTERN_R.search(txt):
                 segs = _build_cast_segments(txt)
                 if segs:
                     ev["segments"] = segs
@@ -3935,6 +4415,44 @@ inventory_bag_scroll     = {}         # bag_name -> int (item-row offset)
 inventory_dropdown_rects = []         # click-target list for the dropdown
 # Toggle button rect in the header (set in draw_header, read by click handler).
 inventory_button_rect    = None
+
+# ── Header OS clock + stopwatch / countdown modal state ────────────────
+# A small HH:MM clock displays in the header between the inventory
+# button and the right-side zone block, driven by os time (NOT
+# Vana'diel time — that's the separate cluster on the left). Clicking
+# it opens a stopwatch/countdown modal.
+header_clock_button_rect = None  # set by draw_header, read by click handler
+
+# Modal visibility flag + per-frame rebuilt click-rect list.
+clock_modal_open  = False
+clock_modal_rects = []
+
+# Stopwatch state. Stored as accumulated-seconds + an optional start
+# timestamp; when running, the displayed value is accumulated +
+# (now - start). On pause, we collapse start into accumulated and
+# clear start. This avoids drift from any frame-rate / sleep timing
+# (we always compute from os.time() rather than incrementing).
+stopwatch_running       = False
+stopwatch_started_at    = 0.0    # os.time() of last start (or 0)
+stopwatch_accumulated   = 0.0    # seconds banked from prior runs
+
+# Countdown state. duration_sec is the user-set total; remaining_sec
+# is the live value (counts down each frame when running). On
+# reaching 0 we set finished=True for one frame, used to trigger the
+# red-flash + brief beep, then leave it at 0.
+countdown_running       = False
+countdown_duration_sec  = 300    # default 5 min
+countdown_remaining_sec = 300
+countdown_started_at    = 0.0    # os.time() when (re)started; 0 = not started
+countdown_finished_at   = 0.0    # os.time() when last hit 0; for flash timing
+events_button_rect       = None      # set by draw_header, read by click handler.
+                                     # The Events button (formerly in the
+                                     # settings menu) lives in the header now
+                                     # so it's one click away from any UI
+                                     # state — see Cooper's reasoning that
+                                     # the live-events list is checked often
+                                     # enough during play that hiding it
+                                     # under Misc was friction.
 # Search state. Lives at the top of the bag-list view: an input box for
 # the user to type into, and the ranked result list when they have.
 # Search runs across every bag in inventory_state and surfaces where
@@ -3946,6 +4464,342 @@ inventory_search_results   = []        # cached ranked list: (bag_key, item dict
 inventory_search_results_key = None    # query string the cache was built for
 inventory_search_scroll    = 0         # scroll offset for the result list
 inventory_search_box_rect  = None      # set by renderer, read by click handler
+
+# ── Porter Slips state ───────────────────────────────────────────────────
+# Populated from INV_SLIP packets the lua side emits between INV_BAG and
+# INV_END. Each entry maps slip item ID → {"name": str, "items": list of
+# {"id": int, "name": str}}. Atomic-swap on INV_END (mirrors how
+# inventory_state is replaced), staged into _inv_slip_buffer while a
+# snapshot is in progress.
+#
+# A slip's PRESENCE in this dict means the player currently owns the
+# slip; absence means they don't. This is reset to {} on every snapshot
+# so a sold/discarded slip disappears from the dropdown the moment lua's
+# next emit lands.
+inventory_slip_state   = {}    # {slip_id: {"name": str, "items": [...]}}
+_inv_slip_buffer       = {}    # accumulator while a snapshot is in progress
+
+# ── Header currency cycler state ────────────────────────────────────────
+# The header used to show just gil. Now it cycles through up to six
+# currencies (gil + 5 tier-1/2 currencies) populated by the lua side
+# via the CURRENCY|key=val;... wire packet. Each currency is shown for
+# `header_currency_cycle_seconds` (settings-controlled) before advancing.
+#
+# Display order is the order of CURRENCY_CYCLE_KEYS below — that's also
+# what the settings panel uses for the six show_currency_<name> toggles,
+# so the user's mental model (Gil → Sparks → Accolades → …) matches
+# what they see on screen.
+currency_state = {
+    "gil": 0, "sparks": 0, "accolades": 0,
+    "gallimaufry": 0, "temenos": 0, "apollyon": 0,
+    "escha_beads": 0, "nyzul_tokens": 0, "ichor": 0,
+}
+
+# Teleport-ring recharge state. Populated from RINGS UDP messages
+# emitted by the lua side, which listens to action packets and
+# stamps a use timestamp when the player activates one of the
+# tracked rings. The equipment-panel header cycles through these.
+#   ring_state[key] = remaining seconds (0 = ready)
+#   ring_state_last_update = time.time() of the most recent emit
+#   ring_cycle_index = which ring is currently displayed
+#   ring_cycle_last_advance = time.time() of last cycle tick
+# Ring keys mirror the Lua-side RINGS table.
+ring_state = {
+    "warp":        0,
+    "dem":         0,
+    "holla":       0,
+    "mea":         0,
+    "echad":       0,
+    "trizek":      0,
+    "reraise":     0,
+    "endorsement": 0,
+    "emporox":     0,
+}
+# Display labels — short forms keep the equipment-header indicator
+# compact. Order here also defines the cycle order. Each ring has
+# a paired visibility setting (show_ring_<key>); the cycle skips
+# rings whose toggle is off, so users can pick which subset to
+# rotate through.
+RING_CYCLE_ORDER = [
+    ("warp",        "Warp Ring"),
+    ("dem",         "Dem Ring"),
+    ("holla",       "Holla Ring"),
+    ("mea",         "Mea Ring"),
+    ("echad",       "Echad Ring"),
+    ("trizek",      "Trizek Ring"),
+    ("reraise",     "Reraise Ring"),
+    ("endorsement", "Endorsement Ring"),
+    ("emporox",     "Emporox's Ring"),
+]
+
+# Header-clock time-zone table. Maps the enum names exposed in the
+# Header Configure modal to their UTC hour offsets. "Local" is the
+# special case — when selected, no offset is applied and we just
+# read the system's local time directly (preserving DST).
+#
+# Offsets here are STANDARD time (non-DST). If you want DST-aware
+# rendering for a specific zone, replace the constant offset with a
+# proper zoneinfo lookup. For now the simple offset model is plenty
+# accurate for "what time is it on the JST server right now" use
+# cases — and JST/KST don't observe DST anyway.
+CLOCK_TIMEZONES = {
+    "Local":  None,   # use computer's local time as-is
+    "UTC":    0,
+    "PST":   -8,      # Pacific Standard Time
+    "MST":   -7,      # Mountain Standard Time
+    "CST":   -6,      # Central Standard Time
+    "EST":   -5,      # Eastern Standard Time
+    "BRT":   -3,      # Brasilia Time
+    "GMT":    0,      # same as UTC; included for users who prefer the name
+    "CET":    1,      # Central European Time
+    "EET":    2,      # Eastern European Time
+    "JST":    9,      # Japan Standard Time (FFXI server time)
+    "KST":    9,      # Korea Standard Time
+    "AEST":  10,      # Australian Eastern Standard Time
+}
+ring_state_last_update = 0.0
+ring_cycle_index       = 0
+ring_cycle_last_advance = 0.0
+# Header time widget (combined Vana'diel + OS clock) cycle state. When
+# clock_cycle_enabled is on, the single time widget alternates between
+# Vana time (phase 0) and OS time (phase 1) every clock_cycle_sec
+# seconds. Phase is recomputed from os.time() each frame (not
+# incremented) so it can't drift; last_advance just records when we
+# last flipped so the dwell time is honored across frames.
+header_time_cycle_phase        = 0     # 0 = Vana'diel, 1 = OS
+header_time_cycle_last_advance = 0.0
+# Cached pixel width reserved for the header time field. Sized once (on
+# first render) to the widest realistic time string ("12:48:59 pm") so
+# the VT/OS label and everything to its right doesn't shift when the
+# displayed time changes width (e.g. "5:03 pm" vs "12:48:59 pm", or
+# Vana "HH:MM" vs a running timer). None until first render measures it.
+_header_time_field_w = None
+# Index into the currently-enabled subset of CURRENCY_CYCLE_KEYS. The
+# header advances this each time the cycle interval elapses. Reset to 0
+# when the enabled set changes so we always start from gil after a
+# settings change rather than landing mid-rotation.
+currency_cycle_index = 0
+# Last os.clock() timestamp the cycle advanced. Driven by the header
+# renderer so the cycle's timing tracks frame draws (typically 60fps) —
+# not perfect but plenty good for a 2-10 second cycle.
+currency_cycle_last_advance = 0.0
+# Cached width of the widest currency label. Computed once per render
+# and used to pad each cycle entry to a fixed width so the inventory
+# button position doesn't jitter when the displayed currency changes.
+# None until first render measures it.
+currency_cycle_max_width = None
+
+# ── Header points tracker state ─────────────────────────────────────────
+# Populated from the lua side via 'POINTS|exp=N;exp_tnl=N;cp=N;cp_tnl=N;
+# exemplar=N;exemplar_tnl=N' emitted on the inventory UDP. Renders to
+# the LEFT of the currency block in the header.
+#
+# The user chooses which one to display via the 'header_points_focus'
+# enum setting (options: 'exp', 'cp', 'exemplar'). The widget itself
+# does NOT auto-cycle — it shows one value at a time picked by settings.
+#
+# Initial values for cp_tnl are 30000 (the fixed CP-to-JP threshold);
+# other tnl values stay 0 until the lua side reports them.
+points_state = {
+    "exp":          0, "exp_tnl":      0,
+    "cp":           0, "cp_tnl":       30000,
+    "exemplar":     0, "exemplar_tnl": 0,
+}
+
+# ── Checklist (collectibles tracker) ────────────────────────────────
+# Modal-style panel opened from settings. Tracks player progress across
+# categories of collectible content. Pass 1 ships Trusts only; future
+# passes add Home Points and Survival Guides.
+#
+# Two layers of "checked":
+#   auto    — confirmed by an in-game data source (live spell list, a
+#             menu packet we listened to, etc.). Auto checks always
+#             win and rebuild from scratch every emit; we don't need
+#             to persist them.
+#   manual  — user-marked. For things the player has but the game
+#             hasn't told us about yet (e.g. trusts learned before we
+#             started watching, or home points visited offline). The
+#             UI renders manual checks with an "M" badge rather than
+#             a plain checkmark so the user can see at a glance which
+#             rows haven't been auto-confirmed.
+#
+# An item shown as checked when either set contains its key. Total
+# uses set union for the "X of Y" count.
+checklist_known = {
+    "trusts":               {"auto": set(), "manual": set()},
+    "homepoints":           {"auto": set(), "manual": set()},
+    "survival_guides":      {"auto": set(), "manual": set()},
+    "blu_spells":           {"auto": set(), "manual": set()},
+    "mounts":               {"auto": set(), "manual": set()},
+    # Outposts split per-allegiance. Each nation has its own manual
+    # set since unlocks reset on allegiance change but the player may
+    # later return to a prior nation and want their old tracking back.
+    "outpost_warps_sandy":  {"auto": set(), "manual": set()},
+    "outpost_warps_bastok": {"auto": set(), "manual": set()},
+    "outpost_warps_windy":  {"auto": set(), "manual": set()},
+    # Quests — manual-only for now. Each quest tab is its own
+    # category (Bastok, Sandy, Windy, Outlands, etc.) since the
+    # in-game Quest Log groups them this way and the lists get long.
+    "quests_bastok":        {"auto": set(), "manual": set()},
+    "quests_sandy":         {"auto": set(), "manual": set()},
+    "quests_windy":         {"auto": set(), "manual": set()},
+    "quests_jeuno":         {"auto": set(), "manual": set()},
+    "quests_ahturhgan":     {"auto": set(), "manual": set()},
+    "quests_adoulin":       {"auto": set(), "manual": set()},
+    "quests_selbina":       {"auto": set(), "manual": set()},
+    "quests_mhaura":        {"auto": set(), "manual": set()},
+    "quests_tavnazia":      {"auto": set(), "manual": set()},
+    "quests_moghouse":      {"auto": set(), "manual": set()},
+    "quests_outlands":      {"auto": set(), "manual": set()},
+    "quests_crystalwar":    {"auto": set(), "manual": set()},
+    "quests_aby_vision":    {"auto": set(), "manual": set()},
+    "quests_aby_scars":     {"auto": set(), "manual": set()},
+    "quests_aby_heroes":    {"auto": set(), "manual": set()},
+    "spells_blm":           {"auto": set(), "manual": set()},
+    "spells_whm":           {"auto": set(), "manual": set()},
+    "spells_smn":           {"auto": set(), "manual": set()},
+    "spells_nin":           {"auto": set(), "manual": set()},
+    "spells_brd":           {"auto": set(), "manual": set()},
+    "spells_geo":           {"auto": set(), "manual": set()},
+    "ws_h2h":               {"auto": set(), "manual": set()},
+    "ws_dag":               {"auto": set(), "manual": set()},
+    "ws_swd":               {"auto": set(), "manual": set()},
+    "ws_gsd":               {"auto": set(), "manual": set()},
+    "ws_axe":               {"auto": set(), "manual": set()},
+    "ws_gax":               {"auto": set(), "manual": set()},
+    "ws_scy":               {"auto": set(), "manual": set()},
+    "ws_pol":               {"auto": set(), "manual": set()},
+    "ws_kat":               {"auto": set(), "manual": set()},
+    "ws_gkt":               {"auto": set(), "manual": set()},
+    "ws_clb":               {"auto": set(), "manual": set()},
+    "ws_stf":               {"auto": set(), "manual": set()},
+    "ws_arc":               {"auto": set(), "manual": set()},
+    "ws_mrk":               {"auto": set(), "manual": set()},
+    "missions_bastok":      {"auto": set(), "manual": set()},
+    "missions_sandy":        {"auto": set(), "manual": set()},
+    "missions_windy":        {"auto": set(), "manual": set()},
+    "missions_zilart":       {"auto": set(), "manual": set()},
+    "missions_cop":          {"auto": set(), "manual": set()},
+    "missions_toau":         {"auto": set(), "manual": set()},
+    "missions_vr":           {"auto": set(), "manual": set()},
+    "missions_rov":          {"auto": set(), "manual": set()},
+    "missions_soa":          {"auto": set(), "manual": set()},
+    "missions_wotg":         {"auto": set(), "manual": set()},
+    "missions_acp":          {"auto": set(), "manual": set()},
+    "missions_mkd":          {"auto": set(), "manual": set()},
+    "missions_asa":          {"auto": set(), "manual": set()},
+    "weapons_relic":         {"auto": set(), "manual": set()},
+    "weapons_mythic":        {"auto": set(), "manual": set()},
+    "weapons_empyrean":      {"auto": set(), "manual": set()},
+    "weapons_aeonic":        {"auto": set(), "manual": set()},
+    "weapons_prime":         {"auto": set(), "manual": set()},
+    "master_trials":         {"auto": set(), "manual": set()},
+}
+
+# Player allegiance snapshot — updated by the NATION| wire packet.
+# Used by the Outpost Warps checklist to annotate its header
+# ("Bastok player — your unlocks reset on allegiance change"). Stored
+# in module state because the data is session-wide, not per-category.
+# Defaults are "unknown" until the first NATION| arrives.
+_player_nation_state = {
+    "id":   -1,   # 0=Sandy, 1=Bastok, 2=Windy, 3=Jeuno, -1=unknown
+    "name": "",   # human-readable nation label
+}
+
+# ── Checklist UI state ──────────────────────────────────────────────
+checklist_modal_open       = False
+# Two-level navigation: the modal is split into top-level TABS
+# (groups of related categories), and within each tab the existing
+# </> arrows cycle through that tab's categories.
+#
+# checklist_current_tab indexes into CHECKLIST_TABS (defined later).
+# checklist_current_category indexes into the ACTIVE TAB's category
+# list (not the full CHECKLIST_CATEGORIES). Switching tabs resets
+# the category index to 0 so the user never lands on a stale slot
+# past the new tab's end.
+checklist_current_tab      = 0
+# Index into the current tab's category list. Cycled by </>.
+checklist_current_category = 0
+# Scroll offset in pixels for the active category's row list.
+checklist_scroll           = 0
+# Horizontal scroll offset (pixels) for the top tab strip. When the
+# combined width of all tab labels exceeds the modal width, the strip
+# becomes scrollable with arrow buttons at each end (same pattern as
+# the chat-panel tab strip).
+checklist_tab_hscroll      = 0
+# Scrollbar drag tracking. When None, no drag in progress. When the
+# user mouses down on the scrollbar thumb, this captures the origin
+# y + scroll + track geometry + max_scroll so MOUSEMOTION events can
+# compute new scroll value without re-querying layout. Cleared on
+# MOUSEBUTTONUP or modal close.
+_checklist_scroll_drag     = None
+# Per-frame rects for scrollbar interaction, set during draw and
+# consumed by the mousedown handler. Both are None when the
+# scrollbar isn't visible (no overflow).
+_checklist_scrollbar_thumb_rect = None
+_checklist_scrollbar_track_rect = None
+# Captured each draw alongside the rects so the drag-start handler
+# has the max scroll value the draw computed (used to map mouse
+# delta-pixels to scroll-pixels in the motion handler).
+_checklist_scrollbar_max_scroll = 0
+# Per-frame click target rects (rebuilt each draw, like other modals).
+# Each entry is (pygame.Rect, payload_dict) where payload['action'] is
+# one of 'cl_backdrop', 'cl_panel_bg', 'cl_tab', 'cl_tab_nav',
+# 'cl_arrow', 'cl_box', 'cl_label'.
+_checklist_click_rects     = []
+# Modal background rect, for outside-click detection.
+_checklist_modal_rect      = None
+# Path cache for persistence file (one JSON per character).
+_checklist_persist_path_cache = {}
+
+# Hidden-achievement state: when the player completes EVERY checkable
+# item across EVERY category in the checklist modal, a flashing
+# congratulations banner appears for 5 seconds. The achievement is
+# persisted to disk so it only ever fires once per character, even
+# across sessions. Persisted as the "_achievement_completed" key in
+# the checklist JSON file alongside the per-category sets.
+#
+# State here is the runtime side: _achievement_unlocked is the
+# loaded-from-disk flag (true once the achievement has been awarded),
+# _achievement_banner_until_ts is the unix-seconds timestamp until
+# which the banner should keep rendering on this session. When the
+# completion check transitions from incomplete→complete, we set
+# _achievement_unlocked=True, push the banner deadline 5 seconds
+# into the future, and save to disk so the flag survives a restart.
+_achievement_unlocked          = False
+_achievement_banner_until_ts   = 0.0
+# Throttle for the periodic achievement check from the main draw
+# loop. Without this, we'd recheck every frame (60Hz) even though
+# the auto sets only change a few times per second at most.
+_achievement_last_check_ts     = 0.0
+
+# Per-character nicknames map. Loaded once on first character lookup,
+# keyed by lowercase character name; each entry is {slip_id: nickname}.
+# Persisted to omniwatch_porter_slip_names_<charname>.json next to other
+# config files. See _porter_slip_nicknames_for_player() below for load,
+# and _porter_slip_set_nickname() for save.
+_inventory_slip_nicknames_cache = {}     # {charname_lower: {slip_id: str}}
+
+# Drill-in state: which slip the user is currently viewing the contents
+# of. None = bag-list (showing both bags + slip section); int = slip
+# item-id whose details are being shown. Mutually exclusive with
+# inventory_active_bag — a click that opens one resets the other.
+inventory_active_slip  = None
+
+# Middle view between bag-list and slip-detail. True means the user
+# clicked the "Porter Slips" row in the bag-list and wants to see the
+# list of slips they own. From there clicking an individual slip drills
+# into its contents (which sets inventory_active_slip). Back-arrow
+# behavior is one-level-up:
+#   slip-detail (active_slip set)  → slip-list (show_slip_list True)
+#   slip-list   (show_slip_list)   → bag-list  (both None/False)
+inventory_show_slip_list = False
+
+# Nickname editor modal state. Set by the right-click handler on a slip
+# row; consumed by the text input event handler and the modal renderer.
+# Shape: {"slip_id": int, "default_name": str, "text": str,
+#         "cursor": int, "cursor_blink": float} or None.
+inventory_slip_nickname_editor = None
 
 # dps_state: per-source bucket dicts, keyed by src tag ('me', 'pet',
 # '<party_member>'). Replaced wholesale on each batch.
@@ -4083,6 +4937,39 @@ buttons_scale         = 1.0
 buttons_config        = []      # list of 12 entries; populated by load_buttons_config
 buttons_rects         = []      # per-frame: list of (pygame.Rect, button_idx)
 
+# ── Whole-display hide toggle (for cutscenes) ────────────────────────
+# When display_hidden is True, every panel (header, hotbars, equip,
+# chat, DPS, recast, everything) is suppressed for the frame, leaving
+# ONLY the small toggle nub on screen. The nub itself persists in both
+# states so the user can always bring the display back. Designed for
+# cutscenes / screenshots where the overlay is in the way.
+#
+# The nub is draggable (reposition) and resizable (corner handle), and
+# its geometry persists across sessions in the settings dict under the
+# keys below (read with .get() defaults so no schema entry is needed;
+# the nub is drag-driven, not configured through the settings menu):
+#   "hide_nub_x", "hide_nub_y", "hide_nub_size"
+display_hidden     = False
+# Default nub home: tucked into the right-side header buffer, vertically
+# centered in the 36px header row. Literal values (not derived from
+# WIDTH/PANEL_X/HEADER_H) because those constants are defined later in
+# module load and WIDTH is re-assigned during monitor detection. The
+# geometry resolver clamps these to the actual window each frame, so a
+# slightly-off literal still lands correctly; users can drag it anyway.
+_HIDE_NUB_DEFAULT_SIZE = 22
+_HIDE_NUB_DEFAULT_X    = 936    # ~ right edge (980) - margin - nub
+_HIDE_NUB_DEFAULT_Y    = 7      # ~ centered in the 36px header
+_HIDE_NUB_MIN_SIZE     = 14
+_HIDE_NUB_MAX_SIZE     = 80
+_hide_nub_rect        = None     # per-frame Rect of the nub body (hit-test)
+_hide_nub_handle_rect = None     # per-frame Rect of the resize corner
+# Drag/resize in-progress state. None when idle.
+#   drag:   {"grab_dx": int, "grab_dy": int, "moved": bool}
+#   resize: {"start_size": int, "anchor_x": int, "anchor_y": int}
+_hide_nub_drag   = None
+_hide_nub_resize = None
+_HIDE_NUB_DRAG_THRESHOLD_PX = 4   # move farther than this = drag, not click
+
 # Multi-hotbar state. When the "Hotbars shown" setting is > 1, additional
 # hotbar panels render alongside the original. Each panel is independent:
 # its own draggable position, its own current content page (cyclable via
@@ -4120,6 +5007,34 @@ hotbar_icon_picker_scroll = 0    # vertical scroll offset within the picker grid
 _hotbar_clipboard = None
 # Per-frame click-target collections, populated by draw_hotbar_editor:
 hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
+
+# ── Hotbar editor drag-and-drop state ────────────────────────────────
+# Tracks an in-progress drag from one slot to another while the editor
+# is open. The flow:
+#   1. MOUSEBUTTONDOWN on a populated slot in edit mode sets this dict
+#      with active=False (we don't commit to "this is a drag" yet — the
+#      user might just be clicking to select).
+#   2. MOUSEMOTION while the button is held checks how far the cursor
+#      has moved. Once it crosses HOTBAR_DRAG_THRESHOLD_PX, active flips
+#      to True and the renderer starts drawing the drag preview.
+#   3. MOUSEBUTTONUP either:
+#        - active = False → treat as a click; call hotbar_select_slot()
+#        - active = True  → find the slot under the cursor and SWAP its
+#                           button with the source's; no-op if same slot
+#                           or dropped outside the grid.
+#
+# The "movement threshold to disambiguate click vs drag" pattern is
+# standard and feels natural; without it, every click would be ambiguous.
+# Six pixels is small enough that intentional drags trigger reliably but
+# large enough to absorb mouse jitter on click.
+hotbar_drag = None
+HOTBAR_DRAG_THRESHOLD_PX = 6
+# Seconds the cursor must hover over a page-nav arrow during a drag
+# before the page auto-flips. Lets the user move a button to a different
+# page without releasing the mouse. 0.6s was tested to feel deliberate
+# without being sluggish; under ~0.4s leads to accidental flips when
+# the cursor crosses an arrow on its way to a slot.
+HOTBAR_DRAG_DWELL_SEC = 0.6
 
 # Settings dropdown menu state. Opened by clicking the gear button in
 # the header (leftmost). Per-frame draw populates settings_menu_rects
@@ -4509,8 +5424,19 @@ def list_known_characters():
     """Return a sorted list of character names that have a config
     subfolder under USER_DIR. Used by the header to decide whether to
     show a dropdown (multiple chars) or just the name (single char),
-    and by the dropdown itself for the picker rows."""
+    and by the dropdown itself for the picker rows.
+
+    Excludes:
+      - dotfiles + leading-underscore entries (private/system)
+      - the 'logs' folder (session log output, not a character)
+      - the simulation-mode pseudo-character (any folder whose
+        lowercased name is 'sim player' / 'simplayer' / 'sim_player').
+        That folder gets created when Simulation Mode runs because
+        the sim addon emits a PLAYER packet with a fake name, and it
+        showing up in the live char switcher was confusing per Cooper.
+    """
     chars = []
+    sim_names = {"sim player", "simplayer", "sim_player", "sim"}
     try:
         for entry in sorted(os.listdir(USER_DIR)):
             full = os.path.join(USER_DIR, entry)
@@ -4519,6 +5445,8 @@ def list_known_characters():
             if entry.startswith(".") or entry.startswith("_"):
                 continue
             if entry.lower() == "logs":
+                continue
+            if entry.lower() in sim_names:
                 continue
             chars.append(entry)
     except Exception as e:
@@ -4570,6 +5498,23 @@ def _rebuild_path_constants():
     BUFF_STATE_SNAPSHOT = os.path.join(cd, "omniwatch_buff_state.json")
     # Per-job + global customizable stats panel layouts.
     STATS_LAYOUT_FILE  = os.path.join(cd, "omniwatch_stats_layout.json")
+
+    # Active layout profile for this character. _load_active_profile_name
+    # reads the omniwatch_profile.json pointer (defaults to "Default")
+    # then we rewire LAYOUT_FILE and SETTINGS_FILE to point at the
+    # chosen profile's JSONs. From here on the rest of the addon
+    # uses these globals transparently — no other code needs to
+    # know about profiles.
+    _load_active_profile_name()
+    if active_profile_name and active_profile_name != "Default":
+        LAYOUT_FILE   = _layout_path_for(active_profile_name)
+        SETTINGS_FILE = _settings_path_for(active_profile_name)
+        # If the named profile's settings file is missing (e.g. the
+        # user created the profile before settings-snapshot landed),
+        # fall back to the canonical settings file. The first save
+        # in this profile will populate the named file.
+        if not os.path.exists(SETTINGS_FILE):
+            SETTINGS_FILE = os.path.join(cd, "omniwatch_settings.json")
 
 # Initial bind. These point to USER_DIR (no char) until the first
 # PLAYER packet fires — _rebuild_path_constants() runs again then.
@@ -4700,10 +5645,23 @@ def _switch_active_view(name):
         "load_mobs_db":        None,    # mutates _mob_db; nothing to assign
     }
     global buttons_config, _zone_regions
+    # Reset per-character checklist state before _checklist_load() runs
+    # below; otherwise the previous character's manual checks would leak
+    # into the new character if the new file is missing. Auto-checks
+    # reset for free (they rebuild from the next TRUSTS| emit). The
+    # achievement-unlocked flag is also per-character — reset it here
+    # so an unlocked character switching to a fresh one doesn't carry
+    # over the "you beat FFXI" state.
+    global _achievement_unlocked, _achievement_banner_until_ts
+    for _ckey in checklist_known:
+        checklist_known[_ckey]["manual"] = set()
+        checklist_known[_ckey]["auto"] = set()
+    _achievement_unlocked = False
+    _achievement_banner_until_ts = 0.0
     for fn_name in ("load_layout", "load_buff_config",
                     "load_recast_timer_config", "load_buff_timer_config",
                     "load_buttons_config", "load_mobs_db", "load_zones_config",
-                    "_load_stats_layout"):
+                    "_load_stats_layout", "_checklist_load"):
         fn = globals().get(fn_name)
         if callable(fn):
             try:
@@ -5884,8 +6842,9 @@ def dispatch_button(idx):
 # Keep this aligned with the order user specified.
 SETTINGS_SECTIONS = [
     "General",
+    "Misc",
     "Header",
-    "Party",
+    "Party Panel",
     "Equipment",
     "Statistics",
     "Recast Timer",
@@ -5895,38 +6854,46 @@ SETTINGS_SECTIONS = [
     "Target Card",
     "DPS Tracker",
     "HotBar",
-    "Developer",
+    "_Bottom",         # unnamed: divider underline only, no label
 ]
 
 SETTINGS_SCHEMA = [
     # ── General ─────────────────────────────────────────────────────
     {
         "key":     "dps_sparkline",
-        "label":   "DPS sparkline",
+        "label":   "(internal) dPS sparkline",
         "kind":    "bool",
         "default": True,
-        "section": "DPS Tracker",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the DPS trend line behind the headline "
                    "number.",
     },
     {
-        # Top of General: a one-click clean exit. OmniWatch always runs
-        # borderless (no OS [X] close button) so we provide an in-app
-        # way to quit. Action handler saves layout + buff state snapshot
-        # before tearing down pygame and exiting the process.
-        "key":     "exit_omniwatch",
-        "label":   "Exit OmniWatch",
+        # Opens the checklist modal: a centered popup that tracks
+        # collectible progress (Trusts, Home Points, Survival Guides,
+        # spells, WSes, missions, etc.) with auto-detection from live
+        # game data and a per-character manual-check fallback for
+        # things the auto-detector can't see (e.g. completed missions
+        # whose state isn't exposed by Windower's APIs).
+        #
+        # Lives in the Misc section so the General section stays
+        # focused on app-level controls (exit / fullscreen / window
+        # pinning). Categories with red ●  in the title are manual-
+        # only; green ● ones auto-populate as you play.
+        "key":     "open_checklist",
+        "label":   "Checklist",
         "kind":    "button",
-        "button_text": "EXIT",
-        "section": "General",
+        "button_text": "OPEN",
+        "section": "Misc",
         "applies": "python",
-        "action":  "exit_omniwatch",
-        "help":    "Quit OmniWatch cleanly. Saves the current panel "
-                   "layout and buff state snapshot before closing. "
-                   "Use this instead of force-killing the process so "
-                   "your panel positions and durations are preserved "
-                   "for next launch.",
+        "action":  "open_checklist",
+        "help":    "Open the collectibles checklist. Cycle categories "
+                   "with the < > arrows in the header. Auto-checks "
+                   "(✓) come from live game data; manual checks (M) "
+                   "are for things you already have but the tracker "
+                   "hasn't confirmed yet — click a row to toggle. "
+                   "Manual checks persist per character.",
     },
     {
         # Full-screen toggle. Borderless windows don't have an OS [□]
@@ -5963,15 +6930,37 @@ SETTINGS_SCHEMA = [
                    "Hold SHIFT and drag anywhere in the OmniWatch "
                    "window to reposition it. Windows only.",
     },
+    # ── Display Configure section ─────────────────────────────────────
+    # Three appearance settings (opacity, UI scale, transparent
+    # background) used to render inline in the General section. They
+    # were rarely touched but added visual noise; collapsed behind a
+    # single Configure button that opens display_settings_modal —
+    # same pattern as the Currency cycler and Party Panel modals.
+    # The fourth row inside the modal is a "Hide display" action that
+    # triggers the same global toggle the floating nub does (useful
+    # for cutscenes / screenshots).
+    {
+        "key":     "display_settings",
+        "label":   "Display",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "General",
+        "applies": "python",
+        "action":  "open_display_settings",
+        "help":    "Configure window appearance: opacity, UI scale, "
+                   "transparent background, and a one-click toggle "
+                   "for the hide-display eye (same as clicking the "
+                   "floating nub).",
+    },
     {
         "key":     "window_opacity",
-        "label":   "Window opacity %",
+        "label":   "(internal) window opacity %",
         "kind":    "int",
         "default": 100,
         "min":     20,    # below this, text is unreadable
         "max":     100,
         "step":    5,
-        "section": "General",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Make the entire OmniWatch window translucent so "
                    "the game shows through behind it. 100 = solid "
@@ -5982,13 +6971,13 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "global_ui_scale",
-        "label":   "Global UI scale",
+        "label":   "(internal) global UI scale",
         "kind":    "float",
         "default": 1.0,
         "min":     0.5,
         "max":     3.0,
         "step":    0.25,
-        "section": "General",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Scales every panel's size and text by this "
                    "multiplier on top of each panel's own size. "
@@ -6001,10 +6990,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "transparent_background",
-        "label":   "Transparent background",
+        "label":   "(internal) transparent background",
         "kind":    "bool",
         "default": False,
-        "section": "General",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Punches out the dark background fill so panels "
                    "and text appear floating over the game. Combines "
@@ -6016,25 +7005,12 @@ SETTINGS_SCHEMA = [
         "key":     "open_crash_log",
         "label":   "Open log folder",
         "kind":    "button",
-        "section": "Developer",
+        "section": "_Bottom",
         "applies": "python",
         "action":  "open_crash_log_folder",
         "help":    "Open the folder containing crash logs and per-"
                    "session log files. Useful when reporting bugs — "
                    "send me the most recent session_*.log.",
-    },
-    {
-        "key":     "reset_zone_timer",
-        "label":   "Reset zone timer",
-        "kind":    "button",
-        "button_text": "RESET",
-        "section": "Header",
-        "applies": "python",
-        "action":  "reset_zone_timer",
-        "help":    "Reset the header's \"Zone Time\" counter to 0 "
-                   "without changing zones. Useful when you want to "
-                   "time something that started after you entered "
-                   "(e.g. an instance run, a timed gathering session).",
     },
     {
         "key":      "setup_mode",
@@ -6053,14 +7029,32 @@ SETTINGS_SCHEMA = [
                     "follows automatically — exit setup to re-lock.",
     },
     {
+        # At the bottom of the settings dropdown: clean exit.
+        # OmniWatch always runs borderless (no OS [X] close button)
+        # so we provide an in-app way to quit. The handler saves
+        # layout + buff state snapshot before tearing down pygame.
+        "key":     "exit_omniwatch",
+        "label":   "Exit OmniWatch",
+        "kind":    "button",
+        "button_text": "EXIT",
+        "section": "_Bottom",
+        "applies": "python",
+        "action":  "exit_omniwatch",
+        "help":    "Quit OmniWatch cleanly. Saves the current panel "
+                   "layout and buff state snapshot before closing. "
+                   "Use this instead of force-killing the process so "
+                   "your panel positions and durations are preserved "
+                   "for next launch.",
+    },
+    {
         "key":     "vana_time_offset_min",
-        "label":   "Adjust Vana'diel time",
+        "label":   "(internal) adjust Vana'diel time",
         "kind":    "int",
         "default": 0,
         "min":     -1440,    # one full Vana day
         "max":     1440,
         "step":    1,
-        "section": "Header",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Adjust the in-header Vana'diel clock by N minutes "
                    "if it drifts from the in-game clock. Positive = "
@@ -6069,14 +7063,136 @@ SETTINGS_SCHEMA = [
                    "NIN feet dusk-to-dawn bonus) always read the live "
                    "game clock and ignore this setting.",
     },
+    {
+        # User-hidden chat tabs (right-click on a tab adds its index
+        # here). Persisted to settings so the hide survives restarts;
+        # because it's part of the settings schema, it's also part
+        # of each profile's settings snapshot — meaning each profile
+        # can have its own hidden-tab set. The "Show all tabs"
+        # header button clears this list. Storing indices (not
+        # names) is robust against tab-name overrides for custom_1/
+        # custom_2; if the user renames Custom 1 to "Crafting", the
+        # hide still works because the underlying index didn't move.
+        "key":     "hidden_chat_tabs",
+        "label":   "(internal) hidden chat tabs",
+        "kind":    "json",
+        "default": [],
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Indices of chat tabs the user has right-click "
+                   "hidden. Cleared via 'Show all tabs' in the header.",
+    },
+    {
+        "key":     "show_clock",
+        "label":   "(internal) show OS clock",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the local-time clock just to the left of "
+                   "the zone block. Click it for the stopwatch/"
+                   "countdown modal.",
+    },
+    {
+        "key":     "show_clock_seconds",
+        "label":   "(internal) show clock seconds",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Append :SS to the header OS clock. Useful for "
+                   "timing-sensitive activities; off keeps the "
+                   "clock looking like a typical wall clock.",
+    },
+    {
+        # Time zone is stored as a named-region string (e.g. "Local",
+        # "JST", "EST"). The render path looks up the corresponding
+        # hour offset from CLOCK_TIMEZONES at draw time so DST shifts
+        # apply automatically (since we use time.time() + offset
+        # before passing to localtime()).
+        "key":     "clock_timezone",
+        "label":   "(internal) clock time zone",
+        "kind":    "enum",
+        "options":       ["Local", "UTC", "PST", "MST", "CST", "EST",
+                          "BRT", "GMT", "CET", "EET",
+                          "JST", "KST", "AEST"],
+        "option_labels": ["Local", "UTC", "PST", "MST", "CST", "EST",
+                          "BRT", "GMT", "CET", "EET",
+                          "JST", "KST", "AEST"],
+        "default": "Local",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Display the header clock in a chosen time zone "
+                   "instead of your computer's local time. Useful "
+                   "for tracking JST event times or coordinating "
+                   "with friends in other zones. 'Local' = your "
+                   "computer's clock.",
+    },
+    {
+        # When True, the single header time widget alternates between
+        # Vana'diel time (label "VT") and OS/real time (label "OS") on
+        # the clock_cycle_sec interval. When False, it shows only Vana
+        # time (the OS clock having been merged into this one widget).
+        "key":     "clock_cycle_enabled",
+        "label":   "(internal) cycle VT/OS time",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Alternate the header time between Vana'diel time "
+                   "(VT) and your real/OS time (OS). Off shows only "
+                   "Vana'diel time. Either way, clicking the time "
+                   "opens the stopwatch/countdown.",
+    },
+    {
+        "key":     "clock_cycle_sec",
+        "label":   "(internal) VT/OS cycle seconds",
+        "kind":    "int",
+        "default": 5,
+        "min":     2,
+        "max":     10,
+        "step":    1,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "How many seconds each time (Vana'diel, then OS) "
+                   "shows before switching, when VT/OS cycling is on. "
+                   "Range 2-10.",
+    },
+    {
+        # Server picker — used by the Domain Invasion banner in the
+        # Ongoing Events modal to filter the whereisdi.com response
+        # down to the user's world. The whereisdi API stores entries
+        # keyed by these exact strings, so the option list mirrors
+        # SE's retail world names.
+        "key":     "ffxi_server",
+        "label":   "(internal) server",
+        "kind":    "enum",
+        "options":       ["Asura", "Bahamut", "Bismarck", "Carbuncle",
+                          "Cerberus", "Fenrir", "Lakshmi", "Leviathan",
+                          "Odin", "Phoenix", "Quetzalcoatl", "Ragnarok",
+                          "Shiva", "Siren", "Sylph", "Valefor"],
+        "option_labels": ["Asura", "Bahamut", "Bismarck", "Carbuncle",
+                          "Cerberus", "Fenrir", "Lakshmi", "Leviathan",
+                          "Odin", "Phoenix", "Quetzalcoatl", "Ragnarok",
+                          "Shiva", "Siren", "Sylph", "Valefor"],
+        "default": "Asura",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Your FFXI retail server name. Used by the Domain "
+                   "Invasion banner in the Events modal to look up the "
+                   "current DI location for your world. Defaults to "
+                   "Asura — change it to your server if different. "
+                   "Selecting a server triggers an immediate refresh "
+                   "of the DI banner.",
+    },
 
     # ── Party ───────────────────────────────────────────────────────
     {
         "key":     "show_party",
-        "label":   "Show party",
+        "label":   "(internal) show party",
         "kind":    "bool",
         "default": True,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the main party panel (your character + up to "
                    "5 party members). Off = hide all party rows. Useful "
@@ -6084,20 +7200,20 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "show_alliance",
-        "label":   "Show alliance",
+        "label":   "(internal) show alliance",
         "kind":    "bool",
         "default": True,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show alliance party 1 + 2 panels. Off = main "
                    "party only.",
     },
     {
         "key":     "party_show_pets",
-        "label":   "Show pets",
+        "label":   "(internal) show pets",
         "kind":    "bool",
         "default": True,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show pet name + HP% in the corner of each party "
                    "member's row when they have a pet (BST jugs, SMN "
@@ -6105,30 +7221,30 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "party_show_buffs",
-        "label":   "Show buffs",
+        "label":   "(internal) show buffs",
         "kind":    "bool",
         "default": True,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the buffs column on each party member panel.",
     },
     {
         "key":     "party_show_debuffs",
-        "label":   "Show debuffs",
+        "label":   "(internal) show debuffs",
         "kind":    "bool",
         "default": True,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the debuffs column on each party member panel.",
     },
     {
         "key":     "party_buff_font_size",
-        "label":   "Buff/debuff font size",
+        "label":   "(internal) buff/debuff font size",
         "kind":    "enum",
         "options":       ["small", "medium", "large"],
         "option_labels": ["Small", "Medium", "Large"],
         "default": "medium",
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Text size for buff and debuff entries on party "
                    "member panels. Affects both columns. Small fits "
@@ -6138,10 +7254,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "party_buff_icon_grid",
-        "label":   "Compact icon grid",
+        "label":   "(internal) compact icon grid",
         "kind":    "bool",
         "default": False,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Render buff/debuff columns as a packed grid of small "
                    "icons (~16px) instead of text labels. Higher density "
@@ -6151,9 +7267,9 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "edit_buff_blacklist",
-        "label":   "Edit buffs / debuffs",
+        "label":   "(internal) edit buffs / debuffs",
         "kind":    "button",
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_buff_blacklist",
         "help":    "Open omniwatch_buffs.json in your default editor. "
@@ -6164,10 +7280,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "specific_buff_names",
-        "label":   "Specific buff names (self)",
+        "label":   "(internal) specific buff names (self)",
         "kind":    "bool",
         "default": False,
-        "section": "Party",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "When on, your own buffs in the party table show the "
                    "specific tier when known (Honor March, Valor Minuet V) "
@@ -6176,34 +7292,201 @@ SETTINGS_SCHEMA = [
                    "spell info to disambiguate buffs cast on other party "
                    "members. Off = legacy 'March x2' grouping.",
     },
+    # ── Party Panel section ──────────────────────────────────────────
+    # The nine party settings above (show/hide rows, buff column
+    # toggles, font size, blacklist editor) used to render inline in
+    # the settings dropdown but cluttered it visually. They've been
+    # collapsed behind a single "Configure" button that opens
+    # party_settings_modal — same pattern as the currency cycler.
+    # The hidden settings still drive everything; the modal just
+    # presents them in one focused panel.
+    {
+        "key":     "party_panel_settings",
+        "label":   "Party Panel",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Party Panel",
+        "applies": "python",
+        "action":  "open_party_settings",
+        "help":    "Configure the party panel: show/hide panel and "
+                   "alliances, pet display, buffs/debuffs columns, "
+                   "font size, compact icon grid, and edit which "
+                   "buffs/debuffs to hide.",
+    },
 
     # ── Equipment ───────────────────────────────────────────────────
+    # Single Configure button collapses the equipment panel settings
+    # (panel visibility, ring-cooldown indicator, ring cycle interval)
+    # into one focused modal — same pattern as other panels. The
+    # underlying schema entries are marked _Hidden so they don't
+    # render inline.
+    {
+        "key":     "equipment_settings",
+        "label":   "Equipment",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Equipment",
+        "applies": "python",
+        "action":  "open_equipment_settings",
+        "help":    "Configure the equipment panel: show/hide the "
+                   "panel itself, the teleport-ring cooldown "
+                   "indicator in the title bar, and the rotation "
+                   "interval for cycling through ring statuses.",
+    },
     {
         "key":     "show_equipment",
-        "label":   "Show equipment panel",
+        "label":   "(internal) show equipment panel",
         "kind":    "bool",
         "default": True,
-        "section": "Equipment",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the equipment viewer panel.",
     },
-
-    # ── Statistics ──────────────────────────────────────────────────
     {
-        "key":     "show_statistics",
-        "label":   "Show statistics panel",
+        "key":     "show_ring_cooldown",
+        "label":   "(internal) show ring cooldown",
         "kind":    "bool",
         "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the teleport-ring cooldown indicator in "
+                   "the equipment panel title bar. Cycles through "
+                   "Warp / Dem / Holla / Mea rings.",
+    },
+    {
+        "key":     "ring_cycle_seconds",
+        "label":   "(internal) ring cycle seconds",
+        "kind":    "int",
+        "default": 5,
+        "min":     2,
+        "max":     15,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "How often the ring cooldown indicator rotates "
+                   "between the four tracked rings.",
+    },
+    # Per-ring visibility toggles. Each ring can be independently
+    # enabled or disabled in the cycle. All default to True so the
+    # full set rotates out of the box; users who only care about
+    # specific rings can disable the others in the Equipment modal.
+    # Disabled rings are skipped during the cycle advance — they
+    # don't waste a 5-second slot showing a ring you don't have.
+    {
+        "key":     "show_ring_warp",
+        "label":   "(internal) cycle Warp Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Warp Ring in the cooldown cycle.",
+    },
+    {
+        "key":     "show_ring_dem",
+        "label":   "(internal) cycle Dem Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Dem Ring in the cooldown cycle.",
+    },
+    {
+        "key":     "show_ring_holla",
+        "label":   "(internal) cycle Holla Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Holla Ring in the cooldown cycle.",
+    },
+    {
+        "key":     "show_ring_mea",
+        "label":   "(internal) cycle Mea Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Mea Ring in the cooldown cycle.",
+    },
+    {
+        "key":     "show_ring_echad",
+        "label":   "(internal) cycle Echad Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Echad Ring (2h Adoulin warp) in the cycle.",
+    },
+    {
+        "key":     "show_ring_trizek",
+        "label":   "(internal) cycle Trizek Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Trizek Ring (2h Ru'Lude warp) in the cycle.",
+    },
+    {
+        "key":     "show_ring_reraise",
+        "label":   "(internal) cycle Reraise Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Reraise Ring (20h) in the cooldown cycle.",
+    },
+    {
+        "key":     "show_ring_endorsement",
+        "label":   "(internal) cycle Endorsement Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Endorsement Ring (2h exp/cp bonus) in the cycle.",
+    },
+    {
+        "key":     "show_ring_emporox",
+        "label":   "(internal) cycle Emporox's Ring",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Include Emporox's Ring (2h sparks bonus) in the cycle.",
+    },
+
+    # ── Statistics ──────────────────────────────────────────────────
+    # Single Configure button collapses the three stats settings
+    # (panel visibility, gear-settings wizard, stats-layout editor)
+    # into one focused modal — same pattern as Header / Party Panel
+    # / Display / Inventory. The underlying schema entries are still
+    # present but marked _Hidden so they don't render inline.
+    {
+        "key":     "statistics_settings",
+        "label":   "Statistics",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
         "section": "Statistics",
+        "applies": "python",
+        "action":  "open_statistics_settings",
+        "help":    "Configure the statistics panel: show/hide it, "
+                   "open the gear-settings wizard for Song+ / "
+                   "Phantom Roll+ / Unity Rank, and open the "
+                   "stats-layout JSON for visibility tweaks.",
+    },
+    {
+        "key":     "show_statistics",
+        "label":   "(internal) show statistics panel",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the character statistics panel.",
     },
     {
         "key":     "open_gear_settings",
-        "label":   "Gear settings",
+        "label":   "(internal) gear settings",
         "kind":    "button",
         "button_text": "OPEN",
-        "section": "Statistics",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_gear_settings",
         "help":    "Open the config wizard to set your Song+, Phantom "
@@ -6211,10 +7494,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "open_stats_layout",
-        "label":   "Edit stats layout",
+        "label":   "(internal) edit stats layout",
         "kind":    "button",
         "button_text": "EDIT",
-        "section": "Statistics",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_stats_layout",
         "help":    "Open omniwatch_stats_layout.json in your default "
@@ -6229,20 +7512,31 @@ SETTINGS_SCHEMA = [
 
     # ── Recast Timer ────────────────────────────────────────────────
     {
+        "key":     "recast_settings",
+        "label":   "Recast Timer",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Recast Timer",
+        "applies": "python",
+        "action":  "open_recast_settings",
+        "help":    "Configure the recast timer panel: visibility, "
+                   "auto-hide, and the blacklist of recasts to skip.",
+    },
+    {
         "key":     "show_recast",
-        "label":   "Show recast timer",
+        "label":   "(internal) show recast timer",
         "kind":    "bool",
         "default": True,
-        "section": "Recast Timer",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the recast timer panel.",
     },
     {
         "key":     "autohide_recast",
-        "label":   "Auto-hide when empty",
+        "label":   "(internal) auto-hide when empty",
         "kind":    "bool",
         "default": False,
-        "section": "Recast Timer",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Hide the recast panel completely when no abilities "
                    "are on cooldown. The panel reappears as soon as a "
@@ -6251,9 +7545,9 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "edit_recast_blacklist",
-        "label":   "Edit list",
+        "label":   "(internal) edit list",
         "kind":    "button",
-        "section": "Recast Timer",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_recast_config",
         "help":    "Open omniwatch_recast.json in your default editor. "
@@ -6264,20 +7558,31 @@ SETTINGS_SCHEMA = [
 
     # ── Buff Timer ──────────────────────────────────────────────────
     {
+        "key":     "buff_timer_settings",
+        "label":   "Buff Timer",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Buff Timer",
+        "applies": "python",
+        "action":  "open_buff_timer_settings",
+        "help":    "Configure the buff timer panel: visibility, "
+                   "auto-hide, and the blacklist of buffs to skip.",
+    },
+    {
         "key":     "show_buff_timer",
-        "label":   "Show buff timer",
+        "label":   "(internal) show buff timer",
         "kind":    "bool",
         "default": True,
-        "section": "Buff Timer",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the buff timer (countdown bars) panel.",
     },
     {
         "key":     "autohide_buff_timer",
-        "label":   "Auto-hide when empty",
+        "label":   "(internal) auto-hide when empty",
         "kind":    "bool",
         "default": False,
-        "section": "Buff Timer",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Hide the buff timer panel completely when no "
                    "tracked buffs are active. The panel reappears as "
@@ -6286,9 +7591,9 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "edit_buff_timer_blacklist",
-        "label":   "Edit list",
+        "label":   "(internal) edit list",
         "kind":    "button",
-        "section": "Buff Timer",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_buff_timer_config",
         "help":    "Open omniwatch_buff_timer.json in your default editor. "
@@ -6299,11 +7604,22 @@ SETTINGS_SCHEMA = [
 
     # ── Chat Panel ─────────────────────────────────────────────────
     {
+        "key":     "chat_settings",
+        "label":   "Chat Panel",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Chat Panel",
+        "applies": "python",
+        "action":  "open_chat_settings",
+        "help":    "Configure the chat panel: visibility, font size, "
+                   "and the input bar (composer).",
+    },
+    {
         "key":     "show_chat",
-        "label":   "Show chat panel",
+        "label":   "(internal) show chat panel",
         "kind":    "bool",
         "default": True,
-        "section": "Chat Panel",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the chat log panel (floating, draggable, "
                    "resizable). Displays /say, /party, /tell, system "
@@ -6313,12 +7629,12 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "chat_font_size",
-        "label":   "Font size",
+        "label":   "(internal) font size",
         "kind":    "enum",
         "options":       ["small", "medium", "large"],
         "option_labels": ["Small", "Medium", "Large"],
         "default": "medium",
-        "section": "Chat Panel",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Body text size for the chat panel. Tabs and "
                    "timestamps scale proportionally so the strip "
@@ -6327,10 +7643,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "show_chat_composer",
-        "label":   "Show input bar",
+        "label":   "(internal) show input bar",
         "kind":    "bool",
         "default": True,
-        "section": "Chat Panel",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the chat input bar at the bottom of the "
                    "panel for typing /say, /tell, /shout, /yell, "
@@ -6341,11 +7657,23 @@ SETTINGS_SCHEMA = [
 
     # ── Skillchain Panel ─────────────────────────────────────────────
     {
+        "key":     "skillchain_settings",
+        "label":   "Skillchain",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Skillchain",
+        "applies": "python",
+        "action":  "open_skillchain_settings",
+        "help":    "Configure the skillchain panel: visibility, "
+                   "auto-hide, and toggles for tracking active "
+                   "skillchains and magic-burst windows.",
+    },
+    {
         "key":     "show_skillchain",
-        "label":   "Show skillchain panel",
+        "label":   "(internal) show skillchain panel",
         "kind":    "bool",
         "default": True,
-        "section": "Skillchain",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the active-battle skillchain panel: resonating "
                    "properties on your current target, the skillchain "
@@ -6357,10 +7685,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "autohide_skillchain",
-        "label":   "Auto-hide when inactive",
+        "label":   "(internal) auto-hide when inactive",
         "kind":    "bool",
         "default": False,
-        "section": "Skillchain",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Hide the skillchain panel completely when no chain "
                    "is active and there are no continuation suggestions. "
@@ -6369,10 +7697,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "sc_track_sc",
-        "label":   "Track skillchains",
+        "label":   "(internal) track skillchains",
         "kind":    "bool",
         "default": True,
-        "section": "Skillchain",
+        "section": "_Hidden",
         "applies": "lua",
         "help":    "Show the build-up rows: resonating properties, "
                    "SC window countdown, chain step. Turn off to "
@@ -6380,10 +7708,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "sc_track_magic_burst",
-        "label":   "Track magic burst",
+        "label":   "(internal) track magic burst",
         "kind":    "bool",
         "default": True,
-        "section": "Skillchain",
+        "section": "_Hidden",
         "applies": "lua",
         "help":    "Show the magic-burst window timer after a chain "
                    "closes (the ~10s period during which matching-"
@@ -6392,40 +7720,51 @@ SETTINGS_SCHEMA = [
 
     # ── Target Card ─────────────────────────────────────────────────
     {
+        "key":     "target_card_settings",
+        "label":   "Target Card",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Target Card",
+        "applies": "python",
+        "action":  "open_target_card_settings",
+        "help":    "Configure target cards: show/hide main and sub-"
+                   "targets, and the per-card buffs/debuffs sections.",
+    },
+    {
         "key":     "show_target",
-        "label":   "Show main target",
+        "label":   "(internal) show main target",
         "kind":    "bool",
         "default": True,
-        "section": "Target Card",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the target card for your current main target.",
     },
     {
         "key":     "show_subtarget",
-        "label":   "Show sub-target",
+        "label":   "(internal) show sub-target",
         "kind":    "bool",
         "default": True,
-        "section": "Target Card",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show a second target card for your sub-target "
                    "(<st>) when one is active.",
     },
     {
         "key":     "target_show_buffs",
-        "label":   "Main: show buffs / debuffs",
+        "label":   "(internal) main: show buffs / debuffs",
         "kind":    "bool",
         "default": True,
-        "section": "Target Card",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the main target's active buffs and debuffs "
                    "sections. Off = hide both.",
     },
     {
         "key":     "subtarget_show_buffs",
-        "label":   "Sub: show buffs / debuffs",
+        "label":   "(internal) sub: show buffs / debuffs",
         "kind":    "bool",
         "default": True,
-        "section": "Target Card",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the sub-target's active buffs and debuffs "
                    "sections. Off = hide both.",
@@ -6433,17 +7772,29 @@ SETTINGS_SCHEMA = [
 
     # ── DPS Tracker ─────────────────────────────────────────────────
     {
+        "key":     "dps_settings",
+        "label":   "DPS Tracker",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "DPS Tracker",
+        "applies": "python",
+        "action":  "open_dps_settings",
+        "help":    "Configure the DPS tracker: panel visibility, "
+                   "sparkline overlay, capture window length, party "
+                   "tracking, and CSV/JSON log access.",
+    },
+    {
         "key":     "show_dps",
-        "label":   "Show DPS panel",
+        "label":   "(internal) show DPS panel",
         "kind":    "bool",
         "default": True,
-        "section": "DPS Tracker",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the DPS tracker panel.",
     },
     {
         "key":     "dps_window_seconds",
-        "label":   "Capture time",
+        "label":   "(internal) capture time",
         "kind":    "enum",
         # Stored as seconds (what lua expects on the wire); displayed
         # via option_labels so the dropdown reads naturally. The
@@ -6452,7 +7803,7 @@ SETTINGS_SCHEMA = [
         "options":       [0,           300,      600,       1800,      3600],
         "option_labels": ["Encounter", "5 min",  "10 min",  "30 min",  "60 min"],
         "default": 300,
-        "section": "DPS Tracker",
+        "section": "_Hidden",
         "applies": "lua",
         "help":    "Time-window or per-encounter tracking. 'Encounter' "
                    "logs each fight separately (mob name, dps, durations) "
@@ -6461,19 +7812,19 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "dps_track_party",
-        "label":   "Track party damage",
+        "label":   "(internal) track party damage",
         "kind":    "bool",
         "default": True,
-        "section": "DPS Tracker",
+        "section": "_Hidden",
         "applies": "lua",
         "help":    "Include party members and their pets in the DPS "
                    "tracker. Off = your damage only.",
     },
     {
         "key":     "open_dps_log_csv",
-        "label":   "Open CSV log",
+        "label":   "(internal) open CSV log",
         "kind":    "button",
-        "section": "DPS Tracker",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_dps_log_csv",
         "help":    "Open omniwatch_dps_log.csv (one summary row per "
@@ -6481,9 +7832,9 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "open_dps_log_json",
-        "label":   "Open JSON log",
+        "label":   "(internal) open JSON log",
         "kind":    "button",
-        "section": "DPS Tracker",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_dps_log_json",
         "help":    "Open omniwatch_dps_log.jsonl (full detail per "
@@ -6492,23 +7843,34 @@ SETTINGS_SCHEMA = [
 
     # ── HotBar ──────────────────────────────────────────────────────
     {
+        "key":     "hotbar_settings",
+        "label":   "HotBar",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "HotBar",
+        "applies": "python",
+        "action":  "open_hotbar_settings",
+        "help":    "Configure hotbars: panel visibility, number of "
+                   "hotbars shown (1-3), and the slot editor.",
+    },
+    {
         "key":     "show_hotbar",
-        "label":   "Show hotbar",
+        "label":   "(internal) show hotbar",
         "kind":    "bool",
         "default": True,
-        "section": "HotBar",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "Show the user-button hotbar panel.",
     },
     {
         "key":     "hotbar_visible_count",
-        "label":   "Hotbars shown",
+        "label":   "(internal) hotbars shown",
         "kind":    "int",
         "default": 1,
         "min":     1,
         "max":     10,
         "step":    1,
-        "section": "HotBar",
+        "section": "_Hidden",
         "applies": "python",
         "help":    "How many hotbar pages to display at once. 1 = the "
                    "classic single panel with </> arrows for switching "
@@ -6519,10 +7881,10 @@ SETTINGS_SCHEMA = [
     },
     {
         "key":     "edit_hotbar",
-        "label":   "Edit hotbar",
+        "label":   "(internal) edit hotbar",
         "kind":    "button",
         "button_text": "GO",
-        "section": "HotBar",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "open_hotbar_editor",
         "help":    "Enter hotbar edit mode. Click any slot to edit "
@@ -6536,22 +7898,281 @@ SETTINGS_SCHEMA = [
     # offset, and zone-timer reset. Anything that lives in the header
     # row goes here.)
     {
-        "key":     "show_inventory_button",
-        "label":   "Show 'Bags' button",
+        "key":     "show_hide_nub",
+        "label":   "(internal) show toggle nub (eye)",
         "kind":    "bool",
         "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show a small draggable, resizable button that "
+                   "hides or shows the entire OmniWatch display with "
+                   "one click — handy during cutscenes. The nub stays "
+                   "visible even when the display is hidden so you can "
+                   "always bring it back. Drag its body to move it, "
+                   "drag the corner to resize. If you turn this off "
+                   "while the display is hidden, use //ow show to "
+                   "restore it.",
+    },
+    {
+        "key":     "show_header_points",
+        "label":   "(internal) show points tracker",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show a points tracker to the left of the currency "
+                   "cycler. Displays current/needed for one of: "
+                   "Experience, Capacity Points (job points), or "
+                   "Exemplar Points. Use the picker below to choose "
+                   "which type is shown.",
+    },
+    {
+        "key":     "header_points_focus",
+        "label":   "(internal) points type",
+        "kind":    "enum",
+        "options":       ["exp", "cp", "exemplar"],
+        "option_labels": ["Experience", "Capacity",  "Exemplar"],
+        "default": "exp",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Which point type to show in the header tracker. "
+                   "Cycle with the < > arrows. Has no effect when "
+                   "'Show points tracker' is off.",
+    },
+    {
+        "key":     "show_inventory_button",
+        "label":   "(internal) show inventory button",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the 'Inventory' dropdown button in the header next "
+                   "to your gil. Lists every bag's contents with one-"
+                   "click links to BG-Wiki for each item, plus a Porter "
+                   "Slips section showing items registered to each slip.",
+    },
+    # ── Header section ───────────────────────────────────────────────
+    # Three Configure buttons collapse what used to be a dozen-ish
+    # inline settings into focused subdialogs:
+    #   Header     → reset zone timer, Vana time, server, points
+    #   Currency   → six-currency toggles + cycle interval (existing)
+    #   Inventory  → inventory button visibility + GearSwap folder
+    # Each maps to its own modal with all the underlying settings
+    # marked "_Hidden" in their schema entries.
+    {
+        "key":     "header_settings",
+        "label":   "Header",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
         "section": "Header",
         "applies": "python",
-        "help":    "Show the 'Bags' dropdown button in the header next "
-                   "to your gil. Lists every bag's contents with one-"
-                   "click links to BG-Wiki for each item.",
+        "action":  "open_header_settings",
+        "help":    "Configure header items: reset zone timer, "
+                   "Vana'diel time adjustment, retail server, and "
+                   "the points-tracker toggle + type.",
+    },
+    # ── Currency cycler (condensed into a subdialog) ─────────────────
+    # The gil block in the header now cycles through up to six
+    # currencies; the per-currency toggles + cycle interval were
+    # collapsed into a single "Configure" button to keep the main
+    # settings list short. Clicking opens currency_settings_modal.
+    {
+        "key":     "header_currency_settings",
+        "label":   "Currency cycler",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Header",
+        "applies": "python",
+        "action":  "open_currency_settings",
+        "help":    "Open the currency cycler settings: which of the "
+                   "six currencies (Gil, Sparks, Accolades, "
+                   "Gallimaufry, Temenos, Apollyon) appear in the "
+                   "header rotation, and how long each is shown.",
+    },
+    # ── Inventory configure ──────────────────────────────────────────
+    # Inventory button visibility + the GearSwap folder picker live
+    # together so the "what shows up in the header's right-side
+    # cluster" controls aren't strewn across the list.
+    {
+        "key":     "inventory_settings",
+        "label":   "Inventory",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Header",
+        "applies": "python",
+        "action":  "open_inventory_settings",
+        "help":    "Configure the inventory dropdown: show/hide the "
+                   "header 'Inventory' button, and pick the GearSwap "
+                   "folder so items referenced in your .lua files "
+                   "show a check mark in the dropdown.",
+    },
+    {
+        # Reset zone timer lives at the bottom of the Header section
+        # as a regular RESET button rather than inside the Header
+        # configure modal — it's an action you fire occasionally
+        # (not a setting you tune once and forget), so keeping it
+        # one click away from the main settings dropdown matches
+        # how it gets used.
+        "key":     "reset_zone_timer",
+        "label":   "Reset zone timer",
+        "kind":    "button",
+        "button_text": "RESET",
+        "section": "Header",
+        "applies": "python",
+        "action":  "reset_zone_timer",
+        "help":    "Reset the header's \"Zone Time\" counter to 0 "
+                   "without changing zones. Useful when you want to "
+                   "time something that started after you entered "
+                   "(e.g. an instance run, a timed gathering session).",
+    },
+    # ── Hidden header-visibility toggles ─────────────────────────────
+    # Driven from the Header configure modal. Each gates one header
+    # element from rendering; default True preserves pre-existing
+    # behavior on first launch.
+    {
+        "key":     "show_time",
+        "label":   "(internal) show time",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the Vana'diel clock (HH:MM VT) in the "
+                   "leftmost part of the header.",
+    },
+    {
+        "key":     "show_weather",
+        "label":   "(internal) show weather",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the current FFXI weather as a colored label "
+                   "after the moon block.",
+    },
+    {
+        "key":     "show_events",
+        "label":   "(internal) show events button",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the 'Events' button in the centered band of "
+                   "the header. Click it to open the campaigns / "
+                   "transport / RoE / DI modal.",
+    },
+    {
+        "key":     "show_location",
+        "label":   "(internal) show location",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the right-side zone block: zone timer, "
+                   "region, zone name, map number, and coordinates. "
+                   "Off = hide all of these together.",
+    },
+    # Hidden settings — driven by the configure modal, not the main
+    # settings list. Defaults still apply at first load; the modal
+    # reads and writes these directly.
+    {
+        "key":     "header_currency_cycle_seconds",
+        "label":   "(internal) currency cycle seconds",
+        "kind":    "int",
+        "default": 5,
+        "min":     2,
+        "max":     10,
+        "step":    1,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_gil",
+        "label":   "(internal) show gil",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_sparks",
+        "label":   "(internal) show sparks",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_accolades",
+        "label":   "(internal) show accolades",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_gallimaufry",
+        "label":   "(internal) show gallimaufry",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_temenos",
+        "label":   "(internal) show temenos",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_apollyon",
+        "label":   "(internal) show apollyon",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_escha_beads",
+        "label":   "(internal) show escha beads",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_nyzul_tokens",
+        "label":   "(internal) show nyzul tokens",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_ichor",
+        "label":   "(internal) show ichor",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
     },
     {
         "key":     "gearswap_folder",
-        "label":   "Gearswap folder",
+        "label":   "(internal) gearswap folder",
         "kind":    "button",
         "button_text": "PICK",
-        "section": "Header",
+        "section": "_Hidden",
         "applies": "python",
         "action":  "pick_gearswap_folder",
         "help":    "Folder containing your GearSwap .lua files. Items "
@@ -6559,13 +8180,13 @@ SETTINGS_SCHEMA = [
                    "in the inventory dropdown. Path is saved to "
                    "omniwatch_gearswap_path.json next to other configs.",
     },
-    # ── Developer ───────────────────────────────────────────────────
+    # ── Misc ────────────────────────────────────────────────────────
     {
         "key":     "sim_mode",
         "label":   "Simulation mode",
         "kind":    "bool",
         "default": False,
-        "section": "Developer",
+        "section": "Misc",
         "applies": "python",
         "help":    "Override OmniWatch's stat compute with synthetic "
                    "inputs (job, sub, merits, JP, gifts). Used to test "
@@ -6632,6 +8253,16 @@ def _coerce_setting(schema, raw):
             if raw in options:
                 return raw
             return schema["default"]
+        if kind == "json":
+            # Free-form JSON value (list / dict). Used for settings
+            # that store collections — e.g. hidden_chat_tabs holds a
+            # list of tab indices. We trust the JSON loader to give
+            # us the right shape; the consumer is responsible for
+            # any deeper validation. Falls back to default on a None
+            # explicitly (so a stray null doesn't replace a list).
+            if raw is None:
+                return schema["default"]
+            return raw
     except (ValueError, TypeError):
         pass
     return schema["default"]
@@ -6667,6 +8298,24 @@ def load_settings():
                     continue
                 if key in raw:
                     out[key] = _coerce_setting(schema, raw[key])
+            # Preserve any persisted keys that aren't in the schema.
+            # Some settings are stored directly via `settings[key] = ...`
+            # rather than the schema (e.g. the hide-nub's x/y/size are
+            # drag-driven, no settings-menu entry). Without this loop
+            # those keys would be silently dropped on every reload,
+            # which is why the eye nub kept resetting to its default
+            # position even though `save_settings` wrote it to disk.
+            #
+            # We don't coerce here — values stay as the JSON gave us.
+            # The reading site (e.g. `_hide_nub_geometry`) handles
+            # coercion and clamping per-key, which is more flexible
+            # for drag-only state than the schema's coerce_setting.
+            for key, val in raw.items():
+                if key in SETTINGS_BY_KEY:
+                    continue   # already handled above
+                if key.startswith("_"):
+                    continue   # private/internal keys, skip
+                out[key] = val
             print(f"[OmniWatch] Loaded settings from {SETTINGS_FILE}")
         else:
             with open(SETTINGS_FILE, "w") as f:
@@ -6727,6 +8376,100 @@ def save_settings():
             json.dump(settings, f, indent=2)
     except Exception as e:
         print(f"[OmniWatch] Could not save settings: {e}")
+
+
+# ── Whole-display hide nub ───────────────────────────────────────────
+def _hide_nub_geometry():
+    """Resolve the nub's (x, y, size) from settings, clamped to the
+    current window and the min/max size. Returns ints. Defaults apply
+    when the keys are absent (first run)."""
+    try:
+        size = int(settings.get("hide_nub_size", _HIDE_NUB_DEFAULT_SIZE))
+    except (TypeError, ValueError):
+        size = _HIDE_NUB_DEFAULT_SIZE
+    size = max(_HIDE_NUB_MIN_SIZE, min(_HIDE_NUB_MAX_SIZE, size))
+    try:
+        x = int(settings.get("hide_nub_x", _HIDE_NUB_DEFAULT_X))
+    except (TypeError, ValueError):
+        x = _HIDE_NUB_DEFAULT_X
+    try:
+        y = int(settings.get("hide_nub_y", _HIDE_NUB_DEFAULT_Y))
+    except (TypeError, ValueError):
+        y = _HIDE_NUB_DEFAULT_Y
+    # Keep at least partly on-screen so it can't be lost off an edge.
+    x = max(0, min(WIDTH - size, x))
+    y = max(0, min(HEIGHT - size, y))
+    return x, y, size
+
+
+def _hide_nub_save_geometry(x, y, size):
+    """Persist nub geometry to the settings dict and write to disk.
+    Stored directly (not via set_setting) because the nub is drag-
+    driven and has no settings-menu schema entry."""
+    settings["hide_nub_x"] = int(x)
+    settings["hide_nub_y"] = int(y)
+    settings["hide_nub_size"] = int(size)
+    save_settings()
+
+
+def draw_hide_nub(surface):
+    """Draw the small persistent toggle nub. Always drawn (in both the
+    shown and hidden states) so the user can always toggle back. An eye
+    glyph indicates state: open eye = display visible, slashed eye =
+    display hidden. A small corner handle affords resizing.
+
+    Records _hide_nub_rect and _hide_nub_handle_rect for the event
+    handler's hit-testing."""
+    global _hide_nub_rect, _hide_nub_handle_rect
+    if not setting("show_hide_nub"):
+        # User disabled the nub entirely. Clear rects so stale geometry
+        # can't be clicked.
+        _hide_nub_rect = None
+        _hide_nub_handle_rect = None
+        return
+
+    x, y, size = _hide_nub_geometry()
+    rect = pygame.Rect(x, y, size, size)
+    _hide_nub_rect = rect
+
+    # Body: rounded translucent square. Slightly more opaque when
+    # hidden so it stands out against an otherwise empty screen.
+    body_alpha = 210 if display_hidden else 150
+    body = pygame.Surface((size, size), pygame.SRCALPHA)
+    body.fill((24, 26, 32, body_alpha))
+    surface.blit(body, (x, y))
+    pygame.draw.rect(surface, (90, 100, 120), rect, 1, border_radius=4)
+
+    # Eye glyph, scaled to the nub. Drawn with primitives so it scales
+    # cleanly at any size and needs no font/asset.
+    cx, cy = x + size / 2, y + size / 2
+    eye_w = size * 0.62
+    eye_h = size * 0.36
+    col = (210, 220, 235) if not display_hidden else (235, 200, 120)
+    eye_rect = pygame.Rect(0, 0, int(eye_w), int(eye_h))
+    eye_rect.center = (int(cx), int(cy))
+    pygame.draw.ellipse(surface, col, eye_rect, max(1, size // 16))
+    pr = max(2, int(size * 0.10))
+    pygame.draw.circle(surface, col, (int(cx), int(cy)), pr)
+    if display_hidden:
+        # Slash across the eye to signal "hidden".
+        pygame.draw.line(
+            surface, (235, 200, 120),
+            (int(x + size * 0.22), int(y + size * 0.74)),
+            (int(x + size * 0.78), int(y + size * 0.26)),
+            max(1, size // 12))
+
+    # Resize handle: a couple diagonal ticks in the bottom-right corner.
+    hs = max(6, size // 4)
+    handle = pygame.Rect(x + size - hs, y + size - hs, hs, hs)
+    _hide_nub_handle_rect = handle
+    for i in range(1, 3):
+        off = int(hs * i / 3)
+        pygame.draw.line(
+            surface, (140, 150, 165),
+            (x + size - off, y + size - 1),
+            (x + size - 1, y + size - off), 1)
+
 
 def set_setting(key, value):
     """Update a setting's value, persist to disk, and dispatch any
@@ -7376,6 +9119,77 @@ def _open_hotbar_editor():
     _refresh_ui_icon_listing()        # rescan icons/ui/ on every entry
     print("[OmniWatch] hotbar editor opened — click a slot to edit it")
 
+
+def _open_currency_settings():
+    """Open the currency cycler subdialog. Closes the parent settings
+    dropdown so the modal isn't visually competing with it. The modal
+    reads/writes the six show_currency_* booleans + the cycle-interval
+    int directly via the settings system; on close, settings are auto-
+    persisted by the standard save path."""
+    global currency_settings_modal_open, settings_menu_open
+    currency_settings_modal_open = True
+    settings_menu_open = False
+
+
+def _open_party_settings():
+    """Open the party panel subdialog. Same pattern as the currency
+    cycler: closes the parent settings dropdown, modal reads/writes
+    the nine hidden party settings (show_party, show_alliance,
+    party_show_pets, party_show_buffs, party_show_debuffs,
+    party_buff_font_size, party_buff_icon_grid, specific_buff_names,
+    + the edit_buff_blacklist action button). Settings auto-persist
+    via the standard save path on each toggle."""
+    global party_settings_modal_open, settings_menu_open
+    party_settings_modal_open = True
+    settings_menu_open = False
+
+
+def _open_display_settings():
+    """Open the Display subdialog. Same pattern as the other
+    Configure-button modals: closes the parent settings dropdown and
+    flips the open flag. The modal reads/writes the three hidden
+    appearance settings (window_opacity, global_ui_scale,
+    transparent_background) plus the show_hide_nub toggle that
+    controls whether the floating eye/nub renders at all."""
+    global display_settings_modal_open, settings_menu_open
+    display_settings_modal_open = True
+    settings_menu_open = False
+
+
+def _open_header_settings():
+    """Open the Header subdialog. Holds reset zone timer, Vana'diel
+    time offset, FFXI server picker, and the points tracker
+    toggle/type. All of these used to render inline in the Header
+    section of the main settings dropdown."""
+    global header_settings_modal_open, settings_menu_open
+    header_settings_modal_open = True
+    settings_menu_open = False
+
+
+def _open_inventory_settings():
+    """Open the Inventory subdialog. Holds the inventory-button
+    visibility toggle and the GearSwap folder picker."""
+    global inventory_settings_modal_open, settings_menu_open
+    inventory_settings_modal_open = True
+    settings_menu_open = False
+
+
+def _open_statistics_settings():
+    """Open the Statistics subdialog. Three rows: show/hide the stats
+    panel, the gear-settings wizard (Song+ / Phantom Roll+ / Unity
+    Rank), and the stats-layout JSON editor."""
+    global statistics_settings_modal_open, settings_menu_open
+    statistics_settings_modal_open = True
+    settings_menu_open = False
+
+
+def _open_clock_modal():
+    """Open the header-clock modal — a small popup with a stopwatch
+    and a countdown timer. Triggered by clicking the OS clock between
+    the inventory button and the right-side zone block."""
+    global clock_modal_open
+    clock_modal_open = True
+
 # Action registry. Each button-kind entry's "action" string keys into
 # this dict to find its handler. Notepad can't jump to a specific line,
 # so the buttons that target sub-sections of the same JSON file all
@@ -7661,6 +9475,24 @@ _SETTINGS_ACTIONS = {
     "restart_overlay":         _restart_overlay,
     "toggle_setup_mode":       _toggle_setup_mode,
     "open_hotbar_editor":      _open_hotbar_editor,
+    "open_currency_settings":  _open_currency_settings,
+    "open_party_settings":     _open_party_settings,
+    "open_display_settings":   _open_display_settings,
+    "open_header_settings":    _open_header_settings,
+    "open_inventory_settings": _open_inventory_settings,
+    "open_statistics_settings": _open_statistics_settings,
+    # Generic-factory subdialogs (Recast / Buff / Chat / Skillchain /
+    # Target Card / DPS / HotBar). Each is just a key lookup into
+    # _SUBDIALOG_CONFIGS — the open helper flips the state's open
+    # flag and closes the parent dropdown.
+    "open_recast_settings":      lambda: _open_subdialog("recast"),
+    "open_buff_timer_settings":  lambda: _open_subdialog("buff_timer"),
+    "open_chat_settings":        lambda: _open_subdialog("chat"),
+    "open_skillchain_settings":  lambda: _open_subdialog("skillchain"),
+    "open_target_card_settings": lambda: _open_subdialog("target_card"),
+    "open_dps_settings":         lambda: _open_subdialog("dps"),
+    "open_hotbar_settings":      lambda: _open_subdialog("hotbar"),
+    "open_equipment_settings":   lambda: _open_subdialog("equipment"),
     "pick_gearswap_folder":    _pick_gearswap_folder,
     "clear_gearswap_folder":   _clear_gearswap_folder,
     "reset_zone_timer":        _reset_zone_timer,
@@ -7668,7 +9500,34 @@ _SETTINGS_ACTIONS = {
     "open_stats_layout":       _open_stats_layout_global,
     "exit_omniwatch":          _exit_omniwatch,
     "toggle_fullscreen":       _toggle_fullscreen,
+    "open_checklist":          lambda: _open_checklist_modal(),
+    "open_campaigns":          lambda: _open_campaigns_modal(),
 }
+
+
+def _open_checklist_modal():
+    """Open the checklist modal popup. Also closes the settings menu
+    so the modal isn't drawn behind it."""
+    global checklist_modal_open, checklist_scroll
+    global checklist_current_category, checklist_current_tab
+    global settings_menu_open
+    checklist_modal_open = True
+    checklist_scroll = 0
+    # Honor the saved tab if it's valid, otherwise start at 0.
+    if not (0 <= checklist_current_tab < len(CHECKLIST_TABS)):
+        checklist_current_tab = 0
+    # Honor the saved per-tab category index if it's valid for the
+    # CURRENT TAB (its bounds depend on which tab is active), else
+    # start at the tab's first category.
+    keys = _checklist_active_category_keys()
+    if not (0 <= checklist_current_category < len(keys)):
+        checklist_current_category = 0
+    settings_menu_open = False
+    # Refresh from disk in case manual checks were edited externally.
+    try:
+        _checklist_load()
+    except Exception as e:
+        print(f"[OmniWatch] checklist load on open failed: {e!r}")
 
 def apply_setting_side_effects(key, value):
     """Run side effects for a setting change. Some settings just need
@@ -7725,6 +9584,20 @@ def apply_setting_side_effects(key, value):
             _apply_transparent_background(True)
     elif key == "transparent_background":
         _apply_transparent_background(bool(value))
+    elif key == "ffxi_server":
+        # Server changed → clear stale data from the previous server
+        # (so the banner doesn't flash the wrong location) and force
+        # an immediate refresh. The setting is the source of truth
+        # whenever the Lua addon hasn't broadcast a server name; the
+        # user picking a new world from the dropdown should see the
+        # banner update within ~1 second.
+        di_state["location"]   = ""
+        di_state["updated_at"] = ""
+        di_state["server"]     = ""
+        di_state["error"]      = ""
+        global di_last_attempt
+        di_last_attempt = 0.0
+        _di_background_fetch()
     elif key == "sim_mode":
         # Sim mode flip: open/close the floating window AND tell lua.
         # Order matters — open the UI before notifying lua so the user
@@ -8800,6 +10673,6498 @@ def lookup_trust(name):
 
     return None
 
+
+# ── Checklist categories (master lists + display metadata) ──────────
+# Each category is a dict:
+#   key          — checklist_known sub-dict key
+#   label        — header text shown in the modal
+#   row_iter()   — returns a list of (item_key, display_name) tuples
+#                  for all items in the category (the master list)
+#   is_checked() — given an item_key, returns 'auto', 'manual', or None.
+# Categories with no master data (DB not loaded, Pass 2/3 not built)
+# self-skip in the modal cycler.
+def _checklist_trust_rows():
+    """All trusts in the loaded DB, sorted in user-preferred tiers.
+
+    Tier order (top → bottom):
+      0 — regular trusts, alphabetical
+      1 — (UC) variants, alphabetical
+      2 — Cornelia
+      3 — Matsui-P
+
+    The "(UC)" group is collected by substring match on the display
+    name (case-insensitive); the two named tail trusts are matched on
+    exact display name. Anything that doesn't fit a special tier lands
+    in tier 0. Returns [(key, display_name), ...]."""
+    if not _trusts_db or not _trusts_db.get("trusts"):
+        return []
+    items = []
+    for key, rec in _trusts_db["trusts"].items():
+        disp = (rec.get("name") if isinstance(rec, dict) else None) \
+               or (rec.get("alter_ego") if isinstance(rec, dict) else None) \
+               or key
+        items.append((key, str(disp)))
+
+    def _tier(disp):
+        d = disp.strip()
+        if d == "Cornelia":
+            return 2
+        if d == "Matsui-P":
+            return 3
+        if "(uc)" in d.lower():
+            return 1
+        return 0
+
+    items.sort(key=lambda t: (_tier(t[1]), t[1].lower()))
+    return items
+
+
+def _checklist_trust_check_state(key):
+    """Returns 'auto' if the key is in the live spell-list set,
+    'manual' if user-marked, else None. Auto wins over manual when
+    both are set (so a re-confirmed manual upgrades visually)."""
+    st = checklist_known.get("trusts", {})
+    if key in st.get("auto", set()):
+        return "auto"
+    if key in st.get("manual", set()):
+        return "manual"
+    return None
+
+
+# Categories whose auto-checks should persist to disk. Use this for
+# categories where the auto observation is a ONE-SHOT event (the user
+# visits an NPC and we sniff the bitfield from the menu packet). Without
+# persistence, that progress would vanish on reload because the NPC
+# only re-sends the bitfield when the user opens its menu again.
+#
+# DO NOT add categories whose auto is derived from data that's always
+# available (e.g. trusts come from windower.ffxi.get_spells() on every
+# emit; persisting that would just risk staleness).
+CHECKLIST_AUTO_PERSIST = {
+    "homepoints",
+    "survival_guides",
+    # Weapon Skills: live auto-set is JOB-DEPENDENT (only WSes
+    # available on current main+sub job), so we accumulate everything
+    # ever seen by UNION-ing each WS_ packet into the existing auto
+    # set and persisting that union across sessions. Without this,
+    # the player would have to be on every relevant job during a
+    # single session to get a complete WS picture.
+    "ws_h2h", "ws_dag", "ws_swd", "ws_gsd", "ws_axe", "ws_gax",
+    "ws_scy", "ws_pol", "ws_kat", "ws_gkt", "ws_clb", "ws_stf",
+    "ws_arc", "ws_mrk",
+}
+
+
+# Categories that have NO auto-detection — every check is one the user
+# manually toggled via the checklist UI. Outpost warps reset on nation
+# change so they're tracked manually for "saved-for-future-switch"
+# purposes. Quests and Missions could in principle be auto-detected
+# from server packets but require dedicated packet-decode work; for
+# now they're manual.
+#
+# Used by the modal header to mark these categories with a red dot
+# in the title, and by the footer to clarify the legend. Any category
+# NOT in this set is treated as auto-detected and gets a green dot
+# instead so users can tell at a glance whether the modal will fill
+# in checkboxes automatically as they play.
+CHECKLIST_MANUAL_ONLY = {
+    "outpost_warps_sandy",
+    "outpost_warps_bastok",
+    "outpost_warps_windy",
+    "quests_bastok",
+    "quests_sandy",
+    "quests_windy",
+    "quests_jeuno",
+    "quests_ahturhgan",
+    "quests_adoulin",
+    "quests_selbina",
+    "quests_mhaura",
+    "quests_tavnazia",
+    "quests_moghouse",
+    "quests_outlands",
+    "quests_crystalwar",
+    "quests_aby_vision",
+    "quests_aby_scars",
+    "quests_aby_heroes",
+    "missions_bastok",
+    "missions_sandy",
+    "missions_windy",
+    "missions_zilart",
+    "missions_cop",
+    "missions_toau",
+    "missions_vr",
+    "missions_rov",
+    "missions_soa",
+    "missions_wotg",
+    "missions_acp",
+    "missions_mkd",
+    "missions_asa",
+    "weapons_relic",
+    "weapons_mythic",
+    "weapons_empyrean",
+    "weapons_aeonic",
+    "weapons_prime",
+}
+
+
+CHECKLIST_CATEGORIES = [
+    # ── Group: Allies (party companions / mounts) ─────────────────────
+    {
+        "key":          "trusts",
+        "label":        "Trusts",
+        "row_iter":     _checklist_trust_rows,
+        "is_checked":   _checklist_trust_check_state,
+        "url_builder":  None,    # set below once the helper is defined
+    },
+    {
+        "key":          "mounts",
+        "label":        "Mounts",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    # ── Group: Magic ──────────────────────────────────────────────────
+    {
+        "key":          "blu_spells",
+        "label":        "BLU Spells",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "spells_blm",
+        "label":        "BLM Spells",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "spells_whm",
+        "label":        "WHM Spells",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "spells_smn",
+        "label":        "SMN Spells",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "spells_nin",
+        "label":        "Ninjutsu",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "spells_brd",
+        "label":        "Bard Songs",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "spells_geo",
+        "label":        "GEO Spells",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    # ── Group: Weapon Skills (one cat per weapon type) ───────────────
+    {
+        "key":          "ws_h2h",
+        "label":        "Hand-to-Hand",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_dag",
+        "label":        "Dagger",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_swd",
+        "label":        "Sword",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_gsd",
+        "label":        "Great Sword",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_axe",
+        "label":        "Axe",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_gax",
+        "label":        "Great Axe",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_scy",
+        "label":        "Scythe",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_pol",
+        "label":        "Polearm",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_kat",
+        "label":        "Katana",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_gkt",
+        "label":        "Great Katana",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_clb",
+        "label":        "Club",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_stf",
+        "label":        "Staff",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_arc",
+        "label":        "Archery",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "ws_mrk",
+        "label":        "Marksmanship",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    # ── Group: Transport ──────────────────────────────────────────────
+    {
+        "key":          "homepoints",
+        "label":        "Home Points",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "survival_guides",
+        "label":        "Survival Guides",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    # Outpost warps split per-nation: unlock state is per-allegiance
+    # and the game wipes it server-side when you switch nations, so
+    # tracking three independent sets lets the player retain memory
+    # of unlocks across nation changes (they can switch back later
+    # and pick up where they left off).
+    {
+        "key":          "outpost_warps_sandy",
+        "label":        "Outposts — San d'Oria",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "outpost_warps_bastok",
+        "label":        "Outposts — Bastok",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "outpost_warps_windy",
+        "label":        "Outposts — Windurst",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    # ── Group: Quests ─────────────────────────────────────────────────
+    {
+        "key":          "quests_bastok",
+        "label":        "Bastok Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_sandy",
+        "label":        "San d'Oria Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_windy",
+        "label":        "Windurst Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_jeuno",
+        "label":        "Jeuno Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_ahturhgan",
+        "label":        "Aht Urhgan Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_adoulin",
+        "label":        "Adoulin Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_selbina",
+        "label":        "Selbina Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_mhaura",
+        "label":        "Mhaura Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_tavnazia",
+        "label":        "Tavnazian Safehold Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_moghouse",
+        "label":        "Mog House Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_outlands",
+        "label":        "Outlands Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_crystalwar",
+        "label":        "Crystal War Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_aby_vision",
+        "label":        "Vision of Abyssea",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_aby_scars",
+        "label":        "Scars of Abyssea",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_aby_heroes",
+        "label":        "Heroes of Abyssea",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    # ── Group: Missions (per nation / expansion) ──────────────────────
+    {
+        "key":          "missions_bastok",
+        "label":        "Bastok",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_sandy",
+        "label":        "San d'Oria",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_windy",
+        "label":        "Windurst",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_zilart",
+        "label":        "Rise of the Zilart",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_cop",
+        "label":        "Chains of Promathia",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_toau",
+        "label":        "Treasures of Aht Urhgan",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_wotg",
+        "label":        "Wings of the Goddess",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_soa",
+        "label":        "Seekers of Adoulin",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_acp",
+        "label":        "A Crystalline Prophecy",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_mkd",
+        "label":        "A Moogle Kupo d'Etat",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_asa",
+        "label":        "A Shantotto Ascension",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_rov",
+        "label":        "Rhapsodies of Vana'diel",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "missions_vr",
+        "label":        "The Voracious Resurgence",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "weapons_relic",
+        "label":        "Relic",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "weapons_mythic",
+        "label":        "Mythic",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "weapons_empyrean",
+        "label":        "Empyrean",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "weapons_aeonic",
+        "label":        "Aeonic",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "weapons_prime",
+        "label":        "Prime",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "master_trials",
+        "label":        "Master Trials",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+]
+
+
+# ── Top-level tabs grouping the categories ─────────────────────────────
+# The modal has two-level navigation: tab bar at top selects a GROUP
+# of categories, then </> arrows cycle through that group's categories.
+#
+# Each tab entry has:
+#   key       — stable internal id
+#   label     — text shown on the tab button
+#   cat_keys  — list of CHECKLIST_CATEGORIES keys in display order
+#
+# To add a new category: append it to CHECKLIST_CATEGORIES with the
+# correct row_iter/is_checked/url_builder, then add its key to one of
+# the cat_keys lists below.
+CHECKLIST_TABS = [
+    {
+        "key":      "allies",
+        "label":    "Allies",
+        "cat_keys": ["trusts", "mounts"],
+    },
+    {
+        "key":      "transport",
+        "label":    "Transportation",
+        "cat_keys": [
+            "homepoints",
+            "survival_guides",
+            "outpost_warps_sandy",
+            "outpost_warps_bastok",
+            "outpost_warps_windy",
+        ],
+    },
+    {
+        "key":      "weapons",
+        "label":    "Weapons",
+        "cat_keys": [
+            "weapons_relic",
+            "weapons_mythic",
+            "weapons_empyrean",
+            "weapons_aeonic",
+            "weapons_prime",
+        ],
+    },
+    {
+        "key":      "weaponskills",
+        "label":    "Weapon Skills",
+        "cat_keys": [
+            "ws_h2h",
+            "ws_dag",
+            "ws_swd",
+            "ws_gsd",
+            "ws_axe",
+            "ws_gax",
+            "ws_scy",
+            "ws_pol",
+            "ws_kat",
+            "ws_gkt",
+            "ws_clb",
+            "ws_stf",
+            "ws_arc",
+            "ws_mrk",
+        ],
+    },
+    {
+        "key":      "spells",
+        "label":    "Spells",
+        "cat_keys": [
+            "blu_spells",
+            "spells_blm",
+            "spells_whm",
+            "spells_smn",
+            "spells_nin",
+            "spells_brd",
+            "spells_geo",
+        ],
+    },
+    {
+        "key":      "missions",
+        "label":    "Missions",
+        "cat_keys": [
+            "missions_bastok",
+            "missions_sandy",
+            "missions_windy",
+            "missions_zilart",
+            "missions_cop",
+            "missions_toau",
+            "missions_wotg",
+            "missions_soa",
+            "missions_rov",
+            "missions_vr",
+            "missions_acp",
+            "missions_mkd",
+            "missions_asa",
+        ],
+    },
+    {
+        "key":      "quests",
+        "label":    "Quests",
+        "cat_keys": [
+            "quests_bastok",
+            "quests_sandy",
+            "quests_windy",
+            "quests_jeuno",
+            "quests_ahturhgan",
+            "quests_adoulin",
+            "quests_selbina",
+            "quests_mhaura",
+            "quests_tavnazia",
+            "quests_moghouse",
+            "quests_outlands",
+            "quests_crystalwar",
+            "quests_aby_vision",
+            "quests_aby_scars",
+            "quests_aby_heroes",
+        ],
+    },
+    {
+        "key":      "master_trials",
+        "label":    "Master Trials",
+        "cat_keys": ["master_trials"],
+    },
+]
+
+
+def _checklist_active_tab():
+    """Return the currently-selected tab dict, clamping the index
+    defensively. Returns the first tab if the index is bad."""
+    if 0 <= checklist_current_tab < len(CHECKLIST_TABS):
+        return CHECKLIST_TABS[checklist_current_tab]
+    return CHECKLIST_TABS[0] if CHECKLIST_TABS else None
+
+
+def _checklist_active_category_keys():
+    """List of category keys in the current tab, in display order."""
+    tab = _checklist_active_tab()
+    return tab.get("cat_keys", []) if tab else []
+
+
+def _checklist_active_category():
+    """Resolve the active CHECKLIST_CATEGORIES entry from the
+    current tab + per-tab category index. Returns None if either
+    index is bad."""
+    keys = _checklist_active_category_keys()
+    if not keys:
+        return None
+    if not (0 <= checklist_current_category < len(keys)):
+        return None
+    want_key = keys[checklist_current_category]
+    for cat in CHECKLIST_CATEGORIES:
+        if cat["key"] == want_key:
+            return cat
+    return None
+
+
+# ── BG-wiki URL builders for each checklist category ────────────────────
+# Maps a row's (item_key, disp) to a BG-wiki article URL. BG-wiki uses
+# MediaWiki conventions: page titles separated from the base path with
+# a slash, spaces replaced by underscores. Special characters in titles
+# (apostrophes, parens, brackets) survive in URLs and BG-wiki accepts
+# them — we only need to URL-encode the unsafe ones.
+#
+# Per-category logic:
+#   - Trusts: all trust rows link to the BG-wiki Trust category page
+#     (one shared landing page; per-trust pages are usually too thin
+#     to be worth navigating to row-by-row).
+#   - Home Points: BG-wiki doesn't have separate pages for each HP
+#     number — the zone page (e.g. /Bastok_Markets) covers all the HPs
+#     in that zone. Strip any trailing " #N" suffix and any " [S]"
+#     marker to get a clean zone name. Past Adoulin updates use
+#     bracket suffix that BG-wiki sometimes keeps and sometimes
+#     drops — keeping it produces a redlinked page about half the
+#     time, so we strip [S] for HPs (the zone page covers both eras).
+#   - Survival Guides: same shape as HPs but no #N suffix exists.
+#     Same [S] stripping for the same reason.
+#   - BLU Spells: spell name → /<spell_name>. BG-wiki uses the spell
+#     name verbatim for the page title.
+#
+# When a category's url_builder returns None (or empty string), the
+# label is rendered as a normal row label — not clickable as a link.
+# This is a safe fallback if we ever can't construct a reasonable URL.
+_BG_WIKI_BASE = "https://www.bg-wiki.com/ffxi/"
+
+
+def _bg_wiki_url(title):
+    """Build a BG-wiki article URL from a page title. Returns None if
+    title is empty/falsy after cleanup."""
+    if not title:
+        return None
+    title = title.strip()
+    if not title:
+        return None
+    # MediaWiki: spaces → underscores. Then quote everything except a
+    # short safelist; this keeps apostrophes, parens, brackets readable
+    # in the URL while encoding the bytes that browsers actually need.
+    page = title.replace(" ", "_")
+    return _BG_WIKI_BASE + urllib.parse.quote(page, safe="_()[]'/:")
+
+
+def _checklist_url_trust(item_key, disp):
+    # All trusts land on the BG-wiki Trust category page rather than
+    # per-trust pages. Individual trust pages on BG-wiki are often
+    # thin (basic stats only) while the category index gives a
+    # browseable overview with everything in one place — better for
+    # the casual "what trusts exist / what does this one do" lookup
+    # the checklist tends to trigger.
+    return _bg_wiki_url("Category:Trust")
+
+
+def _checklist_url_hp(item_key, disp):
+    # Strip the trailing " #N" (HP number) and " [S]" (era marker).
+    # Zone page on BG-wiki covers all HPs in the zone, both eras.
+    name = re.sub(r"\s*#\d+\s*$", "", disp)
+    name = re.sub(r"\s*\[S\]\s*$", "", name)
+    return _bg_wiki_url(name.strip())
+
+
+def _checklist_url_sg(item_key, disp):
+    # SGs don't have HP-style numeric suffixes, but the [S] strip is
+    # still relevant for Crystal War-era zones.
+    name = re.sub(r"\s*\[S\]\s*$", "", disp)
+    return _bg_wiki_url(name.strip())
+
+
+def _checklist_url_blu(item_key, disp):
+    # BLU spell names map directly to BG-wiki article titles.
+    return _bg_wiki_url(disp)
+
+
+def _checklist_url_caster_spell(item_key, disp):
+    """URL builder for BLM/WHM/SMN/NIN/BRD/GEO checklist rows.
+    Most spell names map 1:1 to a wiki article, but a handful collide
+    with element articles ('Fire', 'Water') and need to redirect to
+    the disambiguated page title ('Fire (Spell)', 'Water (Spell)').
+    See _SPELL_PAGE_OVERRIDES."""
+    page = _SPELL_PAGE_OVERRIDES.get(disp, disp)
+    return _bg_wiki_url(page)
+
+
+def _checklist_url_mount(item_key, disp):
+    # Each mount has its own BG-wiki article (e.g. /Crystal_Bahamut,
+    # /Tulfaire), using the canonical English name. disp is already
+    # the name verbatim.
+    return _bg_wiki_url(disp)
+
+
+def _checklist_url_outpost(item_key, disp):
+    # Display text is "Region  (Outpost zone)" — link to the region's
+    # wiki page (where the supply-quest details, fee tables, and
+    # required level live). Strip the parenthetical to get the
+    # region label.
+    region = disp.split("(")[0].strip()
+    return _bg_wiki_url(region)
+
+
+def _checklist_url_quest(item_key, disp):
+    # Quest names map directly to BG-wiki article titles. The display
+    # name preserves disambiguation suffixes like "(Bastok)" which are
+    # part of the wiki page title for quests that exist in multiple
+    # nations.
+    #
+    # Some quests share their name with an item or character on bg-wiki
+    # (e.g. "Brigand's Chart" the item vs the Selbina quest) and need
+    # the "(Quest)" disambig suffix on the page slug. Per-row overrides
+    # live in _QUEST_URL_OVERRIDES so the closure can route those rows
+    # to the disambig page without polluting the displayed quest name.
+    cat_key = _checklist_active_category_key_for_url()
+    if cat_key:
+        overrides = _QUEST_URL_OVERRIDES.get(cat_key, {})
+        slug = overrides.get(item_key)
+        if slug:
+            return _bg_wiki_url(slug)
+    return _bg_wiki_url(disp)
+
+
+def _checklist_active_category_key_for_url():
+    """Return the active checklist category key, for URL builders that
+    need to consult per-category override maps. Returns None if the
+    active category can't be resolved."""
+    cat = _checklist_active_category()
+    return cat["key"] if cat else None
+
+
+# Per-category, per-row URL overrides for quest pages whose bg-wiki
+# slug differs from the bare quest name. Outer key = category key;
+# inner key = lowercased quest name (matches what _make_quest_rows
+# emits as the row key); value = explicit bg-wiki page slug.
+_QUEST_URL_OVERRIDES = {
+    "quests_selbina": {
+        # Both Chart quests share names with the in-world items used
+        # to start them, so bg-wiki uses "(Quest)" disambig slugs.
+        "brigand's chart": "Brigand's_Chart_(Quest)",
+        "pirate's chart":  "Pirate's_Chart_(Quest)",
+    },
+    "quests_tavnazia": {
+        # The in-game quest log displays "VW Op. #004" / "#026" with
+        # the # sign, but bg-wiki's article slugs drop it — the
+        # category page at /ffxi/Category:Tavnazian_Safehold_Quests
+        # links to "VW_Op._004:_..." without the hash.
+        "vw op. #004: bibiki bombardment": "VW_Op._004:_Bibiki_Bombardment",
+        "vw op. #026: tavnazian terrors":  "VW_Op._026:_Tavnazian_Terrors",
+    },
+    "quests_aby_heroes": {
+        # Same pattern as Tavnazia's VW Op entries: the in-game quest
+        # log displays "Dominion Op #NN" with the # sign, but bg-wiki
+        # page slugs are "Dominion_Op_NN_(Zone)" with no hash. All 42
+        # entries (3 zones × 14 ops) need the override.
+        "dominion op #01 (altepa)":     "Dominion_Op_01_(Altepa)",
+        "dominion op #02 (altepa)":     "Dominion_Op_02_(Altepa)",
+        "dominion op #03 (altepa)":     "Dominion_Op_03_(Altepa)",
+        "dominion op #04 (altepa)":     "Dominion_Op_04_(Altepa)",
+        "dominion op #05 (altepa)":     "Dominion_Op_05_(Altepa)",
+        "dominion op #06 (altepa)":     "Dominion_Op_06_(Altepa)",
+        "dominion op #07 (altepa)":     "Dominion_Op_07_(Altepa)",
+        "dominion op #08 (altepa)":     "Dominion_Op_08_(Altepa)",
+        "dominion op #09 (altepa)":     "Dominion_Op_09_(Altepa)",
+        "dominion op #10 (altepa)":     "Dominion_Op_10_(Altepa)",
+        "dominion op #11 (altepa)":     "Dominion_Op_11_(Altepa)",
+        "dominion op #12 (altepa)":     "Dominion_Op_12_(Altepa)",
+        "dominion op #13 (altepa)":     "Dominion_Op_13_(Altepa)",
+        "dominion op #14 (altepa)":     "Dominion_Op_14_(Altepa)",
+        "dominion op #01 (uleguerand)": "Dominion_Op_01_(Uleguerand)",
+        "dominion op #02 (uleguerand)": "Dominion_Op_02_(Uleguerand)",
+        "dominion op #03 (uleguerand)": "Dominion_Op_03_(Uleguerand)",
+        "dominion op #04 (uleguerand)": "Dominion_Op_04_(Uleguerand)",
+        "dominion op #05 (uleguerand)": "Dominion_Op_05_(Uleguerand)",
+        "dominion op #06 (uleguerand)": "Dominion_Op_06_(Uleguerand)",
+        "dominion op #07 (uleguerand)": "Dominion_Op_07_(Uleguerand)",
+        "dominion op #08 (uleguerand)": "Dominion_Op_08_(Uleguerand)",
+        "dominion op #09 (uleguerand)": "Dominion_Op_09_(Uleguerand)",
+        "dominion op #10 (uleguerand)": "Dominion_Op_10_(Uleguerand)",
+        "dominion op #11 (uleguerand)": "Dominion_Op_11_(Uleguerand)",
+        "dominion op #12 (uleguerand)": "Dominion_Op_12_(Uleguerand)",
+        "dominion op #13 (uleguerand)": "Dominion_Op_13_(Uleguerand)",
+        "dominion op #14 (uleguerand)": "Dominion_Op_14_(Uleguerand)",
+        "dominion op #01 (grauberg)":   "Dominion_Op_01_(Grauberg)",
+        "dominion op #02 (grauberg)":   "Dominion_Op_02_(Grauberg)",
+        "dominion op #03 (grauberg)":   "Dominion_Op_03_(Grauberg)",
+        "dominion op #04 (grauberg)":   "Dominion_Op_04_(Grauberg)",
+        "dominion op #05 (grauberg)":   "Dominion_Op_05_(Grauberg)",
+        "dominion op #06 (grauberg)":   "Dominion_Op_06_(Grauberg)",
+        "dominion op #07 (grauberg)":   "Dominion_Op_07_(Grauberg)",
+        "dominion op #08 (grauberg)":   "Dominion_Op_08_(Grauberg)",
+        "dominion op #09 (grauberg)":   "Dominion_Op_09_(Grauberg)",
+        "dominion op #10 (grauberg)":   "Dominion_Op_10_(Grauberg)",
+        "dominion op #11 (grauberg)":   "Dominion_Op_11_(Grauberg)",
+        "dominion op #12 (grauberg)":   "Dominion_Op_12_(Grauberg)",
+        "dominion op #13 (grauberg)":   "Dominion_Op_13_(Grauberg)",
+        "dominion op #14 (grauberg)":   "Dominion_Op_14_(Grauberg)",
+    },
+}
+
+
+def _checklist_url_weaponskill(item_key, disp):
+    # WS names map directly to BG-wiki article titles. Names like
+    # 'Blade: Rin' and 'Tachi: Goten' have colons which _bg_wiki_url
+    # keeps in the safe set (so the URL reads 'Blade:_Rin'), exactly
+    # matching the wiki's page slug convention.
+    return _bg_wiki_url(disp)
+
+
+def _make_mission_url_builder(wiki_prefix, override_map=None):
+    """Factory: return a url_builder closure bound to a specific
+    bg-wiki page slug strategy.
+
+    Two strategies are supported:
+
+      - PREFIXED: wiki_prefix is a non-empty string like
+        'Bastok_Mission_'. URLs are built as <prefix><item_key>,
+        producing slugs like 'Bastok_Mission_4-1'. Used by every
+        mission line that follows the numeric-id pattern.
+
+      - NAME-BASED: wiki_prefix is None or empty string. URLs are
+        built from the mission NAME (parsed out of the row's
+        display string '<id>  <name>'). Used by Wings of the
+        Goddess whose bg-wiki pages use plain mission-name slugs
+        rather than a numbered scheme.
+
+    In either strategy, per-row override entries take precedence
+    over the default URL construction. Use override_map for entries
+    whose bg-wiki page doesn't follow the category's normal pattern
+    (e.g. Rise of the Zilart's epilogue quests, or WotG's disambig
+    pages like 'Cavernous_Maws_(Mission)' that need explicit slugs).
+
+    Falls back to the display name if no item_key arrives (defensive)."""
+    override_map = override_map or {}
+    def _url(item_key, disp):
+        if item_key:
+            override = override_map.get(item_key.lower())
+            if override:
+                return _bg_wiki_url(override)
+        if wiki_prefix and item_key:
+            return _bg_wiki_url(wiki_prefix + item_key)
+        # Name-based path: strip the "<id>  " visual prefix from
+        # disp. Display format is "{id}  {name}" (two spaces); if
+        # we don't find the separator, treat the whole string as
+        # the name.
+        name = disp.split("  ", 1)[-1].strip() if "  " in disp else disp
+        return _bg_wiki_url(name)
+    return _url
+
+
+# Per-category bg-wiki page prefix for missions. Mission pages on
+# bg-wiki use the canonical "<Nation>_Mission_<id>" page slug, so
+# building from (prefix, item_key=mission_id) is more accurate than
+# parsing the display name — works even when two nations share a
+# mission name (e.g. "Magicite" is 4-1 in all three nations).
+_MISSION_WIKI_PREFIX = {
+    "missions_bastok": "Bastok_Mission_",
+    "missions_sandy":  "San_d'Oria_Mission_",
+    "missions_windy":  "Windurst_Mission_",
+    "missions_zilart": "Zilart_Mission_",
+    "missions_cop":    "Promathia_Mission_",
+    "missions_toau":   "Aht_Urhgan_Mission_",
+    "missions_vr":     "The_Voracious_Resurgence_Mission_",
+    "missions_rov":    "Rhapsodies_of_Vanadiel_Mission_",
+    "missions_soa":    "Seekers_of_Adoulin_Mission_",
+    # Wings of the Goddess uses plain-name bg-wiki page slugs
+    # (Cavernous_Maws_(Mission), A_Hawk_in_Repose, ...) rather than
+    # a numbered "Mission_<N>" pattern. Empty prefix triggers the
+    # name-based URL construction path in _make_mission_url_builder.
+    "missions_wotg":   "",
+    "missions_acp":    "A_Crystalline_Prophecy_Mission_",
+    "missions_mkd":    "A_Moogle_Kupo_d'Etat_Mission_",
+    "missions_asa":    "A_Shantotto_Ascension_Mission_",
+}
+
+
+# Per-category, per-row URL overrides. Use this for entries whose
+# bg-wiki page slug doesn't follow the category's normal prefix
+# pattern. The outer key is the category key; the inner key is the
+# row's lowercased item_id (matching what _make_mission_rows emits
+# as the row key); the value is the explicit bg-wiki page slug.
+#
+# Zilart's epilogue quests + joint CoP/RotZ finale live at plain-
+# name pages, not at Zilart_Mission_E1 etc. The 'fin' override
+# routes "The Last Verse" to its own page.
+_MISSION_URL_OVERRIDES = {
+    "missions_zilart": {
+        "e1":  "Storms_of_Fate",
+        "e2":  "Shadows_of_the_Departed",
+        "e3":  "Apocalypse_Nigh",
+        "fin": "The_Last_Verse",
+    },
+    "missions_cop": {
+        # Chapter 5's three-way path fork — bg-wiki uses subpage
+        # slugs under Promathia_Mission_5-3 for each path. Note the
+        # apostrophes are part of the page slug; _bg_wiki_url keeps
+        # them in the safe character set so the URL works as-is.
+        "5-3a": "Promathia_Mission_5-3/Louverance's_Path",
+        "5-3b": "Promathia_Mission_5-3/Tenzen's_Path",
+        "5-3c": "Promathia_Mission_5-3/Ulmia's_Path",
+        # The joint RotZ/CoP finale; canonical bg-wiki page is the
+        # bare mission name, not the chapter-numbered slug.
+        "8-5":  "The_Last_Verse",
+    },
+    "missions_toau": {
+        # Imperial Ward Quests epilogue — five repeatable post-game
+        # quests that bg-wiki keeps at plain-name pages rather than
+        # at Aht_Urhgan_Mission_<id>. Each entry below is the
+        # canonical wiki page slug.
+        "e1": "The_Rider_Cometh",
+        "e2": "Unwavering_Resolve",
+        "e3": "A_Stygian_Pact",
+        "e4": "Waking_the_Colossus",
+        "e5": "Divine_Interference",
+    },
+    "missions_vr": {
+        # Voracious Resurgence epilogue lives at the plain-name page
+        # "Epilogue_Quests" — a single shared page covering all six
+        # post-finale gear-reward NPC visits.
+        "ep": "Epilogue_Quests",
+    },
+    "missions_rov": {
+        # Rhapsodies finale lives at a plain-name page rather than
+        # the Rhapsodies_of_Vanadiel_Mission_<id> pattern.
+        "ep": "The_Silent_Forest",
+    },
+    "missions_soa": {
+        # Seekers of Adoulin epilogue — three plain-name bg-wiki
+        # pages. "The Silent Forest" shares its page with the
+        # Rhapsodies finale (narratively continuous: the page
+        # covers both storyline endings).
+        "ep1a": "The_Silent_Forest",
+        "ep1b": "The_Ygnas_Directive",
+        "ep2":  "The_Arciela_Directive",
+    },
+    "missions_wotg": {
+        # Two missions whose page names share titles with NPCs/items
+        # and so need disambig-suffixed bg-wiki slugs rather than the
+        # name-based default. Without these overrides, mission 1
+        # would link to the Cavernous Maws NPC page instead of the
+        # mission page, and mission 3 would land on the Cait Sith
+        # disambig hub.
+        "1": "Cavernous_Maws_(Mission)",
+        "3": "Cait_Sith_(Mission)",
+    },
+    "missions_acp": {
+        # Mission 1 shares its title with the scenario landing page,
+        # so it lives at a disambig slug. The finale (mission 12)
+        # has its own "(Fin.)" page slug rather than the numbered
+        # pattern.
+        "1":  "A_Crystalline_Prophecy_(Mission)",
+        "12": "A_Crystalline_Prophecy_(Fin.)",
+    },
+    "missions_mkd": {
+        # Same disambig pattern as Crystalline. Note the apostrophe
+        # is part of the page slug and stays as-is in the URL
+        # (_bg_wiki_url's safelist preserves it).
+        "1":  "A_Moogle_Kupo_d'Etat_(Mission)",
+        "15": "A_Moogle_Kupo_d'Etat_(Fin.)",
+    },
+    "missions_asa": {
+        # Same disambig pattern. The finale page on bg-wiki uses
+        # "(Fin)" without the period, unlike ACP and MKD which both
+        # use "(Fin.)" — confirmed against the bg-wiki category
+        # listing for this expansion.
+        "1":  "A_Shantotto_Ascension_(Mission)",
+        "15": "A_Shantotto_Ascension_(Fin)",
+    },
+}
+
+
+# Backfill url_builders by category key.
+_CHECKLIST_URL_BUILDERS = {
+    "trusts":               _checklist_url_trust,
+    "homepoints":           _checklist_url_hp,
+    "survival_guides":      _checklist_url_sg,
+    "blu_spells":           _checklist_url_blu,
+    "spells_blm":           _checklist_url_caster_spell,
+    "spells_whm":           _checklist_url_caster_spell,
+    "spells_smn":           _checklist_url_caster_spell,
+    "spells_nin":           _checklist_url_caster_spell,
+    "spells_brd":           _checklist_url_caster_spell,
+    "spells_geo":           _checklist_url_caster_spell,
+    "ws_h2h":               _checklist_url_weaponskill,
+    "ws_dag":               _checklist_url_weaponskill,
+    "ws_swd":               _checklist_url_weaponskill,
+    "ws_gsd":               _checklist_url_weaponskill,
+    "ws_axe":               _checklist_url_weaponskill,
+    "ws_gax":               _checklist_url_weaponskill,
+    "ws_scy":               _checklist_url_weaponskill,
+    "ws_pol":               _checklist_url_weaponskill,
+    "ws_kat":               _checklist_url_weaponskill,
+    "ws_gkt":               _checklist_url_weaponskill,
+    "ws_clb":               _checklist_url_weaponskill,
+    "ws_stf":               _checklist_url_weaponskill,
+    "ws_arc":               _checklist_url_weaponskill,
+    "ws_mrk":               _checklist_url_weaponskill,
+    "mounts":               _checklist_url_mount,
+    "outpost_warps_sandy":  _checklist_url_outpost,
+    "outpost_warps_bastok": _checklist_url_outpost,
+    "outpost_warps_windy":  _checklist_url_outpost,
+    "quests_bastok":        _checklist_url_quest,
+    "quests_sandy":         _checklist_url_quest,
+    "quests_windy":         _checklist_url_quest,
+    "quests_jeuno":         _checklist_url_quest,
+    "quests_ahturhgan":     _checklist_url_quest,
+    "quests_adoulin":       _checklist_url_quest,
+    "quests_selbina":       _checklist_url_quest,
+    "quests_mhaura":        _checklist_url_quest,
+    "quests_tavnazia":      _checklist_url_quest,
+    "quests_moghouse":      _checklist_url_quest,
+    "quests_outlands":      _checklist_url_quest,
+    "quests_crystalwar":    _checklist_url_quest,
+    "quests_aby_vision":    _checklist_url_quest,
+    "quests_aby_scars":     _checklist_url_quest,
+    "quests_aby_heroes":    _checklist_url_quest,
+    # Ultimate Weapons: each weapon name maps directly to its bg-wiki
+    # article slug (e.g. /ffxi/Excalibur, /ffxi/Idris, /ffxi/Tri-edge).
+    # Reuses the weapon-skill URL helper since both work the same way —
+    # take the display string and bg-wiki it.
+    "weapons_relic":        _checklist_url_weaponskill,
+    "weapons_mythic":       _checklist_url_weaponskill,
+    "weapons_empyrean":     _checklist_url_weaponskill,
+    "weapons_aeonic":       _checklist_url_weaponskill,
+    "weapons_prime":        _checklist_url_weaponskill,
+    # Master Trials: each trial name is also its bg-wiki article
+    # title (e.g. /ffxi/Black_And_White, /ffxi/Heroines%27_Combat_II).
+    # The weaponskill helper already URL-quotes via _bg_wiki_url, so
+    # apostrophes and spaces resolve correctly — no special-case
+    # routing needed.
+    "master_trials":        _checklist_url_weaponskill,
+}
+# Mission URL builders are constructed from the prefix map via the
+# factory above, so each nation gets a closure bound to its own
+# bg-wiki page slug pattern. Generated entries are merged into the
+# main builder map; categories without a prefix entry simply have
+# no url_builder and render as non-clickable rows (the manual-only
+# tab still works fine). Per-row URL overrides come from
+# _MISSION_URL_OVERRIDES so the factory closure can route specific
+# rows to non-conforming bg-wiki page slugs.
+for _mcat_key, _wiki_prefix in _MISSION_WIKI_PREFIX.items():
+    _overrides = _MISSION_URL_OVERRIDES.get(_mcat_key)
+    _CHECKLIST_URL_BUILDERS[_mcat_key] = _make_mission_url_builder(
+        _wiki_prefix, _overrides)
+
+for _cat in CHECKLIST_CATEGORIES:
+    fn = _CHECKLIST_URL_BUILDERS.get(_cat["key"])
+    if fn is not None:
+        _cat["url_builder"] = fn
+
+
+# ── Home Points master list ─────────────────────────────────────────
+# Sourced from the canonical server-side indexing in DarkstarProject's
+# scripts/globals/homepoint.lua. Each entry's KEY is the same 0-based
+# index the server uses in the attunement bitfield (set bit N = HP N
+# is attuned). Display names match BG-Wiki conventions: zone name + "#N"
+# suffix when multiple HPs exist in the same zone.
+#
+# Index 67 (Al Zahbi #1) is included because the bitfield can flag it,
+# but the entry is annotated since it doesn't exist in retail FFXI.
+# It will count toward Y only if you choose to display all entries —
+# we omit it from the displayed list (see filter below) since it's
+# unreachable.
+#
+# Source: https://github.com/DarkstarProject/darkstar/blob/master/scripts/globals/homepoint.lua
+# Verified 122 entries (indices 0..121). Update this list when SE adds
+# new home points; the bitfield supports up to 128 (four uint32s).
+_HOMEPOINTS_MASTER = [
+    (0,   "Southern San d'Oria #1"),
+    (1,   "Southern San d'Oria #2"),
+    (2,   "Southern San d'Oria #3"),
+    (3,   "Northern San d'Oria #1"),
+    (4,   "Northern San d'Oria #2"),
+    (5,   "Northern San d'Oria #3"),
+    (6,   "Port San d'Oria #1"),
+    (7,   "Port San d'Oria #2"),
+    (8,   "Port San d'Oria #3"),
+    (9,   "Bastok Mines #1"),
+    (10,  "Bastok Mines #2"),
+    (11,  "Bastok Markets #1"),
+    (12,  "Bastok Markets #2"),
+    (13,  "Bastok Markets #3"),
+    (14,  "Port Bastok #1"),
+    (15,  "Port Bastok #2"),
+    (16,  "Metalworks #1"),
+    (17,  "Windurst Waters #1"),
+    (18,  "Windurst Waters #2"),
+    (19,  "Windurst Walls #1"),
+    (20,  "Windurst Walls #2"),
+    (21,  "Windurst Walls #3"),
+    (22,  "Port Windurst #1"),
+    (23,  "Port Windurst #2"),
+    (24,  "Port Windurst #3"),
+    (25,  "Windurst Woods #1"),
+    (26,  "Windurst Woods #2"),
+    (27,  "Windurst Woods #3"),
+    (28,  "Windurst Woods #4"),
+    (29,  "Ru'Lude Gardens #1"),
+    (30,  "Ru'Lude Gardens #2"),
+    (31,  "Ru'Lude Gardens #3"),
+    (32,  "Upper Jeuno #1"),
+    (33,  "Upper Jeuno #2"),
+    (34,  "Upper Jeuno #3"),
+    (35,  "Lower Jeuno #1"),
+    (36,  "Lower Jeuno #2"),
+    (37,  "Port Jeuno #1"),
+    (38,  "Port Jeuno #2"),
+    (39,  "Kazham"),
+    (40,  "Mhaura"),
+    (41,  "Norg #1"),
+    (42,  "Rabao #1"),
+    (43,  "Selbina"),
+    (44,  "Western Adoulin #1"),
+    (45,  "Eastern Adoulin #1"),
+    (46,  "Ceizak Battlegrounds"),
+    (47,  "Foret de Hennetiel"),
+    (48,  "Morimar Basalt Fields"),
+    (49,  "Yorcia Weald"),
+    (50,  "Marjami Ravine"),
+    (51,  "Kamihr Drifts"),
+    (52,  "Yughott Grotto"),
+    (53,  "Palborough Mines"),
+    (54,  "Giddeus"),
+    (55,  "Fei'Yin #1"),
+    (56,  "Quicksand Caves #1"),
+    (57,  "Den of Rancor #1"),
+    (58,  "Castle Zvahl Keep"),
+    (59,  "Ru'Aun Gardens #1"),
+    (60,  "Ru'Aun Gardens #2"),
+    (61,  "Ru'Aun Gardens #3"),
+    (62,  "Ru'Aun Gardens #4"),
+    (63,  "Ru'Aun Gardens #5"),
+    (64,  "Tavnazian Safehold #1"),
+    (65,  "Aht Urhgan Whitegate #1"),
+    (66,  "Nashmau"),
+    # 67 Al Zahbi #1 — does not exist in retail, intentionally excluded
+    (68,  "Southern San d'Oria [S]"),
+    (69,  "Bastok Markets [S]"),
+    (70,  "Windurst Waters [S]"),
+    (71,  "Upper Delkfutt's Tower"),
+    (72,  "The Shrine of Ru'Avitau"),
+    (73,  "Riverne - Site #B01"),
+    (74,  "Bhaflau Thickets"),
+    (75,  "Caedarva Mire"),
+    (76,  "Uleguerand Range #1"),
+    (77,  "Uleguerand Range #2"),
+    (78,  "Uleguerand Range #3"),
+    (79,  "Uleguerand Range #4"),
+    (80,  "Uleguerand Range #5"),
+    (81,  "Attohwa Chasm"),
+    (82,  "Pso'Xja"),
+    (83,  "Newton Movalpolos"),
+    (84,  "Riverne - Site #A01"),
+    (85,  "Al'Taieu #1"),
+    (86,  "Al'Taieu #2"),
+    (87,  "Al'Taieu #3"),
+    (88,  "Grand Palace of Hu'Xzoi"),
+    (89,  "The Garden of Ru'Hmet"),
+    (90,  "Mount Zhayolm"),
+    (91,  "Cape Teriggan"),
+    (92,  "The Boyahda Tree"),
+    (93,  "Den of Rancor #2"),
+    (94,  "Fei'Yin #2"),
+    (95,  "Ifrit's Cauldron"),
+    (96,  "Quicksand Caves #2"),
+    (97,  "Southern San d'Oria #4"),
+    (98,  "Northern San d'Oria #4"),
+    (99,  "Bastok Mines #3"),
+    (100, "Bastok Markets #4"),
+    (101, "Port Bastok #3"),
+    (102, "Metalworks #2"),
+    (103, "Windurst Waters #3"),
+    (104, "Norg #2"),
+    (105, "Rabao #2"),
+    (106, "Aht Urhgan Whitegate #2"),
+    (107, "Aht Urhgan Whitegate #3"),
+    (108, "Aht Urhgan Whitegate #4"),
+    (109, "Western Adoulin #2"),
+    (110, "Eastern Adoulin #2"),
+    (111, "Xarcabard [S]"),
+    (112, "Leafallia"),
+    (113, "Castle Zvahl Keep [S]"),
+    (114, "Qufim Island"),
+    (115, "Toraimarai Canal"),
+    (116, "Ra'Kaznar Inner Court"),
+    (117, "Misareaux Coast"),
+    (118, "Windurst Waters #4"),
+    (119, "Windurst Woods #5"),
+    (120, "Tavnazian Safehold #2"),
+    (121, "Tavnazian Safehold #3"),
+]
+# Quick lookup: index -> display name.
+_HOMEPOINTS_BY_IDX = dict(_HOMEPOINTS_MASTER)
+
+
+def _checklist_hp_rows():
+    """All home points in our master list, sorted by canonical index
+    (which corresponds roughly to geographic/expansion order — Bastion
+    cities first, then expansion regions, then later additions).
+    Returns [(key, display_name), ...] where key is the integer index
+    rendered as a string (matches the wire format from Lua)."""
+    items = [(str(idx), disp) for idx, disp in _HOMEPOINTS_MASTER]
+    # Sort by the underlying integer (str-sort would put "100" before
+    # "2") so the master geographic order is preserved.
+    items.sort(key=lambda t: int(t[0]))
+    return items
+
+
+def _checklist_hp_check_state(key):
+    st = checklist_known.get("homepoints", {})
+    if key in st.get("auto", set()):
+        return "auto"
+    if key in st.get("manual", set()):
+        return "manual"
+    return None
+
+
+# Backfill the row_iter / is_checked for the homepoints category now
+# that the helpers are defined.
+for _cat in CHECKLIST_CATEGORIES:
+    if _cat["key"] == "homepoints":
+        _cat["row_iter"]    = _checklist_hp_rows
+        _cat["is_checked"]  = _checklist_hp_check_state
+
+
+# ── Survival Guides master list ─────────────────────────────────────
+# CRITICAL: the SG attunement bitfield uses a DIFFERENT ordering than
+# the menu display. Each guide has both:
+#   - menu index: position in the in-game NPC menu (player-friendly)
+#   - bitfield offset: position in the 128-bit attunement bitfield
+# These are NOT the same. For example, "West Ronfaure" is menu item
+# #6 but bitfield bit #0. The two orderings appear to be:
+#   - menu index = roughly geographic (cities first, then regions...)
+#   - bitfield offset = roughly chronological (order SE added the SG)
+#
+# Sourced from AkadenTK/superwarp's map/guides.lua, the most up-to-
+# date public mapping. Each entry's KEY here is the BITFIELD OFFSET
+# (so bit N in the attunement bitfield = master list entry with
+# offset=N), and the value is the display name.
+#
+# Source: https://github.com/AkadenTK/superwarp/blob/master/map/guides.lua
+# All 98 entries (offsets 0..97) covered with no gaps; the upper bits
+# (98..127) are reserved/padding.
+_SURVIVAL_GUIDES_MASTER = [
+    (0,  "West Ronfaure"),
+    (1,  "Valkurm Dunes"),
+    (2,  "Jugner Forest"),
+    (3,  "North Gustaberg"),
+    (4,  "Pashhow Marshlands"),
+    (5,  "West Sarutabaruta"),
+    (6,  "Buburimu Peninsula"),
+    (7,  "Beaucedine Glacier"),
+    (8,  "Xarcabard"),
+    (9,  "Qufim Island"),
+    (10, "Meriphataud Mountains"),
+    (11, "The Sanctuary of Zi'Tah"),
+    (12, "Eastern Altepa Desert"),
+    (13, "Cape Teriggan"),
+    (14, "Yuhtunga Jungle"),
+    (15, "Yhoator Jungle"),
+    (16, "Lufaise Meadows"),
+    (17, "Ru'Aun Gardens"),
+    (18, "Oldton Movalpolos"),
+    (19, "Bostaunieux Oubliette"),
+    (20, "Toraimarai Canal"),
+    (21, "The Eldieme Necropolis"),
+    (22, "Crawlers' Nest"),
+    (23, "Garlaige Citadel"),
+    (24, "Northern San d'Oria"),
+    (25, "Bastok Mines"),
+    (26, "Port Windurst"),
+    (27, "Ru'Lude Gardens"),
+    (28, "La Theine Plateau"),
+    (29, "Batallia Downs"),
+    (30, "Konschtat Highlands"),
+    (31, "Rolanberry Fields"),
+    (32, "Tahrongi Canyon"),
+    (33, "Sauromugue Champaign"),
+    (34, "Fort Ghelsba"),
+    (35, "Beadeaux"),
+    (36, "Davoi"),
+    (37, "Castle Oztroja"),
+    (38, "Castle Zvahl Baileys"),
+    (39, "Ranguemont Pass"),
+    (40, "Lower Delkfutt's Tower"),
+    (41, "King Ranperre's Tomb"),
+    (42, "Dangruf Wadi"),
+    (43, "Inner Horutoto Ruins"),
+    (44, "Ordelle's Caves"),
+    (45, "Gusgen Mines"),
+    (46, "Maze of Shakhrami"),
+    (47, "Ro'Maeve"),
+    (48, "Western Altepa Desert"),
+    (49, "Temple of Uggalepih"),
+    (50, "Korroloka Tunnel"),
+    (51, "Kuftal Tunnel"),
+    (52, "Sea Serpent Grotto"),
+    (53, "Gustav Tunnel"),
+    (54, "Labyrinth of Onzozo"),
+    (55, "Carpenters' Landing"),
+    (56, "Bibiki Bay"),
+    (57, "Misareaux Coast"),
+    (58, "Phomiuna Aqueducts"),
+    (59, "Sacrarium"),
+    (60, "Wajaom Woodlands"),
+    (61, "Mamook"),
+    (62, "Aydeewa Subterrane"),
+    (63, "East Ronfaure [S]"),
+    (64, "Jugner Forest [S]"),
+    (65, "Vunkerl Inlet [S]"),
+    (66, "Batallia Downs [S]"),
+    (67, "North Gustaberg [S]"),
+    (68, "Grauberg [S]"),
+    (69, "Pashhow Marshlands [S]"),
+    (70, "Rolanberry Fields [S]"),
+    (71, "West Sarutabaruta [S]"),
+    (72, "Fort Karugo-Narugo [S]"),
+    (73, "Meriphataud Mountains [S]"),
+    (74, "Sauromugue Champaign [S]"),
+    (75, "Beaucedine Glacier [S]"),
+    (76, "Castle Zvahl Baileys [S]"),
+    (77, "Garlaige Citadel [S]"),
+    (78, "Crawlers' Nest [S]"),
+    (79, "The Eldieme Necropolis [S]"),
+    (80, "Kazham"),
+    (81, "Norg"),
+    (82, "Rabao"),
+    (83, "Tavnazian Safehold"),
+    (84, "Aht Urhgan Whitegate"),
+    (85, "Nashmau"),
+    (86, "Southern San d'Oria [S]"),
+    (87, "Bastok Markets [S]"),
+    (88, "Windurst Waters [S]"),
+    (89, "Caedarva Mire"),
+    (90, "Arrapago Reef"),
+    (91, "Halvung"),
+    (92, "Behemoth's Dominion"),
+    (93, "Dragon's Aery"),
+    (94, "Valley of Sorrows"),
+    (95, "Ifrit's Cauldron"),
+    (96, "Zeruhn Mines"),
+    (97, "Eastern Adoulin"),
+]
+_SURVIVAL_GUIDES_BY_IDX = dict(_SURVIVAL_GUIDES_MASTER)
+
+
+def _checklist_sg_rows():
+    """Survival Guides in alphabetical order by display name. The
+    underlying bitfield offset (the dict key) is preserved as the
+    item_key for matching against auto-check state. We sort
+    alphabetically rather than by offset because bitfield-offset order
+    is essentially arbitrary (chronological order SE added each guide),
+    while alphabetical is what the user actually wants to scan."""
+    items = [(str(idx), disp) for idx, disp in _SURVIVAL_GUIDES_MASTER]
+    items.sort(key=lambda t: t[1].lower())
+    return items
+
+
+def _checklist_sg_check_state(key):
+    st = checklist_known.get("survival_guides", {})
+    if key in st.get("auto", set()):
+        return "auto"
+    if key in st.get("manual", set()):
+        return "manual"
+    return None
+
+
+# Backfill row_iter / is_checked for survival_guides similarly.
+for _cat in CHECKLIST_CATEGORIES:
+    if _cat["key"] == "survival_guides":
+        _cat["row_iter"]    = _checklist_sg_rows
+        _cat["is_checked"]  = _checklist_sg_check_state
+
+
+# ── BLU Spells master list cache ──────────────────────────────────────
+# Unlike HPs/SGs/Trusts which use a hardcoded master list, the BLU
+# category gets BOTH its master list and learned-set from Lua at runtime
+# (via the BLU_SPELLS| payload). The master list lives in res.spells,
+# which Windower keeps updated with patches, so we don't have to chase
+# the wiki to add new spells when SE releases them.
+#
+# Stored case-preserved (keys are exact spell.english from Windower).
+# We compare auto-set membership case-insensitively because the wire
+# format already normalizes, but spell names like "Sub-zero Smash" vs
+# "Sub-Zero Smash" could otherwise drift between sources.
+#
+# Starts empty; populated on the first non-empty master list from Lua.
+# Never cleared back to empty (so a transient empty emit doesn't wipe
+# the visible category mid-session).
+_BLU_SPELLS_MASTER = []  # list of spell-name strings, alphabetically
+
+
+def _checklist_blu_rows():
+    """All BLU spells in the master list (sourced live from Lua's
+    res.spells walk). Each row's key is the spell name itself (lower-
+    cased for case-insensitive matching against the auto set). Display
+    text is the original casing."""
+    return [(name.lower(), name) for name in _BLU_SPELLS_MASTER]
+
+
+def _checklist_blu_check_state(key):
+    st = checklist_known.get("blu_spells", {})
+    if key in st.get("auto", set()):
+        return "auto"
+    if key in st.get("manual", set()):
+        return "manual"
+    return None
+
+
+# Backfill row_iter / is_checked for blu_spells.
+for _cat in CHECKLIST_CATEGORIES:
+    if _cat["key"] == "blu_spells":
+        _cat["row_iter"]    = _checklist_blu_rows
+        _cat["is_checked"]  = _checklist_blu_check_state
+
+
+# ── Caster-school spell master list caches ───────────────────────────
+# Six caster schools (BLM/WHM/SMN/NIN/BRD/GEO) share a common shape:
+# Lua streams BOTH the learned set and the master list every cycle via
+# the SPELLS_<TAG>| packet (parameterised over res.spells.type). Each
+# school gets its own master list with the standard "keep last non-
+# empty" guard, mirroring _BLU_SPELLS_MASTER and _MOUNTS_MASTER.
+#
+# Starts empty; populated on the first non-empty master emit from Lua.
+# Never cleared back to empty (a transient empty emit doesn't wipe the
+# visible category mid-session).
+_BLM_SPELLS_MASTER = []  # Black Magic
+_WHM_SPELLS_MASTER = []  # White Magic
+_SMN_SPELLS_MASTER = []  # Summoner Pact (avatars + blood pacts)
+_NIN_SPELLS_MASTER = []  # Ninjutsu
+_BRD_SPELLS_MASTER = []  # Bard Songs
+_GEO_SPELLS_MASTER = []  # Geomancy (indicolure + geocolure)
+
+
+# ── Per-school whitelists (sourced from bg-wiki category pages) ──────
+# Windower's res.spells includes "unlearnable" internals (Bindga,
+# Curse, Virus, Tractor II, etc.) that no player can ever acquire.
+# When a whitelist is defined for a category, the SPELLS_ handler
+# intersects the streamed Windower master with it, dropping the
+# unlearnable entries before they reach the checklist rows.
+#
+# Whitelists are bg-wiki Category page snapshots — the canonical
+# "spells that have wiki pages because they're real and learnable".
+# Lists where Windower's data is already clean (no whitelist entry)
+# pass through unfiltered.
+#
+# Two BLM/WHM names use disambiguating page titles on bg-wiki because
+# the bare name collides with the element article: "Fire (Spell)" and
+# "Water (Spell)". Windower emits the bare name. We store the bare
+# name here (since that's what we match against Windower's stream)
+# and rely on _SPELL_PAGE_OVERRIDES below to redirect those two
+# entries' wiki URLs to the disambiguated page titles.
+_BLM_SPELLS_WHITELIST = {
+    "Absorb-ACC", "Absorb-AGI", "Absorb-Attri", "Absorb-CHR", "Absorb-DEX",
+    "Absorb-INT", "Absorb-MND", "Absorb-STR", "Absorb-TP", "Absorb-VIT",
+    "Aera", "Aera II", "Aera III",
+    "Aero", "Aero II", "Aero III", "Aero IV", "Aero V", "Aero VI",
+    "Aeroga", "Aeroga II", "Aeroga III",
+    "Aeroja",
+    "Anemohelix", "Anemohelix II",
+    "Aspir", "Aspir II", "Aspir III",
+    "Bind",
+    "Bio", "Bio II", "Bio III",
+    "Blaze Spikes",
+    "Blind", "Blind II",
+    "Blizzaga", "Blizzaga II", "Blizzaga III",
+    "Blizzaja",
+    "Blizzara", "Blizzara II", "Blizzara III",
+    "Blizzard", "Blizzard II", "Blizzard III", "Blizzard IV", "Blizzard V", "Blizzard VI",
+    "Break", "Breakga",
+    "Burn",
+    "Burst", "Burst II",
+    "Choke",
+    "Comet",
+    "Cryohelix", "Cryohelix II",
+    "Death",
+    "Dispel", "Dispelga",
+    "Distract", "Distract II", "Distract III",
+    "Drain", "Drain II", "Drain III",
+    "Dread Spikes",
+    "Drown",
+    "Endark", "Endark II",
+    "Escape",
+    "Fira", "Fira II", "Fira III",
+    "Firaga", "Firaga II", "Firaga III",
+    "Firaja",
+    "Fire", "Fire II", "Fire III", "Fire IV", "Fire V", "Fire VI",
+    "Flare", "Flare II",
+    "Flood", "Flood II",
+    "Frazzle", "Frazzle II", "Frazzle III",
+    "Freeze", "Freeze II",
+    "Frost",
+    "Geohelix", "Geohelix II",
+    "Gravity", "Gravity II",
+    "Hydrohelix", "Hydrohelix II",
+    "Ice Spikes",
+    "Impact",
+    "Ionohelix", "Ionohelix II",
+    "Kaustra",
+    "Klimaform",
+    "Luminohelix", "Luminohelix II",
+    "Meteor",
+    "Noctohelix", "Noctohelix II",
+    "Poison", "Poison II",
+    "Poisonga", "Poisonga II",
+    "Pyrohelix", "Pyrohelix II",
+    "Quake", "Quake II",
+    "Rasp",
+    "Retrace",
+    "Shock", "Shock Spikes",
+    "Sleep", "Sleep II",
+    "Sleepga", "Sleepga II",
+    "Stone", "Stone II", "Stone III", "Stone IV", "Stone V", "Stone VI",
+    "Stonega", "Stonega II", "Stonega III",
+    "Stoneja",
+    "Stonera", "Stonera II", "Stonera III",
+    "Stun",
+    "Thundaga", "Thundaga II", "Thundaga III",
+    "Thundaja",
+    "Thundara", "Thundara II", "Thundara III",
+    "Thunder", "Thunder II", "Thunder III", "Thunder IV", "Thunder V", "Thunder VI",
+    "Tornado", "Tornado II",
+    "Tractor",
+    "Warp", "Warp II",
+    "Water", "Water II", "Water III", "Water IV", "Water V", "Water VI",
+    "Watera", "Watera II", "Watera III",
+    "Waterga", "Waterga II", "Waterga III",
+    "Waterja",
+}
+
+_WHM_SPELLS_WHITELIST = {
+    "Addle", "Addle II",
+    "Adloquium",
+    "Animus Augeo", "Animus Minuo",
+    "Aquaveil",
+    "Arise",
+    "Aurorastorm", "Aurorastorm II",
+    "Auspice",
+    "Banish", "Banish II", "Banish III", "Banish IV",
+    "Banishga", "Banishga II",
+    "Baraera", "Baraero",
+    "Baramnesia", "Baramnesra",
+    "Barblind", "Barblindra", "Barblizzara", "Barblizzard",
+    "Barfira", "Barfire",
+    "Barparalyze", "Barparalyzra",
+    "Barpetra", "Barpetrify",
+    "Barpoison", "Barpoisonra",
+    "Barsilence", "Barsilencera",
+    "Barsleep", "Barsleepra",
+    "Barstone", "Barstonra",
+    "Barthunder", "Barthundra",
+    "Barvira", "Barvirus",
+    "Barwater", "Barwatera",
+    "Blindna",
+    "Blink",
+    "Boost-AGI", "Boost-CHR", "Boost-DEX", "Boost-INT",
+    "Boost-MND", "Boost-STR", "Boost-VIT",
+    "Crusade",
+    "Cura", "Cura II", "Cura III",
+    "Curaga", "Curaga II", "Curaga III", "Curaga IV", "Curaga V",
+    "Cure", "Cure II", "Cure III", "Cure IV", "Cure V", "Cure VI",
+    "Cursna",
+    "Deodorize",
+    "Dia", "Dia II", "Dia III",
+    "Diaga",
+    "Embrava",
+    "Enaero", "Enaero II",
+    "Enblizzard", "Enblizzard II",
+    "Enfire", "Enfire II",
+    "Enlight", "Enlight II",
+    "Enstone", "Enstone II",
+    "Enthunder", "Enthunder II",
+    "Enwater", "Enwater II",
+    "Erase",
+    "Esuna",
+    "Firestorm", "Firestorm II",
+    "Flash",
+    "Flurry", "Flurry II",
+    "Foil",
+    "Full Cure",
+    "Gain-AGI", "Gain-CHR", "Gain-DEX", "Gain-INT",
+    "Gain-MND", "Gain-STR", "Gain-VIT",
+    "Hailstorm", "Hailstorm II",
+    "Haste", "Haste II",
+    "Holy", "Holy II",
+    "Inundation",
+    "Invisible",
+    "Paralyna",
+    "Paralyze", "Paralyze II",
+    "Phalanx", "Phalanx II",
+    "Poisona",
+    "Protect", "Protect II", "Protect III", "Protect IV", "Protect V",
+    "Protectra", "Protectra II", "Protectra III", "Protectra IV", "Protectra V",
+    "Rainstorm", "Rainstorm II",
+    "Raise", "Raise II", "Raise III",
+    "Recall-Jugner", "Recall-Meriph", "Recall-Pashh",
+    "Refresh", "Refresh II", "Refresh III",
+    "Regen", "Regen II", "Regen III", "Regen IV", "Regen V",
+    "Repose",
+    "Reprisal",
+    "Reraise", "Reraise II", "Reraise III", "Reraise IV",
+    "Sacrifice",
+    "Sandstorm", "Sandstorm II",
+    "Shell", "Shell II", "Shell III", "Shell IV", "Shell V",
+    "Shellra", "Shellra II", "Shellra III", "Shellra IV", "Shellra V",
+    "Silena", "Silence",
+    "Slow", "Slow II",
+    "Sneak",
+    "Stona",
+    "Stoneskin",
+    "Teleport-Altep", "Teleport-Dem", "Teleport-Holla",
+    "Teleport-Mea", "Teleport-Vahzl", "Teleport-Yhoat",
+    "Temper", "Temper II",
+    "Thunderstorm", "Thunderstorm II",
+    "Viruna",
+    "Voidstorm", "Voidstorm II",
+    "Windstorm", "Windstorm II",
+}
+
+
+# Ninjutsu (bg-wiki Category:Ninjutsu — 37 spells, the full Ichi/Ni/San
+# trinity for every element plus the utility set). Windower's res.spells
+# tags these with type='Ninjutsu' and includes 6 unlearnable internals
+# that this whitelist drops.
+_NIN_SPELLS_WHITELIST = {
+    "Aisha: Ichi",
+    "Dokumori: Ichi",
+    "Doton: Ichi", "Doton: Ni", "Doton: San",
+    "Gekka: Ichi",
+    "Hojo: Ichi", "Hojo: Ni",
+    "Huton: Ichi", "Huton: Ni", "Huton: San",
+    "Hyoton: Ichi", "Hyoton: Ni", "Hyoton: San",
+    "Jubaku: Ichi",
+    "Kakka: Ichi",
+    "Katon: Ichi", "Katon: Ni", "Katon: San",
+    "Kurayami: Ichi", "Kurayami: Ni",
+    "Migawari: Ichi",
+    "Monomi: Ichi",
+    "Myoshu: Ichi",
+    "Raiton: Ichi", "Raiton: Ni", "Raiton: San",
+    "Suiton: Ichi", "Suiton: Ni", "Suiton: San",
+    "Tonko: Ichi", "Tonko: Ni",
+    "Utsusemi: Ichi", "Utsusemi: Ni", "Utsusemi: San",
+    "Yain: Ichi",
+    "Yurin: Ichi",
+}
+
+
+# Bard Songs (bg-wiki Category:Bard_Songs — 107 wiki pages, of which
+# one is a user sandbox page (User:Darvamos/Song) that we exclude.
+# 106 actual songs. Windower's res.spells tags these with
+# type='BardSong' and includes a few unlearnable internals.
+_BRD_SPELLS_WHITELIST = {
+    "Advancing March",
+    "Adventurer's Dirge",
+    "Archer's Prelude",
+    "Aria of Passion",
+    "Army's Paeon", "Army's Paeon II", "Army's Paeon III",
+    "Army's Paeon IV", "Army's Paeon V", "Army's Paeon VI",
+    "Battlefield Elegy",
+    "Bewitching Etude",
+    "Blade Madrigal",
+    "Carnage Elegy",
+    "Chocobo Mazurka",
+    "Dark Carol", "Dark Carol II",
+    "Dark Threnody", "Dark Threnody II",
+    "Dextrous Etude",
+    "Dragonfoe Mambo",
+    "Earth Carol", "Earth Carol II",
+    "Earth Threnody", "Earth Threnody II",
+    "Enchanting Etude",
+    "Fire Carol", "Fire Carol II",
+    "Fire Threnody", "Fire Threnody II",
+    "Foe Lullaby", "Foe Lullaby II",
+    "Foe Requiem", "Foe Requiem II", "Foe Requiem III",
+    "Foe Requiem IV", "Foe Requiem V", "Foe Requiem VI", "Foe Requiem VII",
+    "Foe Sirvente",
+    "Fowl Aubade",
+    "Goblin Gavotte",
+    "Goddess's Hymnus",
+    "Gold Capriccio",
+    "Herb Pastoral",
+    "Herculean Etude",
+    "Honor March",
+    "Horde Lullaby", "Horde Lullaby II",
+    "Hunter's Prelude",
+    "Ice Carol", "Ice Carol II",
+    "Ice Threnody", "Ice Threnody II",
+    "Knight's Minne", "Knight's Minne II", "Knight's Minne III",
+    "Knight's Minne IV", "Knight's Minne V",
+    "Learned Etude",
+    "Light Carol", "Light Carol II",
+    "Light Threnody", "Light Threnody II",
+    "Lightning Carol", "Lightning Carol II",
+    "Logical Etude",
+    "Ltng. Threnody", "Ltng. Threnody II",
+    "Mage's Ballad", "Mage's Ballad II", "Mage's Ballad III",
+    "Magic Finale",
+    "Maiden's Virelai",
+    "Pining Nocturne",
+    "Puppet's Operetta",
+    "Quick Etude",
+    "Raptor Mazurka",
+    "Sage Etude",
+    "Scop's Operetta",
+    "Sentinel's Scherzo",
+    "Sheepfoe Mambo",
+    "Shining Fantasia",
+    "Sinewy Etude",
+    "Spirited Etude",
+    "Swift Etude",
+    "Sword Madrigal",
+    "Uncanny Etude",
+    "Valor Minuet", "Valor Minuet II", "Valor Minuet III",
+    "Valor Minuet IV", "Valor Minuet V",
+    "Victory March",
+    "Vital Etude",
+    "Vivacious Etude",
+    "Warding Round",
+    "Water Carol", "Water Carol II",
+    "Water Threnody", "Water Threnody II",
+    "Wind Carol", "Wind Carol II",
+    "Wind Threnody", "Wind Threnody II",
+}
+
+
+# Geomancy (bg-wiki Category:Geomancy — 61 wiki pages including
+# 'Geomantic Reservoir' which is a job ability, not a spell. 60 actual
+# spells: the full 30-effect set in both Geo- (target) and Indi-
+# (self/ally) prefixes. Windower's res.spells tags these with
+# type='Geomancy' and (per the canonical resource) has no unlearnable
+# internals for this school, so the whitelist primarily exists for
+# consistency with the other curated schools.
+_GEO_SPELLS_WHITELIST = {
+    "Geo-Acumen", "Geo-AGI", "Geo-Attunement", "Geo-Barrier",
+    "Geo-CHR", "Geo-DEX",
+    "Geo-Fade", "Geo-Fend", "Geo-Focus", "Geo-Frailty",
+    "Geo-Fury", "Geo-Gravity", "Geo-Haste", "Geo-INT",
+    "Geo-Languor", "Geo-Malaise", "Geo-MND",
+    "Geo-Paralysis", "Geo-Poison", "Geo-Precision",
+    "Geo-Refresh", "Geo-Regen", "Geo-Slip", "Geo-Slow",
+    "Geo-STR", "Geo-Torpor", "Geo-Vex", "Geo-VIT",
+    "Geo-Voidance", "Geo-Wilt",
+    "Indi-Acumen", "Indi-AGI", "Indi-Attunement", "Indi-Barrier",
+    "Indi-CHR", "Indi-DEX",
+    "Indi-Fade", "Indi-Fend", "Indi-Focus", "Indi-Frailty",
+    "Indi-Fury", "Indi-Gravity", "Indi-Haste", "Indi-INT",
+    "Indi-Languor", "Indi-Malaise", "Indi-MND",
+    "Indi-Paralysis", "Indi-Poison", "Indi-Precision",
+    "Indi-Refresh", "Indi-Regen", "Indi-Slip", "Indi-Slow",
+    "Indi-STR", "Indi-Torpor", "Indi-Vex", "Indi-VIT",
+    "Indi-Voidance", "Indi-Wilt",
+}
+
+
+# Registry binding each spell category to its master list AND optional
+# whitelist. SPELLS_<TAG>| handler consults this to decide whether to
+# filter the streamed master before storing it. Categories without a
+# whitelist entry pass the full Windower stream through (intended for
+# SMN/NIN/BRD/GEO until/unless we curate them too).
+_SPELL_CATEGORY_WHITELISTS = {
+    "spells_blm": _BLM_SPELLS_WHITELIST,
+    "spells_whm": _WHM_SPELLS_WHITELIST,
+    "spells_nin": _NIN_SPELLS_WHITELIST,
+    "spells_brd": _BRD_SPELLS_WHITELIST,
+    "spells_geo": _GEO_SPELLS_WHITELIST,
+}
+
+
+# Page-title overrides for bg-wiki URL building. Most spell names map
+# 1:1 to a wiki article of the same name, but two BLM spells collide
+# with element articles and use disambiguated page titles. Keys are
+# the spell.en names Windower emits; values are the article titles.
+_SPELL_PAGE_OVERRIDES = {
+    "Fire":  "Fire (Spell)",
+    "Water": "Water (Spell)",
+}
+
+
+# Registry binding each spell category to its master list. Used by both
+# the row-iter factory below and the SPELLS_<TAG>| packet handler so
+# they stay in lockstep (one source of truth per category).
+_SPELL_CATEGORY_MASTERS = {
+    "spells_blm": _BLM_SPELLS_MASTER,
+    "spells_whm": _WHM_SPELLS_MASTER,
+    "spells_smn": _SMN_SPELLS_MASTER,
+    "spells_nin": _NIN_SPELLS_MASTER,
+    "spells_brd": _BRD_SPELLS_MASTER,
+    "spells_geo": _GEO_SPELLS_MASTER,
+}
+
+
+def _make_spell_rows(master_list):
+    """Factory: return a row_iter closure for a specific spell master
+    list. Each row's key is the spell name lowercased (case-insensitive
+    matching against the live-emitted auto set); display preserves the
+    spell.english casing Windower emits. Already alphabetical from Lua
+    but we resort defensively in case a future emit drops sorting."""
+    def _rows():
+        items = [(name.lower(), name) for name in master_list]
+        items.sort(key=lambda t: t[1].lower())
+        return items
+    return _rows
+
+
+def _make_spell_check_state(cat_key):
+    """Factory: return a check-state closure bound to a specific spell
+    category's storage key. Auto consulted first (set by SPELLS_<TAG>|
+    packet); manual fallback for spells the player hand-checks."""
+    def _check(key):
+        st = checklist_known.get(cat_key, {})
+        if key in st.get("auto", set()):
+            return "auto"
+        if key in st.get("manual", set()):
+            return "manual"
+        return None
+    return _check
+
+
+# Backfill row_iter / is_checked for every spell-school category.
+for _cat in CHECKLIST_CATEGORIES:
+    _master = _SPELL_CATEGORY_MASTERS.get(_cat["key"])
+    if _master is not None:
+        _cat["row_iter"]   = _make_spell_rows(_master)
+        _cat["is_checked"] = _make_spell_check_state(_cat["key"])
+
+
+# ── Ultimate Weapons master lists ────────────────────────────────────
+# The five "Ultimate Weapon" categories in FFXI: Relic, Mythic
+# (including the two Ergon weapons), Empyrean, Aeonic, and Prime.
+# Each is a hand-authored static list — there's no game-server feed
+# for these the way there is for trusts/spells/WSes — so the row
+# data lives entirely client-side and toggles are manual-only.
+#
+# Lists are ordered by weapon type in the canonical FFXI order
+# (H2H → Dagger → Sword → Great Sword → Axe → Great Axe → Scythe →
+# Polearm → Katana → Great Katana → Club → Staff → Archery →
+# Marksmanship → Instrument → Shield) so a player scanning the tab
+# can find their job's weapon row predictably. Mythics differ in
+# that they're job-tied rather than weapon-type-tied, so that list
+# is alphabetical by weapon name.
+#
+# Bg-wiki page slugs are just the weapon names (e.g. /ffxi/Excalibur,
+# /ffxi/Idris) — reuses the spell-style URL builder.
+
+# Relic Weapons — 16 weapons + horn + shield = 18 entries. Obtained
+# via Dynamis and upgraded through Switchstix in Castle Zvahl Baileys.
+_RELIC_WEAPONS_MASTER = [
+    "Spharai",         # Hand-to-Hand (MNK)
+    "Mandau",          # Dagger (THF)
+    "Excalibur",       # Sword (PLD/RDM)
+    "Ragnarok",        # Great Sword (DRK/WAR/PLD)
+    "Guttler",         # Axe (BST)
+    "Bravura",         # Great Axe (WAR)
+    "Apocalypse",      # Scythe (DRK)
+    "Gungnir",         # Polearm (DRG)
+    "Kikoku",          # Katana (NIN)
+    "Amanomurakumo",   # Great Katana (SAM)
+    "Mjollnir",        # Club (WHM)
+    "Claustrum",       # Staff (BLM/SMN)
+    "Yoichinoyumi",    # Archery (RNG/SAM)
+    "Annihilator",     # Marksmanship (RNG)
+    "Gjallarhorn",     # Horn (BRD)
+    "Aegis",           # Shield (PLD)
+]
+
+# Mythic Weapons — 20 mythics (one per job, except GEO/RUN) plus
+# two Ergon weapons (Idris for GEO, Epeolatry for RUN) which fill
+# the same role for the SoA-era jobs. 22 entries total.
+# Obtained via the "Arms of Balrahn" quest chain starting in
+# Aht Urhgan; Ergons via the SoA Coalitions quest chain.
+_MYTHIC_WEAPONS_MASTER = [
+    "Aymur",           # Double Axe (BST)
+    "Burtgang",        # Sword (PLD)
+    "Carnwenhan",      # Dagger (BRD)
+    "Conqueror",       # Great Axe (WAR)
+    "Death Penalty",   # Marksmanship (COR)
+    "Epeolatry",       # Great Sword (RUN) — Ergon
+    "Gastraphetes",    # Archery (RNG)
+    "Glanzfaust",      # Hand-to-Hand (MNK)
+    "Idris",           # Club (GEO) — Ergon
+    "Kenkonken",       # Hand-to-Hand (PUP)
+    "Kogarasumaru",    # Great Katana (SAM)
+    "Laevateinn",      # Staff (BLM)
+    "Liberator",       # Scythe (DRK)
+    "Murgleis",        # Sword (RDM)
+    "Nagi",            # Katana (NIN)
+    "Nirvana",         # Staff (SMN)
+    "Ryunohige",       # Polearm (DRG)
+    "Terpsichore",     # Dagger (DNC)
+    "Tizona",          # Sword (BLU)
+    "Tupsimati",       # Staff (SCH)
+    "Vajra",           # Dagger (THF)
+    "Yagrush",         # Club (WHM)
+]
+
+# Empyrean Weapons — 14 weapons (one per weapon type except
+# throwing) + harp + shield = 16 entries. Created via the Trial
+# of the Magians from Abyssea NM drops.
+_EMPYREAN_WEAPONS_MASTER = [
+    "Verethragna",     # Hand-to-Hand (MNK)
+    "Twashtar",        # Dagger (THF/DNC)
+    "Almace",          # Sword (RDM)
+    "Caladbolg",       # Great Sword (DRK)
+    "Farsha",          # Axe (BST)
+    "Ukonvasara",      # Great Axe (WAR)
+    "Redemption",      # Scythe (DRK)
+    "Rhongomiant",     # Polearm (DRG)
+    "Kannagi",         # Katana (NIN)
+    "Masamune",        # Great Katana (SAM)
+    "Gambanteinn",     # Club (BLU)
+    "Hvergelmir",      # Staff (BLM)
+    "Gandiva",         # Archery (RNG)
+    "Armageddon",      # Marksmanship (COR)
+    "Daurdabla",       # Harp (BRD)
+    "Ochain",          # Shield (PLD)
+]
+
+# Aeonic Weapons — 14 weapons + instrument + shield = 16 entries.
+# Created via Reisenjima Geas Fete + Dynamis - Divergence drops,
+# delivered by Temprix in Reisenjima.
+_AEONIC_WEAPONS_MASTER = [
+    "Godhands",            # Hand-to-Hand (MNK/PUP)
+    "Aeneas",              # Dagger (THF/BRD/DNC)
+    "Sequence",            # Sword (RDM/RUN/BLU)
+    "Lionheart",           # Great Sword (RUN/DRK)
+    "Tri-edge",            # Axe (BST)
+    "Chango",              # Great Axe (WAR)
+    "Anguta",              # Scythe (DRK)
+    "Trishula",            # Polearm (DRG)
+    "Heishi Shorinken",    # Katana (NIN)
+    "Dojikiri Yasutsuna",  # Great Katana (SAM)
+    "Tishtrya",            # Club (WHM/SCH/GEO)
+    "Khatvanga",           # Staff (BLM/SMN)
+    "Fail-Not",            # Archery (RNG)
+    "Fomalhaut",           # Marksmanship (COR/RNG)
+    "Marsyas",             # Instrument (BRD)
+    "Srivatsa",            # Shield (PLD)
+]
+
+# Prime Weapons — 14 weapons + instrument + shield = 16 entries.
+# The fifth and most recent Ultimate Weapon category, introduced
+# with The Voracious Resurgence. Created through Sortie content
+# with Gama-Shama in the Silver Knife.
+_PRIME_WEAPONS_MASTER = [
+    "Varga Purnikawa",     # Hand-to-Hand (MNK/PUP)
+    "Mpu Gandring",        # Dagger (RDM/THF/BRD/DNC)
+    "Caliburnus",          # Sword (RDM/PLD/BLU)
+    "Helheim",             # Great Sword (WAR/PLD/DRK/RUN)
+    "Spalirisos",          # Axe (BST)
+    "Laphria",             # Great Axe (WAR)
+    "Foenaria",            # Scythe (DRK)
+    "Gae Buide",           # Polearm (DRG)
+    "Dokoku",              # Katana (NIN)
+    "Kusanagi",            # Great Katana (SAM)
+    "Lorg Mor",            # Club (WHM/GEO)
+    "Opashoro",            # Staff (BLM/SMN/SCH)
+    "Pinaka",              # Archery (RNG)
+    "Earp",                # Marksmanship (RNG/COR)
+    "Loughnashade",        # Instrument (BRD)
+    "Duban",               # Shield (PLD)
+]
+
+
+# Master Trials — the seven hardest battlefields in FFXI, accessed
+# via Emporox in Reisenjima for 250 Potpourri each (Heroines' Combat
+# II is the budget exception at 5 Potpourri). Each yields a unique
+# aesthetic "lock-style" weapon — no in-combat utility, purely a
+# trophy of completion. Listed in the same order bg-wiki presents
+# them.
+_MASTER_TRIALS_MASTER = [
+    "Black And White",         # Alexander, Odin, 9 Valkyries → Fermion sword
+    "Unafraid of the Dark",    # Shadow Lord + Beastmen Leaders → Irradiance blade
+    "Sealed Fate",             # Arch Ultima/Omega Weapon → Aphelion knuckles
+    "Heroines' Combat II",     # Iroha, Lion, Prishe + heroines → Mizukage-no-naginata
+    "Crystal Paradise",        # Kam'lanaut, Eald'narche, Ark Angels → Hedron dagger
+    "Oathsworn Blade",         # August, Teodor, Naakuals → Celestial spear
+    "Wings of War",            # Chaos Bahamut → Ohakari
+]
+
+
+# Registry binding each weapon category to its master list. Mirrors
+# _SPELL_CATEGORY_MASTERS — same shape, lets the row/check-state
+# factories built for spells be reused directly for weapons.
+_WEAPON_CATEGORY_MASTERS = {
+    "weapons_relic":     _RELIC_WEAPONS_MASTER,
+    "weapons_mythic":    _MYTHIC_WEAPONS_MASTER,
+    "weapons_empyrean":  _EMPYREAN_WEAPONS_MASTER,
+    "weapons_aeonic":    _AEONIC_WEAPONS_MASTER,
+    "weapons_prime":     _PRIME_WEAPONS_MASTER,
+    # Master Trials reuses the same plain-name list shape, so we
+    # hang it off this registry to inherit the row_iter/is_checked
+    # backfill loop below. The variable name "_WEAPON_CATEGORY..."
+    # is a misnomer post-this-addition (master trials aren't weapons
+    # — they're battlefields that REWARD weapons), but the data
+    # shape is identical and renaming would churn too much for the
+    # cosmetic payoff. Treat the registry as "plain-name-list
+    # categories" mentally.
+    "master_trials":     _MASTER_TRIALS_MASTER,
+}
+
+
+# Backfill row_iter / is_checked for every weapon category. The
+# spell factories work as-is — weapons are just plain-name lists
+# with the same (key.lower(), display) row shape and the same
+# auto-then-manual check fallback (though for weapons, auto stays
+# empty in practice since there's no server-side detection).
+for _cat in CHECKLIST_CATEGORIES:
+    _master = _WEAPON_CATEGORY_MASTERS.get(_cat["key"])
+    if _master is not None:
+        _cat["row_iter"]   = _make_spell_rows(_master)
+        _cat["is_checked"] = _make_spell_check_state(_cat["key"])
+
+
+# ── Weapon Skills master list caches (per weapon type) ───────────────
+# Lua streams the per-skill-type WS list every cycle via WS_<TAG>|.
+# Each weapon type gets its own master list + auto set, just like the
+# caster spell schools. Master lists start empty and populate on the
+# first non-empty emit; the "keep last non-empty" guard prevents a
+# transient empty payload from blanking the tab mid-session.
+_WS_H2H_MASTER = []  # Hand-to-Hand
+_WS_DAG_MASTER = []  # Dagger
+_WS_SWD_MASTER = []  # Sword
+_WS_GSD_MASTER = []  # Great Sword
+_WS_AXE_MASTER = []  # Axe
+_WS_GAX_MASTER = []  # Great Axe
+_WS_SCY_MASTER = []  # Scythe
+_WS_POL_MASTER = []  # Polearm
+_WS_KAT_MASTER = []  # Katana
+_WS_GKT_MASTER = []  # Great Katana
+_WS_CLB_MASTER = []  # Club
+_WS_STF_MASTER = []  # Staff
+_WS_ARC_MASTER = []  # Archery
+_WS_MRK_MASTER = []  # Marksmanship
+
+
+# Registry binding each WS category key to its master list. Mirrors
+# _SPELL_CATEGORY_MASTERS for the caster spell tabs — same shape, same
+# row-factory pattern. The keys here become the category_key strings
+# the Python handler routes on (e.g. 'ws_swd', 'ws_arc').
+_WS_CATEGORY_MASTERS = {
+    "ws_h2h": _WS_H2H_MASTER,
+    "ws_dag": _WS_DAG_MASTER,
+    "ws_swd": _WS_SWD_MASTER,
+    "ws_gsd": _WS_GSD_MASTER,
+    "ws_axe": _WS_AXE_MASTER,
+    "ws_gax": _WS_GAX_MASTER,
+    "ws_scy": _WS_SCY_MASTER,
+    "ws_pol": _WS_POL_MASTER,
+    "ws_kat": _WS_KAT_MASTER,
+    "ws_gkt": _WS_GKT_MASTER,
+    "ws_clb": _WS_CLB_MASTER,
+    "ws_stf": _WS_STF_MASTER,
+    "ws_arc": _WS_ARC_MASTER,
+    "ws_mrk": _WS_MRK_MASTER,
+}
+
+
+# Backfill row_iter / is_checked for every WS category. Reuses the
+# spell factories — same data shape (sorted list of names matched
+# case-insensitively against the auto set).
+for _cat in CHECKLIST_CATEGORIES:
+    _ws_master = _WS_CATEGORY_MASTERS.get(_cat["key"])
+    if _ws_master is not None:
+        _cat["row_iter"]   = _make_spell_rows(_ws_master)
+        _cat["is_checked"] = _make_spell_check_state(_cat["key"])
+
+
+# ── Mounts master list cache ──────────────────────────────────────────
+# Same shape as BLU spells: Lua sends both the learned set and the full
+# master list (from res.mounts) every cycle. Python caches the master
+# list with a "keep last non-empty" guard. Mount names are stable; the
+# only time the list grows is when SE patches in new ones.
+_MOUNTS_MASTER = []  # list of mount-name strings, alphabetically
+
+
+def _checklist_mount_rows():
+    """All mounts in the master list. Each row's key is the mount name
+    lower-cased for case-insensitive matching; the display text keeps
+    original casing."""
+    return [(name.lower(), name) for name in _MOUNTS_MASTER]
+
+
+def _checklist_mount_check_state(key):
+    st = checklist_known.get("mounts", {})
+    if key in st.get("auto", set()):
+        return "auto"
+    if key in st.get("manual", set()):
+        return "manual"
+    return None
+
+
+# Backfill row_iter / is_checked for mounts.
+for _cat in CHECKLIST_CATEGORIES:
+    if _cat["key"] == "mounts":
+        _cat["row_iter"]    = _checklist_mount_rows
+        _cat["is_checked"]  = _checklist_mount_check_state
+
+
+# ── Outpost Warps master list ─────────────────────────────────────────
+# Outpost teleports differ from every other checklist category we've
+# wired so far. There's no clean Windower API that exposes the unlock
+# state, and superwarp's README confirms SE moved the checks server-
+# side — so we can't infer "unlocked" from any local flag. This
+# category is MANUAL-ONLY: the user clicks the checkbox to mark a
+# region as personally-unlocked, and the disk-persisted manual set
+# is the source of truth.
+#
+# Important caveat about allegiance changes: when a player changes
+# allegiance via the Immigration NPC, the game wipes all their
+# outpost unlocks server-side. We do NOT detect this and won't wipe
+# the local checks automatically — the user would need to re-mark
+# their list. This is acceptable for now since allegiance changes
+# are rare (rank-5 lockout, etc.) and detection would require
+# packet research we haven't done.
+#
+# Master list of 17 regions that have outpost teleporters. Tu'Lia
+# and Lumoria are NOT included (they don't have OP teleporters in
+# retail). Movalpolos has a goblin vendor outpost service but no
+# supply quest, so it's also omitted. Each entry pairs the
+# conquest region with the in-game zone the outpost is located in;
+# we link to the REGION wiki page (not the outpost zone) since
+# that's where the supply-run info and OP details live.
+#
+# Tuple shape: (region_name, dest_zone_label).
+# region_name is the conquest region label (the BG-wiki page).
+# dest_zone_label is what the player actually arrives in — shown
+# in the row label as a parenthetical for clarity.
+_OUTPOST_WARPS_MASTER = [
+    ("Ronfaure",            "East Ronfaure"),
+    ("Zulkheim",            "La Theine Plateau"),
+    ("Norvallen",           "Jugner Forest"),
+    ("Gustaberg",           "North Gustaberg"),
+    ("Derfland",            "Pashhow Marshlands"),
+    ("Sarutabaruta",        "East Sarutabaruta"),
+    ("Kolshushu",           "Buburimu Peninsula"),
+    ("Aragoneu",            "Meriphataud Mountains"),
+    ("Fauregandi",          "Beaucedine Glacier"),
+    ("Valdeaunia",          "Xarcabard"),
+    ("Qufim",               "Qufim Island"),
+    ("Li'Telor",            "The Sanctuary of Zi'Tah"),
+    ("Kuzotz",              "Eastern Altepa Desert"),
+    ("Vollbow",             "Cape Teriggan"),
+    ("Elshimo Lowlands",    "Yuhtunga Jungle"),
+    ("Elshimo Uplands",     "Yhoator Jungle"),
+    ("Tavnazian Archipelago", "Misareaux Coast"),
+]
+
+
+def _checklist_outpost_rows():
+    """Outpost warp destinations. Row key is the region name lower-
+    cased (matches what _checklist_toggle_manual stores). Display
+    text is 'Region (Outpost zone)' so the user sees both the
+    conquest region label they'd find on the wiki and the actual
+    zone they arrive in. Shared across all three per-nation
+    categories — the master list is identical, only the manual
+    tracking set differs per allegiance."""
+    rows = []
+    for region, zone in _OUTPOST_WARPS_MASTER:
+        rows.append((region.lower(), f"{region}  ({zone})"))
+    rows.sort(key=lambda t: t[1].lower())
+    return rows
+
+
+def _make_outpost_check_state(cat_key):
+    """Factory: return a check-state closure bound to one of the per-
+    nation outpost categories. Each closure looks at its own auto/
+    manual sets independently — Sandy unlocks don't affect Bastok's
+    checkmarks. Auto-set is consulted first to keep wiring symmetric
+    with other categories (in case future packet research enables
+    per-nation auto-detection)."""
+    def _check(key):
+        st = checklist_known.get(cat_key, {})
+        if key in st.get("auto", set()):
+            return "auto"
+        if key in st.get("manual", set()):
+            return "manual"
+        return None
+    return _check
+
+
+# Backfill row_iter / is_checked for all three outpost categories.
+_OUTPOST_CATEGORY_KEYS = (
+    "outpost_warps_sandy",
+    "outpost_warps_bastok",
+    "outpost_warps_windy",
+)
+for _cat in CHECKLIST_CATEGORIES:
+    if _cat["key"] in _OUTPOST_CATEGORY_KEYS:
+        _cat["row_iter"]   = _checklist_outpost_rows
+        _cat["is_checked"] = _make_outpost_check_state(_cat["key"])
+
+
+# ── Bastok Quests master list ─────────────────────────────────────────
+# Names sourced from the HorizonXI wiki's "Bastok: Completed Quests"
+# table, which is itself ordered to match the in-game Quest Log layout.
+# Era-bias note: this is the original-cast list (~93 entries) covering
+# all city/area quests for Bastok proper plus Beadeaux quests filed
+# under Bastok. Newer retail additions (Adoulin-era city follow-ups,
+# etc.) can be appended as we identify them.
+#
+# Sorting: we display alphabetically in the UI (sort happens in the
+# row_iter), but the master list is kept in source-discovery order
+# so diffing against an updated wiki list stays readable.
+#
+# Manual-only category: row key is the quest name lowercased,
+# stored in the per-character checklist JSON's
+# "quests_bastok": {"manual": [...]} section. Auto detection is
+# possible in principle (server pushes a quest-log bitfield on
+# packet 0x056 when you open a quest tab) but would require packet
+# research; deferred.
+_BASTOK_QUESTS_MASTER = [
+    "The Siren's Tear",
+    "Beauty and the Galka",
+    "Welcome to Bastok",
+    "Guest of Hauteur",
+    "The Quadav's Curse",
+    "Out of One's Shell",
+    "Hearts of Mythril",
+    "The Eleventh's Hour",
+    "Shady Business",
+    "A Foreman's Best Friend",
+    "Breaking Stones",
+    "The Cold Light of Day",
+    "Gourmet",
+    "The Elvaan Goldsmith",
+    "A Flash in the Pan",
+    "Smoke on the Mountain",
+    "Stamp Hunt",
+    "Forever to Hold",
+    "Till Death Do Us Part",
+    "Fallen Comrades",
+    "Rivals",
+    "Mom, the Adventurer?",
+    "The Signpost Marks the Spot",
+    "Past Perfect",
+    "Stardust",
+    "Mean Machine",
+    "Cid's Secret",
+    "The Usual",
+    "Blade of Darkness",
+    "Father Figure",
+    "The Return of the Adventurer",
+    "Drachenfall",
+    "Vengeful Wrath",
+    "Beadeaux Smog",
+    "The Curse Collector",
+    "Fear of Flying",
+    "The Wisdom of Elders",
+    "Groceries",
+    "The Bare Bones",
+    "Minesweeper",
+    "The Darksmith",
+    "Buckets of Gold",
+    "The Stars of Ifrit",
+    "Love and Ice",
+    "Brygid the Stylist",
+    "The Gustaberg Tour",
+    "Bite the Dust",
+    "Blade of Death",
+    "Silence of the Rams",
+    "Altana's Sorrow",
+    "A Lady's Heart",
+    "Ghosts of the Past",
+    "The First Meeting",
+    "True Strength",
+    "The Doorman",
+    "The Talekeeper's Truth",
+    "The Talekeeper's Gift",
+    "Dark Legacy",
+    "Dark Puppet",
+    "Blade of Evil",
+    "Ayame and Kaede",
+    "A Test of True Love",
+    "Lovers in the Dusk",
+    "Wish Upon a Star",
+    "Eco-Warrior (Bastok)",
+    "The Weight of Your Limits",
+    "Shoot First, Ask Questions Later",
+    "Inheritance",
+    "The Walls of Your Mind",
+    "Escort for Hire (Bastok)",
+    "A Discerning Eye (Bastok)",
+    "Faded Promises",
+    "Brygid the Stylist Returns",
+    "Out of the Depths",
+    "A Question of Faith",
+    "Return to the Depths",
+    "Teak Me to the Stars",
+    "Hyper Active",
+    "The Naming Game",
+    "All by Myself",
+    "Chips",
+    "Bait and Switch",
+    "Lure of the Wildcat (Bastok)",
+    "Achieving True Power",
+    "Too Many Chefs",
+    "Fully Mental Alchemist",
+    "Synergistic Pursuits",
+    "The Wondrous Whatchamacallit",
+    "Synergistic Support",
+    "Trust: Bastok",
+    "Trial Size Trial by Earth",
+    "Trial by Earth",
+]
+
+
+# ── San d'Oria Quests master list ─────────────────────────────────────
+# Same source / ordering convention as Bastok (HorizonXI's "Completed
+# Quests" table, mirroring the in-game Quest Log).
+_SANDY_QUESTS_MASTER = [
+    "A Sentry's Peril",
+    "Waters of the Cheval",
+    "Rosel the Armorer",
+    "The Pickpocket",
+    "Father and Son",
+    "The Seamstress",
+    "The Dismayed Customer",
+    "The Trader in the Forest",
+    "The Sweetest Things",
+    "The Vicasque's Sermon",
+    "A Squire's Test",
+    "Grave Concerns",
+    "The Brugaire Consortium",
+    "Lizard Skins",
+    "Flyers for Regine",
+    "Gates to Paradise",
+    "A Squire's Test II",
+    "To Cure a Cough",
+    "Tiger's Teeth",
+    "Undying Flames",
+    "A Purchase of Arms",
+    "A Knight's Test",
+    "The Medicine Woman",
+    "Black Tiger Skins",
+    "Growing Flowers",
+    "The General's Secret",
+    "The Rumor",
+    "Her Majesty's Garden",
+    "Introduction To Teamwork",
+    "Intermediate Teamwork",
+    "Advanced Teamwork",
+    "Grimy Signposts",
+    "A Job for the Consortium",
+    "Trouble at the Sluice",
+    "The Merchant's Bidding",
+    "Unexpected Treasure",
+    "Blackmail",
+    "The Setting Sun",
+    "Distant Loyalties",
+    "The Rivalry",
+    "The Competition",
+    "Starting a Flame",
+    "Fear of the Dark",
+    "Warding Vampires",
+    "Sleepless Nights",
+    "Lufet's Lake Salt",
+    "Healing the Land",
+    "Sorcery of the North",
+    "The Crimson Trial",
+    "Enveloped in Darkness",
+    "Peace for the Spirit",
+    "Messenger from Beyond",
+    "Prelude of Black and White",
+    "Pieuje's Decision",
+    "Sharpening the Sword",
+    "A Boy's Dream",
+    "Under Oath",
+    "The Holy Crest",
+    "A Craftsman's Work",
+    "Chasing Quotas",
+    "Knight Stalker",
+    "Eco-Warrior (San d'Oria)",
+    "Methods Create Madness",
+    "Souls in Shadow",
+    "A Taste For Meat",
+    "Exit the Gambler",
+    "Old Wounds",
+    "Escort for Hire (San d'Oria)",
+    "A Discerning Eye (San d'Oria)",
+    "A Timely Visit",
+    "Fit for a Prince",
+    "Over the Hills and Far Away",
+    "Signed in Blood",
+    "Tea with a Tonberry?",
+    "Spice Gals",
+    "Thick Shells",
+    "Forest for the Trees",
+    "Trial Size Trial by Ice",
+    "Trial by Ice",
+]
+
+
+# ── Windurst Quests master list ───────────────────────────────────────
+_WINDY_QUESTS_MASTER = [
+    "In a Pickle",
+    "A Pose by Any Other Name",
+    "Acting in Good Faith",
+    "Say It with Flowers",
+    "Hat in Hand",
+    "A Feather in One's Cap",
+    "Making Headlines",
+    "Scooped!",
+    "Glyph Hanger",
+    "Early Bird Catches the Bookworm",
+    "Chasing Tales",
+    "A Smudge on One's Record",
+    "Food for Thought",
+    "Overnight Delivery",
+    "Water Way to Go",
+    "Blue Ribbon Blues",
+    "Toraimarai Turmoil",
+    "Teacher's Pet",
+    "Reap What You Sow",
+    "Let Sleeping Dogs Lie",
+    "Making the Grade",
+    "A Crisis in the Making",
+    "Hoist the Jelly, Roger",
+    "Wondering Minstrel",
+    "Heaven Cent",
+    "The Postman Always K.O.s Twice",
+    "To Bee or Not to Bee?",
+    "Curses, Foiled Again!",
+    "Curses, Foiled...Again!?",
+    "Curses, Foiled A-Golem!?",
+    "Mandragora-Mad",
+    "Star Struck",
+    "Blast from the Past",
+    "Nothing Matters",
+    "Something Fishy",
+    "To Catch a Falling Star",
+    "All at Sea",
+    "Truth, Justice, and the Onion Way!",
+    "Know One's Onions",
+    "Inspector's Gadget!",
+    "Onion Rings",
+    "Crying Over Onions",
+    "Wild Card",
+    "The Promise",
+    "Making Amends",
+    "Making Amens!",
+    "Wonder Wands",
+    "Catch It If You Can!",
+    "Creepy Crawlies",
+    "Paying Lip Service",
+    "The Amazin' Scorpio",
+    "Twinstone Bonding",
+    "Chocobilious",
+    "In a Stew",
+    "Mihgo's Amigo",
+    "Rock Racketeer",
+    "The All-New C-2000",
+    "A Greeting Cardian",
+    "Legendary Plan B",
+    "The All-New C-3000",
+    "Can Cardians Cry?",
+    "The Fanged One",
+    "Flower Child",
+    "The Three Magi",
+    "Recollections",
+    "The Root of the Problem",
+    "The Tenshodo Showdown",
+    "As Thick as Thieves",
+    "Hitting the Marquisate",
+    "Sin Hunting",
+    "Fire and Brimstone",
+    "Unbridled Passion",
+    "I Can Hear a Rainbow",
+    "The Puppet Master",
+    "Class Reunion",
+    "Carbuncle Debacle",
+    "The Moonlit Path",
+    "From Saplings Grow",
+    "Orastery Woes",
+    "Blood and Glory",
+    "Tuning In",
+    "Tuning Out",
+    "One Good Deed?",
+    "Eco-Warrior (Windurst)",
+    "Escort For Hire (Windurst)",
+    "A Discerning Eye (Windurst)",
+    "Waking Dreams",
+]
+
+
+# ── Jeuno Quests master list ──────────────────────────────────────────
+# Source: HorizonXI wiki Category:Jeuno_Quests "Completed Quests" table,
+# in Quest Log order. Quest categories include Lower Jeuno, Upper Jeuno,
+# Port Jeuno, and Ru'Lude Gardens. Includes the 14 Borghertz's Hands
+# job-AF gauntlet quests which all live under Jeuno in the log.
+_JEUNO_QUESTS_MASTER = [
+    "Crest of Davoi",
+    "Save My Sister",
+    "A Clock Most Delicate",
+    "Save the Clock Tower",
+    "Chocobo's Wounds",
+    "Save My Son",
+    "A Candlelight Vigil",
+    "The Wonder Magic Set",
+    "The Kind Cardian",
+    "Your Crystal Ball",
+    "Collect Tarut Cards",
+    "The Old Monument",
+    "A Minstrel in Despair",
+    "Rubbish Day",
+    "Never to Return",
+    "Community Service",
+    "Cook's Pride",
+    "Tenshodo Membership",
+    "The Lost Cardian",
+    "Path of the Beastmaster",
+    "Path of the Bard",
+    "The Clockmaster",
+    "Candle-making",
+    "Child's Play",
+    "Northward",
+    "The Antique Collector",
+    "Deal with Tenshodo",
+    "The Gobbiebag Part I",
+    "The Gobbiebag Part II",
+    "The Gobbiebag Part III",
+    "The Gobbiebag Part IV",
+    "The Gobbiebag Part V",
+    "The Gobbiebag Part VI",
+    "Mysteries of Beadeaux I",
+    "Mysteries of Beadeaux II",
+    "Fistful of Fury",
+    "The Goblin Tailor",
+    "Pretty Little Things",
+    "Borghertz's Warring Hands",
+    "Borghertz's Striking Hands",
+    "Borghertz's Healing Hands",
+    "Borghertz's Sorcerous Hands",
+    "Borghertz's Vermillion Hands",
+    "Borghertz's Sneaky Hands",
+    "Borghertz's Stalwart Hands",
+    "Borghertz's Shadowy Hands",
+    "Borghertz's Wild Hands",
+    "Borghertz's Harmonious Hands",
+    "Borghertz's Chasing Hands",
+    "Borghertz's Loyal Hands",
+    "Borghertz's Lurking Hands",
+    "Borghertz's Dragon Hands",
+    "Borghertz's Calling Hands",
+    "Axe the Competition",
+    "Wings of Gold",
+    "Scattered into Shadow",
+    "A New Dawn",
+    "Painful Memory",
+    "The Requiem",
+    "The Circle of Time",
+    "Searching for the Right Words",
+    "Beat Around the Bushin",
+    "A Reputation in Ruins",
+    "Ducal Hospitality",
+    "Hook, Line, and Sinker",
+    "In the Mood for Love",
+    "A Chocobo's Tale",
+    "Empty Memories",
+    "Unlisted Qualities",
+    "Chameleon Capers",
+    "Regaining Trust",
+    "Storms of Fate",
+    "Mixed Signals",
+    "Shadows of the Departed",
+    "Apocalypse Nigh",
+    "Chocobo on the Loose!",
+    "In Defiant Challenge",
+    "Atop the Highest Mountains",
+    "Whence Blows the Wind",
+    "Riding on the Clouds",
+    "Shattering Stars",
+    "Beyond the Sun",
+    "Omni Aketon",
+    "The Road to Aht Urhgan",
+]
+
+
+# ── Aht Urhgan Quests master list ─────────────────────────────────────
+# Source: bg-wiki Category:Aht_Urhgan_Quests pages list and the
+# Aht Urhgan Quest Checklist template (cross-referenced). Sorted
+# alphabetically — bg-wiki's public list isn't in Quest Log order
+# and the Quest Log order isn't easily recoverable without a live
+# scrape, so alphabetical works fine for a checklist.
+#
+# Note: Treasures of Aht Urhgan is "Coming Soon" on HorizonXI per
+# their wiki — this list is here for the user's retail account
+# and for whenever ToAU lands on Horizon. Quest names match the
+# bg-wiki page titles for clean URL building.
+_AHTURHGAN_QUESTS_MASTER = [
+    "A Stygian Pact",
+    "A Taste of Honey",
+    "Against All Odds",
+    "An Empty Vessel",
+    "An Imperial Heist",
+    "Arts and Crafts",
+    "Beginnings",
+    "Breaking the Bonds of Fate",
+    "Coming Full Circle",
+    "Cook-a-roon?",
+    "Delivering the Goods",
+    "Divine Interference",
+    "Duties, Tasks, and Deeds",
+    "Embers of His Past",
+    "Equipped for All Occasions",
+    "Fear of the Dark II",
+    "Finding Faults",
+    "Fist of the People",
+    "Five Seconds of Fame",
+    "Forging a New Myth",
+    "Get the Picture",
+    "Give Peace a Chance",
+    "Got It All",
+    "Keeping Notes",
+    "Led Astray",
+    "Luck of the Draw",
+    "Lure of the Wildcat",
+    "Moment of Truth",
+    "Navigating the Unfriendly Seas",
+    "No Strings Attached",
+    "Not Meant to Be",
+    "Ode to the Serpents",
+    "Olduum",
+    "Omens",
+    "Operation Teatime",
+    "Promotion: Captain",
+    "Promotion: Chief Sergeant",
+    "Promotion: Corporal",
+    "Promotion: First Lieutenant",
+    "Promotion: Lance Corporal",
+    "Promotion: Private First Class",
+    "Promotion: Second Lieutenant",
+    "Promotion: Sergeant",
+    "Promotion: Sergeant Major",
+    "Promotion: Superior Private",
+    "Puppetmaster Blues",
+    "Rat Race",
+    "Rock Bottom",
+    "Royal Painter Escort",
+    "Saga of the Skyserpent",
+    "Scouting the Ashu Talif",
+    "Soothing Waters",
+    "Striking a Balance",
+    "Such Sweet Sorrow",
+    "Targeting the Captain",
+    "The Art of War",
+    "The Beast Within",
+    "The Die is Cast",
+    "The Prankster",
+    "The Prince and the Hopper",
+    "The Rider Cometh",
+    "The Wayward Automaton",
+    "Three Men and a Closet",
+    "Totoroon's Treasure Hunt",
+    "Transformations",
+    "Two Horn the Savage",
+    "Unwavering Resolve",
+    "Vanishing Act",
+    "Waking the Colossus",
+    "What Friends Are For",
+    "When the Bow Breaks",
+]
+
+
+
+
+# ── Adoulin Quests master list ─────────────────────────────
+# Sourced from the user's personal Adoulin quest tracker
+# spreadsheet — 98 entries spanning city quests (Western and
+# Eastern Adoulin) and zone quests (Ceizak Battlegrounds,
+# Foret de Hennetiel, Yahse Hunting Grounds, Morimar Basalt
+# Fields, Marjami Ravine, Yorcia Weald, Cirdas Caverns, and
+# Kamihr Drifts). Sorted alphabetically for the checklist UI.
+# Coalition Assignments (repeatable per-zone tasks) are NOT
+# included — those are a separate Adoulin subsystem.
+_ADOULIN_QUESTS_MASTER = [
+    "A Barrel of Laughs",
+    "A Certain Substitute Patrolman",
+    "A Geothermal Expedition",
+    "A Good Pair of Crocs",
+    "A Pioneer's Best (Imaginary) Friend",
+    "A Shot in the Dark",
+    "A Stone's Throw Away",
+    "A Thirst Before Time",
+    "A Thirst for Eternity",
+    "A Thirst for the Ages",
+    "A Thirst for the Eons",
+    "All the Way to the Bank",
+    "\"Always more,\" Quoth the Ravenous",
+    "Boiling Over",
+    "Breaking the Ice",
+    "Cafe...teria",
+    "Chacharoon's Cheer",
+    "Coastal Chaos",
+    "Courtesy Crustacean",
+    "Cry Not, Caretaker",
+    "Did You Feel That?",
+    "Dirt Cheap",
+    "Do Not Go Into the Light",
+    "Doctor Chacharoon",
+    "Don't Clam Up on Me Now",
+    "Don't Ever Leaf Me",
+    "Eastern Waypoints, Ho!",
+    "Empty Nest",
+    "Exotic Delicacies",
+    "Eye of the Beholder",
+    "F.A.I.L.ure Is Not an Option",
+    "Feeding Frenzy",
+    "Fertile Ground",
+    "Flavors of Our Lives",
+    "Flotsam Finding",
+    "Flower Power",
+    "Flowers for Svenja",
+    "Full Fields",
+    "Granddaddy Dearest",
+    "Green Groves",
+    "Grind to Sawdust",
+    "Hide and Go Peak",
+    "Hop to It",
+    "Hunger Strikes",
+    "Hypnotic Hospitality",
+    "Hypocritical Oath",
+    "I'm on a Boat",
+    "In the Land of the Blind",
+    "It Never Goes Out of Style",
+    "It Sets My Heart Aflutter",
+    "Keep Your Bloomers On, Erisa",
+    "Lerene's Lament",
+    "Meg-alomaniac",
+    "Mining Missive",
+    "Mistress of Ceremonies",
+    "No Laughing Matter",
+    "No Love Lost",
+    "No Mercy for the Wicked",
+    "No Rime Like the Present",
+    "Not-So-Clean Bill",
+    "One Good Turn...",
+    "Open the Floodgates",
+    "Orobon Appetit",
+    "Poisoning the Well",
+    "Pond Probing",
+    "Raptor Rapture",
+    "Release the Fleece",
+    "Rowing Together",
+    "Scaredy-Cats",
+    "Seed Sowing",
+    "Sick and Tired",
+    "Talk About Wrinkly Skin",
+    "The Curious Case of Melvien",
+    "The Good, the Bad, the Clement",
+    "The Longest Way Round...",
+    "The Old Man and the Harpoon",
+    "The Secret to Success",
+    "The Starving",
+    "The Weatherspoon Inquisition",
+    "The Weatherspoon War",
+    "The Whole Place Is Abuzz",
+    "Thorn in the Side",
+    "Titillating Tomes",
+    "To Catch a Predator",
+    "To Laugh Is to Love",
+    "Transporting",
+    "Trial of the Chacharoon",
+    "Trinket for the Tyrant",
+    "Twitherym Dust",
+    "Unsullied Lands",
+    "Vegetable Vegetable Crisis",
+    "Vegetable Vegetable Evolution",
+    "Vegetable Vegetable Frustration",
+    "Vegetable Vegetable Revolution",
+    "Velkkovert Operations",
+    "Water, Water, Everywhere",
+    "Wayward Waypoints",
+    "Western Waypoints, Ho!",
+]
+
+
+# Selbina — a small port town between the three nations, mostly a
+# layover for Mhaura ferry traffic and a fishing hub. Subjob unlock
+# (Elder Memories) starts here; the rest are mid-2000s side content:
+# the Oswald pearl-necklace mini-arc, Zaldon's fishing chart quests,
+# and the Stone Monument cartography quest spanning every outdoor
+# zone in Vana'diel.
+_SELBINA_QUESTS_MASTER = [
+    "An Explorer's Footsteps",
+    "Brigand's Chart",
+    "Cargo",
+    "Donate to Recycling",
+    "Elder Memories",
+    "Inside the Belly",
+    "Only the Best",
+    "Picture Perfect",
+    "Pirate's Chart",
+    "Test My Mettle",
+    "The Gift",
+    "The Real Gift",
+    "The Rescue",
+    "Under the Sea",
+]
+
+
+# Mhaura — Selbina's twin port on the Mindartia side of the ferry
+# route. Most quests revolve around the cooking guild (Rycharde the
+# Chef chain) and the local subjob unlock alternative (The Old Lady,
+# mutually exclusive with Selbina's Elder Memories). The two "Trial
+# by Lightning" entries are level-capped BCNM siblings.
+_MHAURA_QUESTS_MASTER = [
+    "A Potter's Preference",
+    "Expertise",
+    "Fisherman's Heart",
+    "His Name is Valgeir",
+    "It's Raining Mannequins",
+    "Orlando's Antiques",
+    "Recycling Rods",
+    "Rycharde the Chef",
+    "The Basics",
+    "The Clue",
+    "The Old Lady",
+    "The Sand Charm",
+    "Trial by Lightning",
+    "Trial Size Trial by Lightning",
+    "Unending Chase",
+    "Way of the Cook",
+]
+
+
+# Tavnazian Safehold — the underground refugee city accessible after
+# Promathia Mission 2. Quests here open up during the CoP storyline
+# and cover map acquisition (Unforgiven → Map of Tavnazia), kitchen
+# repair lore (Secrets of Ovens Lost), and the two Voidwatch Ops
+# anchored at Owain. The VW Op entries display the in-game "#NNN"
+# label but route to bg-wiki's hashless slug via URL override.
+_TAVNAZIA_QUESTS_MASTER = [
+    "A Bitter Past",
+    "A Hard Day's Knight",
+    "Behind the Smile",
+    "Elderly Pursuits",
+    "Fly High",
+    "Go! Go! Gobmuffin!",
+    "In Search of the Truth",
+    "In the Name of Science",
+    "Knocking on Forbidden Doors",
+    "Paradise, Salvation, and Maps",
+    "Petals for Parelbriaux",
+    "Requiem of Sin",
+    "Secrets of Ovens Lost",
+    "Tango with a Tracker",
+    "The Big One",
+    "The Call of the Sea",
+    "Unforgiven",
+    "Uninvited Guests",
+    "VW Op. #004: Bibiki Bombardment",
+    "VW Op. #026: Tavnazian Terrors",
+    "X Marks the Spot",
+]
+
+
+# Mog House — the three Moogle-related quests that aren't tied to
+# any single nation. Sparse category but worth tracking separately
+# since they share a thematic source (your house Moogle) rather
+# than a city.
+_MOGHOUSE_QUESTS_MASTER = [
+    "Give a Moogle a Break",
+    "The Moogle's Picnic!",
+    "Moogles in the Wild",
+]
+
+
+# Outlands — bg-wiki's umbrella for quests anchored in the second-
+# wave hubs and outpost zones outside the Three Nations and Adoulin.
+# Covers Kazham (cooking/sub-jobs/Avatar Trials by Fire), Norg (the
+# Tenshodo pirate hub including Avatar Trials by Water, Bugi Soden,
+# and Sacred Katana), Rabao (desert town including Trials by Wind
+# and Lu Shang's fishing rod chain), and standalone zone quests
+# scattered across Yuhtunga Jungle, Cape Terrigan, Zi'Tah, Ru'Avitau,
+# and Eastern Altepa. Includes the Border Crossing voidwatch chain
+# whose entry points are spread across these same outpost zones.
+_OUTLANDS_QUESTS_MASTER = [
+    # ── Kazham (cooking + sub-job + Avatar Trials by Fire) ──
+    "The Firebloom Tree",
+    "Greetings to the Guardian",
+    "A Question of Taste",
+    "Everyone's Grudging",
+    "You Call That a Knife?",
+    "Missionary Man",
+    "Gullible's Travels",
+    "Even More Gullible's Travels",
+    "Personal Hygiene",
+    "The Opo-opo and I",
+    "Cloak and Dagger",
+    "A Discerning Eye (Kazham)",
+    "Trial-Size Trial by Fire",
+    "Trial by Fire",
+    # ── Norg (Tenshodo pirate hub; Avatar Trials by Water) ──
+    "Forge Your Destiny",
+    "Black Market",
+    "Mama Mia",
+    "Stop Your Whining",
+    "Everyone's Grudge",
+    "Secret of the Damp Scroll",
+    "The Sahagin's Stash",
+    "It's Not Your Vault",
+    "Like a Shining Subligar",
+    "Like Shining Leggings",
+    "The Sacred Katana",
+    "Yomi Okuri",
+    "A Thief in Norg!?",
+    "20 in Pirate Years",
+    "I'll Take the Big Box",
+    "True Will",
+    "The Potential Within",
+    "Bugi Soden",
+    "An Undying Pledge",
+    "Trial-Size Trial by Water",
+    "Trial by Water",
+    # ── Standalone zone quests ──
+    "Wrath of the Opo-opos",       # Yuhtunga Jungle
+    "Wandering Souls",             # Cape Terrigan
+    "Soul Searching",              # Sanctuary of Zi'Tah
+    "Divine Might",                # Shrine of Ru'Avitau
+    "Open Sesame",                 # Eastern Altepa Desert
+    # ── Rabao (Avatar Trials by Wind + Lu Shang chain) ──
+    "Don't Forget the Antidote",
+    "The Missing Piece",
+    "The Kuftal Tour",
+    "Chasing Dreams",
+    "The Search for Goldmane",
+    "Trial-Size Trial by Wind",
+    "Trial by Wind",
+    # ── Voidwatch Border Crossing chain (spans outpost zones) ──
+    "Voidwatch Ops: Border Crossing",
+    "VW Op. 054: Elshimo List",
+    "VW Op. 101: Detour to Zepwell",
+    "VW Op. 115: Li'Telor Variant",
+    "Skyward Ho, Voidwatcher!",
+    # ── Rabao fishing rod chain ──
+    "Indomitable Spirit",
+    "The Immortal Lu Shang",
+]
+
+
+# Crystal War — quests anchored in the past-era versions of the
+# three nation capitals (Bastok Markets (S), Southern San d'Oria
+# (S), Windurst Waters (S)) plus a few outdoor (S) zones and the
+# Upper Jeuno / Eldieme Necropolis (S) job-unlock anchors. The
+# storyline covers each nation's involvement in the Crystal War,
+# leading up to the Wings of the Goddess mission climax. Includes
+# the two WotG-era job-unlock quests (Dancer and Scholar), which
+# were added alongside the expansion.
+_CRYSTAL_WAR_QUESTS_MASTER = [
+    # ── Job unlocks (Upper Jeuno / Eldieme Necropolis) ──
+    "Lakeside Minuet",                  # Dancer unlock
+    "A Little Knowledge",               # Scholar unlock
+    # ── Bastok Markets (S) story arc ──
+    "The Fighting Fourth",              # Bastok initiation
+    "Better Part of Valor",
+    "Fires of Discontent",
+    "Light in the Darkness",
+    "Burden of Suspicion",
+    "Storm on the Horizon",
+    "Fire in the Hole",
+    "Quelling the Storm",
+    "Honor Under Fire",
+    "Beneath the Mask",
+    "What Price Loyalty",
+    "The Truth Lies Hid",
+    "Bonds of Mythril",
+    # ── Bastok (S) "Other Quests" ──
+    "Seeing Spots",
+    "Beans Ahoy!",
+    "Beast from the East",
+    # ── Southern San d'Oria (S) story arc ──
+    "Steamed Rams",                     # San d'Oria initiation
+    "Gifts of the Griffon",
+    "Claws of the Griffon",
+    "Boy and the Beast",
+    "Wrath of the Griffon",
+    "Perils of the Griffon",
+    "In a Haze of Glory",
+    "The Price of Valor",
+    "Bonds That Never Die",
+    "Songbirds in a Snowstorm",
+    "Blood of Heroes",
+    "Chasing Shadows",
+    "Face of the Future",
+    # ── Windurst Waters (S) story arc ──
+    "Snake on the Plains",              # Windurst initiation
+    "The Tigress Stirs",
+    "The Tigress Strikes",
+    "Knot Quite There",
+    "A Manifest Problem",
+    "When One Man Is Not Enough",
+    "A Feast for Gnats",
+    "The Long March North",
+    "The Forbidden Path",
+    "Sins of the Mothers",
+    "Howl from the Heavens",
+    "Manifest Destiny",
+    "At Journey's End",
+    # ── Windurst (S) "Other Quests" ──
+    "Healing Herbs",
+    "Redeeming Rocks",
+    "The Dawn of Delectability",
+    "Say It with a Handbag",
+]
+
+
+# Abyssea — Vision of Abyssea (first expansion add-on). Three zones
+# (Konschtat, La Theine, Tahrongi) with zone-boss quests, mini-arcs,
+# and the shared "Refuel and Replenish" / "A Mightier Martello"
+# repeatable side quests per zone. Display strings include the
+# zone disambig in parentheses where bg-wiki uses it.
+_ABYSSEA_VISION_QUESTS_MASTER = [
+    # Abyssea - Konschtat
+    "To Paste a Peiste",
+    "Hope Blooms on the Battlefield",
+    "Of Malnourished Martellos",
+    "Rose on the Heath",
+    "Full-of-Himself Alchemist",
+    "The Walking Wounded",
+    "Shady Business Redux",
+    "Addled Mind, Undying Dreams",
+    "The Soul of The Matter",
+    "Secret Agent Man",
+    "Playing Paparazzi",
+    "Refuel and Replenish (Konschtat)",
+    "A Mightier Martello (Konschtat)",
+    # Abyssea - La Theine
+    "A Goldstruck Gigas",
+    "Catering Capers",
+    "Gift of Light",
+    "Fear of the Dark III",
+    "An Eye for Revenge",
+    "Unbreak His Heart",
+    "Explosive Endeavors",
+    "The Angling Armorer",
+    "Water of Life",
+    "Out of Touch",
+    "Lost Memories",
+    "Refuel and Replenish (La Theine)",
+    "A Mightier Martello (La Theine)",
+    # Abyssea - Tahrongi
+    "Megadrile Menace",
+    "His Box, His Beloved",
+    "Weapons, Not Worries",
+    "Cleansing the Canyon",
+    "Savory Salvation",
+    "Bringing Down the Mountain",
+    "A Sterling Specimen",
+    "For Love of a Daughter",
+    "Sisters in Crime",
+    "When Good Cardians Go Bad",
+    "Tangling with Tongue-twisters",
+    "Refuel and Replenish (Tahrongi)",
+    "A Mightier Martello (Tahrongi)",
+]
+
+
+# Abyssea — Scars of Abyssea (second expansion add-on). Three zones
+# (Misareaux, Vunkerl, Attohwa). Adds the Ward Warden / Desert Rain /
+# Crimson Carpet repeatable seal quests per zone alongside the zone
+# bosses and mini-arcs.
+_ABYSSEA_SCARS_QUESTS_MASTER = [
+    # Abyssea - Misareaux
+    "A Delectable Demon",
+    "Missing in Action",
+    "I Dream of Flowers",
+    "Destiny Odyssey",
+    "Unidentified Research Object",
+    "Cookbook of Hope Restoring",
+    "Smoke over The Coast",
+    "Soil and Green",
+    "Dropping The Bomb",
+    "Wanted: Medical Supplies",
+    "Refuel and Replenish (Misareaux)",
+    "A Mightier Martello (Misareaux)",
+    "Ward Warden I (Misareaux)",
+    "Ward Warden II (Misareaux)",
+    "Desert Rain I (Misareaux)",
+    "Desert Rain II (Misareaux)",
+    "Crimson Carpet I (Misareaux)",
+    "Crimson Carpet II (Misareaux)",
+    # Abyssea - Vunkerl
+    "The Beast of Bastore",
+    "A Ward to End All Wards",
+    "The Boxwatcher's Behest",
+    "His Bridge, His Beloved",
+    "Bad Communication",
+    "Family Ties",
+    "Aqua Pura",
+    "Aqua Puraga",                       # bg-wiki spelling (not "Purpura")
+    "Whither the Whisker",
+    "Scattered Shells, Scattered Mind",
+    "Refuel and Replenish (Vunkerl)",
+    "A Mightier Martello (Vunkerl)",
+    "Ward Warden I (Vunkerl)",
+    "Ward Warden II (Vunkerl)",
+    "Desert Rain I (Vunkerl)",
+    "Desert Rain II (Vunkerl)",
+    "Crimson Carpet I (Vunkerl)",
+    "Crimson Carpet II (Vunkerl)",
+    # Abyssea - Attohwa
+    "A Fluttery Fiend",
+    "Wayward Wares",
+    "Looking For Lookouts",
+    "Flown The Coop",
+    "Threadbare Testimonials",
+    "An Offer You Can't Refuse",
+    "Something in the Air",
+    "An Acrididaen Anodyne",             # bg-wiki spelling (double-i)
+    "Hazy Prospects",
+    "For Want of a Pot",
+    "Refuel and Replenish (Attohwa)",
+    "A Mightier Martello (Attohwa)",
+    "Ward Warden I (Attohwa)",
+    "Ward Warden II (Attohwa)",
+    "Desert Rain I (Attohwa)",
+    "Desert Rain II (Attohwa)",
+    "Crimson Carpet I (Attohwa)",
+    "Crimson Carpet II (Attohwa)",
+]
+
+
+# Abyssea — Heroes of Abyssea (third expansion add-on). Three zones
+# (Altepa, Uleguerand, Grauberg). Introduces the Dominion battle
+# system: each zone has 14 numbered Dominion Op quests in addition
+# to the usual zone bosses, mini-arcs, and Refuel/Martello quests.
+#
+# Display strings preserve the in-game "Dominion Op #NN" formatting
+# (with the # sign), but the bg-wiki page slugs drop the hash —
+# they live at "Dominion_Op_01_(Altepa)" etc. URL overrides for the
+# 42 hashed entries are wired through _QUEST_URL_OVERRIDES below.
+_ABYSSEA_HEROES_QUESTS_MASTER = [
+    # Abyssea - Altepa
+    "A Beaked Blusterer",
+    "Classrooms Without Borders",
+    "The Secret Ingredient",
+    "Help Not Wanted",
+    "The Titus Touch",
+    "Slacking Subordinates",
+    "Motherly Love",
+    "Look to the Sky",
+    "The Unmarked Tomb",
+    "Proof of the Lion",
+    "Brygid the Stylist Strikes Back",
+    "Dominion Op #01 (Altepa)",
+    "Dominion Op #02 (Altepa)",
+    "Dominion Op #03 (Altepa)",
+    "Dominion Op #04 (Altepa)",
+    "Dominion Op #05 (Altepa)",
+    "Dominion Op #06 (Altepa)",
+    "Dominion Op #07 (Altepa)",
+    "Dominion Op #08 (Altepa)",
+    "Dominion Op #09 (Altepa)",
+    "Dominion Op #10 (Altepa)",
+    "Dominion Op #11 (Altepa)",
+    "Dominion Op #12 (Altepa)",
+    "Dominion Op #13 (Altepa)",
+    "Dominion Op #14 (Altepa)",
+    "Refuel and Replenish (Altepa)",
+    "A Mightier Martello (Altepa)",
+    # Abyssea - Uleguerand
+    "A Man-eating Mite",
+    "Let There Be Light",
+    "Look Out Below",
+    "Home, Home on the Range",
+    "Imperial Espionage",
+    "Imperial Espionage II",
+    "Boreal Blossoms",
+    "Brothers in Arms",
+    "Scouts Astray",
+    "Frozen Flame Redux",
+    "Slip Slidin' Away",
+    "Dominion Op #01 (Uleguerand)",
+    "Dominion Op #02 (Uleguerand)",
+    "Dominion Op #03 (Uleguerand)",
+    "Dominion Op #04 (Uleguerand)",
+    "Dominion Op #05 (Uleguerand)",
+    "Dominion Op #06 (Uleguerand)",
+    "Dominion Op #07 (Uleguerand)",
+    "Dominion Op #08 (Uleguerand)",
+    "Dominion Op #09 (Uleguerand)",
+    "Dominion Op #10 (Uleguerand)",
+    "Dominion Op #11 (Uleguerand)",
+    "Dominion Op #12 (Uleguerand)",
+    "Dominion Op #13 (Uleguerand)",
+    "Dominion Op #14 (Uleguerand)",
+    "Refuel and Replenish (Uleguerand)",
+    "A Mightier Martello (Uleguerand)",
+    # Abyssea - Grauberg
+    "An Ulcerous Uragnite",
+    "Voices from Beyond",
+    "Benevolence Lost",
+    "Brugaire's Ambition",
+    "Chocobo Panic",
+    "The Egg Enthusiast",
+    "Getting Lucky",
+    "Her Father's Legacy",
+    "The Mysterious Head Patrol",
+    "The Perils of Korons",
+    "Master Missing, Master Missed",
+    "Dominion Op #01 (Grauberg)",
+    "Dominion Op #02 (Grauberg)",
+    "Dominion Op #03 (Grauberg)",
+    "Dominion Op #04 (Grauberg)",
+    "Dominion Op #05 (Grauberg)",
+    "Dominion Op #06 (Grauberg)",
+    "Dominion Op #07 (Grauberg)",
+    "Dominion Op #08 (Grauberg)",
+    "Dominion Op #09 (Grauberg)",
+    "Dominion Op #10 (Grauberg)",
+    "Dominion Op #11 (Grauberg)",
+    "Dominion Op #12 (Grauberg)",
+    "Dominion Op #13 (Grauberg)",
+    "Dominion Op #14 (Grauberg)",
+    "Refuel and Replenish (Grauberg)",
+    "A Mightier Martello (Grauberg)",
+]
+
+
+# ── Per-nation quest helpers (factory) ─────────────────────────────────
+# All three nation quest categories share the same shape (manual-only,
+# alphabetical sort, name-keyed). Build the row_iter / is_checked
+# closures via a factory so each category gets a closure bound to its
+# own master list and storage key.
+_QUEST_CATEGORY_MASTERS = {
+    "quests_bastok":    _BASTOK_QUESTS_MASTER,
+    "quests_sandy":     _SANDY_QUESTS_MASTER,
+    "quests_windy":     _WINDY_QUESTS_MASTER,
+    "quests_jeuno":     _JEUNO_QUESTS_MASTER,
+    "quests_ahturhgan": _AHTURHGAN_QUESTS_MASTER,
+    "quests_adoulin":   _ADOULIN_QUESTS_MASTER,
+    "quests_selbina":   _SELBINA_QUESTS_MASTER,
+    "quests_mhaura":    _MHAURA_QUESTS_MASTER,
+    "quests_tavnazia":  _TAVNAZIA_QUESTS_MASTER,
+    "quests_moghouse":  _MOGHOUSE_QUESTS_MASTER,
+    "quests_outlands":  _OUTLANDS_QUESTS_MASTER,
+    "quests_crystalwar": _CRYSTAL_WAR_QUESTS_MASTER,
+    "quests_aby_vision": _ABYSSEA_VISION_QUESTS_MASTER,
+    "quests_aby_scars":  _ABYSSEA_SCARS_QUESTS_MASTER,
+    "quests_aby_heroes": _ABYSSEA_HEROES_QUESTS_MASTER,
+}
+
+
+def _make_quest_rows(master_list):
+    """Factory: return a row_iter closure for a specific quest master
+    list. Each row key is the quest name lowercased; display preserves
+    original casing. Sorted alphabetically for easy scanning."""
+    def _rows():
+        items = [(q.lower(), q) for q in master_list]
+        items.sort(key=lambda t: t[1].lower())
+        return items
+    return _rows
+
+
+def _make_quest_check_state(cat_key):
+    """Factory: return a check-state closure bound to a specific
+    quest category's storage key. Auto consulted first to keep
+    wiring symmetric in case packet-decode auto-detection lands."""
+    def _check(key):
+        st = checklist_known.get(cat_key, {})
+        if key in st.get("auto", set()):
+            return "auto"
+        if key in st.get("manual", set()):
+            return "manual"
+        return None
+    return _check
+
+
+# Backfill row_iter / is_checked for every quest category.
+for _cat in CHECKLIST_CATEGORIES:
+    _master = _QUEST_CATEGORY_MASTERS.get(_cat["key"])
+    if _master is not None:
+        _cat["row_iter"]   = _make_quest_rows(_master)
+        _cat["is_checked"] = _make_quest_check_state(_cat["key"])
+
+
+# ── Missions master lists (per nation / expansion) ─────────────────────
+# Each mission entry is a (mission_id, name) tuple. mission_id is the
+# canonical "<rank>-<number>" string (Bastok-style) or a sequential
+# number string (used by expansions like CoP/ToAU that don't carry a
+# Rank progression). Sorting by mission_id gives the in-game completion
+# order rather than alphabetical, which matches how the mission log
+# itself displays them. Display format in the row is "<id>  <name>"
+# (e.g. "5-2  Xarcabard, Land of Truths") so the user can scan rank
+# progression at a glance.
+#
+# Mission progress is server-side state. The server emits a per-nation
+# "current mission" packet (0x05F + friends) but decoding that is a
+# self-contained project; for now this is a manual-only checklist that
+# the user ticks off as they complete missions. Auto-detect can land
+# later without changing this master-list structure.
+#
+# Source: bg-wiki / canonical mission lists per nation / expansion.
+# Mob-only / dev-only entries (e.g. Bastok 6-2 "The Pirates' Cove"
+# being skippable on certain paths) are NOT pruned — the wiki page
+# exists, the user might want to track it, leave it visible.
+_BASTOK_MISSIONS_MASTER = [
+    ("1-1", "The Zeruhn Report"),
+    ("1-2", "A Geological Survey"),
+    ("1-3", "Fetichism"),
+    ("2-1", "The Crystal Line"),
+    ("2-2", "Wading Beasts"),
+    ("2-3", "The Emissary"),
+    ("3-1", "The Four Musketeers"),
+    ("3-2", "To the Forsaken Mines"),
+    ("3-3", "Jeuno"),
+    ("4-1", "Magicite"),
+    ("5-1", "Darkness Rising"),
+    ("5-2", "Xarcabard, Land of Truths"),
+    ("6-1", "Return of the Talekeeper"),
+    ("6-2", "The Pirates' Cove"),
+    ("7-1", "The Final Image"),
+    ("7-2", "On My Way"),
+    ("8-1", "The Chains That Bind Us"),
+    ("8-2", "Enter the Talekeeper"),
+    ("9-1", "The Salt of the Earth"),
+    ("9-2", "Where Two Paths Converge"),
+]
+
+
+# San d'Oria missions ranks 1-9. Note that 4-1 (Magicite) shares the
+# mission name with Bastok 4-1 and Windurst 4-1 — bg-wiki uses
+# nation-prefixed page titles to disambiguate (San_d'Oria_Mission_4-1),
+# which the URL builder generates from item_key + category prefix.
+_SANDY_MISSIONS_MASTER = [
+    ("1-1", "Smash the Orcish Scouts"),
+    ("1-2", "Bat Hunt"),
+    ("1-3", "Save the Children"),
+    ("2-1", "The Rescue Drill"),
+    ("2-2", "The Davoi Report"),
+    ("2-3", "Journey Abroad"),
+    ("3-1", "Infiltrate Davoi"),
+    ("3-2", "The Crystal Spring"),
+    ("3-3", "Appointment to Jeuno"),
+    ("4-1", "Magicite"),
+    ("5-1", "The Ruins of Fei'Yin"),
+    ("5-2", "The Shadow Lord"),
+    ("6-1", "Leaute's Last Wishes"),
+    ("6-2", "Ranperre's Final Rest"),
+    ("7-1", "Prestige of the Papsque"),
+    ("7-2", "Secret Weapon"),
+    ("8-1", "Coming of Age"),
+    ("8-2", "Lightbringer"),
+    ("9-1", "Breaking Barriers"),
+    ("9-2", "The Heir to the Light"),
+]
+
+
+# Windurst missions ranks 1-9. Like Bastok and San d'Oria, 4-1 is
+# the shared "Magicite" mission — bg-wiki disambiguates via the
+# nation-prefixed page slug (Windurst_Mission_4-1).
+_WINDY_MISSIONS_MASTER = [
+    ("1-1", "The Horutoto Ruins Experiment"),
+    ("1-2", "The Heart of the Matter"),
+    ("1-3", "The Price of Peace"),
+    ("2-1", "Lost for Words"),
+    ("2-2", "A Testing Time"),
+    ("2-3", "The Three Kingdoms"),
+    ("3-1", "To Each His Own Right"),
+    ("3-2", "Written in the Stars"),
+    ("3-3", "A New Journey"),
+    ("4-1", "Magicite"),
+    ("5-1", "The Final Seal"),
+    ("5-2", "The Shadow Awaits"),
+    ("6-1", "Full Moon Fountain"),
+    ("6-2", "Saintly Invitation"),
+    ("7-1", "The Sixth Ministry"),
+    ("7-2", "Awakening of the Gods"),
+    ("8-1", "Vain"),
+    ("8-2", "The Jester Who'd Be King"),
+    ("9-1", "Doll of the Dead"),
+    ("9-2", "Moon Reading"),
+]
+
+
+# Rise of the Zilart missions. Unlike nation missions which use a
+# rank-number scheme (1-1, 1-2, ...), Zilart uses a single ordinal
+# count from 1 to 17, matching bg-wiki's "Zilart_Mission_<N>" page
+# slug convention. Sort key handles the plain-numeric ids correctly
+# (returns (1, int(s)) so 17 sorts after 9 and not before 2).
+#
+# Mission 14 (Ark Angels) is also known as the BCNM "Divine Might";
+# bg-wiki has both pages, but Zilart_Mission_14 is the canonical
+# mission walkthrough page and matches our other mission URL slugs.
+#
+# The 3-quest epilogue (Storms of Fate / Shadows of the Departed /
+# Apocalypse Nigh) is tracked with ids 'E1'/'E2'/'E3' so they sort
+# after the numbered missions in the row list. The joint RotZ/CoP
+# finale "The Last Verse" uses id 'Fin' to land at the very end.
+# All four route to their own bg-wiki pages via _MISSION_URL_OVERRIDES
+# rather than the Zilart_Mission_<id> prefix pattern.
+_ZILART_MISSIONS_MASTER = [
+    ("1",   "The New Frontier"),
+    ("2",   "Welcome t'Norg"),
+    ("3",   "Kazham's Chieftainness"),
+    ("4",   "The Temple of Uggalepih"),
+    ("5",   "Headstone Pilgrimage"),
+    ("6",   "Through the Quicksand Caves"),
+    ("7",   "The Chamber of Oracles"),
+    ("8",   "Return to Delkfutt's Tower"),
+    ("9",   "Ro'Maeve"),
+    ("10",  "The Temple of Desolation"),
+    ("11",  "The Hall of the Gods"),
+    ("12",  "The Mithra and the Crystal"),
+    ("13",  "The Gate of the Gods"),
+    ("14",  "Ark Angels"),
+    ("15",  "The Sealed Shrine"),
+    ("16",  "The Celestial Nexus"),
+    ("17",  "Awakening"),
+    ("E1",  "Storms of Fate"),
+    ("E2",  "Shadows of the Departed"),
+    ("E3",  "Apocalypse Nigh"),
+    ("Fin", "The Last Verse"),
+]
+
+
+# Chains of Promathia missions. Uses the chapter.mission scheme
+# (1-1, 1-2, ..., 8-5) like nation missions, but with 8 chapters
+# instead of 9 ranks. Bg-wiki page slug is "Promathia_Mission_<id>".
+#
+# Chapter 5 mission 3 is a three-way fork: the player picks one of
+# Louverance's / Tenzen's / Ulmia's Path; eventually all three must
+# be completed before chapter 6 unlocks. We track them as three
+# separate rows (5-3a, 5-3b, 5-3c) so the user can check off each
+# path as they finish it. The sort key handles the alpha suffix so
+# they appear right after 5-2 and before 6-1 in canonical order.
+# Each routes to its own bg-wiki subpage via _MISSION_URL_OVERRIDES.
+#
+# 8-5 "The Last Verse" is the joint RotZ/CoP finale; bg-wiki keeps
+# it at the bare page title "The_Last_Verse" rather than
+# Promathia_Mission_8-5 (which redirects there), so it also gets a
+# URL override.
+_COP_MISSIONS_MASTER = [
+    ("1-1",  "The Rites of Life"),
+    ("1-2",  "Below the Arks"),
+    ("1-3",  "The Mothercrystals"),
+    ("2-1",  "An Imitation West"),
+    ("2-2",  "The Lost City"),
+    ("2-3",  "Distant Beliefs"),
+    ("2-4",  "An Eternal Melody"),
+    ("2-5",  "Ancient Vows"),
+    ("3-1",  "The Call of the Wyrmking"),
+    ("3-2",  "A Vessel Without a Captain"),
+    ("3-3",  "The Road Forks"),
+    ("3-4",  "Tending Aged Wounds"),
+    ("3-5",  "Darkness Named"),
+    ("4-1",  "Sheltering Doubt"),
+    ("4-2",  "The Savage"),
+    ("4-3",  "The Secrets of Worship"),
+    ("4-4",  "Slanderous Utterings"),
+    ("5-1",  "The Enduring Tumult of War"),
+    ("5-2",  "Desires of Emptiness"),
+    ("5-3a", "Louverance's Path"),
+    ("5-3b", "Tenzen's Path"),
+    ("5-3c", "Ulmia's Path"),
+    ("6-1",  "For Whom the Verse is Sung"),
+    ("6-2",  "A Place to Return"),
+    ("6-3",  "More Questions than Answers"),
+    ("6-4",  "One to be Feared"),
+    ("7-1",  "Chains and Bonds"),
+    ("7-2",  "Flames in the Darkness"),
+    ("7-3",  "Fire in the Eyes of Men"),
+    ("7-4",  "Calm Before the Storm"),
+    ("7-5",  "The Warrior's Path"),
+    ("8-1",  "Garden of Antiquity"),
+    ("8-2",  "A Fate Decided"),
+    ("8-3",  "When Angels Fall"),
+    ("8-4",  "Dawn"),
+    ("8-5",  "The Last Verse"),
+]
+
+
+# Treasures of Aht Urhgan missions. Like Rise of the Zilart, ToAU
+# uses a single-ordinal count (1 through 48) rather than chapter-
+# based numbering. Bg-wiki page slug is "Aht_Urhgan_Mission_<N>"
+# (just the number, no mission name in the slug). Sort key handles
+# plain integers correctly via the (1, int(s)) branch.
+#
+# Mission 40 "Unraveling Reason" uses the wiki canonical single-l
+# spelling, not the FFXIclopedia "Unravelling Reason" variant.
+#
+# The 5-quest epilogue (Imperial Ward Quests: The Rider Cometh,
+# Unwavering Resolve, A Stygian Pact, Waking the Colossus, Divine
+# Interference) is tracked with ids 'E1'-'E5'. Each routes to its
+# own bg-wiki page (the bare quest name) via _MISSION_URL_OVERRIDES
+# rather than the Aht_Urhgan_Mission_<id> prefix.
+_TOAU_MISSIONS_MASTER = [
+    ("1",  "Land of Sacred Serpents"),
+    ("2",  "Immortal Sentries"),
+    ("3",  "President Salaheem"),
+    ("4",  "Knight of Gold"),
+    ("5",  "Confessions of Royalty"),
+    ("6",  "Easterly Winds"),
+    ("7",  "Westerly Winds"),
+    ("8",  "A Mercenary Life"),
+    ("9",  "Undersea Scouting"),
+    ("10", "Astral Waves"),
+    ("11", "Imperial Schemes"),
+    ("12", "Royal Puppeteer"),
+    ("13", "Lost Kingdom"),
+    ("14", "The Dolphin Crest"),
+    ("15", "The Black Coffin"),
+    ("16", "Ghosts of the Past"),
+    ("17", "Guests of the Empire"),
+    ("18", "Passing Glory"),
+    ("19", "Sweets for the Soul"),
+    ("20", "Teahouse Tumult"),
+    ("21", "Finders Keepers"),
+    ("22", "Shield of Diplomacy"),
+    ("23", "Social Graces"),
+    ("24", "Foiled Ambition"),
+    ("25", "Playing the Part"),
+    ("26", "Seal of the Serpent"),
+    ("27", "Misplaced Nobility"),
+    ("28", "Bastion of Knowledge"),
+    ("29", "Puppet in Peril"),
+    ("30", "Prevalence of Pirates"),
+    ("31", "Shades of Vengeance"),
+    ("32", "In the Blood"),
+    ("33", "Sentinels' Honor"),
+    ("34", "Testing the Waters"),
+    ("35", "Legacy of the Lost"),
+    ("36", "Gaze of the Saboteur"),
+    ("37", "Path of Blood"),
+    ("38", "Stirrings of War"),
+    ("39", "Allied Rumblings"),
+    ("40", "Unraveling Reason"),
+    ("41", "Light of Judgment"),
+    ("42", "Path of Darkness"),
+    ("43", "Fangs of the Lion"),
+    ("44", "Nashmeira's Plea"),
+    ("45", "Ragnarok"),
+    ("46", "Imperial Coronation"),
+    ("47", "The Empress Crowned"),
+    ("48", "Eternal Mercenary"),
+    ("E1", "The Rider Cometh"),
+    ("E2", "Unwavering Resolve"),
+    ("E3", "A Stygian Pact"),
+    ("E4", "Waking the Colossus"),
+    ("E5", "Divine Interference"),
+]
+
+
+# The Voracious Resurgence missions. The modern post-Adoulin
+# storyline, structured as 11 "Parts" with chapter.mission ids
+# (1-1 through 11-3) followed by a single epilogue page. Bg-wiki
+# slug is "The_Voracious_Resurgence_Mission_<id>" — note the
+# "The_" prefix is part of the canonical page name.
+#
+# 46 numbered missions total, plus one combined "Epilogue Quests"
+# entry that the wiki keeps as a single shared page covering all
+# six gear-reward NPC visits. Use sentinel id "Ep" for it; the
+# sort key's bucket-4 fallback puts string ids after all numeric
+# ones, so it lands cleanly at the end of the list.
+_VR_MISSIONS_MASTER = [
+    ("1-1",  "The Voracious Resurgence"),
+    ("1-2",  "The Gloom Phantom's Approach"),
+    ("1-3",  "The Brygid Cup"),
+    ("1-4",  "The Destiny Destroyers"),
+    ("2-1",  "Kupipi's Dilemma"),
+    ("2-2",  "The Cardian's Duty"),
+    ("2-3",  "Zhuu Buxu's Gambit"),
+    ("2-4",  "Star Onion Fortune"),
+    ("2-5",  "The Doll Whisperer"),
+    ("3-1",  "Dancing Prince"),
+    ("3-2",  "Claidie's Concern"),
+    ("3-3",  "Curilla Unleashed"),
+    ("3-4",  "Run, Excenmille, Run!"),
+    ("3-5",  "Of Knights and Orcs"),
+    ("4-1",  "Best Served Cold"),
+    ("4-2",  "Cornelia's Call to Action"),
+    ("4-3",  "Naja the Ambitious"),
+    ("4-4",  "Raubahn the Blue"),
+    ("5-1",  "Ghatsad's Quandary"),
+    ("5-2",  "The Revelation"),
+    ("5-3",  "Tateeya's Worries"),
+    ("5-4",  "The Seagull Phratrie"),
+    ("5-5",  "The Sea Sage"),
+    ("6-1",  "Sky, Moon, Incantrix"),
+    ("6-2",  "Nii's Last Stand"),
+    ("6-3",  "Dance of the Tengu"),
+    ("7-1",  "Raebrimm's Rebirth"),
+    ("7-2",  "Uran-Mafran of the Maelstrom"),
+    ("7-3",  "Koru-Moru's Hypothesis"),
+    ("7-4",  "Altennia Burns Bright"),
+    ("8-1",  "Maat on the Rampage"),
+    ("8-2",  "Not Just a Pretty Face"),
+    ("8-3",  "Delkfutt the Great"),
+    ("9-1",  "Oshasha Violation"),
+    ("9-2",  "Phantasmic Heroes"),
+    ("9-3",  "Skokkr Undrborn's Temptation"),
+    ("9-4",  "The Prime Weapons"),
+    ("10-1", "To Movalpolos!"),
+    ("10-2", "Magh Bihu on the Prowl"),
+    ("10-3", "101 Dazbogs"),
+    ("10-4", "Kipdrix the Faithful"),
+    ("10-5", "Duke Alloces's Decision"),
+    ("10-6", "Odin's Eye"),
+    ("11-1", "Moglesse Oblige"),
+    ("11-2", "The Voracious Beast"),
+    ("11-3", "Your Decision"),
+    ("Ep",   "Epilogue Quests"),
+]
+
+
+# Rhapsodies of Vana'diel missions — the 2015 narrative compilation
+# that ties together all prior expansion stories. Three chapters of
+# 18 / 41 / 35 missions plus a single epilogue finale. Bg-wiki page
+# slug is "Rhapsodies_of_Vanadiel_Mission_<id>" — note the URL slug
+# omits the apostrophe in "Vanadiel" (the wiki's canonical decision).
+#
+# Mission 2-35 "Eddies of Despair" shares its name with 1-10. Both
+# are distinct missions and get distinct bg-wiki pages via the
+# id-suffixed URL pattern, so no special handling needed.
+#
+# The epilogue mission "The Silent Forest" (BCNM finale, sometimes
+# called "Quest 1" in mission-log displays) gets the "Ep" sentinel
+# id and a URL override to its plain-name bg-wiki page.
+_ROV_MISSIONS_MASTER = [
+    # Chapter 1
+    ("1-1",  "Rhapsodies of Vanadiel"),
+    ("1-2",  "Resonance"),
+    ("1-3",  "Emissary from the Seas"),
+    ("1-4",  "Set Free"),
+    ("1-5",  "The Beginning"),
+    ("1-6",  "Flames of Prayer"),
+    ("1-7",  "The Path Untraveled"),
+    ("1-8",  "At the Heavens' Door"),
+    ("1-9",  "The Lion's Roar"),
+    ("1-10", "Eddies of Despair"),
+    ("1-11", "A Land After Time"),
+    ("1-12", "Fate's Call"),
+    ("1-13", "What Lies Beyond"),
+    ("1-14", "The Ties That Bind"),
+    ("1-15", "Impurity"),
+    ("1-16", "The Lost Avatar"),
+    ("1-17", "Volto Oscuro"),
+    ("1-18", "Ring My Bell"),
+    # Chapter 2
+    ("2-1",  "Spirits Awoken"),
+    ("2-2",  "Crashing Waves"),
+    ("2-3",  "Call to Serve"),
+    ("2-4",  "Numbering Days"),
+    ("2-5",  "Inescapable Binds"),
+    ("2-6",  "Desert Winds"),
+    ("2-7",  "Ever Forward"),
+    ("2-8",  "The Endless Sky"),
+    ("2-9",  "Aphmau's Light"),
+    ("2-10", "Reunited"),
+    ("2-11", "Take Wing"),
+    ("2-12", "Prime Number"),
+    ("2-13", "From the Ruins"),
+    ("2-14", "Cauterize"),
+    ("2-15", "Uncertain Destinations"),
+    ("2-16", "Ganged Up On"),
+    ("2-17", "Sacrifice"),
+    ("2-18", "Somber Dreams"),
+    ("2-19", "Of Light and Darkness"),
+    ("2-20", "Temporary Farewells"),
+    ("2-21", "Brushing Up"),
+    ("2-22", "Keep On Giving"),
+    ("2-23", "Past Imperfect"),
+    ("2-24", "The Cursed Temple"),
+    ("2-25", "Wisdom of Our Forefathers"),
+    ("2-26", "Where Divinities Collide"),
+    ("2-27", "Visions of Dread"),
+    ("2-28", "To the Skies"),
+    ("2-29", "Escha - Ru'Aun"),
+    ("2-30", "The Decisive Heroine"),
+    ("2-31", "Fall from Grace"),
+    ("2-32", "Banishing the Darkness"),
+    ("2-33", "Over the Rainbow"),
+    ("2-34", "Cacophonous Discord"),
+    ("2-35", "Eddies of Despair"),
+    ("2-36", "Pretender to the Throne"),
+    ("2-37", "Banished"),
+    ("2-38", "Call of the Void"),
+    ("2-39", "Both Paths Taken"),
+    ("2-40", "The Man Behind the Mask"),
+    ("2-41", "Uncertain Futures"),
+    # Chapter 3
+    ("3-1",  "Darkness Beckons"),
+    ("3-2",  "The Brewing Storm"),
+    ("3-3",  "The River Runs Red"),
+    ("3-4",  "The Crucible"),
+    ("3-5",  "Forward Thinking"),
+    ("3-6",  "Tears of the Generals"),
+    ("3-7",  "What He Left Behind"),
+    ("3-8",  "Gone but Not Forgotten"),
+    ("3-9",  "August Artifacts"),
+    ("3-10", "Solemnity"),
+    ("3-11", "Eyes on You"),
+    ("3-12", "Exploring the Ruins"),
+    ("3-13", "Become Something More"),
+    ("3-14", "Unshakable Nightmares"),
+    ("3-15", "What Remains of Hope"),
+    ("3-16", "Death Cares Not"),
+    ("3-17", "No Time like the Future"),
+    ("3-18", "Sin"),
+    ("3-19", "Penance"),
+    ("3-20", "Vessel of Light"),
+    ("3-21", "The Lifestream of Reisenjima"),
+    ("3-22", "From West to East"),
+    ("3-23", "Good Things Come in Threes"),
+    ("3-24", "Tackling the Problem"),
+    ("3-25", "Way to Divinity"),
+    ("3-26", "The Winds of Time"),
+    ("3-27", "Calm After the Storm"),
+    ("3-28", "Nary a Cloud in Sight"),
+    ("3-29", "An Unending Song"),
+    ("3-30", "A Deep Sleep"),
+    ("3-31", "Guardians"),
+    ("3-32", "Iroha in Distress"),
+    ("3-33", "Absolute Trust"),
+    ("3-34", "The Orb's Radiance"),
+    ("3-35", "A Rhapsody for the Ages"),
+    # Epilogue (the wiki labels this single mission as the finale
+    # of the storyline; in-game mission log shows it as "Quest 1").
+    ("Ep",   "The Silent Forest"),
+]
+
+
+# Seekers of Adoulin missions — 2013 expansion, the most structurally
+# complex mission line in the game. Uses a three-tier id scheme:
+# chapter, section, mission (e.g. '2-1-1', '4-3-9'). Some sections
+# have just one mission (no third tier — e.g. '2-3') while others
+# branch into multiple sub-missions ('2-1', '2-1-1', '2-1-2'). The
+# sort key handles both forms in the same category by collapsing
+# 2-tier ids to '(rank, section, 0)' so parents always precede
+# their 3-tier children, then the next 2-tier sibling comes after
+# all children.
+#
+# Bg-wiki page slug is "Seekers_of_Adoulin_Mission_<id>" with the
+# full three-tier id (e.g. Seekers_of_Adoulin_Mission_5-5-1).
+#
+# Epilogue: Quest 1 has two parts ("The Silent Forest" — note this
+# shares its name with the Rhapsodies finale; bg-wiki keeps both
+# at the same page since they're narratively continuous — and "The
+# Ygnas Directive"), Quest 2 is "The Arciela Directive". Use
+# Ep1a/Ep1b/Ep2 sentinel ids; they sort string-comparison after
+# the numbered missions thanks to bucket-4 fallback.
+_SOA_MISSIONS_MASTER = [
+    # Chapter 1 — The Sacred City of Adoulin
+    ("1-1",   "Rumors from the West"),
+    ("1-2",   "The Geomagnetron"),
+    ("1-3",   "Onward to Adoulin"),
+    ("1-4",   "Heartwings and the Kindhearted"),
+    ("1-5",   "Pioneer Registration"),
+    ("1-6",   "Life on the Frontier"),
+    ("1-7",   "Meeting of the Minds"),
+    ("1-8",   "Arciela Appears Again"),
+    # Chapter 2 — The Ancient Pact
+    ("2-1",   "Budding Prospects"),
+    ("2-1-1", "The Light Shining in Your Eyes"),
+    ("2-1-2", "The Heirloom"),
+    ("2-2",   "An Aimless Journey"),
+    ("2-2-1", "Orthasyne"),
+    ("2-2-2", "In the Presence of Royalty"),
+    ("2-3",   "The Twin World Trees"),
+    ("2-4",   "Honor and Audacity"),
+    ("2-4-1", "The Watergarden Coliseum"),
+    ("2-5",   "Friction and Fissures"),
+    ("2-5-1", "The Celennia Memorial Library"),
+    ("2-5-2", "For Whom Do We Toil?"),
+    ("2-6",   "Aiming for Ygnas"),
+    ("2-6-1", "Calamity in the Kitchen"),
+    ("2-6-2", "Arciela's Promise"),
+    ("2-7",   "Predators and Prey"),
+    ("2-7-1", "Behind the Sluices"),
+    ("2-7-2", "The Leafkin Monarch"),
+    ("2-7-3", "Yggdrasil"),
+    # Chapter 3 — Shadows Upon Adoulin
+    ("3-1",   "Return of the Exorcist"),
+    ("3-1-1", "The Merciless One"),
+    ("3-1-2", "A Curse from the Past"),
+    ("3-1-3", "The Purgation"),
+    ("3-1-4", "The Key"),
+    ("3-2",   "The Princess's Dilemma"),
+    ("3-2-1", "Dark Clouds Ahead"),
+    ("3-2-2", "The Smallest of Favors"),
+    ("3-3",   "Summoned by Spirits"),
+    ("3-3-1", "Evil Entities"),
+    ("3-3-2", "Adoulin Calling"),
+    ("3-3-3", "The Disappearance of Nyline"),
+    ("3-3-4", "Shared Consciousness"),
+    ("3-3-5", "Clear Skies"),
+    ("3-4",   "The Man in Black"),
+    ("3-4-1", "To the Victor.."),
+    ("3-4-2", "An Extraordinary Gentleman"),
+    ("3-4-3", "The Order's Treasures"),
+    ("3-4-4", "August's Heirloom"),
+    ("3-5",   "Beauty and the Beast"),
+    ("3-5-1", "Wildcat with a Gold Pelt"),
+    ("3-5-2", "In Search of Arciela"),
+    ("3-5-3", "Looking For Leads"),
+    ("3-6",   "Drifting Northwest"),
+    ("3-6-1", "Kumhau, the Flashfrost Naakual"),
+    ("3-6-2", "Soul Siphon"),
+    ("3-6-3", "Stonewalled"),
+    ("3-6-4", "Salvation"),
+    ("3-6-5", "Glimmer of Portent"),
+    # Chapter 4 — The Serpentine Labyrinth
+    ("4-1",   "...Into the Fire"),
+    ("4-1-1", "Melvien de Malecroix"),
+    ("4-1-2", "Courier Catastrophe"),
+    ("4-1-3", "Done and Delivered"),
+    ("4-1-4", "Ministerial Whispers"),
+    ("4-1-5", "A Day in the Life of a Pioneer"),
+    ("4-2",   "Lighting the Way"),
+    ("4-2-1", "Saj'aka"),
+    ("4-2-2", "Studying Up"),
+    ("4-2-3", "A Vow of Truth"),
+    ("4-2-4", "Darrcuiln"),
+    ("4-3",   "The Gates"),
+    ("4-3-1", "Morimar"),
+    ("4-3-2", "A New Force Arises"),
+    ("4-3-3", "The Sacred Sapling"),
+    ("4-3-4", "Tree Grafting"),
+    ("4-3-5", "A Shrouded Canopy"),
+    ("4-3-6", "Leafallia"),
+    ("4-3-7", "Rosulatia's Promise"),
+    ("4-3-8", "The Lightsland"),
+    ("4-3-9", "The Light of Dawn Comes from the East"),
+    ("4-4",   "Cries from the Deep"),
+    ("4-4-1", "Seeds of Doubt"),
+    ("4-4-2", "The Tomatoes of Wrath"),
+    ("4-4-3", "A Grave Mistake"),
+    ("4-4-4", "An Emergency Convocation"),
+    ("4-5",   "Balamor, the Deathborne Xol"),
+    ("4-5-1", "Anagnorisis"),
+    ("4-5-2", "Just the Thing"),
+    ("4-5-3", "Sugarcoated Salvation"),
+    ("4-5-4", "Arciela's Resolve"),
+    ("4-6",   "Balamor's Ruse"),
+    ("4-6-1", "The Charlatan"),
+    ("4-6-2", "Royal Blessings"),
+    # Chapter 5 — The Eternal Star
+    ("5-1",   "Arboreal Rumors"),
+    ("5-1-1", "Arciela's Missive"),
+    ("5-1-2", "Heroes, Unite!"),
+    ("5-1-3", "A Portent Most Ominous"),
+    ("5-2",   "Yggdrasil Beckons"),
+    ("5-2-1", "Returning to the Trees"),
+    ("5-2-2", "The Key to the Turris"),
+    ("5-3",   "Teodor's Summons"),
+    ("5-3-1", "The Seventh Guardian"),
+    ("5-3-2", "Watery Grave"),
+    ("5-3-3", "Blood for Blood"),
+    ("5-4",   "Reckoning"),
+    ("5-4-1", "Abomination"),
+    ("5-5",   "Undying Light"),
+    ("5-5-1", "The Light Within"),
+    # Epilogue Quest 1 (two parts) + Quest 2
+    ("Ep1a",  "The Silent Forest"),
+    ("Ep1b",  "The Ygnas Directive"),
+    ("Ep2",   "The Arciela Directive"),
+]
+
+
+# Wings of the Goddess missions — the Crystal War expansion (2007).
+# Structurally the most complex mission line in the game:
+#
+#   1. Main numbered missions (1-54) form the core storyline.
+#   2. Twelve "Nation Quest" gates (NQ1-NQ12) plus an "Initiation
+#      Quest" (NIQ) interleave with the main missions. Each Nation
+#      Quest has THREE variants (one per nation: San d'Oria/Bastok/
+#      Windurst); the player only does the one matching their
+#      Allegiance. We track all three as separate rows (suffixed
+#      a/b/c) the same way CoP's 5-3a/5-3b/5-3c handle path forks
+#      — the player checks whichever they completed.
+#   3. Mission 41 "Her Memories" branches into nested sub-quests:
+#         41-1 → 41-1-1 / 41-1-2 / 41-1-3
+#         41-2, 41-3 (standalone)
+#         41-4 → 41-4a / 41-4b / 41-4c  (nation-locked footfalls)
+#      The bare "41" parent row is omitted; only the playable
+#      sub-quests are tracked.
+#   4. Two epilogue BCNMs: Champion of the Dawn, A Forbidden Reunion.
+#
+# Bg-wiki uses plain mission-NAME page slugs for WotG (rather than a
+# numbered Wings_of_the_Goddess_Mission_<N> pattern), so the URL
+# builder for this category runs in name-based mode with explicit
+# overrides for the two disambig pages (mission 1 "Cavernous Maws"
+# and mission 3 "Cait Sith") that share their name with NPCs/items.
+#
+# Master list order is the NARRATIVE flow shown on the canonical
+# mission-progress reference (numbered missions interleaved with
+# Nation Quests). The _make_mission_rows factory honors
+# preserve_order=True for this category so the rows render in the
+# authored sequence rather than being re-sorted by id.
+_WOTG_MISSIONS_MASTER = [
+    ("1",      "Cavernous Maws"),
+    ("2",      "Back to the Beginning"),
+    ("NIQa",   "The Fighting Fourth"),
+    ("NIQb",   "Steamed Rams"),
+    ("NIQc",   "Snake on the Plains"),
+    ("NQ1a",   "Better Part of Valor"),
+    ("NQ1b",   "Gifts of the Griffon"),
+    ("NQ1c",   "The Tigress Stirs"),
+    ("NQ2a",   "Fires of Discontent"),
+    ("NQ2b",   "Claws of the Griffon"),
+    ("NQ2c",   "The Tigress Strikes"),
+    ("3",      "Cait Sith"),
+    ("NQ3a",   "Light in the Darkness"),
+    ("NQ3b",   "Boy and the Beast"),
+    ("NQ3c",   "Knot Quite There"),
+    ("NQ4a",   "Burden of Suspicion"),
+    ("NQ4b",   "Wrath of the Griffon"),
+    ("NQ4c",   "A Manifest Problem"),
+    ("4",      "The Queen of the Dance"),
+    ("5",      "While the Cat is Away"),
+    ("6",      "A Timeswept Butterfly"),
+    ("7",      "Purple, The New Black"),
+    ("8",      "In the Name of the Father"),
+    ("NQ5a",   "Storm on the Horizon"),
+    ("NQ5b",   "Perils of the Griffon"),
+    ("NQ5c",   "When One Man Is Not Enough"),
+    ("NQ6a",   "Fire in the Hole"),
+    ("NQ6b",   "In a Haze of Glory"),
+    ("NQ6c",   "A Feast for Gnats"),
+    ("9",      "Dancers in Distress"),
+    ("10",     "Daughter of a Knight"),
+    ("11",     "A Spoonful of Sugar"),
+    ("12",     "Affairs of State"),
+    ("13",     "Borne by the Wind"),
+    ("14",     "A Nation on the Brink"),
+    ("15",     "Crossroads of Time"),
+    ("NQ7a",   "Quelling the Storm"),
+    ("NQ7b",   "The Price of Valor"),
+    ("NQ7c",   "The Long March North"),
+    ("NQ8a",   "Honor Under Fire"),
+    ("NQ8b",   "Bonds That Never Die"),
+    ("NQ8c",   "The Forbidden Path"),
+    ("16",     "Sandswept Memories"),
+    ("17",     "Northland Exposure"),
+    ("18",     "Traitor in the Midst"),
+    ("19",     "Betrayal at Beaucedine"),
+    ("20",     "On Thin Ice"),
+    ("21",     "Proof of Valor"),
+    ("22",     "A Sanguinary Prelude"),
+    ("23",     "Dungeons and Dancers"),
+    ("24",     "Distorter of Time"),
+    ("25",     "The Will of the World"),
+    ("26",     "Fate in Haze"),
+    ("NQ9a",   "Beneath the Mask"),
+    ("NQ9b",   "Songbirds in a Snowstorm"),
+    ("NQ9c",   "Sins of the Mothers"),
+    ("NQ10a",  "What Price Loyalty"),
+    ("NQ10b",  "Blood of Heroes"),
+    ("NQ10c",  "Howl from the Heavens"),
+    ("27",     "The Scent of Battle"),
+    ("28",     "Another World"),
+    ("29",     "A Hawk in Repose"),
+    ("30",     "The Battle of Xarcabard"),
+    ("31",     "Prelude to a Storm"),
+    ("32",     "Storm's Crescendo"),
+    ("33",     "Into the Beast's Maw"),
+    ("34",     "The Hunter Ensnared"),
+    ("35",     "Flight of the Lion"),
+    ("36",     "Fall of the Hawk"),
+    ("37",     "Darkness Descends"),
+    ("38",     "Adieu, Lilisette"),
+    ("NQ11a",  "The Truth Lies Hid"),
+    ("NQ11b",  "Chasing Shadows"),
+    ("NQ11c",  "Manifest Destiny"),
+    ("NQ12a",  "Bonds of Mythril"),
+    ("NQ12b",  "Face of the Future"),
+    ("NQ12c",  "At Journey's End"),
+    ("39",     "By the Fading Light"),
+    ("40",     "Edge of Existence"),
+    ("41-1",   "Her Memories: Homecoming Queen"),
+    ("41-1-1", "Her Memories: Old Bean"),
+    ("41-1-2", "Her Memories: The Faux Pas"),
+    ("41-1-3", "Her Memories: Grave Resolve"),
+    ("41-2",   "Her Memories: Of Malign Maladies"),
+    ("41-3",   "Her Memories: Operation Cupid"),
+    ("41-4a",  "Her Memories: Azure Footfalls"),
+    ("41-4b",  "Her Memories: Carnelian Footfalls"),
+    ("41-4c",  "Her Memories: Verdure Footfalls"),
+    ("42",     "Forget Me Not"),
+    ("43",     "Pillar of Hope"),
+    ("44",     "Glimmer of Life"),
+    ("45",     "Time Slips Away"),
+    ("46",     "When Wills Collide"),
+    ("47",     "Whispers of Dawn"),
+    ("48",     "A Dreamy Interlude"),
+    ("49",     "Cait in the Woods"),
+    ("50",     "Fork in the Road"),
+    ("51",     "Maiden of the Dusk"),
+    ("52",     "Where It All Began"),
+    ("53",     "A Token of Troth"),
+    ("54",     "Lest We Forget"),
+    ("Ep1",    "Champion of the Dawn"),
+    ("Ep2",    "A Forbidden Reunion"),
+]
+
+
+# A Crystalline Prophecy — 12-mission add-on scenario, the first of
+# three short-form scenarios released in 2009. Bg-wiki uses the
+# "A_Crystalline_Prophecy_Mission_<N>" page slug for missions 2-11,
+# but mission 1 shares its title with the scenario landing page so
+# it lives at the disambig slug "A_Crystalline_Prophecy_(Mission)",
+# and the finale lives at "A_Crystalline_Prophecy_(Fin.)" — both
+# need URL overrides.
+_ACP_MISSIONS_MASTER = [
+    ("1",  "A Crystalline Prophecy"),
+    ("2",  "The Echo Awakens"),
+    ("3",  "Gatherer of Light (I)"),
+    ("4",  "Gatherer of Light (II)"),
+    ("5",  "Those Who Lurk in Shadows (I)"),
+    ("6",  "Those Who Lurk in Shadows (II)"),
+    ("7",  "Those Who Lurk in Shadows (III)"),
+    ("8",  "Remember Me in Your Dreams"),
+    ("9",  "Born of Her Nightmares"),
+    ("10", "Banishing the Echo"),
+    ("11", "Ode of Life Bestowing"),
+    ("12", "A Crystalline Prophecy (Fin.)"),
+]
+
+
+# A Moogle Kupo d'Etat — 15-mission add-on scenario, second of the
+# three short-form scenarios. Bg-wiki uses
+# "A_Moogle_Kupo_d'Etat_Mission_<N>" for the numbered missions;
+# the apostrophe is part of the URL and _bg_wiki_url's safelist
+# keeps it readable. Mission 1 and the finale use disambig page
+# slugs the same way Crystalline does.
+_MKD_MISSIONS_MASTER = [
+    ("1",  "A Moogle Kupo d'Etat"),
+    ("2",  "Drenched! It Began with a Raindrop"),
+    ("3",  "Hasten! In a Jam in Jeuno?"),
+    ("4",  "Welcome! To My Decrepit Domicile"),
+    ("5",  "Curses! A Horrifically Harrowing Hex"),
+    ("6",  "An Errand! The Professor's Price"),
+    ("7",  "Shock! Arrant Abuse of Authority"),
+    ("8",  "Lender Beware! Read the Fine Print"),
+    ("9",  "Rescue! A Moogle's Labor of Love"),
+    ("10", "Roar! A Cat Burglar Bares Her Fangs"),
+    ("11", "Relief! A Triumphant Return"),
+    ("12", "Joy! Summoned to a Fabulous Fete"),
+    ("13", "A Challenge! You Could Be a Winner"),
+    ("14", "Smash! A Malevolent Menace"),
+    ("15", "A Moogle Kupo d'Etat (Fin.)"),
+]
+
+
+# A Shantotto Ascension — 15-mission add-on scenario, third of the
+# three short-form scenarios. Same prefixed slug pattern as the
+# other two; mission 1 disambig page is "A_Shantotto_Ascension_(Mission)"
+# and the finale uses "(Fin)" (no period) rather than "(Fin.)" —
+# confirmed against bg-wiki's category page.
+_ASA_MISSIONS_MASTER = [
+    ("1",  "A Shantotto Ascension"),
+    ("2",  "Burgeoning Dread"),
+    ("3",  "That Which Curdles Blood"),
+    ("4",  "Sugar-coated Directive"),
+    ("5",  "Enemy of the Empire (I)"),
+    ("6",  "Enemy of the Empire (II)"),
+    ("7",  "Sugar-coated Subterfuge"),
+    ("8",  "Shantotto in Chains"),
+    ("9",  "Fountain of Trouble"),
+    ("10", "Battaru Royale"),
+    ("11", "Romancing the Clone"),
+    ("12", "Sisters in Arms"),
+    ("13", "Project: Shantottofication"),
+    ("14", "An Uneasy Peace"),
+    ("15", "A Shantotto Ascension (Fin)"),
+]
+
+
+# Registry binding each mission category to its master list. Mirrors
+# _QUEST_CATEGORY_MASTERS — same factory pattern, new sorting rule.
+_MISSION_CATEGORY_MASTERS = {
+    "missions_bastok": _BASTOK_MISSIONS_MASTER,
+    "missions_sandy":  _SANDY_MISSIONS_MASTER,
+    "missions_windy":  _WINDY_MISSIONS_MASTER,
+    "missions_zilart": _ZILART_MISSIONS_MASTER,
+    "missions_cop":    _COP_MISSIONS_MASTER,
+    "missions_toau":   _TOAU_MISSIONS_MASTER,
+    "missions_vr":     _VR_MISSIONS_MASTER,
+    "missions_rov":    _ROV_MISSIONS_MASTER,
+    "missions_soa":    _SOA_MISSIONS_MASTER,
+    "missions_wotg":   _WOTG_MISSIONS_MASTER,
+    "missions_acp":    _ACP_MISSIONS_MASTER,
+    "missions_mkd":    _MKD_MISSIONS_MASTER,
+    "missions_asa":    _ASA_MISSIONS_MASTER,
+}
+
+
+# (_MISSION_WIKI_PREFIX lives upstream alongside _CHECKLIST_URL_BUILDERS
+# so the factory-built mission URL closures can read it at registration
+# time. See _make_mission_url_builder.)
+
+
+def _mission_sort_key(mid):
+    """Sort key for mission_id strings.
+
+    Supported formats (in priority order, all share bucket 0 so they
+    interleave correctly when present in the same category):
+
+      'R-N'      Nation-mission style. → (0, rank, number, 0, "")
+      'R-Na'     CoP 5-3a path-fork style. → (0, rank, number, 0, "a")
+      'R-N-M'    Seekers of Adoulin three-tier style: chapter,
+                 section, mission. → (0, R, N, M, "")
+
+    Three-tier ids are placed so that a 2-tier parent (e.g. '2-1')
+    sorts BEFORE its 3-tier children ('2-1-1', '2-1-2'), and after
+    those children come the next 2-tier sibling ('2-2'). This is
+    achieved by collapsing the 2-tier form to (0, R, N, 0, ...) and
+    the 3-tier form to (0, R, N, M, "") with M ≥ 1. That way a
+    parent's mission-slot is 0 and its children carry 1, 2, 3, ...
+    so the parent always precedes them. Matches the canonical
+    in-game mission log ordering.
+
+    Bucket 1 covers plain numeric ids (Zilart, ToAU). Bucket 2 covers
+    'E<n>' epilogue ids. Bucket 3 is 'Fin'. Bucket 4 is a fallback
+    string compare for anything we don't explicitly recognize."""
+    s = mid.strip()
+    sl = s.lower()
+    if "-" in s:
+        parts = s.split("-")
+        # 3-tier 'R-N-M' all integers — Seekers of Adoulin pattern.
+        if len(parts) == 3:
+            try:
+                rank = int(parts[0])
+                section = int(parts[1])
+                mission = int(parts[2])
+                return (0, rank, section, mission, "")
+            except ValueError:
+                return (4, s)
+        # 2-tier 'R-N' or 'R-Na'. Collapse to 5-tuple with M=0 so
+        # parents sort before their 3-tier children.
+        if len(parts) == 2:
+            try:
+                rank = int(parts[0])
+            except ValueError:
+                return (4, s)
+            num_part = parts[1]
+            try:
+                return (0, rank, int(num_part), 0, "")
+            except ValueError:
+                pass
+            # Mixed: '3a' → digits=3, suffix='a'.
+            digits = ""
+            suffix = ""
+            for c in num_part:
+                if c.isdigit():
+                    digits += c
+                else:
+                    suffix = num_part[len(digits):]
+                    break
+            if digits:
+                return (0, rank, int(digits), 0, suffix)
+            return (4, s)
+        return (4, s)
+    try:
+        return (1, int(s))
+    except ValueError:
+        pass
+    if sl.startswith("e") and sl[1:].isdigit():
+        return (2, int(sl[1:]))
+    if sl == "fin":
+        return (3,)
+    return (4, s)
+
+
+def _make_mission_rows(master_list, preserve_order=False):
+    """Factory: return a row_iter closure for a specific mission
+    master list. Each row key is the mission_id lowercased (unique
+    within its category — different nations live in different
+    storage namespaces). Display is '<id>  <name>'.
+
+    Sort behavior:
+      - preserve_order=False (default): sort by _mission_sort_key so
+        rows render in canonical mission-log order (1-1, 1-2, ...,
+        9-2). Used by all mission lines whose ids reflect natural
+        play order.
+      - preserve_order=True: keep master-list order as-authored.
+        Used by Wings of the Goddess, where the narrative interleave
+        of numbered missions and Nation Quests (1, 2, NIQ, NQ1, NQ2,
+        3, NQ3, NQ4, 4, ...) doesn't fit any id-based sort, so we
+        hand-author the order in the master list itself."""
+    def _rows():
+        if preserve_order:
+            items = list(master_list)
+        else:
+            items = sorted(master_list, key=lambda t: _mission_sort_key(t[0]))
+        return [(mid.lower(), f"{mid}  {name}") for (mid, name) in items]
+    return _rows
+
+
+def _make_mission_check_state(cat_key):
+    """Factory: return a check-state closure bound to a specific
+    mission category's storage key. Auto consulted first to keep
+    wiring symmetric in case packet-decode auto-detection lands."""
+    def _check(key):
+        st = checklist_known.get(cat_key, {})
+        if key in st.get("auto", set()):
+            return "auto"
+        if key in st.get("manual", set()):
+            return "manual"
+        return None
+    return _check
+
+
+# Backfill row_iter / is_checked for every mission category. WotG
+# uses narrative-flow ordering (numbered missions interleaved with
+# Nation Quests) that doesn't fit the id-based sort, so we preserve
+# its master-list order as-authored.
+_MISSION_PRESERVE_ORDER = {"missions_wotg"}
+for _cat in CHECKLIST_CATEGORIES:
+    _master = _MISSION_CATEGORY_MASTERS.get(_cat["key"])
+    if _master is not None:
+        _preserve = _cat["key"] in _MISSION_PRESERVE_ORDER
+        _cat["row_iter"]   = _make_mission_rows(_master, preserve_order=_preserve)
+        _cat["is_checked"] = _make_mission_check_state(_cat["key"])
+
+
+def _checklist_persist_path():
+    """Path to the per-character checklist persistence file. Returns
+    None if SETTINGS_DIR or the current character name isn't resolved
+    yet (early-startup), in which case load/save become no-ops.
+
+    Resolution priority for the character name:
+      1. ``current_char_name`` — the authoritative live name, set
+         once Lua sends the first PLAYER packet.
+      2. ``active_view_char`` — the pre-selected char folder picked
+         at module-load time (before Lua has connected). Lets the
+         startup checklist_load fire against the right file even if
+         the PLAYER packet hasn't arrived yet, so toggles saved in
+         a previous session are visible the moment the modal opens
+         (rather than only after Lua flips current_char_name).
+    The cache is keyed by the resolved name so a later authoritative
+    rename invalidates correctly by picking the new cache slot."""
+    global _checklist_persist_path_cache
+    try:
+        char = (current_char_name or "").strip()
+    except NameError:
+        char = ""
+    if not char:
+        # Pre-Lua-PLAYER fallback. The pre-select machinery picks
+        # the most-recent char folder at startup; use that name so
+        # the checklist file gets read from the right place during
+        # the early-startup window.
+        try:
+            char = (active_view_char or "").strip()
+        except NameError:
+            char = ""
+    if not char:
+        return None
+    key = char.lower()
+    cached = _checklist_persist_path_cache.get(key)
+    if cached:
+        return cached
+    try:
+        path = os.path.join(SETTINGS_DIR,
+                            f"omniwatch_checklist_{key}.json")
+    except (NameError, TypeError):
+        return None
+    _checklist_persist_path_cache[key] = path
+    return path
+
+
+def _checklist_save():
+    """Write checklist state to disk. Two policies:
+
+    - For categories where auto-checks come from live, repeatedly-
+      available data sources (e.g. trusts read straight from the
+      player's spell list every cycle), we ONLY persist manual checks.
+      The auto state rebuilds itself on every TRUSTS| emit.
+    - For categories where auto-checks come from one-shot observations
+      (you only learn an HP / survival guide is attuned when you
+      visit the NPC), we persist BOTH auto and manual. Without this
+      the auto progress earned this session would vanish on restart
+      because the NPCs only re-emit the bitfield when you talk to
+      them again.
+
+    Categories whose auto state should persist are listed in
+    CHECKLIST_AUTO_PERSIST. Add a new category's key here when it
+    fits the visit-discovered pattern.
+
+    SAFETY: for AUTO_PERSIST categories, the in-memory auto set may
+    be empty during the early-session window — the player hasn't
+    visited the relevant NPC yet, so the live snapshot from Lua is
+    blank. We must NOT clobber the previously-persisted non-empty
+    auto set with that transient blank: do a read-merge instead.
+    If the on-disk file already has a non-empty auto set for a
+    category and the in-memory set is currently empty, keep the
+    on-disk value. This protects against unrelated save triggers
+    (e.g. the WS auto→manual promote, or a manual toggle in a
+    different category) wiping HP/SG progress before the player
+    revisits an NPC this session.
+
+    No-op if path is unresolved (early startup)."""
+    path = _checklist_persist_path()
+    if not path:
+        return
+    # Read existing on-disk state for AUTO_PERSIST guard merge.
+    existing = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f) or {}
+        except Exception:
+            existing = {}
+    payload = {}
+    for cat_key, sets in checklist_known.items():
+        entry = {"manual": sorted(sets.get("manual", set()))}
+        if cat_key in CHECKLIST_AUTO_PERSIST:
+            in_mem_auto = sets.get("auto", set())
+            if in_mem_auto:
+                entry["auto"] = sorted(in_mem_auto)
+            else:
+                # Keep the previously-persisted auto set rather than
+                # blanking it. Once the player visits the NPC again
+                # and the live auto repopulates, the next save will
+                # overwrite this with the real value.
+                prev = existing.get(cat_key, {})
+                if isinstance(prev, dict):
+                    prev_auto = prev.get("auto") or []
+                    if isinstance(prev_auto, list) and prev_auto:
+                        entry["auto"] = prev_auto
+                    else:
+                        entry["auto"] = []
+                else:
+                    entry["auto"] = []
+        payload[cat_key] = entry
+    # Diagnostic: log what's about to be written for weapons so the
+    # round-trip toggle → save → file → load can be traced end-to-end.
+    # Weapons were reported as not persisting; this confirms the save
+    # side carries the right manual set down to JSON. Skipped when
+    # the payload contains nothing weapon-related (e.g. an HP/SG-only
+    # save) so log volume stays manageable.
+    _weapon_payload = {
+        k: len(v.get("manual", []))
+        for k, v in payload.items()
+        if k.startswith("weapons_") and v.get("manual")}
+    if _weapon_payload:
+        print(f"[OmniWatch] checklist save: weapons "
+              f"{dict(sorted(_weapon_payload.items()))} → {path}")
+    # Persist the achievement-unlocked flag alongside the per-category
+    # sets. Sentinel key (starts with underscore) keeps it from
+    # colliding with any current or future category key. Also merge
+    # in any existing on-disk flag so save() never accidentally
+    # un-unlocks the achievement (defensive against logic bugs that
+    # might run save() before _checklist_load() restored the flag
+    # into memory).
+    achv = _achievement_unlocked
+    if not achv and isinstance(existing.get("_achievement_completed"), bool):
+        achv = existing["_achievement_completed"]
+    payload["_achievement_completed"] = achv
+    try:
+        # Rotate a single-generation backup before overwriting the
+        # live file. Lets the user recover from a bad save (e.g. the
+        # HP/SG-auto-blank bug we just patched) by manually renaming
+        # the .bak to the canonical path. Failures during rotation
+        # are non-fatal — better to attempt the save than to abort it
+        # because the backup step couldn't run.
+        if os.path.exists(path):
+            bak = path + ".bak"
+            try:
+                if os.path.exists(bak):
+                    os.remove(bak)
+                os.rename(path, bak)
+            except Exception:
+                pass
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] Could not save checklist: {e}")
+
+
+def _checklist_load():
+    """Read manual-check sets from disk into checklist_known. Silent
+    no-op if the file doesn't exist or is malformed."""
+    global _achievement_unlocked
+    path = _checklist_persist_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[OmniWatch] Could not load checklist: {e}")
+        return
+    if not isinstance(data, dict):
+        return
+    # Track weapon-category restorations for diagnostic logging.
+    # Weapons were reported as not persisting between reload; this
+    # surfaces exactly which categories got entries back from disk
+    # and how many, so the load side can be verified against the
+    # earlier toggle-time print.
+    _weapon_restored = {}
+    for cat_key, sets in data.items():
+        if cat_key not in checklist_known:
+            continue
+        if not isinstance(sets, dict):
+            continue
+        manual = sets.get("manual") or []
+        if isinstance(manual, list):
+            restored = {
+                str(x).lower() for x in manual
+                if isinstance(x, (str, int))}
+            checklist_known[cat_key]["manual"] = restored
+            if cat_key.startswith("weapons_") and restored:
+                _weapon_restored[cat_key] = len(restored)
+        # Persisted auto-set, only for categories that need it.
+        # Trusts rebuild auto from the live spell list every cycle,
+        # so saving an auto set for trusts would be stale data.
+        if cat_key in CHECKLIST_AUTO_PERSIST:
+            auto = sets.get("auto") or []
+            if isinstance(auto, list):
+                checklist_known[cat_key]["auto"] = {
+                    str(x).lower() for x in auto
+                    if isinstance(x, (str, int))}
+    if _weapon_restored:
+        print(f"[OmniWatch] checklist load: restored weapons "
+              f"{dict(sorted(_weapon_restored.items()))} from {path}")
+    # Restore the achievement-unlocked flag so the easter-egg banner
+    # only ever fires once per character. The flag lives at the
+    # sentinel key '_achievement_completed' so it never collides
+    # with any current or future category key.
+    if isinstance(data.get("_achievement_completed"), bool):
+        _achievement_unlocked = data["_achievement_completed"]
+
+
+def _checklist_toggle_manual(item_key):
+    """Toggle a manual-check entry for the currently-active category.
+    Resolves the active category via the tab + per-tab category index
+    so the toggle applies to the right tracking set regardless of
+    which tab the user is on."""
+    cat = _checklist_active_category()
+    if cat is None:
+        return
+    sets = checklist_known.setdefault(
+        cat["key"], {"auto": set(), "manual": set()})
+    manual = sets.setdefault("manual", set())
+    if item_key in manual:
+        manual.discard(item_key)
+    else:
+        manual.add(item_key)
+    # Diagnostic log: confirms the in-memory mutation landed and the
+    # save was attempted. Weapons categories were reported as not
+    # persisting across reload; this line surfaces the actual size
+    # of the manual set immediately after toggle so the save side
+    # can be verified against the load side. Only logs for weapons
+    # to avoid spam from frequently-toggled WS/quest rows.
+    if cat["key"].startswith("weapons_"):
+        print(f"[OmniWatch] toggle {cat['key']}: {item_key!r} → "
+              f"manual now has {len(manual)} entr"
+              f"{'y' if len(manual)==1 else 'ies'}")
+    _checklist_save()
+    # After any toggle, check whether the player has now completed
+    # every checkable row across every category. This fires the
+    # easter-egg banner exactly once per character (the unlocked
+    # flag is persisted, so re-checking after an uncheck doesn't
+    # re-fire it on this session or any future one).
+    _checklist_check_achievement()
+
+
+def _checklist_check_achievement():
+    """Detect whether every checkable row across every checklist
+    category is currently checked. If yes AND the achievement has
+    not yet been awarded for this character, mark it unlocked,
+    schedule the 5-second banner, and persist to disk.
+
+    Called from _checklist_toggle_manual after every toggle, and
+    from the auto-detect packet handlers that promote rows into
+    the manual set (e.g. the WS auto-promote). Cheap to call: the
+    early-out on _achievement_unlocked skips all the row counting
+    once the flag has been set."""
+    global _achievement_unlocked, _achievement_banner_until_ts
+    if _achievement_unlocked:
+        return
+    # Sweep every category. For each, get its full row list and
+    # the (auto ∪ manual) set, then count rows whose key is in
+    # that union. Achievement requires EVERY row in EVERY category
+    # to be checked.
+    for cat in CHECKLIST_CATEGORIES:
+        row_iter = cat.get("row_iter")
+        if row_iter is None:
+            continue
+        try:
+            rows = row_iter()
+        except Exception:
+            return  # malformed category — bail rather than misfire
+        if not rows:
+            # Empty master list (e.g. a master that hasn't been
+            # populated by the Lua snapshot yet) — treat as not-yet-
+            # completable. Without this guard, an early-session
+            # call before the master lists arrive would erroneously
+            # see 0/0 categories as "complete".
+            return
+        sets = checklist_known.get(cat["key"], {})
+        union = sets.get("auto", set()) | sets.get("manual", set())
+        for item_key, _disp in rows:
+            if item_key not in union:
+                return
+    # All rows in all categories checked. Award the achievement.
+    _achievement_unlocked = True
+    _achievement_banner_until_ts = time.time() + 5.0
+    try:
+        _checklist_save()
+    except Exception as e:
+        print(f"[OmniWatch] achievement save failed: {e!r}")
+    print("[OmniWatch] 🎉 ACHIEVEMENT UNLOCKED: "
+          "you beat Final Fantasy XI!")
+
+
+def _trigger_achievement_banner_for_test():
+    """Manually trigger the achievement banner for 5 seconds without
+    touching the unlocked-flag persistence. Used by the `//ow congrats`
+    test command so the developer can preview the banner without
+    actually completing every row in the checklist."""
+    global _achievement_banner_until_ts
+    _achievement_banner_until_ts = time.time() + 5.0
+
+
+# ═════════════════════════════════════════════════════════════════════
+# ── Current Campaigns / Ongoing Events ──────────────────────────────
+# Fetches FFXI's official "Topics" RSS feed from PlayOnline, parses the
+# event entries, and exposes them to the UI for an "Ongoing Events"
+# popup. The data path:
+#
+#   1. Background thread polls topics.xml on a 6-hour cycle (and on
+#      first modal open if cache is missing/stale).
+#   2. Parsed entries are normalized to a list of dicts:
+#         [{title, period_start, period_end, summary, link}, ...]
+#      The period strings are kept as the human-readable original
+#      (e.g. "Friday, May 22, 2026, at 1:00 a.m. (PDT)") because the
+#      timezone and minute precision matter when telling the user
+#      when something ends.
+#   3. Results cached to disk (omniwatch_campaigns_cache.json) so the
+#      modal renders instantly on startup before the background fetch
+#      lands; the next fetch updates it.
+#   4. The modal renders the list as cards: title in bold, period in
+#      a muted color, summary in plain text.
+#
+# Fetch failures are non-fatal — the modal falls back to whatever was
+# cached, and shows a "(offline)" footer note.
+# ═════════════════════════════════════════════════════════════════════
+
+CAMPAIGNS_TOPICS_URL = "https://www.playonline.com/pcd2/topics/ff11us/topics.xml"
+CAMPAIGNS_REFRESH_INTERVAL_SEC = 6 * 60 * 60   # 6 hours
+CAMPAIGNS_FETCH_TIMEOUT_SEC    = 8
+
+# In-memory state. Populated from disk at startup, refreshed by the
+# background thread, read by the modal renderer each frame.
+campaigns_entries        = []      # list of dicts
+campaigns_last_fetched   = 0.0     # unix ts; 0 = never
+campaigns_last_attempt   = 0.0     # unix ts; gates retries on failure
+campaigns_fetch_in_flight = False
+campaigns_fetch_failed   = False   # True if last attempt failed and we have no fallback
+campaigns_modal_open     = False
+campaigns_scroll         = 0       # pixel offset
+_campaigns_click_rects   = []      # hit-test targets, refilled each frame
+_campaigns_modal_rect    = None
+
+
+def _campaigns_cache_path():
+    """Path to the on-disk campaigns cache. Lives in USER_DIR rather
+    than per-character — events are global, not character-specific."""
+    try:
+        return os.path.join(SETTINGS_DIR, "omniwatch_campaigns_cache.json")
+    except (NameError, TypeError):
+        return None
+
+
+def _campaigns_load_cache():
+    """Read cached entries from disk into module globals. Silent no-op
+    on missing/malformed file — the background fetch will populate
+    `campaigns_entries` once it lands."""
+    global campaigns_entries, campaigns_last_fetched
+    path = _campaigns_cache_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        entries = data.get("entries") or []
+        if isinstance(entries, list):
+            campaigns_entries = [e for e in entries if isinstance(e, dict)]
+        ts = data.get("fetched_at")
+        if isinstance(ts, (int, float)):
+            campaigns_last_fetched = float(ts)
+    except Exception as e:
+        print(f"[OmniWatch] campaigns cache load failed: {e!r}")
+
+
+def _campaigns_save_cache():
+    """Persist current entries + fetched-at timestamp to disk."""
+    path = _campaigns_cache_path()
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({
+                "fetched_at": campaigns_last_fetched,
+                "entries":    campaigns_entries,
+            }, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] campaigns cache save failed: {e!r}")
+
+
+# Regex patterns compiled once at module load. The date patterns
+# accept the various date-shape variants the topics feed uses:
+#   "Friday, May 22, 2026, at 1:00 a.m. (PDT)"
+#   "Monday, June 1, at 7:59 a.m. (PDT)"        (no year)
+#   "Tuesday, June 2, at 7:00 a.m."             (no timezone)
+_CAMPAIGN_DATE_RE = (
+    r"[A-Z][a-z]+,?\s+[A-Z][a-z]+\s+\d{1,2}"      # Friday, May 22
+    r"(?:,?\s+\d{4})?"                              # optional year
+    r",?\s+at\s+\d{1,2}:\d{2}\s*[ap]\.?m\.?"       # at 1:00 a.m.
+    r"(?:\s*\([A-Z]+\))?"                           # optional (PDT)
+)
+_CAMPAIGN_PERIOD_RES = [
+    re.compile(
+        r"(?:Event|Campaign|Point\s+distribution|Point\s+exchange|"
+        r"Sale|Discount|Limited\s+Time)\s+Period\s*:?\s*"
+        rf"({_CAMPAIGN_DATE_RE})\s*to\s*({_CAMPAIGN_DATE_RE})",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # Plain "<date> to <date>" without a label — fallback when SE
+    # forgets the "Event Period:" header.
+    re.compile(
+        rf"({_CAMPAIGN_DATE_RE})\s*to\s*({_CAMPAIGN_DATE_RE})",
+        re.IGNORECASE | re.DOTALL,
+    ),
+]
+_CAMPAIGN_BR_RE   = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_CAMPAIGN_TAG_RE  = re.compile(r"<[^>]+>")
+
+
+def _campaigns_clean_html(s):
+    """Strip CDATA HTML down to readable plain text. <br> becomes
+    newlines; other tags vanish; HTML entities are unescaped.
+    Multiple blank lines are collapsed."""
+    s = _CAMPAIGN_BR_RE.sub("\n", s)
+    s = _CAMPAIGN_TAG_RE.sub("", s)
+    s = html.unescape(s)
+    # Collapse runs of 3+ newlines and trim each line
+    lines = [ln.strip() for ln in s.splitlines()]
+    # Drop separator lines made of just '=' or '-' (the topics feed
+    # uses them as visual rulers around the Event Period block).
+    lines = [ln for ln in lines
+             if ln and not re.fullmatch(r"[=\-_]{3,}", ln)]
+    # Collapse adjacent blanks
+    out, prev_blank = [], False
+    for ln in lines:
+        is_blank = not ln
+        if is_blank and prev_blank:
+            continue
+        out.append(ln)
+        prev_blank = is_blank
+    return "\n".join(out).strip()
+
+
+def _campaigns_extract_summary(clean_text, period_match):
+    """Pull a short summary from the cleaned description.
+
+    Strategy: take everything UP TO the line that contains the
+    'Event Period:' (or similar) marker. The blurb text always
+    precedes that header in PlayOnline's templating. If we don't
+    find a clear cut, fall back to the first ~3 lines.
+
+    The naive approach of cutting at the date string itself fails,
+    because the cleaned text has the structure:
+
+        <marketing blurb>
+        Event Period:
+        Friday, May 22, 2026, at 1:00 a.m. (PDT) to ...
+
+    where the date is on its own line. Cutting at the date leaves
+    'Event Period:' as the visible summary, which is useless. We
+    need to walk back from the date match to find the start of the
+    'Event Period:' label and cut there instead."""
+    blurb = clean_text
+    if period_match:
+        # Find the line containing the period header. Search for
+        # common labels (case-insensitive) — the regex captured
+        # the date itself, but we want to cut at the label above it.
+        label_pat = re.compile(
+            r"(?:Event|Campaign|Point\s+distribution|Point\s+exchange|"
+            r"Sale|Discount|Limited\s+Time)\s+Period\s*:?",
+            re.IGNORECASE,
+        )
+        lbl_m = label_pat.search(clean_text)
+        cut_idx = lbl_m.start() if lbl_m else clean_text.find(period_match.group(1))
+        if cut_idx > 0:
+            blurb = clean_text[:cut_idx].strip()
+        # else: no clean cut → use whole text (summary cap below
+        # keeps it bounded).
+
+    # Remove the trailing "Read on for details." link line if present.
+    blurb = re.sub(r"\n?Read on\s+for details\.?\s*$", "",
+                   blurb, flags=re.IGNORECASE).strip()
+
+    # Cap length — the modal will wrap, but very long descriptions
+    # bury the next entry below the fold.
+    MAX_LEN = 400
+    if len(blurb) > MAX_LEN:
+        blurb = blurb[:MAX_LEN].rstrip() + "…"
+    return blurb
+
+
+def _campaigns_extract_bonuses(clean_text):
+    """Pull out reward / bonus bullet points from the cleaned text.
+
+    Looks for lines starting with '-', '■', '●', '・' or containing
+    common reward markers (Kupon, Tier, x2, EXP, Rewards). Returns
+    a short list of strings — at most 8 — for display under each
+    entry's summary. Falls back to empty list when no bullets are
+    obvious (which is fine; the summary alone is then enough)."""
+    bullets = []
+    for ln in clean_text.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        # Marker characters at the start of a line
+        if s[0] in "-■●・▼*•":
+            cleaned = s.lstrip("-■●・▼*• ").strip()
+            if cleaned and len(cleaned) < 120:
+                bullets.append(cleaned)
+        if len(bullets) >= 8:
+            break
+    return bullets
+
+
+# Heuristic: a "bold name" block of fewer than 8 chars or that's mostly
+# punctuation is a separator/decoration, not a sub-campaign header.
+# Examples we want to filter:
+#   "**==========**", "**Increased rewards!**" (banner), "**Note:**",
+#   "**Phase 1**" (date block continuation), pure numeric strings.
+def _campaign_subcampaign_looks_useful(name, desc):
+    """Return True if the (name, desc) pair looks like a real sub-campaign
+    rather than a stray markup artifact pulled out by the bold-tag regex.
+
+    Real campaign names follow predictable PlayOnline templating: they
+    end with "Campaign", "Bonanza", or "Event", or they're a recognized
+    short event title ("XI Day", "Mog Bonanza"). In-prose bold emphasis
+    (like '<strong>spoils for completing the Tower</strong>') doesn't
+    match this pattern and gets filtered out."""
+    n = name.strip()
+    d = desc.strip()
+    if not n or not d:
+        return False
+    # Strip out pure decoration:
+    if re.fullmatch(r"[=\-_*\s]+", n):
+        return False
+    if re.fullmatch(r"\W+", n):
+        return False
+    # Header banners like "Phase 1" and date blocks pulled out by the
+    # bold regex (PlayOnline wraps dates in <strong>).
+    if re.match(r"(?:phase|■\s*phase)\s+\d", n, re.IGNORECASE):
+        return False
+    if re.match(r"event\s+period|campaign\s+period|point\s+\w+\s+period",
+                n, re.IGNORECASE):
+        return False
+    # Description that's mostly a date string (means the bold tag wrapped
+    # a date line, not a campaign name)
+    if re.search(r"\d{1,2}:\d{2}\s*[ap]\.?m\.?", d) and len(d) < 80:
+        return False
+    # Short description that's just punctuation/numbers
+    if len(d) < 15:
+        return False
+    # The actual quality gate: the name must contain a recognizable
+    # event keyword. This is the strongest signal that we're looking
+    # at an actual section header rather than mid-sentence emphasis.
+    # Trailing "!" is allowed since names like "Geas Fete - PLUS!" end
+    # with punctuation.
+    n_lower = n.lower()
+    event_keywords = ("campaign", "bonanza", " day", "event",
+                      "celebration", "festival", "fete")
+    if not any(kw in n_lower for kw in event_keywords):
+        return False
+    return True
+
+
+# Pre-compiled patterns used for detail-page parsing. PlayOnline's
+# templating has at least TWO distinct shapes across topic pages:
+#
+# Shape 1 — Heading-style (e.g. detail/40213):
+#     <p class="tp_h4">Chain Experience Bonus Campaign</p>
+#     Experience chains will yield double to triple…
+#     <br><br>
+#     <p class="tp_h4">Chain Experience Bonus Campaign - PLUS!</p>
+#     …
+#
+# Shape 2 — Inline bold-tag style (e.g. detail/40278):
+#     <strong>Adoulin Dial Campaign</strong>A brand-new dial will be added…
+#     <strong>Dynamis Granules of Time Campaign</strong>For the duration…
+#
+# Section banners ("Characters are easier to develop!", etc.) are
+# wrapped in <strong>, separately from the campaign names. We use
+# the heading pattern preferentially because it's used on the bigger
+# / more interesting campaign overview pages (the kind Cooper wants
+# to see), and fall back to bold-tag matching only when the heading
+# pattern finds nothing.
+
+# Shape 1: <p class="tp_h4">Name</p> followed by description text
+# (which may include more tags) until the next heading-class <p>,
+# the next major structural element, or end-of-document.
+#
+# We also stop at <strong> openers — on 40213-style pages, those
+# wrap section banners between campaign groups (e.g.
+# "<strong>Skills are more likely to increase!</strong>" appears
+# between the Chain campaigns and the Synthesis Skill campaign). If
+# we didn't stop there, the description for the last campaign of one
+# section would bleed into the banner text of the next section.
+_CAMPAIGN_DETAIL_H4_RE = re.compile(
+    r"<p\s+class\s*=\s*['\"]tp_h4['\"][^>]*>"   # opening <p class="tp_h4">
+    r"\s*"
+    r"(.+?)"                                      # campaign name — may
+                                                  # contain inline tags
+                                                  # (e.g. <br>); we strip
+                                                  # them post-match via
+                                                  # _CAMPAIGN_TAG_RE.
+                                                  # Using [^<]+? here
+                                                  # silently dropped any
+                                                  # heading containing an
+                                                  # inline tag (24 of 29
+                                                  # campaigns on the 40213
+                                                  # detail page were lost
+                                                  # because PlayOnline's
+                                                  # CMS sometimes emits
+                                                  # <p class="tp_h4">Name<br></p>
+                                                  # rather than a clean
+                                                  # <p class="tp_h4">Name</p>).
+    r"\s*"
+    r"</p\s*>"                                    # closing </p>
+    r"(.*?)"                                      # description content
+    r"(?="                                        # until...
+    r"<p\s+class\s*=\s*['\"]tp_h4['\"]"          #   next tp_h4 paragraph
+    r"|<strong\b"                                 #   or next section banner
+    r"|<h\d"                                      #   or next heading
+    r"|<hr"                                       #   or next horizontal rule
+    r"|\Z)",                                      #   or end of document
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Shape 2: <strong>Name</strong>Description (inline pattern used by
+# the 40278-style umbrella campaign pages). Match both <strong> and
+# <b> for templating consistency across pages.
+#
+# Description uses .*? (not .+?) so empty descriptions match —
+# PlayOnline puts adjacent <strong> tags right next to each other
+# (e.g. <strong>==========</strong><strong>Adoulin Dial Campaign</strong>),
+# and .+? would greedily consume the next <strong> opener rather than
+# matching an empty description.
+_CAMPAIGN_DETAIL_STRONG_RE = re.compile(
+    r"<(?:strong|b)\b[^>]*>"        # opening <strong> or <b>
+    r"\s*"
+    r"(.+?)"                         # campaign name — see H4_RE note
+                                     # above; allow inline tags so
+                                     # CMS-emitted variants like
+                                     # <strong>Name<br></strong> still
+                                     # match. Post-match tag stripping
+                                     # cleans this up.
+    r"\s*"
+    r"</(?:strong|b)\s*>"           # matching close
+    r"(.*?)"                         # description text (may be empty)
+    r"(?="                           # until...
+    r"<(?:strong|b)\b[^>]*>"        #   next bold tag
+    r"|<h\d"                         #   or next heading
+    r"|<hr"                          #   or next horizontal rule
+    r"|\Z)",                         #   or end of document
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Shape 3: <p><strong>Name</strong></p> followed by separate
+# description paragraph(s). This is the templating shape used on
+# the larger Vana'versary-style overview pages (e.g. 40213), where
+# the campaign list is mixed: some sub-campaigns use <p class="tp_h4">
+# headings, others use <p><strong>...</strong></p>. The pattern is
+# stricter than Shape 2 (which would also match inline <strong> tags
+# embedded in description text) because we require the <strong> to
+# be wrapped in its own <p> tag — that's how PlayOnline distinguishes
+# a section/campaign title from emphasis.
+_CAMPAIGN_DETAIL_P_STRONG_RE = re.compile(
+    r"<p\b[^>]*>"                    # opening <p>
+    r"\s*"
+    r"<(?:strong|b)\b[^>]*>"        # opening <strong>/<b>
+    r"\s*"
+    r"(.+?)"                         # campaign name — see H4_RE note
+                                     # above; allow inline tags so
+                                     # CMS-emitted variants with
+                                     # embedded <br> still match.
+    r"\s*"
+    r"</(?:strong|b)\s*>"           # closing </strong>
+    r"\s*"
+    r"</p\s*>"                       # closing </p>
+    r"(.*?)"                         # description content
+    r"(?="                           # until next title-shaped block
+    r"<p\b[^>]*>\s*<(?:strong|b)\b" #   another <p><strong>
+    r"|<p\s+class\s*=\s*['\"]tp_h4['\"]"  # or a tp_h4 paragraph
+    r"|<h\d"                         #   or a heading
+    r"|<hr"                          #   or a horizontal rule
+    r"|\Z)",                         #   or end of document
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _campaigns_resolve_short_link(url):
+    """Follow sqex.to (and similar) HTTP 301/302 redirects to the
+    underlying playonline.com detail page. Returns the resolved URL,
+    or the original if it doesn't redirect / fails.
+
+    PlayOnline's RSS items frequently link out through sqex.to shorts
+    (e.g. https://sqex.to/fQmc7) rather than the canonical
+    playonline.com/.../detail.html URL. Without resolution, the
+    sub-campaign drilldown can't tell that those links are reachable
+    detail pages, so it skips them entirely. This helper takes the
+    cost of an extra HEAD request to learn the real target."""
+    if not url:
+        return url
+    # Already a direct playonline page — nothing to resolve.
+    if "playonline.com" in url and url.endswith("detail.html"):
+        return url
+    # Only attempt resolution for sqex.to (it's the only consumer-facing
+    # shortener SE uses for FFXI topics, so we don't blindly chase
+    # arbitrary redirects).
+    if "sqex.to" not in url:
+        return url
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "OmniWatch/1.0 (+github.com/BalladOfWorms)"),
+            },
+            method="HEAD",
+        )
+        # urllib auto-follows redirects by default, so the final URL
+        # surfaces on the response object via geturl().
+        with urllib.request.urlopen(req, timeout=CAMPAIGNS_FETCH_TIMEOUT_SEC) as r:
+            final = r.geturl()
+        print(f"[OmniWatch] campaigns: resolved short link "
+              f"{url} → {final}")
+        return final
+    except Exception as e:
+        print(f"[OmniWatch] campaigns: short-link resolution failed "
+              f"({url}): {e!r}")
+        return url
+
+
+def _campaigns_fetch_detail(detail_url):
+    """Fetch a topic detail page and parse its sub-campaign blocks.
+
+    Returns a list of {name, description} dicts. Empty list on any
+    fetch/parse failure — caller falls back to the RSS-derived
+    summary if this returns nothing.
+
+    Detail pages are stable once published, so the cache-busting
+    burden lives at the RSS layer; here we just fetch fresh each
+    time a refresh is triggered (the RSS layer's 6h cycle naturally
+    limits the load on SE's CDN)."""
+    try:
+        req = urllib.request.Request(
+            detail_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "OmniWatch/1.0 (+github.com/BalladOfWorms)"),
+                "Accept": "text/html",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=CAMPAIGNS_FETCH_TIMEOUT_SEC) as r:
+            body = r.read().decode("utf-8", errors="replace")
+        print(f"[OmniWatch] campaigns detail fetched OK: "
+              f"{detail_url} ({len(body)} chars)")
+    except Exception as e:
+        print(f"[OmniWatch] campaigns detail fetch failed ({detail_url}): {e!r}")
+        return []
+
+    # Trim to the article body to avoid matching <strong> in nav/footer.
+    # The PlayOnline pages wrap content in a few possible containers;
+    # find the first article-ish block we can.
+    body_match = re.search(
+        r"(?:<article[^>]*>|<div[^>]*class=['\"][^'\"]*(?:topic|detail|content|news)[^'\"]*['\"][^>]*>)"
+        r"(.+?)"
+        r"(?:</article>|</body>|<footer)",
+        body, re.DOTALL | re.IGNORECASE,
+    )
+    article = body_match.group(1) if body_match else body
+    print(f"[OmniWatch] campaigns detail: article body "
+          f"{'found' if body_match else 'NOT found (using full body)'}, "
+          f"{len(article)} chars")
+
+    # Count raw <strong>/<b> tags before filtering so we can see how
+    # many candidate sub-campaign headers the page contained.
+    raw_strong_count = len(re.findall(r"<(?:strong|b)\b[^>]*>", article,
+                                       re.IGNORECASE))
+    raw_h4_count = len(re.findall(
+        r"<p\s+class\s*=\s*['\"]tp_h4['\"]", article, re.IGNORECASE))
+    raw_pstrong_count = len(re.findall(
+        r"<p\b[^>]*>\s*<(?:strong|b)\b", article, re.IGNORECASE))
+    print(f"[OmniWatch] campaigns detail: {raw_strong_count} bold tags, "
+          f"{raw_h4_count} tp_h4 paragraphs, "
+          f"{raw_pstrong_count} <p><strong> blocks")
+
+    # PlayOnline mixes markup within a single page — the 24th
+    # Vana'versary Celebration (40213) uses <p class="tp_h4">Name</p>
+    # for some campaigns AND <p><strong>Name</strong></p> for others.
+    # Earlier the parser tried tp_h4 first and ONLY fell back to bold
+    # if no tp_h4 matched. That missed half the campaigns on mixed
+    # pages.
+    #
+    # New strategy: run BOTH "title-shaped" patterns (tp_h4 paragraph
+    # AND <p><strong> paragraph), merge the matches by document
+    # position, dedupe by name, and process in order. Only fall back
+    # to the inline <strong> pattern if NEITHER title pattern finds
+    # anything (i.e. the page uses Shape 2 — bare bold tags between
+    # adjacent labels, as on 40278-style pages).
+    subcampaigns = []
+    candidate_count = 0
+
+    h4_matches      = list(_CAMPAIGN_DETAIL_H4_RE.finditer(article))
+    p_strong_matches = list(_CAMPAIGN_DETAIL_P_STRONG_RE.finditer(article))
+    title_matches = []
+    for m in h4_matches:
+        title_matches.append((m.start(), "tp_h4",  m.group(1), m.group(2)))
+    for m in p_strong_matches:
+        title_matches.append((m.start(), "p_strong", m.group(1), m.group(2)))
+    title_matches.sort()
+
+    if title_matches:
+        # Dedup by normalized name — when a candidate appears in both
+        # patterns (rare but possible if the templating happens to
+        # nest one inside the other), keep the first occurrence so
+        # downstream document order is preserved.
+        seen_names = set()
+        merged = []
+        for pos, src, name_raw, desc_raw in title_matches:
+            key = re.sub(r"\s+", " ", name_raw or "").strip().lower()
+            if not key or key in seen_names:
+                continue
+            seen_names.add(key)
+            merged.append((src, name_raw, desc_raw))
+        matches = merged
+        pattern_used = (f"merged (tp_h4={len(h4_matches)}, "
+                        f"p_strong={len(p_strong_matches)}, "
+                        f"deduped={len(merged)})")
+    else:
+        # No heading-shaped candidates → page uses Shape 2 inline
+        # bold tags throughout. This is the path 40278-style pages
+        # take, where adjacent <strong> tags act as title separators
+        # with no <p> wrappers.
+        bare = list(_CAMPAIGN_DETAIL_STRONG_RE.finditer(article))
+        matches = [("strong", m.group(1), m.group(2)) for m in bare]
+        pattern_used = f"inline-strong fallback ({len(bare)} matches)"
+
+    print(f"[OmniWatch] campaigns detail: using {pattern_used}, "
+          f"{len(matches)} initial matches")
+
+    for src, raw_name, raw_desc in matches:
+        candidate_count += 1
+
+        # Clean the name: remove any nested tags/entities, collapse ws.
+        name = _CAMPAIGN_TAG_RE.sub("", raw_name)
+        name = html.unescape(name).strip()
+        # Clean the desc the same way as RSS descriptions.
+        desc = _campaigns_clean_html(raw_desc)
+        # PlayOnline's tp_h4 templating wraps descriptions in literal
+        # double-quote characters (i.e. the text node IS '"Experience
+        # chains will yield..."' including the quotes). Strip them off.
+        desc = desc.strip().strip('"').strip("'").strip()
+        # Trim descriptions to a single line ish — these are short
+        # one/two-sentence blurbs in PlayOnline's templating.
+        # If the description has many paragraphs, take only the first
+        # 2 to avoid pulling in the next section's setup text.
+        desc_lines = [ln for ln in desc.splitlines() if ln.strip()]
+        if len(desc_lines) > 2:
+            desc = "\n".join(desc_lines[:2])
+        # Hard cap description length so cards stay readable.
+        if len(desc) > 280:
+            desc = desc[:280].rstrip() + "…"
+
+        if not _campaign_subcampaign_looks_useful(name, desc):
+            continue
+        subcampaigns.append({"name": name, "description": desc})
+
+    print(f"[OmniWatch] campaigns detail: kept {len(subcampaigns)} of "
+          f"{candidate_count} candidates from {detail_url}")
+    return subcampaigns
+
+
+# Pattern to extract sub-events from the "Event and Campaign Overview"
+# topic item. The overview item is an index — its description doesn't
+# describe a single event, instead it lists all currently-active
+# events with their date range and a short-link, grouped under
+# section headings like "▼ Enjoy the 24th Vana'versary Events and
+# Campaigns!".
+#
+# Per-event structure in the overview's description HTML is:
+#     <strong>Event Name</strong>:<br>
+#     Date1 to Date2<br>
+#     <span><img></span><br>   (sometimes absent)
+#     <a href="https://sqex.to/...">https://sqex.to/...</a>
+#
+# We anchor on `<strong>Name</strong>:` (the colon distinguishes
+# real event entries from section headings — sections don't have
+# colons after them) and capture up to the first <a href="..."> link.
+_OVERVIEW_SUBEVENT_RE = re.compile(
+    r"<strong[^>]*>\s*([^<]+?)\s*</strong\s*>\s*:"   # name (with trailing colon)
+    r"(.+?)"                                           # middle (period + image)
+    r"<a\s+href\s*=\s*['\"]([^'\"]+)['\"]",          # link
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _campaigns_parse_date(s):
+    """Parse a PlayOnline-style date string to a Python date object.
+    Returns None on any failure (caller treats None as "unknown" and
+    sorts those entries to the end).
+
+    PlayOnline writes dates in several shape variants:
+        "Friday, May 22, 2026, at 1:00 a.m. (PDT)"        ← canonical
+        "Monday, June 1, at 7:59 a.m. (PDT)"              ← year omitted
+        "Tuesday, June 2, at 7:00 a.m."                   ← no timezone
+
+    We extract the month name, day, and (optional) year. When the year
+    is missing, we infer it from the current real year — and bump
+    forward one year if the resulting date is in the past by more than
+    ~6 months (typical RSS items announce events 1-2 months ahead, so
+    a missing-year June date in November should be next-year's June)."""
+    if not s:
+        return None
+    m = re.match(
+        r"\s*[A-Z][a-z]+,?\s+"           # day-of-week
+        r"([A-Z][a-z]+)\s+(\d{1,2})"     # month, day
+        r"(?:,?\s+(\d{4}))?",             # optional year
+        s,
+    )
+    if not m:
+        return None
+    month_name = m.group(1)
+    day_num    = int(m.group(2))
+    year_str   = m.group(3)
+    try:
+        month_num = datetime.datetime.strptime(month_name, "%B").month
+    except ValueError:
+        return None
+    if year_str:
+        year_num = int(year_str)
+    else:
+        # No explicit year — assume current real year, but roll
+        # forward if that makes the date look like it's already
+        # ~6+ months in the past.
+        today = datetime.date.today()
+        year_num = today.year
+        try:
+            candidate = datetime.date(year_num, month_num, day_num)
+        except ValueError:
+            return None
+        if (today - candidate).days > 180:
+            year_num += 1
+    try:
+        return datetime.date(year_num, month_num, day_num)
+    except ValueError:
+        return None
+
+
+def _campaigns_sort_key(entry):
+    """Sort key for the campaign entries list. Order:
+        1. Currently-active events first (start <= today <= end)
+        2. Upcoming events next (today < start)
+        3. Past events last (today > end — rare but handled)
+    Within each group, sort by start date ascending so the earliest-
+    starting events appear at the top.
+
+    Entries with unparseable dates land at the end of their group."""
+    today = datetime.date.today()
+    start = _campaigns_parse_date(entry.get("period_start", ""))
+    end   = _campaigns_parse_date(entry.get("period_end", ""))
+    if start is None and end is None:
+        status = 3  # totally unknown — lowest priority
+    elif start is None:
+        # End-only date: treat as ending soon (likely a campaign
+        # already in progress with only an end date stated).
+        status = 0 if end >= today else 2
+    elif end is None:
+        # Start-only date: classify by start position relative to now.
+        status = 0 if start <= today else 1
+    else:
+        if start <= today <= end:
+            status = 0
+        elif today < start:
+            status = 1
+        else:
+            status = 2
+    # Secondary sort: start date (earliest first). Treat None as far-
+    # future so it sorts last within its status group.
+    secondary = start or datetime.date.max
+    return (status, secondary)
+
+
+def _campaigns_group_for(entry):
+    """Return (group_key, group_label) for an entry. Used to inject
+    section headers into the modal layout — entries with the same
+    group_key are rendered under a shared header band.
+
+    Group keys:
+        "current"       — actively running today
+        "upcoming_<iso>" — starts on the given date in the future
+        "past"          — ended (rare in the modal; only seen if the
+                          RSS lags the end date)
+        "unknown"       — could not parse the dates
+
+    The label is what gets rendered in the header band. For upcoming
+    groups, the label includes the human-readable start date so the
+    user can tell at a glance when the campaigns in that section
+    become available."""
+    today = datetime.date.today()
+    start = _campaigns_parse_date(entry.get("period_start", ""))
+    end   = _campaigns_parse_date(entry.get("period_end", ""))
+    if start is None and end is None:
+        return ("unknown", "Unknown Dates")
+    if start is None:
+        return (("current", "Current")
+                if end >= today
+                else ("past", "Past"))
+    if end is None:
+        if start <= today:
+            return ("current", "Current")
+        return (f"upcoming_{start.isoformat()}",
+                "Starting " + start.strftime("%A, %B %d"))
+    if start <= today <= end:
+        return ("current", "Current")
+    if today < start:
+        return (f"upcoming_{start.isoformat()}",
+                "Starting " + start.strftime("%A, %B %d"))
+    return ("past", "Past")
+
+
+def _campaigns_group_color(group_key):
+    """Background color for a section header band. Matches the
+    visual cue conventions Cooper showed from bg-wiki: greenish for
+    active, blue/teal for upcoming, neutral for unknown/past."""
+    if group_key == "current":
+        return (60, 110, 70)        # warm green
+    if group_key.startswith("upcoming_"):
+        return (70, 90, 130)        # cool blue
+    if group_key == "past":
+        return (95, 70, 70)         # faded red
+    return (80, 80, 90)             # neutral gray
+
+
+# Hardcoded phase mapping for umbrella events whose schedule rolls out
+# in waves. PlayOnline's detail pages list every sub-campaign in one
+# big block — they include the phase START DATES at the top of the
+# article but never tag individual campaigns with which phase they
+# belong to. The phase→campaign mapping has to come from somewhere
+# else; bg-wiki/FFXIclopedia community-curate that breakdown.
+#
+# This table is the manual transcription of bg-wiki's phase tables.
+# When a top-level campaign card's title matches a key in this table,
+# the modal renders its sub-campaigns grouped by phase with date
+# headers between groups, mirroring the bg-wiki layout. For events
+# not in this table, sub-campaigns continue to render as a flat list
+# (the previous behavior).
+#
+# Each entry is shaped:
+#   {
+#     "phases": [ (label, [campaign_name, ...]), ... ],   ordered
+#                                                          chronologically
+#     "aliases": [ ... ],   # other titles this same data applies to
+#                            # (e.g. the umbrella + closing celebration
+#                            # often have the same campaign list)
+#   }
+#
+# Names match what PlayOnline's detail-page parser produces. If
+# PlayOnline tweaks punctuation (en-dash vs hyphen, "PLUS!" vs "Plus")
+# the lookup falls back to a normalized comparison (lowercase,
+# stripped of common punctuation). Anything we can't map lands in an
+# "Other" group at the bottom rather than being dropped.
+KNOWN_CAMPAIGN_PHASES = {
+    "24th Vana'versary Celebration Campaign": {
+        "phases": [
+            ("Campaign Start  •  Wed, May 13", [
+                "Chain Experience Bonus Campaign",
+                "Chain Capacity Point Bonus Campaign",
+                "Chain Monstrosity Bonus Campaign",
+                "Bonus Bayld Campaign",
+                "Abyssea Campaign",
+                "Alter Ego Expo Campaign HQ",
+                "Vagary Campaign",
+                "Combat and Magic Skill Increase Campaign",
+            ]),
+            ("Phase 1  •  Sun, May 17", [
+                "Assault - Nyzul Isle Uncharted Area Survey Mysterious Item Campaign",
+                "Campaign Festa",
+                "High-Tier Mission Battlefield Campaign",
+                "Omen Job Card Campaign - PLUS!",
+                "Omen Light Double-Up Campaign",
+                "Dynamis – Divergence Statue Crusher Campaign - PLUS!",
+            ]),
+            ("Phase 2  •  Sun, May 24", [
+                "Chain Experience Bonus Campaign - PLUS!",
+                "Chain Capacity Point Bonus Campaign - PLUS!",
+                "Chain Monstrosity Bonus Campaign - PLUS!",
+                "Delve Campaign - PLUS!",
+                "Wildskeeper Reive Campaign - PLUS!",
+                "Double Unity Accolade Campaign",
+                "Unity Wanted Campaign",
+                "Special Dial Campaign",
+                "Ambuscade Gallantry Campaign",
+            ]),
+            ("Phase 3  •  Sun, May 31", [
+                "Increased Seal and Crest Drop Rate Campaign",
+                "Additional Seal Battlefield Spoils Campaign",
+                "Voidwatch Campaign",
+                "Dark Matter Arcane Glyptics Campaign",
+            ]),
+            ("Phase 4  •  Fri, Jun 5", [
+                "Double Synthesis Skill Increase Campaign",
+                "The Great Odyssey Campaign",
+            ]),
+        ],
+        "aliases": [],
+    },
+}
+
+
+def _campaigns_normalize_subname(name):
+    """Lowercase, collapse whitespace, normalize dashes and quotes.
+    Used to match sub-campaign names against KNOWN_CAMPAIGN_PHASES
+    despite minor punctuation differences between PlayOnline's
+    rendering and our hardcoded reference list. Without this, "PLUS!"
+    vs "Plus!" or "–" (en-dash) vs "-" (hyphen) would cause silent
+    misses and campaigns would land in the "Other" bucket."""
+    s = (name or "").lower().strip()
+    # Normalize quote variants to plain apostrophes.
+    s = s.replace("\u2019", "'").replace("\u2018", "'")
+    s = s.replace("\u201c", '"').replace("\u201d", '"')
+    # Normalize dashes (em-dash, en-dash) to plain hyphen.
+    s = s.replace("\u2014", "-").replace("\u2013", "-")
+    # Collapse all whitespace runs to a single space.
+    s = re.sub(r"\s+", " ", s)
+    # Drop common trailing punctuation that doesn't carry meaning.
+    s = s.rstrip(" .!?,:;")
+    return s
+
+
+def _campaigns_phase_groups(parent_title, sub_campaigns):
+    """Group a flat sub-campaign list into ordered (phase, [scs]) pairs
+    using KNOWN_CAMPAIGN_PHASES. Returns:
+
+      [ (None, [all_subs]) ]                 # parent not in table
+      [ (phase_label, [scs]), ... ]          # parent has mapping;
+                                              # final group may be
+                                              # ("Other", [...]) for
+                                              # sub-campaigns we
+                                              # couldn't classify.
+
+    Phase order follows the table's declared order — that's the
+    chronological order bg-wiki uses, so the rendered modal reads
+    Campaign Start → Phase 1 → Phase 2 → ... top to bottom.
+
+    Empty phase buckets are dropped (some sub-campaigns may not have
+    been parsed yet if the detail-page fetch is mid-flight) so the
+    modal doesn't show empty headers."""
+    if not sub_campaigns:
+        return []
+    mapping = KNOWN_CAMPAIGN_PHASES.get(parent_title or "")
+    if not mapping:
+        # Also try the aliases of every entry in case the title
+        # arrives slightly differently (e.g. when the closing
+        # celebration parent inherits the same campaign list).
+        for tbl_title, tbl_data in KNOWN_CAMPAIGN_PHASES.items():
+            if (parent_title or "") in tbl_data.get("aliases", []):
+                mapping = tbl_data
+                break
+    if not mapping:
+        return [(None, list(sub_campaigns))]
+
+    # Build a normalized-name → phase_label index from the table.
+    name_to_phase = {}
+    phase_order = []
+    for phase_label, names in mapping["phases"]:
+        phase_order.append(phase_label)
+        for n in names:
+            name_to_phase[_campaigns_normalize_subname(n)] = phase_label
+
+    # Partition sub_campaigns into per-phase buckets, preserving
+    # the order the parser produced (which is the order they appear
+    # on the PlayOnline detail page).
+    buckets = {label: [] for label in phase_order}
+    others = []
+    for sc in sub_campaigns:
+        key = _campaigns_normalize_subname(sc.get("name", ""))
+        phase = name_to_phase.get(key)
+        if phase:
+            buckets[phase].append(sc)
+        else:
+            others.append(sc)
+
+    result = []
+    for label in phase_order:
+        if buckets[label]:
+            result.append((label, buckets[label]))
+    if others:
+        result.append(("Other", others))
+    return result
+
+
+def _campaigns_parse_xml(xml_bytes):
+    """Parse the topics.xml byte string into a list of entry dicts.
+
+    Each item in the feed becomes one entry. Items whose description
+    contains no recognizable Event Period are skipped — they're
+    typically meta-announcements ("Website has been updated!") that
+    aren't time-bounded events.
+
+    Returns [] on any parse error (caller treats this same as a
+    fetch failure)."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        print(f"[OmniWatch] campaigns XML parse failed: {e!r}")
+        return []
+
+    ns = {"rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+          "rss": "http://purl.org/rss/1.0/",
+          "dc":  "http://purl.org/dc/elements/1.1/"}
+
+    out = []
+    seen_titles = set()  # the feed sometimes lists "Almost Here!" /
+                         # "Is Now Underway!" pairs for the same event;
+                         # keep the first (most recent) only.
+    all_items = root.findall("rss:item", ns)
+    print(f"[OmniWatch] campaigns: RSS has {len(all_items)} items total")
+    for idx, item in enumerate(all_items):
+        title_for_log = (item.findtext("rss:title", "", ns) or "").strip()
+        print(f"[OmniWatch] campaigns: item {idx+1}/{len(all_items)}: "
+              f"{title_for_log[:70]!r}")
+    for item in all_items:
+        title = (item.findtext("rss:title", "", ns) or "").strip()
+        link  = (item.findtext("rss:link",  "", ns) or "").strip()
+        desc  = (item.findtext("rss:description", "", ns) or "")
+        date  = (item.findtext("dc:date",   "", ns) or "").strip()
+        if not title:
+            continue
+
+        # Detect overview-index items BEFORE the dedup check below.
+        # Overview titles like "24th Vana'versary Event and Campaign
+        # Overview" share their first 18 characters with sibling event
+        # titles like "24th Vana'versary Closing Celebration Campaign",
+        # so a prefix-based dedup that runs first would silently drop
+        # the overview if the sibling was processed earlier. The
+        # overview must always be processed because exploding it is
+        # the ONLY way to surface currently-active events that have
+        # already scrolled off the RSS feed's recency window (like
+        # 40213, posted 04/28 — by the time June rolls around the
+        # 24th Vana'versary Celebration Campaign is only reachable
+        # via the overview's sqex.to link).
+        title_lower = title.lower()
+        is_overview = ("event and campaign overview" in title_lower
+                       or "events and campaigns overview" in title_lower)
+
+        # Dedup: prefix-match — "Vana'Bout - Round 9 Is Almost Here!"
+        # collides with "Vana'Bout - Round 9 Is Now Underway!" because
+        # both are the same event in different lifecycle stages.
+        # Use the first 18 chars of the title as the dedup key.
+        # Overview items bypass this check (see above).
+        dedup_key = title[:18].lower()
+        if not is_overview and dedup_key in seen_titles:
+            continue
+
+        clean = _campaigns_clean_html(desc)
+
+        # ── Overview-index detection ──
+        # The "24th Vana'versary Event and Campaign Overview" item (and
+        # similar yearly-anniversary overview pages) isn't a single
+        # event — it's an index listing every currently-active event
+        # with its dates and a sqex.to short-link. Explode it into its
+        # constituent sub-events so each one becomes its own card,
+        # rather than treating the index itself as one summary card.
+        # Without this, current events that are no longer in the RSS
+        # feed's recency window (like 40213 from 04/28) never appear,
+        # because their only entry in the RSS IS the overview's index.
+        if is_overview:
+            print(f"[OmniWatch] campaigns: exploding overview {title!r}")
+            seen_titles.add(dedup_key)
+            sub_count = 0
+            for sub_m in _OVERVIEW_SUBEVENT_RE.finditer(desc):
+                sub_name_raw = sub_m.group(1)
+                sub_middle   = sub_m.group(2)
+                sub_link_raw = sub_m.group(3)
+                # Strip any nested tags from the name
+                sub_name = _CAMPAIGN_TAG_RE.sub("", sub_name_raw)
+                sub_name = html.unescape(sub_name).strip()
+                # The middle chunk contains the period and possibly an
+                # image span. Clean and run the period regex against it.
+                sub_clean = _campaigns_clean_html(sub_middle)
+                sub_pstart = sub_pend = ""
+                sub_period_match = None
+                for pat in _CAMPAIGN_PERIOD_RES:
+                    pm = pat.search(sub_clean)
+                    if pm:
+                        sub_period_match = pm
+                        sub_pstart = pm.group(1).strip()
+                        sub_pend   = pm.group(2).strip()
+                        break
+                # Skip sub-events without parseable periods — that's
+                # almost always a section heading (▼ banner) the regex
+                # accidentally caught despite the colon anchor.
+                if not sub_period_match:
+                    continue
+                # Resolve short-link and drill the detail page for
+                # this sub-event's rich sub-campaign list.
+                sub_resolved = _campaigns_resolve_short_link(sub_link_raw)
+                sub_subcamps = []
+                if (sub_resolved
+                        and "playonline.com" in sub_resolved
+                        and sub_resolved.endswith("detail.html")):
+                    print(f"[OmniWatch] campaigns: drilling into overview "
+                          f"sub-event {sub_name!r}")
+                    sub_subcamps = _campaigns_fetch_detail(sub_resolved)
+                    time.sleep(0.15)
+                out.append({
+                    "title":         sub_name,
+                    "period_start":  sub_pstart,
+                    "period_end":    sub_pend,
+                    "summary":       "",       # overview entries have no per-event blurb
+                    "bonuses":       [],
+                    "subcampaigns":  sub_subcamps,
+                    "link":          sub_resolved or sub_link_raw,
+                    "published":     date,
+                })
+                sub_count += 1
+            print(f"[OmniWatch] campaigns: overview yielded {sub_count} sub-events")
+            continue  # don't append the overview itself
+
+        # Find event period
+        period_start = ""
+        period_end   = ""
+        period_match = None
+        for pat in _CAMPAIGN_PERIOD_RES:
+            m = pat.search(clean)
+            if m:
+                period_match = m
+                period_start = m.group(1).strip()
+                period_end   = m.group(2).strip()
+                break
+
+        if not period_match:
+            # No event period found — likely a non-event announcement.
+            # Skip it; campaigns view is specifically time-bounded events.
+            continue
+
+        seen_titles.add(dedup_key)
+
+        summary  = _campaigns_extract_summary(clean, period_match)
+        bonuses  = _campaigns_extract_bonuses(clean)
+
+        # Try to upgrade this entry with sub-campaign detail from the
+        # linked detail page. Detail pages have the real meat — each
+        # umbrella event like "24th Vana'versary Closing Celebration"
+        # lists 5-10 individual sub-campaigns (Adoulin Dial, Geas Fete
+        # PLUS, Incursion bonus, etc.), each with its own bonus
+        # description. RSS only carries the umbrella summary.
+        #
+        # First resolve any sqex.to short-link to its underlying
+        # playonline.com page; this is what lets us drill into events
+        # whose RSS <link> field uses SE's URL shortener (most of the
+        # campaign announcements do).
+        #
+        # Brief pause between requests so we don't burst SE's CDN —
+        # 10 events × 8s timeout = 80s worst case, but typical
+        # response is ~200ms each so total refresh is ~2-3s.
+        subcampaigns = []
+        resolved_link = _campaigns_resolve_short_link(link)
+        if resolved_link and "playonline.com" in resolved_link and resolved_link.endswith("detail.html"):
+            print(f"[OmniWatch] campaigns: drilling into detail for "
+                  f"{title!r}")
+            subcampaigns = _campaigns_fetch_detail(resolved_link)
+            time.sleep(0.15)
+        else:
+            print(f"[OmniWatch] campaigns: skipping detail for "
+                  f"{title!r} (resolved={resolved_link!r}, "
+                  f"not a playonline detail page)")
+        # Persist the resolved URL so clicking the card lands on the
+        # canonical page rather than the shortener (which may 404 if
+        # the shortener changes its mapping).
+        if resolved_link:
+            link = resolved_link
+
+        out.append({
+            "title":         title,
+            "period_start":  period_start,
+            "period_end":    period_end,
+            "summary":       summary,
+            "bonuses":       bonuses,
+            "subcampaigns":  subcampaigns,
+            "link":          link,
+            "published":     date,
+        })
+
+    # ── Dedup by resolved URL ──
+    # Some events appear BOTH independently in the RSS feed AND as
+    # sub-events under the overview index (e.g. "Moogle Support Campaign"
+    # is both its own RSS item and listed in the 24th Vana'versary
+    # Event Overview). When that happens we keep the entry from the
+    # overview because its title/period are richer; the RSS items
+    # also tend to have noisy "Is Now Underway!" suffixes on titles.
+    # Order of preference: keep the FIRST occurrence so overview
+    # sub-events (which are processed before non-overview RSS items
+    # only if the overview comes first in the feed — which it does in
+    # current PlayOnline RSS) win the dedup.
+    seen_urls = set()
+    deduped = []
+    for entry in out:
+        key = entry.get("link", "") or entry.get("title", "")
+        if key in seen_urls:
+            continue
+        seen_urls.add(key)
+        deduped.append(entry)
+    if len(deduped) < len(out):
+        print(f"[OmniWatch] campaigns: deduped {len(out) - len(deduped)} "
+              f"duplicate entries by URL")
+
+    # ── Sort: active events first, then upcoming, by start date ──
+    deduped.sort(key=_campaigns_sort_key)
+
+    return deduped
+
+
+def _campaigns_fetch_now():
+    """Synchronous fetch + parse. Returns the new entries list or
+    None on failure. Called from the background thread; never call
+    from the main thread because the network can stall for seconds."""
+    try:
+        req = urllib.request.Request(
+            CAMPAIGNS_TOPICS_URL,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "OmniWatch/1.0 (+github.com/BalladOfWorms)"),
+                "Accept": "application/xml, text/xml, */*",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=CAMPAIGNS_FETCH_TIMEOUT_SEC) as r:
+            body = r.read()
+    except Exception as e:
+        print(f"[OmniWatch] campaigns fetch failed: {e!r}")
+        return None
+    entries = _campaigns_parse_xml(body)
+    return entries
+
+
+def _campaigns_background_fetch():
+    """Run the fetch on a worker thread. Updates module-level state
+    on success and persists to disk. No-op if a fetch is already in
+    flight (defensive against rapid Refresh-button clicks)."""
+    global campaigns_fetch_in_flight, campaigns_entries
+    global campaigns_last_fetched, campaigns_last_attempt
+    global campaigns_fetch_failed
+    if campaigns_fetch_in_flight:
+        return
+    campaigns_fetch_in_flight = True
+
+    def _worker():
+        global campaigns_fetch_in_flight, campaigns_entries
+        global campaigns_last_fetched, campaigns_last_attempt
+        global campaigns_fetch_failed
+        try:
+            print(f"[OmniWatch] campaigns: background fetch starting")
+            campaigns_last_attempt = time.time()
+            entries = _campaigns_fetch_now()
+            if entries is None:
+                # Fetch failed — keep whatever's already in memory.
+                # Mark failed only if we have nothing to show.
+                campaigns_fetch_failed = not bool(campaigns_entries)
+                print(f"[OmniWatch] campaigns: fetch returned None "
+                      f"(network/parse failure)")
+                return
+            if not entries:
+                # Parsed OK but no events found. Don't overwrite a
+                # non-empty cached list with this — could be a
+                # parser regression we'd recover from on the next
+                # successful poll.
+                campaigns_fetch_failed = not bool(campaigns_entries)
+                print(f"[OmniWatch] campaigns: fetch returned 0 entries "
+                      f"(empty result)")
+                return
+            campaigns_entries = entries
+            campaigns_last_fetched = time.time()
+            campaigns_fetch_failed = False
+            _campaigns_save_cache()
+            print(f"[OmniWatch] campaigns refreshed: "
+                  f"{len(entries)} active events")
+            # Log titles so we can see exactly what's in the list
+            for e in entries:
+                print(f"[OmniWatch] campaigns:   • {e.get('title', '?')[:60]} "
+                      f"({len(e.get('subcampaigns', []))} subs)")
+        except Exception as e:
+            # Worker crashes must be logged or they disappear silently
+            # (daemon threads swallow exceptions). Without this, a bug
+            # in the parser would make Refresh look like it did nothing
+            # without surfacing any error message.
+            print(f"[OmniWatch] campaigns worker CRASHED: {e!r}")
+            traceback.print_exc()
+            campaigns_fetch_failed = True
+        finally:
+            campaigns_fetch_in_flight = False
+
+    t = threading.Thread(target=_worker, daemon=True,
+                         name="omniwatch-campaigns-fetch")
+    t.start()
+
+
+def _campaigns_maybe_refresh():
+    """Decide whether the cache is stale enough to warrant a new
+    fetch. Called on modal open and during the idle-frame poll loop.
+    Skips if we just attempted (within last 60s, to throttle retries
+    on persistent network failure) or if the cache is fresh."""
+    now = time.time()
+    if campaigns_fetch_in_flight:
+        return
+    if now - campaigns_last_attempt < 60.0:
+        return  # throttle
+    if now - campaigns_last_fetched < CAMPAIGNS_REFRESH_INTERVAL_SEC:
+        return
+    _campaigns_background_fetch()
+
+
+def _open_campaigns_modal():
+    """Open the campaigns modal popup. Triggers a stale-check refresh
+    in the background; the modal renders whatever's cached immediately
+    so there's no perceived load delay."""
+    global campaigns_modal_open, campaigns_scroll, settings_menu_open
+    campaigns_modal_open = True
+    campaigns_scroll = 0
+    settings_menu_open = False
+    _campaigns_maybe_refresh()
+    # Also kick off a Domain Invasion refresh — the persistent banner
+    # at the top of the modal reads from di_state and the user expects
+    # it to be current the moment the modal opens.
+    _di_maybe_refresh()
+
+
+def _force_campaigns_refresh():
+    """Bypass the staleness throttle and fetch immediately. Called
+    from the Refresh button in the modal."""
+    global campaigns_last_attempt
+    campaigns_last_attempt = 0.0  # bypass the 60s throttle
+    _campaigns_background_fetch()
+
+
+# Module-level initialization: load whatever's cached so the modal
+# is non-empty on first open even if the background fetch hasn't
+# completed yet. The background fetch is fired lazily on modal open
+# rather than at startup — no need to hit SE's servers if the user
+# never opens the events view.
+_campaigns_load_cache()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Domain Invasion tracker (whereisdi.com)
+# ─────────────────────────────────────────────────────────────────────────
+# Crowd-sourced location data for the current Domain Invasion zone on
+# each FFXI retail server. The same data the Whereisdi Windower/Ashita
+# addons consume — they're both reading from the public Directus
+# instance at api.whereisdi.com. We share the bearer token published
+# in the loonsies/whereisdi Ashita addon's source (it's a read-only
+# anonymous token, not a user secret).
+#
+# Endpoint returns a JSON envelope shaped like:
+#   { "data": [
+#       { "server": {"name": "Asura"},
+#         "location": {"en_us": "Some Zone Name"},
+#         "date_updated": "2026-05-29T14:30:00" },
+#       ...
+#     ] }
+# We pick the entry matching the player's server (Asura by default,
+# falls back to whatever we can detect from session state) and surface
+# its location plus a "X minutes ago" freshness indicator.
+
+WHEREISDI_API_URL = "https://api.whereisdi.com/items/di?fields=*.*"
+WHEREISDI_TOKEN   = "Bearer 82j1GCjQxUCxriN-XhXicb6Ts8G400l7"
+WHEREISDI_REFRESH_INTERVAL_SEC = 60        # 1 minute cache — DI position can
+                                           # shift any time a Unity message
+                                           # is observed in-game and uploaded
+                                           # to whereisdi. The modal's
+                                           # render loop calls _di_maybe_refresh
+                                           # every frame, so the cache TTL is
+                                           # what actually drives refresh
+                                           # cadence while the modal's open.
+WHEREISDI_HTTP_TIMEOUT = 8.0
+
+# State (mirrors the campaigns module's shape for symmetry).
+di_state = {
+    "server":       "",     # which server the data is for
+    "location":     "",     # zone name, e.g. "Yhoator Jungle"
+    "updated_at":   "",     # ISO timestamp string from the API
+    "fetched_at":   0.0,    # local wall-clock when we last fetched
+    "error":        "",     # last error message, empty on success
+}
+di_fetch_in_flight = False
+di_last_attempt    = 0.0
+
+
+def _di_cache_path():
+    base = _campaigns_cache_path()
+    if not base:
+        return None
+    # Same dir, different filename
+    return os.path.join(os.path.dirname(base), "omniwatch_di_cache.json")
+
+
+def _di_load_cache():
+    """Load the last-known DI state from disk. Quiet on missing file —
+    first run just has no cache."""
+    global di_state
+    path = _di_cache_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for k in ("server", "location", "updated_at"):
+                if isinstance(data.get(k), str):
+                    di_state[k] = data[k]
+            ts = data.get("fetched_at")
+            if isinstance(ts, (int, float)):
+                di_state["fetched_at"] = float(ts)
+    except Exception as e:
+        print(f"[OmniWatch] DI cache load failed: {e!r}")
+
+
+def _di_save_cache():
+    path = _di_cache_path()
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(di_state, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] DI cache save failed: {e!r}")
+
+
+def _di_current_server():
+    """Return the FFXI server name to query whereisdi.com for.
+    Driven entirely by the Settings → Header → Server dropdown
+    (default 'Asura' on first run). Returns empty string only if
+    the user has explicitly cleared the setting via the underlying
+    JSON, which the UI doesn't permit — defensive."""
+    try:
+        s = setting("ffxi_server")
+        if isinstance(s, str) and s.strip():
+            return s.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _di_iso_to_epoch(s):
+    """Parse the API's ISO-8601 timestamp into a Unix epoch. Returns
+    None on parse failure. The API emits times in UTC without a 'Z'
+    suffix, so we treat them as UTC explicitly."""
+    if not isinstance(s, str):
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})", s)
+    if not m:
+        return None
+    try:
+        dt = datetime.datetime(
+            int(m.group(1)), int(m.group(2)), int(m.group(3)),
+            int(m.group(4)), int(m.group(5)), int(m.group(6)),
+            tzinfo=datetime.timezone.utc,
+        )
+        return dt.timestamp()
+    except (ValueError, OverflowError):
+        return None
+
+
+def _di_fetch_now():
+    """Synchronous fetch. Returns a parsed entry dict or None on error.
+    Called from the background worker — do NOT call from the main
+    render thread (8s timeout would freeze the UI)."""
+    req = urllib.request.Request(
+        WHEREISDI_API_URL,
+        headers={
+            "Authorization": WHEREISDI_TOKEN,
+            "Accept":        "application/json",
+            "User-Agent":    "OmniWatch (FFXI overlay)",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=WHEREISDI_HTTP_TIMEOUT) as resp:
+            body = resp.read()
+    except Exception as e:
+        print(f"[OmniWatch] DI fetch failed: {e!r}")
+        return None
+    try:
+        envelope = json.loads(body.decode("utf-8"))
+    except Exception as e:
+        print(f"[OmniWatch] DI JSON decode failed: {e!r}")
+        return None
+    entries = envelope.get("data") if isinstance(envelope, dict) else None
+    if not isinstance(entries, list):
+        print(f"[OmniWatch] DI response: no 'data' array")
+        return None
+    target_server = _di_current_server().lower()
+    if not target_server:
+        print("[OmniWatch] DI: server unknown — Lua needs to broadcast it "
+              "(or set ffxi_server in settings)")
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        srv = entry.get("server")
+        srv_name = (srv.get("name") if isinstance(srv, dict) else srv) or ""
+        if not isinstance(srv_name, str):
+            continue
+        if srv_name.lower() != target_server:
+            continue
+        loc = entry.get("location")
+        loc_name = ""
+        if isinstance(loc, dict):
+            loc_name = (loc.get("en_us") or loc.get("ja_jp") or "")
+        elif isinstance(loc, str):
+            loc_name = loc
+        return {
+            "server":     srv_name,
+            "location":   loc_name or "(unknown)",
+            "updated_at": entry.get("date_updated") or "",
+        }
+    print(f"[OmniWatch] DI: no entry for server "
+          f"{_di_current_server()!r} in {len(entries)} records")
+    return None
+
+
+def _di_background_fetch():
+    """Spawn a daemon thread to refresh DI state. Idempotent — caller
+    can spam this; we guard against concurrent fetches."""
+    global di_fetch_in_flight
+    if di_fetch_in_flight:
+        return
+    di_fetch_in_flight = True
+
+    def _worker():
+        global di_fetch_in_flight, di_last_attempt
+        try:
+            di_last_attempt = time.time()
+            entry = _di_fetch_now()
+            if entry is None:
+                # Keep the old cached state — don't clobber it on a
+                # transient network failure. Mark the error so the
+                # UI can hint at staleness if desired.
+                di_state["error"] = "fetch failed"
+                return
+            di_state["server"]     = entry["server"]
+            di_state["location"]   = entry["location"]
+            di_state["updated_at"] = entry["updated_at"]
+            di_state["fetched_at"] = time.time()
+            di_state["error"]      = ""
+            _di_save_cache()
+            print(f"[OmniWatch] DI refreshed: {entry['server']} → "
+                  f"{entry['location']}")
+        except Exception as e:
+            print(f"[OmniWatch] DI worker CRASHED: {e!r}")
+            traceback.print_exc()
+        finally:
+            di_fetch_in_flight = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _di_maybe_refresh():
+    """Throttled refresh — called from the modal open path AND every
+    frame while the modal stays open. Cheap to call repeatedly: it
+    short-circuits unless both throttles have elapsed.
+
+    Two layers of throttling:
+      - 30s minimum between fetch ATTEMPTS — protects against the
+        loop firing every frame if the cache somehow gets cleared
+        without fetched_at being updated.
+      - WHEREISDI_REFRESH_INTERVAL_SEC (60s) minimum between
+        successful fetches — keeps API load polite while still
+        giving the user near-real-time DI updates."""
+    now = time.time()
+    if di_fetch_in_flight:
+        return
+    if now - di_last_attempt < 30.0:
+        return
+    if now - di_state.get("fetched_at", 0) < WHEREISDI_REFRESH_INTERVAL_SEC:
+        return
+    _di_background_fetch()
+
+
+def _force_di_refresh():
+    """Bypass both throttles and trigger an immediate DI fetch. Called
+    from the modal's Refresh button so a manual click always pulls
+    fresh data — even if our cache says we just fetched. Without this,
+    the user can hit Refresh seconds after seeing different data on
+    whereisdi.com and our banner won't update until the 60s cache TTL
+    elapses, which feels broken."""
+    global di_last_attempt
+    di_last_attempt = 0.0
+    # Clear the fetched_at so any subsequent _di_maybe_refresh sees
+    # the cache as expired. The fetch itself updates fetched_at on
+    # success.
+    di_state["fetched_at"] = 0.0
+    _di_background_fetch()
+
+
+def _di_freshness_text():
+    """Human-readable 'N minutes ago' string for the API's reported
+    updated_at. Falls back to the local fetch time if the API didn't
+    return a timestamp."""
+    ts = _di_iso_to_epoch(di_state.get("updated_at", ""))
+    if ts is None:
+        ts = di_state.get("fetched_at", 0)
+    if not ts:
+        return ""
+    diff = time.time() - ts
+    if diff < 60:
+        return "just now"
+    if diff < 3600:
+        mins = int(diff // 60)
+        return f"{mins} min ago" if mins == 1 else f"{mins} min ago"
+    if diff < 86400:
+        hrs = int(diff // 3600)
+        return f"{hrs} hr ago" if hrs == 1 else f"{hrs} hrs ago"
+    days = int(diff // 86400)
+    return f"{days} day ago" if days == 1 else f"{days} days ago"
+
+
+_di_load_cache()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Limited-Time Records of Eminence Objectives — rotation
+# ─────────────────────────────────────────────────────────────────────────
+# RoE has a 42-cell rotation: 6 time slots per day × 7 days of the week.
+# Slots are 4 hours wide and anchored to the Pacific timezone (DST-aware),
+# starting at 23:00 PST. The slot active right now determines which RoE
+# objective is currently rewarded.
+#
+# Source: bg-wiki "Records of Eminence" → "Limited-Time Objectives"
+# table (Cooper's screenshot). The schedule is stable — it's been the
+# same rotation since the system was introduced.
+#
+# Slot index 0 = 23:00-02:59 PST (rolls into the labelled day)
+# Slot index 1 = 03:00-06:59 PST
+# Slot index 2 = 07:00-10:59 PST
+# Slot index 3 = 11:00-14:59 PST
+# Slot index 4 = 15:00-18:59 PST
+# Slot index 5 = 19:00-22:59 PST
+#
+# Indexed by [day_of_week][slot] where day_of_week is 0=Sunday ... 6=Saturday.
+ROE_LIMITED_ROTATION = [
+    # Sunday
+    ["Vanquish Arcana",
+     "Gain Experience",
+     "Vanquish Birds",
+     "Vanquish Lizards",
+     "Vanquish Undead",
+     "Spoils (Seals)"],
+    # Monday
+    ["Crack Treasure Caskets",
+     "Vanquish Aquans",
+     "Vanquish Amorphs",
+     "Vanquish Vermin",
+     "Vanquish Arcana",
+     "Gain Experience"],
+    # Tuesday
+    ["Physical Damage Kills",
+     "Vanquish Beasts",
+     "Vanquish Undead",
+     "Spoils (Seals)",
+     "Crack Treasure Chests",
+     "Vanquish Aquans"],
+    # Wednesday
+    ["Magic Damage Kills",
+     "Vanquish Plantoids",
+     "Vanquish Arcana",
+     "Gain Experience",
+     "Physical Damage Kills",
+     "Vanquish Beasts"],
+    # Thursday
+    ["Vanquish Birds",
+     "Vanquish Lizards",
+     "Crack Treasure Caskets",
+     "Vanquish Aquans",
+     "Magic Damage Kills",
+     "Vanquish Plantoids"],
+    # Friday
+    ["Vanquish Amorphs",
+     "Vanquish Vermin",
+     "Physical Damage Kills",
+     "Vanquish Beasts",
+     "Vanquish Birds",
+     "Vanquish Lizards"],
+    # Saturday
+    ["Vanquish Undead",
+     "Spoils (Seals)",
+     "Magic Damage Kills",
+     "Vanquish Plantoids",
+     "Vanquish Amorphs",
+     "Vanquish Vermin"],
+]
+
+
+def _roe_current_objective():
+    """Return (current_name, seconds_until_next, next_name) for the
+    Limited-Time RoE rotation. None on error.
+
+    All slot boundaries are computed in Pacific time (DST-aware via
+    zoneinfo). The schedule is fixed regardless of FFXI server — it's
+    a real-world clock rotation, not a game-time rotation."""
+    try:
+        # zoneinfo is stdlib since Python 3.9. Fall back to a fixed
+        # UTC-8 offset if it's unavailable (shouldn't happen on
+        # Cooper's Python 3.14 but defensive).
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("America/Los_Angeles")
+        except Exception:
+            tz = datetime.timezone(datetime.timedelta(hours=-8))
+        now = datetime.datetime.now(tz)
+        # Shift +1h so slot boundaries land on 00/04/08/12/16/20 of the
+        # shifted clock. This makes slot 0 (which actually starts at
+        # 23:00 PST of the previous day) align cleanly to 00:00 of
+        # the labelled day, eliminating the wraparound case.
+        shifted = now + datetime.timedelta(hours=1)
+        slot = (shifted.hour // 4) % 6
+        # weekday() is Mon=0 ... Sun=6. Convert to Sun=0 ... Sat=6.
+        day_sun = (shifted.weekday() + 1) % 7
+        objective = ROE_LIMITED_ROTATION[day_sun][slot]
+
+        # Compute the NEXT objective so we can preview it in the
+        # banner footer. The next slot is (slot+1) % 6; when that
+        # wraps to 0 we also advance the day-of-week.
+        next_slot = (slot + 1) % 6
+        next_day  = day_sun if next_slot != 0 else (day_sun + 1) % 7
+        next_objective = ROE_LIMITED_ROTATION[next_day][next_slot]
+
+        # Compute seconds remaining in the current slot. Slot ends at
+        # the next multiple-of-4 hour boundary in shifted time.
+        next_slot_hour = ((shifted.hour // 4) + 1) * 4
+        if next_slot_hour >= 24:
+            # Wrap to next day
+            next_slot_dt = (shifted + datetime.timedelta(days=1)).replace(
+                hour=next_slot_hour - 24, minute=0, second=0, microsecond=0)
+        else:
+            next_slot_dt = shifted.replace(
+                hour=next_slot_hour, minute=0, second=0, microsecond=0)
+        seconds_left = int((next_slot_dt - shifted).total_seconds())
+        return (objective, max(0, seconds_left), next_objective)
+    except Exception as e:
+        print(f"[OmniWatch] RoE rotation lookup failed: {e!r}")
+        return None
+
+
+def _roe_format_countdown(seconds):
+    """Format a seconds-remaining int as 'Xh YYm' for the banner."""
+    if seconds is None or seconds < 0:
+        return ""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Transport schedules — airships and ferries
+#
+# All FFXI transport runs on a fixed Vana'diel-time loop, so we can
+# compute "next boarding" with zero network calls — pure modular math
+# against route offsets. Schedule data ported from the public-domain
+# `brantb/VanaTime` JS library, cross-checked against bg-wiki.
+#
+# Each route has:
+#   offset  — Vana'diel seconds since VD midnight when boarding starts
+#   cycle   — Vana'diel seconds between consecutive boardings
+#   board   — Vana'diel seconds the boarding window stays open
+#
+# Airships board for an unknown-but-short window (the VanaTime author
+# explicitly punted: "I never bothered figuring out"). bg-wiki notes
+# the boarding banner shows for ~20 VD seconds. We use 0 here, which
+# means we report "next boarding" === "next departure" — slightly
+# conservative (you might already be boarding when we say "in 12s"),
+# but never miss a ship by displaying false-ready.
+# ──────────────────────────────────────────────────────────────────────
+
+# Earth↔Vana ratio is already encoded as VANA_SPEED=25 above.
+# 1 VD day = 86400 VD seconds = 86400/25 = 3456 Earth seconds = 57.6 min.
+# Airship cycle = 6h VD = 21600 VD sec = 14.4 Earth min between trips.
+# Ferry   cycle = 8h VD = 28800 VD sec = 19.2 Earth min between trips.
+
+_AIRSHIP_CYCLE_VS = 6 * 3600      # 6 VD hours
+_AIRSHIP_BOARD_VS = 0             # see comment above
+_FERRY_CYCLE_VS   = 8 * 3600      # 8 VD hours
+
+
+def _vs(h, m):
+    """Helper: pack (hours, minutes) into Vana'diel seconds. Just
+    sugar for the route table below so each row reads naturally."""
+    return h * 3600 + m * 60
+
+
+# Each list entry is a directional route:
+#   (display_name, offset_vs, cycle_vs, board_vs)
+# Routes are ORDERED for click-cycle traversal — destinations grouped
+# by departure city so cycling reads as "Jeuno → Bastok / Bastok →
+# Jeuno / Jeuno → Windurst / ..." rather than scattered.
+TRANSPORT_AIRSHIPS = [
+    # Jeuno hub trips
+    ("Jeuno > Bastok",       _vs(3, 11), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("Bastok > Jeuno",       _vs(0, 13), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("Jeuno > Windurst",     _vs(1, 41), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("Windurst > Jeuno",     _vs(4, 47), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("Jeuno > San d'Oria",   _vs(0, 11), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("San d'Oria > Jeuno",   _vs(3, 10), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("Jeuno > Kazham",       _vs(4, 49), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+    ("Kazham > Jeuno",       _vs(1, 48), _AIRSHIP_CYCLE_VS, _AIRSHIP_BOARD_VS),
+]
+
+# Ferry routes. Each direction is its own entry even though both
+# directions of a given ferry share the same schedule — the user
+# cycling through routes wants to see directional labels, not a
+# bidirectional "↔" shorthand. The shared schedule means the two
+# directions of the same ferry will always show the same countdown,
+# which is correct: when the Selbina-Mhaura ship arrives at Mhaura,
+# it boards passengers for Selbina at the same instant.
+TRANSPORT_FERRIES = [
+    ("Selbina > Mhaura",       _vs(6, 40),  _FERRY_CYCLE_VS, _vs(1, 20)),
+    ("Mhaura > Selbina",       _vs(6, 40),  _FERRY_CYCLE_VS, _vs(1, 20)),
+    ("Al Zahbi > Mhaura",      _vs(2, 40),  _FERRY_CYCLE_VS, _vs(1, 20)),
+    ("Mhaura > Al Zahbi",      _vs(2, 40),  _FERRY_CYCLE_VS, _vs(1, 20)),
+    ("Al Zahbi > Nashmau",     _vs(0,  0),  _FERRY_CYCLE_VS, _vs(3,  0)),
+    ("Nashmau > Al Zahbi",     _vs(0,  0),  _FERRY_CYCLE_VS, _vs(3,  0)),
+]
+
+
+def _current_vana_seconds():
+    """Return the user-corrected current Vana'diel time as a single
+    integer: seconds since VD epoch. Mirrors get_vana_time()'s offset
+    handling so the transport countdowns stay aligned with whatever
+    the clock header shows. Pure math, no I/O."""
+    now_sec = time.time()
+    vana_sec = (now_sec + VANA_OFFSET + VANA_FINE_TUNE) * VANA_SPEED
+    try:
+        user_offset_min = int(setting("vana_time_offset_min") or 0)
+    except Exception:
+        user_offset_min = 0
+    vana_sec += user_offset_min * 60
+    return vana_sec
+
+
+def _next_transport_event(offset_vs, cycle_vs, board_vs):
+    """Compute the next boarding/departure for a single route.
+
+    Returns a dict:
+      status       - "boarding" / "waiting"
+      earth_secs   - Earth seconds until the NEXT event (boarding
+                     starts if waiting; departure happens if currently
+                     boarding)
+      event_label  - what's coming up: "departs" / "boards"
+      vana_hhmm    - VD HH:MM string of the next event (display only)
+
+    Math: find the most-recent boarding-start at-or-before now, check
+    whether we're still inside the boarding window. If we are, the
+    next event is the matching departure. If we aren't, the next event
+    is the next scheduled boarding."""
+    now_vs = _current_vana_seconds()
+    # Floor to the start of the current VD day, then add offset for
+    # the first boarding of that day.
+    day_start_vs = (now_vs // 86400) * 86400
+    # Find the latest boarding-start that's at-or-before now. The
+    # offset is "first boarding of the day" so we step in cycle_vs
+    # increments from there.
+    last_board_start = day_start_vs + offset_vs
+    # If today's first boarding hasn't happened yet (offset > now's
+    # secs-since-midnight), step BACK one cycle so last_board_start is
+    # actually in the past. Otherwise the loop below won't run and
+    # we'd report a future event as "currently boarding".
+    while last_board_start > now_vs:
+        last_board_start -= cycle_vs
+    while last_board_start + cycle_vs <= now_vs:
+        last_board_start += cycle_vs
+    board_end_vs = last_board_start + board_vs
+    # Are we inside the boarding window?
+    if board_vs > 0 and last_board_start <= now_vs < board_end_vs:
+        # Yes — next event is this trip's departure.
+        secs_until_vs = board_end_vs - now_vs
+        status = "boarding"
+        event_label = "departs"
+        event_vs = board_end_vs
+    else:
+        # No — next event is the next boarding-start.
+        next_board_start = last_board_start + cycle_vs
+        secs_until_vs = next_board_start - now_vs
+        status = "waiting"
+        event_label = "boards" if board_vs > 0 else "departs"
+        event_vs = next_board_start
+    # Convert VD seconds to Earth seconds. Round to nearest integer so
+    # countdowns feel responsive (0.04s precision is overkill).
+    earth_secs = max(0, int(round(secs_until_vs / VANA_SPEED)))
+    # VD HH:MM of the event itself, for tooltip-style display.
+    event_day_secs = event_vs % 86400
+    event_h = int(event_day_secs // 3600)
+    event_m = int((event_day_secs % 3600) // 60)
+    return {
+        "status":      status,
+        "earth_secs":  earth_secs,
+        "event_label": event_label,
+        "vana_hhmm":   f"{event_h:02d}:{event_m:02d}",
+    }
+
+
+def _format_transport_countdown(earth_secs):
+    """Compact countdown formatter for the banner. Sub-minute uses
+    seconds resolution since transit countdowns are short (sub-15min
+    even at worst case) — granular seconds make the banner feel live
+    rather than frozen."""
+    if earth_secs <= 0:
+        return "now"
+    if earth_secs < 60:
+        return f"{earth_secs}s"
+    mins = earth_secs // 60
+    secs = earth_secs % 60
+    if mins < 60:
+        return f"{mins}m {secs:02d}s"
+    hrs = mins // 60
+    mins = mins % 60
+    return f"{hrs}h {mins:02d}m"
+
+
+# Click-cycle state — which route within each list is currently
+# displayed. Module-level so it persists across modal opens within a
+# session; intentionally not persisted to disk (it's a transient UI
+# preference, the user can re-pick on next launch). Click handler
+# increments and wraps modulo the list length.
+transport_airship_idx = 0
+transport_ferry_idx   = 0
+
+# Auto-cycle timestamps. When the modal is open, the transport boxes
+# rotate to the next route every TRANSPORT_AUTO_CYCLE_SEC. A manual
+# click also bumps the timestamp so the user gets the full interval
+# to read the route they just clicked to — without that, an auto-tick
+# could fire right after a click and feel broken.
+#
+# Stale timestamps (>30s old) are treated as "modal just reopened" —
+# the timer resets to "now" without advancing, so reopening the modal
+# doesn't make it jump-cycle on the first frame.
+transport_airship_last_cycle_ts = 0.0
+transport_ferry_last_cycle_ts   = 0.0
+TRANSPORT_AUTO_CYCLE_SEC        = 4.0    # ~middle of Cooper's 3-5s range
+TRANSPORT_STALE_THRESHOLD_SEC   = 30.0   # treat as "fresh open" if older
+
+# Click rects for the transport boxes — populated each render, cleared
+# at the top of the banner render. Same pattern as _campaigns_click_rects.
+_transport_click_rects = []
+
+
 def resolve_target_card_data(target_sticky):
     """Resolve a target_sticky dict into the values draw_target_card needs.
     Returns (mob_ref, mobdb_entry, family_key, ability_count, ability_chars,
@@ -9043,6 +17408,249 @@ try:
     _register_setup_mocks()
 except Exception as _e:
     print(f"[OmniWatch] could not register setup mocks: {_e}")
+
+# ──────────────────────────────────────────────────────────────────────
+# Layout profiles
+#
+# A "profile" is a saved snapshot of the layout file (panel anchors,
+# scales, visibility, chat panel size, etc.) named by the user.
+# Profiles let you keep multiple arrangements per character — e.g. a
+# "Full" profile with every panel on a second monitor and a "Compact"
+# profile with just the essentials laid out as an overlay over the
+# game window. Switching the active profile reloads layout state from
+# the named JSON.
+#
+# Storage layout (under USER_DIR/<char>/):
+#   omniwatch_layout.json              ← the active profile's data
+#   omniwatch_layout_<profile>.json    ← saved snapshots, one per profile
+#   omniwatch_profile.json             ← {"active": "<name>"}; defaults to "Default"
+#
+# Switching profiles:
+#   1. save_layout() writes the CURRENT state to omniwatch_layout.json
+#      AND to omniwatch_layout_<current_profile>.json
+#   2. _set_active_profile(name) writes the active name to
+#      omniwatch_profile.json then copies omniwatch_layout_<name>.json
+#      back to omniwatch_layout.json
+#   3. load_layout() runs as normal against omniwatch_layout.json
+#
+# This means an unaware caller that just does open(LAYOUT_FILE) keeps
+# working — they always see the active profile's data.
+# ──────────────────────────────────────────────────────────────────────
+
+# Currently active profile name. Persists across restarts via
+# omniwatch_profile.json. Defaults to "Default" for first-run users
+# and characters who've never created a named profile.
+active_profile_name = "Default"
+
+
+def _profile_file_path():
+    """Path to the per-character profile-pointer JSON (the one that
+    just stores which named profile is active)."""
+    return os.path.join(_chardir(active_view_char),
+                         "omniwatch_profile.json")
+
+
+def _layout_path_for(profile):
+    """Path to the layout JSON for the named profile. The 'Default'
+    profile uses the original omniwatch_layout.json filename to stay
+    backward-compatible with existing layouts; other profiles use the
+    omniwatch_layout_<sanitized>.json form."""
+    if profile == "Default":
+        return os.path.join(_chardir(active_view_char),
+                             "omniwatch_layout.json")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "Profile"
+    return os.path.join(_chardir(active_view_char),
+                         f"omniwatch_layout_{safe}.json")
+
+
+def _settings_path_for(profile):
+    """Path to the settings JSON for the named profile. Same
+    convention as _layout_path_for — Default keeps the canonical
+    omniwatch_settings.json name; named profiles get a sanitized
+    suffix. This is what makes panel-visibility toggles
+    profile-scoped: SETTINGS_FILE points at the active profile's
+    own copy, so save_settings()/load_settings() naturally use it."""
+    if profile == "Default":
+        return os.path.join(_chardir(active_view_char),
+                             "omniwatch_settings.json")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "Profile"
+    return os.path.join(_chardir(active_view_char),
+                         f"omniwatch_settings_{safe}.json")
+
+
+def list_profiles():
+    """Return a sorted list of profile names for the active character.
+    Always includes 'Default' (which maps to the canonical config
+    filenames) plus any omniwatch_layout_<name>.json or
+    omniwatch_settings_<name>.json files present. Picking up both
+    forms means a profile that has settings but somehow lost its
+    layout (or vice versa) still appears in the picker."""
+    cd = _chardir(active_view_char)
+    out = {"Default"}
+    try:
+        for entry in os.listdir(cd):
+            m = re.match(
+                r"^omniwatch_(?:layout|settings)_([A-Za-z0-9_.-]+)\.json$",
+                entry)
+            if m:
+                out.add(m.group(1))
+    except Exception as e:
+        print(f"[OmniWatch] list_profiles: {e!r}")
+    return sorted(out)
+
+
+def _load_active_profile_name():
+    """Read the active profile name from omniwatch_profile.json.
+    Falls back to 'Default' if the file doesn't exist or is malformed
+    — never raises, so a corrupt profile file can't break startup."""
+    global active_profile_name
+    try:
+        with open(_profile_file_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        name = data.get("active", "Default")
+        if isinstance(name, str) and name.strip():
+            active_profile_name = name
+            return
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[OmniWatch] _load_active_profile_name: {e!r}")
+    active_profile_name = "Default"
+
+
+def _persist_active_profile_name():
+    """Write the active profile name to omniwatch_profile.json."""
+    try:
+        with open(_profile_file_path(), "w", encoding="utf-8") as f:
+            json.dump({"active": active_profile_name}, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] _persist_active_profile_name: {e!r}")
+
+
+def save_profile_as(name):
+    """Save the CURRENT layout state AND settings to a new profile
+    name (or overwrite if it already exists). Switches the active
+    profile to the new name so subsequent saves go to it.
+
+    Two files get written for each profile:
+      • omniwatch_layout_<name>.json   — anchors, scales
+      • omniwatch_settings_<name>.json — every show_* toggle and
+        every other settings-schema value (font sizes, opacity,
+        time-zone, ring cycle interval, etc.)
+    This matters because panel visibility is in settings, not in
+    layout — without snapshotting settings, switching profiles
+    couldn't toggle which panels show."""
+    global active_profile_name, LAYOUT_FILE, SETTINGS_FILE
+    name = (name or "").strip() or "Default"
+    active_profile_name = name
+    _persist_active_profile_name()
+    # Switch path pointers to the new profile. From here on, every
+    # auto-save (settings change, layout-on-quit, etc.) writes to
+    # the new profile's files transparently.
+    LAYOUT_FILE   = _layout_path_for(name)
+    SETTINGS_FILE = _settings_path_for(name)
+    # Snapshot current state to the new profile's files.
+    save_layout()
+    save_settings()
+    print(f"[OmniWatch] Saved profile {name!r} for "
+          f"{active_view_char or '?'} "
+          f"(layout + settings snapshotted)")
+
+
+def switch_to_profile(name):
+    """Switch the active profile and reload BOTH layout state and
+    settings from disk. Does nothing if the requested profile
+    doesn't exist (other than logging).
+
+    The reload of settings is what makes panel visibility toggles
+    profile-scoped — every show_* / show_clock / show_ring_cooldown
+    etc. snaps to whatever was last saved for the target profile.
+    Tolerates missing files: if a profile has a layout file but no
+    settings file (or vice versa), the present file is loaded and
+    the absent one is left as-is. This lets users mix-and-match in
+    the rare case they're hand-editing things."""
+    global active_profile_name, LAYOUT_FILE, SETTINGS_FILE, settings
+    name = (name or "").strip() or "Default"
+    layout_target   = _layout_path_for(name)
+    settings_target = _settings_path_for(name)
+    # Existence check — at least one of the two must exist for a
+    # named profile. Default is always considered to exist (the
+    # canonical files may or may not be present, but Default is
+    # the fallback identity).
+    if name != "Default":
+        if not (os.path.exists(layout_target)
+                or os.path.exists(settings_target)):
+            print(f"[OmniWatch] switch_to_profile: {name!r} "
+                  f"does not exist (no layout or settings file)")
+            return
+
+    active_profile_name = name
+    LAYOUT_FILE   = layout_target
+    SETTINGS_FILE = settings_target
+    _persist_active_profile_name()
+
+    # Reload layout (always — load_layout already tolerates missing
+    # files gracefully by falling back to defaults).
+    load_layout()
+
+    # Reload settings if the file exists. Otherwise leave the
+    # current in-memory settings dict in place — switching to a
+    # profile that has no settings snapshot just means "same
+    # settings as before, different layout".
+    if os.path.exists(settings_target):
+        try:
+            new_settings = load_settings()
+            settings.clear()
+            settings.update(new_settings)
+            # Re-apply side effects for every loaded key. Without
+            # this step, the in-memory dict has the right values
+            # but live state (window opacity, font sizes, lua-side
+            # toggles like show_party_buffs, etc.) keeps the
+            # previous profile's values until next change. Walk
+            # the schema rather than `new_settings.keys()` so
+            # button-kind entries and live_key entries are skipped
+            # (they have no persistable value to re-apply).
+            for skey in list(settings.keys()):
+                schema = SETTINGS_BY_KEY.get(skey)
+                if not schema:
+                    continue
+                if schema.get("kind") == "button":
+                    continue
+                if schema.get("live_key"):
+                    continue
+                try:
+                    apply_setting_side_effects(skey, settings[skey])
+                except Exception as se:
+                    print(f"[OmniWatch] switch_to_profile: "
+                          f"side-effect for {skey!r} failed: {se!r}")
+            print(f"[OmniWatch] Switched to profile {name!r} "
+                  f"(layout + settings + side-effects)")
+        except Exception as e:
+            print(f"[OmniWatch] switch_to_profile: settings reload "
+                  f"failed for {name!r}: {e!r}")
+    else:
+        print(f"[OmniWatch] Switched to profile {name!r} "
+              f"(layout only; no settings snapshot for this profile)")
+
+
+def delete_profile(name):
+    """Delete a named profile's layout AND settings files. The
+    'Default' profile cannot be deleted (it's the underlying
+    canonical config files). If the deleted profile was active,
+    falls back to Default."""
+    if name == "Default":
+        print("[OmniWatch] delete_profile: cannot delete Default")
+        return
+    for path in (_layout_path_for(name), _settings_path_for(name)):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                print(f"[OmniWatch] Deleted {path}")
+        except Exception as e:
+            print(f"[OmniWatch] delete_profile: {e!r} ({path})")
+    if active_profile_name == name:
+        switch_to_profile("Default")
+
 
 def save_layout():
     try:
@@ -9399,6 +18007,24 @@ load_chat_routing()
 # saved icons/labels don't appear after a restart.
 buttons_config = load_buttons_config()
 
+# Restore checklist state from the per-character JSON. Without this,
+# weapon/quest/mission manual toggles saved in a previous session
+# wouldn't be reflected in checklist_known until either Lua sent its
+# first PLAYER packet (triggering apply_char_change → _checklist_load)
+# or the user opened the checklist modal (which also calls load). For
+# the gap between pygame startup and the first PLAYER packet, the
+# in-memory manual sets would be empty and any save() triggered during
+# that window (e.g. from a HOMEPOINTS auto-detect) would write an
+# empty file — overwriting the user's previous-session toggles.
+#
+# _checklist_persist_path() falls back to active_view_char when
+# current_char_name is empty, so this fires against the right file
+# even though Lua hasn't connected yet.
+try:
+    _checklist_load()
+except Exception as _e:
+    print(f"[OmniWatch] initial checklist load failed: {_e!r}")
+
 # Restore buff timer state from the on-disk snapshot if present. The
 # next BUFF_BATCH from Lua will overwrite anything stale within 250ms,
 # so this is purely a hedge against the case where Python comes up
@@ -9558,6 +18184,11 @@ SLOT_LABELS = [
 # ── Layout ───────────────────────────────────────────────────────────────────
 HEADER_H     = 36
 PANEL_X      = 20
+# Extra space reserved at the right end of the header (after the
+# coordinates) so the block doesn't sit flush to the edge and the
+# hide/show eye nub has a place to live. ~30px clears the default
+# 24px nub plus a small gap.
+HEADER_RIGHT_BUFFER = 30
 ROW_PAD      = 8
 START_Y      = HEADER_H + 12   # rows start below header
 BAR_W        = 240
@@ -10470,17 +19101,24 @@ def draw_header(surface, w):
         # We re-enumerate every frame because the count changes rarely
         # and the directory listing is essentially free.
         known_chars = list_known_characters()
-        is_multi = len(known_chars) > 1
+        # Previously this only became a clickable pill button when
+        # multiple characters were known (so the dropdown was
+        # exclusively for character switching). With layout profiles
+        # added to the same dropdown, single-character users also
+        # need access — otherwise they have no UI surface for saving
+        # or switching profiles. Always show the clickable button.
+        is_multi = True
 
         is_off_live = (active_view_char and current_char_name
                        and active_view_char != current_char_name)
         cv_label = font_moon.render(display_name, True, (220, 220, 230))
 
         if not is_multi:
-            # Single character: plain text, no interaction.
-            cv_y = cy - cv_label.get_height() // 2
-            surface.blit(cv_label, (cx, cv_y))
-            cx += cv_label.get_width() + 8
+            # Dead code retained as a comment: this branch used to
+            # render a plain non-clickable name for single-character
+            # rigs. Kept as a no-op so the indentation around the
+            # multi-char branch below stays unchanged.
+            pass
         else:
             # Multi-character: pill button with caret. Click opens dropdown.
             cv_caret = font_moon.render(" ▼", True, (180, 180, 200))
@@ -10509,40 +19147,166 @@ def draw_header(surface, w):
                  cv_y + (cv_h - cv_caret.get_height()) // 2))
             cx += cv_w + 8
 
-    # ── Time ────────────────────────────────────────────────────────────────
-    time_str = f"{hours:02d}:{minutes:02d}"
-    t_surf   = font_clock.render(time_str, True, COL_CLOCK)
-    surface.blit(t_surf, (cx, cy - t_surf.get_height() // 2))
-    cx += t_surf.get_width() + 6
+    # ── Time / Day / Moon ───────────────────────────────────────────────────
+    # All three blocks are temporal info from get_vana_time(); they
+    # share a single show_time guard so the user can hide the whole
+    # Vana'diel-clock cluster as a unit rather than per-element. When
+    # off, the cluster (including the two dividers between time/day
+    # and day/moon, plus the trailing space before weather) is
+    # skipped entirely — no phantom gap.
+    # Clear the clock click-rect first so a stale rect from a previous
+    # frame can't fire click-routing when the time widget is hidden.
+    global header_time_cycle_phase, header_time_cycle_last_advance
+    global header_clock_button_rect
+    header_clock_button_rect = None
+    if setting("show_time"):
+        # ── Combined Vana'diel + OS time widget ─────────────────────────
+        # This single widget (at the Vana'diel clock's original left-side
+        # position) shows EITHER Vana'diel time ("HH:MM VT") or OS/real
+        # time ("H:MM[:SS] am/pm OS"). When clock_cycle_enabled is on it
+        # alternates between the two every clock_cycle_sec seconds; when
+        # off it shows only Vana time. The OS clock that used to live on
+        # the right side is merged in here — clicking the widget still
+        # opens the stopwatch/countdown modal (header_clock_button_rect
+        # is set below), and a running timer overrides the display with
+        # its own value/color regardless of cycle phase. Day + Moon stay
+        # exactly where they were, immediately to the right.
 
-    # small "VT" label
-    vt_surf = font_moon.render("VT", True, COL_LABEL_DIM)
-    surface.blit(vt_surf, (cx, cy - vt_surf.get_height() // 2))
-    cx += vt_surf.get_width() + 18
+        # Advance the VT/OS cycle phase on the user-set interval. Computed
+        # against os.time() so dwell time is honored without per-frame
+        # drift. Clamped 2-10s. Only cycles when enabled AND no timer is
+        # running (a running timer pins the display, see below).
+        cycle_on = bool(setting("clock_cycle_enabled"))
+        try:
+            cycle_sec = int(setting("clock_cycle_sec") or 5)
+        except (TypeError, ValueError):
+            cycle_sec = 5
+        cycle_sec = max(2, min(10, cycle_sec))
+        now_t = time.time()
+        if cycle_on:
+            if header_time_cycle_last_advance == 0.0:
+                header_time_cycle_last_advance = now_t
+            if now_t - header_time_cycle_last_advance >= cycle_sec:
+                header_time_cycle_phase = 1 - header_time_cycle_phase
+                header_time_cycle_last_advance = now_t
+        else:
+            header_time_cycle_phase = 0   # Vana only
 
-    # ── Divider ─────────────────────────────────────────────────────────────
-    pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
-    cx += 14
+        # Build the OS-time string (respecting timezone + seconds toggle),
+        # mirroring the former right-side clock block.
+        tz_name   = setting("clock_timezone") or "Local"
+        tz_offset = CLOCK_TIMEZONES.get(tz_name)
+        if tz_offset is None:
+            local_now = time.localtime()
+        else:
+            local_now = time.gmtime(time.time() + tz_offset * 3600)
+        hh12  = local_now.tm_hour % 12 or 12
+        am_pm = "am" if local_now.tm_hour < 12 else "pm"
+        if setting("show_clock_seconds"):
+            os_time_str = (f"{hh12:d}:{local_now.tm_min:02d}:"
+                           f"{local_now.tm_sec:02d} {am_pm}")
+        else:
+            os_time_str = f"{hh12:d}:{local_now.tm_min:02d} {am_pm}"
+        vana_time_str = f"{hours:02d}:{minutes:02d}"
 
-    # ── Day ─────────────────────────────────────────────────────────────────
-    day_color = DAY_COLORS.get(day_name, COL_CLOCK)
-    d_surf    = font_day.render(day_name, True, day_color)
-    surface.blit(d_surf, (cx, cy - d_surf.get_height() // 2))
-    cx += d_surf.get_width() + 18
+        # Decide what this frame shows. Running timers take priority over
+        # the cycle so the user always sees an active countdown/stopwatch.
+        if countdown_running:
+            _tick_countdown()   # keep live even with modal closed
+        show_label = "VT"
+        time_text  = vana_time_str
+        time_color = COL_CLOCK
+        if countdown_running:
+            rem        = _countdown_remaining_now()
+            time_text  = _format_countdown(rem)
+            time_color = (220, 110, 110)   # red — counting down
+            show_label = "TMR"
+        elif stopwatch_running:
+            sw_elapsed = _stopwatch_elapsed()
+            s = max(0, int(sw_elapsed))
+            time_text  = f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+            time_color = (220, 200, 130)   # amber — stopwatch running
+            show_label = "SW"
+        elif cycle_on and header_time_cycle_phase == 1:
+            time_text  = os_time_str
+            time_color = COL_CLOCK
+            show_label = "OS"
+        # else: Vana time (already the default above)
 
-    # ── Divider ─────────────────────────────────────────────────────────────
-    pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
-    cx += 14
+        # Render the time value + small label, as a clickable button so
+        # it opens the stopwatch/countdown modal (same affordance the OS
+        # clock had). Track the widget's full extent for the click rect.
+        #
+        # Fixed-width time field: the displayed string varies in width
+        # (Vana "HH:MM", OS "H:MM pm" vs "12:48:59 pm", timer "0:05:09"),
+        # so without a reservation the label and every header element to
+        # its right would shift each time the digit count changes. We
+        # reserve a constant width sized to the widest realistic string
+        # ("12:48:59 pm") and RIGHT-ALIGN the time inside it, so the label
+        # — and the rest of the header — stays put regardless of content.
+        widget_x0 = cx
+        t_surf    = font_clock.render(time_text, True, time_color)
+        # Width to reserve for the time field. Measured once against the
+        # widest plausible string; cached so we don't re-measure each frame.
+        global _header_time_field_w
+        if _header_time_field_w is None:
+            _header_time_field_w = font_clock.render(
+                "12:48:59 pm", True, COL_CLOCK).get_width()
+        time_field_w = _header_time_field_w
+        # Gap between the time field and the VT/OS label (was 6 — widened
+        # to 12 so the label reads as its own element, not crowding the
+        # digits).
+        TIME_LABEL_GAP = 12
+        # Compute the label up front so we can size the click box.
+        lbl_surf_pre = font_moon.render(show_label, True, COL_LABEL_DIM)
+        widget_w = time_field_w + TIME_LABEL_GAP + lbl_surf_pre.get_width()
+        time_click_rect = pygame.Rect(
+            widget_x0 - 4, cy - (t_surf.get_height() // 2) - 3,
+            widget_w + 8, t_surf.get_height() + 6)
+        is_hover_time = time_click_rect.collidepoint(mx, my)
+        if is_hover_time:
+            pygame.draw.rect(surface, (40, 44, 56), time_click_rect,
+                             border_radius=3)
+            hover_color = (
+                min(255, time_color[0] + 35),
+                min(255, time_color[1] + 35),
+                min(255, time_color[2] + 35))
+            t_surf = font_clock.render(time_text, True, hover_color)
+        # Right-align the time within the reserved field so its right edge
+        # (next to the label) is stable; shorter strings pad on the left.
+        time_x = widget_x0 + (time_field_w - t_surf.get_width())
+        surface.blit(t_surf, (time_x, cy - t_surf.get_height() // 2))
+        cx = widget_x0 + time_field_w + TIME_LABEL_GAP
 
-    # ── Moon ────────────────────────────────────────────────────────────────
-    moon_label = font_moon.render("Moon:", True, COL_LABEL_DIM)
-    surface.blit(moon_label, (cx, cy - moon_label.get_height() // 2))
-    cx += moon_label.get_width() + 6
+        lbl_surf = font_moon.render(show_label, True, COL_LABEL_DIM)
+        surface.blit(lbl_surf, (cx, cy - lbl_surf.get_height() // 2))
+        cx += lbl_surf.get_width() + 18
 
-    moon_str  = f"{moon_phase}  {moon_pct}%"
-    m_surf    = font_moon.render(moon_str, True, COL_MOON)
-    surface.blit(m_surf, (cx, cy - m_surf.get_height() // 2))
-    cx += m_surf.get_width()
+        header_clock_button_rect = time_click_rect
+
+        # Divider.
+        pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
+        cx += 14
+
+        # Day name.
+        day_color = DAY_COLORS.get(day_name, COL_CLOCK)
+        d_surf    = font_day.render(day_name, True, day_color)
+        surface.blit(d_surf, (cx, cy - d_surf.get_height() // 2))
+        cx += d_surf.get_width() + 18
+
+        # Divider.
+        pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
+        cx += 14
+
+        # Moon phase + percent.
+        moon_label = font_moon.render("Moon:", True, COL_LABEL_DIM)
+        surface.blit(moon_label, (cx, cy - moon_label.get_height() // 2))
+        cx += moon_label.get_width() + 6
+
+        moon_str  = f"{moon_phase}  {moon_pct}%"
+        m_surf    = font_moon.render(moon_str, True, COL_MOON)
+        surface.blit(m_surf, (cx, cy - m_surf.get_height() // 2))
+        cx += m_surf.get_width()
 
     # ── Weather (right after moon, part of the left block) ────────────────
     # Renders the current FFXI weather as a colored label. Color uses the
@@ -10550,7 +19314,11 @@ def draw_header(surface, w):
     # intensity weathers (Heat Wave, Squall, Blizzards, ...) brighten the
     # color so they stand out from their single-intensity counterparts.
     # When weather id is 0 (None) or unmapped, nothing draws.
-    w_name, w_color = weather_display(zone_info.get("weather", 0))
+    # Also gated on the show_weather setting — off = skip entirely.
+    if setting("show_weather"):
+        w_name, w_color = weather_display(zone_info.get("weather", 0))
+    else:
+        w_name, w_color = None, None
     if w_name:
         # Divider before weather, matching the moon/day separator style.
         cx += 14
@@ -10567,58 +19335,316 @@ def draw_header(surface, w):
     # doesn't overlap left content.
     left_block_end_x = cx
 
-    # ── Gil (centered between left and right blocks) ───────────────────────
-    # Drawn before the right-side zone info so we can clamp to "safe middle"
-    # between the left block end and an estimated right-block start. If gil
-    # would overlap, we shift it inward (still readable, just not perfectly centered).
-    global inventory_button_rect
-    inventory_button_rect = None
-    if gearswap_gil >= 0:
-        # Color: muted gold. "Gil" suffix in dim grey to keep the number prominent.
-        gil_num_str = f"{gearswap_gil:,}"
-        gil_col = (220, 195, 90)
-        gil_dim = COL_LABEL_DIM
-        gil_num_surf = font_clock.render(gil_num_str, True, gil_col)
-        gil_g_surf   = font_moon.render(" Gil", True, gil_dim)
-        gil_total_w  = gil_num_surf.get_width() + gil_g_surf.get_width()
-        # Center on panel midpoint.
-        ideal_x = (w - gil_total_w) // 2
-        # Clamp so we don't bleed into the left block.
-        min_x = left_block_end_x + 12
-        gil_x = max(ideal_x, min_x)
-        gy = cy - gil_num_surf.get_height() // 2
-        surface.blit(gil_num_surf, (gil_x, gy))
-        # Suffix " Gil" baseline-aligned with the number.
-        gy2 = cy - gil_g_surf.get_height() // 2
-        surface.blit(gil_g_surf, (gil_x + gil_num_surf.get_width(), gy2))
+    # ── Pre-compute right block start (for true middle-block centering) ─
+    # The whole middle band — points widget, currency cycler, inventory
+    # button — should visually center between the end of the left block
+    # (weather) and the start of the right block (zone-time). The right
+    # block isn't rendered yet, but we can predict where it'll land
+    # by re-doing the same width math used down below.
+    #
+    # Mirrors the calculation in the "Zone info on the right side"
+    # block. Kept in sync by reading the same state fields and using
+    # the same font + separator widths.
+    def _predict_right_block_start():
+        # When show_location is off, the right block doesn't render —
+        # return the window's right edge so the centered band gets
+        # the full remaining width.
+        if not setting("show_location"):
+            return WIDTH
+        timer_t = ""
+        if zone_entered_at is not None:
+            elapsed = max(0, int(time.time() - zone_entered_at))
+            h_, rem_ = divmod(elapsed, 3600)
+            m_, s_   = divmod(rem_, 60)
+            if h_ > 0:
+                timer_t = f"Zone Time - {h_:d}:{m_:02d}:{s_:02d}"
+            else:
+                timer_t = f"Zone Time - {m_:02d}:{s_:02d}"
+        region_t = region_for_zone(zone_info["zone_id"]) or ""
+        zname_t  = zone_info["zone_name"] or ""
+        mapi_t   = zone_info["map_index"]
+        pos_t    = (zone_info.get("pos_str") or "").strip()
+        right_p = []
+        if mapi_t == -1:
+            right_p.append("Mog")
+        elif mapi_t > 0:
+            right_p.append(f"Map {mapi_t}")
+        if zname_t:
+            x_, y_, z_ = zone_info["x"], zone_info["y"], zone_info["z"]
+            right_p.append(f"x:{x_:.3f} y:{y_:.3f} z:{z_:.3f}")
+        right_t = "  ".join(right_p)
+        left_p = []
+        if timer_t:  left_p.append(timer_t)
+        if region_t: left_p.append(region_t)
+        left_t = "  ".join(left_p)
+        sep_l_   = (font_moon.size("  ")[0] if left_t and zname_t else 0)
+        sep_pos_ = (font_moon.size(" ")[0]  if zname_t and pos_t  else 0)
+        sep_r_   = (font_moon.size("  ")[0]
+                    if (zname_t or pos_t) and right_t else 0)
+        total_w_ = 0
+        if left_t:  total_w_ += font_moon.size(left_t)[0]
+        total_w_ += sep_l_
+        if zname_t: total_w_ += font_moon.size(zname_t)[0]
+        total_w_ += sep_pos_
+        if pos_t:   total_w_ += font_moon.size(pos_t)[0]
+        total_w_ += sep_r_
+        if right_t: total_w_ += font_moon.size(right_t)[0]
+        # Match the right-block render's edge (PANEL_X + the buffer that
+        # reserves room for the eye nub) so the middle band centers
+        # against the same boundary the coordinates actually draw to.
+        return (w - PANEL_X - HEADER_RIGHT_BUFFER) - total_w_
 
-        # Inventory button: small "▼ Bags" pill right after Gil. Click
-        # opens the dropdown that shows each bag's contents with BG-wiki
-        # links. Gated on the show_inventory_button setting so users
-        # who don't want it can hide it cleanly. Button rect is stashed
-        # in inventory_button_rect for the main click handler.
-        if setting("show_inventory_button"):
-            inv_btn_x = gil_x + gil_total_w + 10
-            inv_btn_y = cy - 9
-            inv_btn_w, inv_btn_h = 60, 18
-            inv_btn_rect = pygame.Rect(inv_btn_x, inv_btn_y,
-                                       inv_btn_w, inv_btn_h)
-            # Hover/open feedback.
-            is_hover_inv = inv_btn_rect.collidepoint(mx, my)
-            bg  = (62, 62, 78) if (is_hover_inv or inventory_dropdown_open) else (44, 44, 54)
-            bdr = (180, 180, 200) if inventory_dropdown_open else (100, 100, 115)
-            pygame.draw.rect(surface, bg,  inv_btn_rect, border_radius=3)
-            pygame.draw.rect(surface, bdr, inv_btn_rect, 1, border_radius=3)
-            # Tiny down-caret + "Bags" label.
-            caret_color = (220, 220, 230)
-            cax = inv_btn_x + 6
-            cay = inv_btn_y + 6
-            pygame.draw.polygon(surface, caret_color, [
-                (cax, cay), (cax + 6, cay), (cax + 3, cay + 4)])
-            bag_label = font_moon.render("Bags", True, caret_color)
-            surface.blit(bag_label,
-                (cax + 10, inv_btn_y + (inv_btn_h - bag_label.get_height()) // 2))
-            inventory_button_rect = inv_btn_rect
+    right_block_start_x = _predict_right_block_start()
+
+    # ── Header points tracker (EXP / CP / Exemplar) ─────────────────────
+    # Renders one of the three trackable point types as "current/needed"
+    # plus a short label. Sits between the left content (clock/weather)
+    # and the currency cycler. Hidden when show_header_points is off.
+    # Width is locked to the widest possible entry across all three
+    # types so the currency cycler to its right doesn't jitter when
+    # the user switches focus or when values cross a digit boundary.
+    #
+    # Position is finalized BELOW (after measuring the currency block
+    # and inventory button) so the whole middle band can be centered
+    # as one unit between left and right content. This block just
+    # measures the points widget; rendering happens after centering.
+    pts_visible = bool(setting("show_header_points"))
+    pts_max_w   = 0
+    pts_left_pad  = 18
+    pts_right_pad = 18
+    pts_entry    = None  # (num_surf, lbl_surf) for the focused type
+    if pts_visible:
+        pts_col = (220, 195, 90)
+        pts_dim = COL_LABEL_DIM
+        # Pre-measure widest possible entry for width locking.
+        for key, label, _ in HEADER_POINTS_KEYS:
+            cur_v = points_state.get(key, 0)
+            tnl_v = points_state.get(key + "_tnl", 0) or 1
+            cur_s = f"{cur_v:,}/{tnl_v:,}"
+            num_surf = font_clock.render(cur_s, True, pts_col)
+            lbl_surf = font_moon.render(f" {label}", True, pts_dim)
+            w_entry = num_surf.get_width() + lbl_surf.get_width()
+            if w_entry > pts_max_w:
+                pts_max_w = w_entry
+        # Resolve which type the user wants shown.
+        focus = setting("header_points_focus") or "exp"
+        chosen = None
+        for key, label, val in HEADER_POINTS_KEYS:
+            if val == focus:
+                chosen = (key, label)
+                break
+        if chosen is None:
+            chosen = HEADER_POINTS_KEYS[0][:2]
+        key, label = chosen
+        cur_v = points_state.get(key, 0)
+        tnl_v = points_state.get(key + "_tnl", 0)
+        cur_s = f"{cur_v:,}/{tnl_v:,}"
+        pts_entry = (
+            font_clock.render(cur_s, True, pts_col),
+            font_moon.render(f" {label}", True, pts_dim),
+        )
+
+    # ── Currency cycler (centered between left and right blocks) ──────────
+    # Was just gil; now cycles through up to 6 currencies (gil + 5 tier-1/2)
+    # at a settings-controlled interval. The block has a locked width
+    # (widest possible entry) so the inventory button to its right doesn't
+    # jitter every cycle when the displayed value changes.
+    global inventory_button_rect, events_button_rect
+    global currency_cycle_index, currency_cycle_last_advance
+    inventory_button_rect = None
+    events_button_rect = None
+
+    # Read settings: which currencies are enabled and the cycle interval.
+    enabled_entries = []   # list of (state_key, display_name)
+    for key, name, setting_key in CURRENCY_CYCLE_KEYS:
+        if setting(setting_key):
+            enabled_entries.append((key, name))
+    cycle_seconds = setting("header_currency_cycle_seconds") or 5
+    try:
+        cycle_seconds = max(2, min(10, int(cycle_seconds)))
+    except (TypeError, ValueError):
+        cycle_seconds = 5
+
+    # Colors and fonts (same palette gil used to use).
+    cur_col = (220, 195, 90)
+    cur_dim = COL_LABEL_DIM
+
+    # Advance the cycle index when the interval elapses. Wrap modulo
+    # the enabled list length so a settings change that drops the
+    # current entry doesn't index past the end.
+    now_t = time.time()
+    if enabled_entries:
+        if now_t - currency_cycle_last_advance >= cycle_seconds:
+            # Catch up if we skipped multiple intervals (e.g. game
+            # was paused). Single increment is fine here — we only
+            # advance once per slow tick, the visual just resumes.
+            currency_cycle_index = (currency_cycle_index + 1) \
+                                   % len(enabled_entries)
+            currency_cycle_last_advance = now_t
+        else:
+            # Clamp index in case the enabled set shrank.
+            currency_cycle_index %= len(enabled_entries)
+
+    # Measure widest possible entry to lock the block width. We use the
+    # CURRENT value of every enabled currency as the candidate; the
+    # widest of these sets our reserved block. This means the block
+    # width can still grow as a currency increases (e.g. gil going
+    # from 9,999 to 10,000), but only on those transition frames —
+    # not every cycle tick. Acceptable trade-off vs. globally locking
+    # to "biggest possible 64-bit int."
+    if enabled_entries:
+        max_w = 0
+        for key, name in enabled_entries:
+            val = currency_state.get(key, 0)
+            val_str = f"{val:,}"
+            num_surf = font_clock.render(val_str, True, cur_col)
+            suf_surf = font_moon.render(f" {name}", True, cur_dim)
+            entry_w = num_surf.get_width() + suf_surf.get_width()
+            if entry_w > max_w:
+                max_w = entry_w
+        block_w = max_w
+    else:
+        # No currencies enabled: reserve space for the placeholder.
+        placeholder = font_moon.render(
+            "No currencies enabled", True, cur_dim)
+        block_w = placeholder.get_width()
+
+    # ── Center the WHOLE middle band as one unit ─────────────────────
+    # The middle band consists of:
+    #   [points widget + paddings] → [currency block] → [gap + inventory btn]
+    # All three move together so they stay visually grouped and the
+    # combined unit centers between the left content (weather) and the
+    # right content (zone-time). Earlier code centered only the currency
+    # block, which left the band shifted left when points and inventory
+    # are both present.
+    inv_gap     = 10
+    inv_btn_w   = 96    # matches the value used in the inventory-button render
+    inv_visible = bool(setting("show_inventory_button"))
+
+    # Events button — always shown, sits at the leftmost edge of the
+    # centered band so it doesn't conflict with the inventory button
+    # on the right. Width fits the label "Events" comfortably at our
+    # header font sizes. Gap between it and the points/currency block
+    # is the same as inv_gap for visual symmetry.
+    # Gated on show_events — when off, the band collapses without it
+    # and the points widget anchors the left edge instead.
+    events_visible = bool(setting("show_events"))
+    events_btn_w   = 60
+    events_btn_gap = 10
+    events_total_w = (events_btn_w + events_btn_gap) if events_visible else 0
+
+    pts_total_w = (pts_left_pad + pts_max_w + pts_right_pad) if pts_visible else 0
+    inv_total_w = (inv_gap + inv_btn_w) if inv_visible else 0
+    band_w      = events_total_w + pts_total_w + block_w + inv_total_w
+
+    # Available horizontal space and ideal centered position. Floor at
+    # left_block_end_x + 12 so we never overlap the weather block — if
+    # the window's been resized to be very narrow, the band slides
+    # right against the left content rather than under it.
+    avail_lo   = left_block_end_x + 12
+    avail_hi   = max(avail_lo, right_block_start_x - 12)
+    ideal_band = (avail_lo + avail_hi - band_w) // 2
+    band_x     = max(avail_lo, min(ideal_band,
+                                   avail_hi - band_w))
+
+    # ── Events button (leftmost in the band) ──
+    # Click opens the campaigns/events modal (the same target the now-
+    # removed settings menu item used to fire). Drawn first so it
+    # anchors the left edge of the band. We size it to match the
+    # inventory button's vertical metrics so they line up across
+    # the centered band. When show_events is off, the button is
+    # skipped entirely and events_button_rect stays None so the
+    # click handler can't fire stale geometry.
+    if events_visible:
+        ev_btn_x = band_x
+        ev_btn_y = cy - 9
+        ev_btn_h = 18
+        ev_btn_rect = pygame.Rect(ev_btn_x, ev_btn_y, events_btn_w, ev_btn_h)
+        is_hover_ev = ev_btn_rect.collidepoint(mx, my)
+        ev_bg  = (62, 62, 78) if is_hover_ev else (44, 44, 54)
+        ev_bdr = (100, 100, 115)
+        pygame.draw.rect(surface, ev_bg,  ev_btn_rect, border_radius=3)
+        pygame.draw.rect(surface, ev_bdr, ev_btn_rect, 1, border_radius=3)
+        ev_label = font_moon.render("Events", True, (220, 220, 230))
+        surface.blit(ev_label,
+                     (ev_btn_x + (events_btn_w - ev_label.get_width()) // 2,
+                      ev_btn_y + (ev_btn_h - ev_label.get_height()) // 2))
+        events_button_rect = ev_btn_rect
+
+    # Render the points widget at the left edge of the band (shifted
+    # right by the events button + gap).
+    if pts_visible:
+        pts_x = band_x + events_total_w + pts_left_pad
+        if pts_entry is not None:
+            num_surf, lbl_surf = pts_entry
+            entry_w  = num_surf.get_width() + lbl_surf.get_width()
+            entry_x  = pts_x + (pts_max_w - entry_w) // 2
+            gy  = cy - num_surf.get_height() // 2
+            surface.blit(num_surf, (entry_x, gy))
+            gy2 = cy - lbl_surf.get_height() // 2
+            surface.blit(lbl_surf, (entry_x + num_surf.get_width(), gy2))
+
+    # The currency block sits right after the points widget's right-pad.
+    block_x = band_x + events_total_w + pts_total_w
+
+    # Render the current entry (or placeholder) inside the locked block.
+    if enabled_entries:
+        cur_key, cur_name = enabled_entries[currency_cycle_index]
+        cur_val = currency_state.get(cur_key, 0)
+        val_str = f"{cur_val:,}"
+        num_surf = font_clock.render(val_str, True, cur_col)
+        suf_surf = font_moon.render(f" {cur_name}", True, cur_dim)
+        entry_w  = num_surf.get_width() + suf_surf.get_width()
+        # Center the entry within the locked block so shorter entries
+        # don't all left-justify under the widest one (looks ragged).
+        entry_x = block_x + (block_w - entry_w) // 2
+        gy = cy - num_surf.get_height() // 2
+        surface.blit(num_surf, (entry_x, gy))
+        gy2 = cy - suf_surf.get_height() // 2
+        surface.blit(suf_surf, (entry_x + num_surf.get_width(), gy2))
+    else:
+        placeholder = font_moon.render(
+            "No currencies enabled", True, cur_dim)
+        py = cy - placeholder.get_height() // 2
+        surface.blit(placeholder, (block_x, py))
+
+    # Inventory button anchored to the right edge of the LOCKED block,
+    # not the current entry. This is what stops the button from jittering
+    # when the cycle advances to a shorter/longer entry.
+    if setting("show_inventory_button"):
+        inv_btn_x = block_x + block_w + 10
+        inv_btn_y = cy - 9
+        # Width sized to fit "▼ Inventory" comfortably at Consolas 12pt.
+        inv_btn_w, inv_btn_h = 96, 18
+        inv_btn_rect = pygame.Rect(inv_btn_x, inv_btn_y,
+                                   inv_btn_w, inv_btn_h)
+        # Hover/open feedback.
+        is_hover_inv = inv_btn_rect.collidepoint(mx, my)
+        bg  = (62, 62, 78) if (is_hover_inv or inventory_dropdown_open) else (44, 44, 54)
+        bdr = (180, 180, 200) if inventory_dropdown_open else (100, 100, 115)
+        pygame.draw.rect(surface, bg,  inv_btn_rect, border_radius=3)
+        pygame.draw.rect(surface, bdr, inv_btn_rect, 1, border_radius=3)
+        # Tiny down-caret + "Inventory" label.
+        caret_color = (220, 220, 230)
+        cax = inv_btn_x + 6
+        cay = inv_btn_y + 6
+        pygame.draw.polygon(surface, caret_color, [
+            (cax, cay), (cax + 6, cay), (cax + 3, cay + 4)])
+        bag_label = font_moon.render("Inventory", True, caret_color)
+        surface.blit(bag_label,
+            (cax + 10, inv_btn_y + (inv_btn_h - bag_label.get_height()) // 2))
+        inventory_button_rect = inv_btn_rect
+
+    # ── OS clock (right-side) — REMOVED, merged into the left time ─────
+    # The standalone right-side OS clock was combined with the Vana'diel
+    # time into the single cycling widget at the left cluster (see the
+    # "Combined Vana'diel + OS time widget" block above). That widget now
+    # owns header_clock_button_rect and the running-timer takeover, so
+    # there is intentionally nothing to render here. The old show_clock /
+    # clock_timezone / show_clock_seconds settings still apply — they're
+    # consumed by the combined widget. Kept as a comment (rather than
+    # silently deleted) so the merge is obvious to the next reader and the
+    # right-side layout math below isn't accidentally fed a clock width.
 
     # ── Zone info on the right side ────────────────────────────────────────
     # Build parts left to right: ZoneTimer, Region, Zone (clickable),
@@ -10661,10 +19687,10 @@ def draw_header(surface, w):
     elif mapi > 0:
         right_parts.append(f"Map {mapi}")
     if zname:
-        right_parts.append(f"x:{x:.1f} y:{y:.1f} z:{z:.1f}")
+        right_parts.append(f"x:{x:.3f} y:{y:.3f} z:{z:.3f}")
     right_text = "  ".join(right_parts)
 
-    if region or zname or right_text:
+    if (region or zname or right_text) and setting("show_location"):
         # Measure all four pieces to right-align together: left, zone,
         # pos-grid suffix, right.
         gap = font_moon.size("  ")[0]
@@ -10681,7 +19707,13 @@ def draw_header(surface, w):
                    (z_surf.get_width() if z_surf else 0) + sep_pos +
                    (p_surf.get_width() if p_surf else 0) + sep_r +
                    (r_surf.get_width() if r_surf else 0))
-        right_edge = w - PANEL_X
+        # Extra right-side breathing room at the end of the coordinates.
+        # Reserves a small gap so the right block doesn't run flush to
+        # the window edge — and gives the hide/show eye nub a natural
+        # home there. Sized to clear the default nub (24px) plus a hair
+        # of spacing; if the user resizes the nub larger, it may overlap
+        # slightly, but the nub draws on top so it stays usable.
+        right_edge = w - PANEL_X - HEADER_RIGHT_BUFFER
         draw_x = right_edge - total_w
         y_mid  = cy - (z_surf or l_surf or r_surf).get_height() // 2
 
@@ -10737,9 +19769,17 @@ def settings_menu_size():
             grouped[sec].append(s)
     height = pad
     for sec in SETTINGS_SECTIONS:
+        is_loose = sec.startswith("_")
+        entries = grouped[sec]
+        if is_loose and not entries:
+            # Empty unnamed sections contribute nothing.
+            continue
+        # Header strip height: same for both named and unnamed
+        # (unnamed renders just the underline at the same Y position
+        # a name would occupy).
         height += sec_h
-        if grouped[sec]:
-            height += row_h * len(grouped[sec])
+        if entries:
+            height += row_h * len(entries)
         else:
             height += placeholder_h
     height += pad
@@ -10772,6 +19812,41 @@ INVENTORY_BAG_ORDER = [
     ("case",      "Case"),
 ]
 
+# ── Header currency cycle order ────────────────────────────────────────
+# Tuple of (state_key, display_name, settings_key). The header cycles
+# through every entry where setting(settings_key) is True (which is the
+# default for all six). Order here is also the order presented in the
+# Settings panel under the "Header" section. state_key matches the keys
+# emitted by lua's CURRENCY|...; display_name is what appears next to
+# the value (e.g. "12,345 Gil").
+CURRENCY_CYCLE_KEYS = [
+    ("gil",          "Gil",         "show_currency_gil"),
+    ("sparks",       "Sparks",      "show_currency_sparks"),
+    ("accolades",    "Accolades",   "show_currency_accolades"),
+    ("gallimaufry",  "Gallimaufry", "show_currency_gallimaufry"),
+    ("temenos",      "Temenos",     "show_currency_temenos"),
+    ("apollyon",     "Apollyon",    "show_currency_apollyon"),
+    # Display labels for the new currencies use single-word forms to
+    # match the existing convention (and the natural FFXI shorthand)
+    # — using "Escha Beads" / "Nyzul Tokens" overflowed the centered
+    # header band on narrower windows. Storage keys keep the long
+    # form for clarity in logs and at the wire.
+    ("escha_beads",  "Beads",       "show_currency_escha_beads"),
+    ("nyzul_tokens", "Tokens",      "show_currency_nyzul_tokens"),
+    ("ichor",        "Ichor",       "show_currency_ichor"),
+]
+
+# ── Header points tracker ────────────────────────────────────────────
+# Tuple of (state_key, display_label, settings_value). state_key is
+# what lua emits in POINTS|...; display_label is the suffix shown after
+# the value in the header (e.g. "12,847 EXP"); settings_value is the
+# string stored for the 'header_points_focus' enum setting.
+HEADER_POINTS_KEYS = [
+    ("exp",      "EXP",      "exp"),
+    ("cp",       "CP",       "cp"),
+    ("exemplar", "Exemplar", "exemplar"),
+]
+
 
 def _bgwiki_item_url(item_name):
     """Build a BG-Wiki URL for an item. Spaces → underscores; the rest
@@ -10780,6 +19855,128 @@ def _bgwiki_item_url(item_name):
     if not item_name:
         return ""
     return "https://www.bg-wiki.com/ffxi/" + item_name.replace(" ", "_")
+
+
+# ── Porter slip nicknames ────────────────────────────────────────────────
+# Per-character nickname overrides for porter slip rows. Slips have
+# generic default names ("Porter Slip 01") that don't convey what the
+# user actually stores on them, so the dropdown lets the user
+# right-click any slip and assign a custom label (e.g. "NIN Body
+# Wardrobe"). Nicknames are persisted to disk so they survive restarts.
+#
+# Scope: per-character. Each character file is at
+#   SETTINGS_DIR/omniwatch_porter_slip_names_<charname>.json
+# Format: { "<slip_id>": "<nickname>", ... }   keys are stringified ints
+# (JSON limitation; we coerce back to int on load).
+#
+# A character-specific file is read lazily on first lookup and cached in
+# _inventory_slip_nicknames_cache so subsequent draws don't hit disk.
+# Saves are immediate and synchronous — the file is small and writes are
+# rare (one per nickname edit), so async/throttle isn't worth the
+# complexity.
+
+def _porter_slip_nicknames_path(charname):
+    """Return the JSON file path for a character's slip nicknames.
+
+    Empty/None charname yields None (no file path — caller treats as
+    "no nicknames available"). Character name is lowercased for the
+    filename to avoid case-sensitivity surprises on Windows vs other
+    filesystems where the user might create the file with one case
+    and later look it up with another.
+    """
+    if not charname:
+        return None
+    try:
+        safe = "".join(c for c in charname.lower()
+                       if c.isalnum() or c in ("_", "-"))
+        if not safe:
+            return None
+        return os.path.join(
+            SETTINGS_DIR, f"omniwatch_porter_slip_names_{safe}.json")
+    except NameError:
+        # SETTINGS_DIR not defined yet (early in startup). Caller
+        # treats None as "no nicknames yet"; the slip rows just show
+        # their default names until SETTINGS_DIR is available.
+        return None
+
+
+def _porter_slip_nicknames_for_player():
+    """Return the {slip_id: nickname} dict for the current character.
+
+    Lazy-loads from disk on first call per character. Cached for
+    subsequent calls so the renderer can call this every frame
+    without disk I/O. Returns an empty dict (not None) when there
+    are no nicknames yet — caller can do .get() against the result
+    without nil-check noise.
+
+    If player_self_name is empty (haven't received it from lua yet),
+    returns an empty dict that ISN'T cached — so once the name does
+    arrive, the next lookup loads properly.
+    """
+    name = (player_self_name or "").strip().lower()
+    if not name:
+        return {}
+    cached = _inventory_slip_nicknames_cache.get(name)
+    if cached is not None:
+        return cached
+    path = _porter_slip_nicknames_path(name)
+    nicks = {}
+    if path and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                for k, v in raw.items():
+                    try:
+                        sid = int(k)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(v, str) and v.strip():
+                        nicks[sid] = v.strip()
+        except Exception as e:
+            print(f"[OmniWatch] porter slip nicknames load failed "
+                  f"({path}): {e!r}")
+    _inventory_slip_nicknames_cache[name] = nicks
+    return nicks
+
+
+def _porter_slip_set_nickname(slip_id, nickname):
+    """Persist a nickname for `slip_id` on the current character.
+
+    Updates the in-memory cache AND writes the per-character JSON
+    file. An empty/whitespace nickname REMOVES the entry (lets the
+    user clear a nickname by editing it to empty). Returns True on
+    success, False if the file can't be written (path resolution
+    failed, disk error, etc.) — caller decides whether to surface
+    the failure.
+
+    No-op if there's no current character name yet.
+    """
+    name = (player_self_name or "").strip().lower()
+    if not name:
+        return False
+    path = _porter_slip_nicknames_path(name)
+    if not path:
+        return False
+    # Update cache first so the renderer reflects the change
+    # immediately, even if the write fails.
+    nicks = _porter_slip_nicknames_for_player()
+    cleaned = (nickname or "").strip()
+    if cleaned:
+        nicks[slip_id] = cleaned
+    else:
+        nicks.pop(slip_id, None)
+    # Persist. Empty dict still writes (creates an empty file) so the
+    # user can see in the filesystem that we're managing the slot.
+    try:
+        out = {str(k): v for k, v in nicks.items()}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] porter slip nicknames save failed "
+              f"({path}): {e!r}")
+        return False
 
 
 def _inventory_panel_geometry():
@@ -10818,7 +20015,11 @@ def draw_char_view_dropdown(surface):
     """Render the character-view dropdown if char_view_dropdown_open.
     Lists every character that has a subfolder under USER_DIR plus an
     explicit 'follow live character' option that tracks whoever is
-    logged in. Populates char_view_dropdown_rects for click dispatch."""
+    logged in. For the ACTIVE character, also lists their saved
+    layout profiles indented under their row, with a green dot next
+    to the currently active profile and a '+ New profile…' row at
+    the bottom. Populates char_view_dropdown_rects for click
+    dispatch."""
     global char_view_dropdown_rects
     char_view_dropdown_rects = []
     if not char_view_dropdown_open:
@@ -10829,12 +20030,20 @@ def draw_char_view_dropdown(surface):
     # Discover characters via the shared helper. Same enumeration
     # logic the header uses to decide whether to show a dropdown.
     chars = list_known_characters()
+    # Pull profiles for the ACTIVE character so we can size the
+    # panel correctly upfront. list_profiles() always returns at
+    # least ["Default"] so this set is non-empty whenever there's
+    # an active character.
+    profiles = list_profiles() if active_view_char else ["Default"]
+    # Profile block size: separator (~6) + header (~14) + N profile
+    # rows + Save-as row, all at 18px each.
+    profile_rows_h = 20 + (len(profiles) + 1) * 18
 
     pad   = 6
     row_h = 20
-    item_count = max(1, len(chars)) + 1   # +1 for the "Follow live" row
-    panel_w = 180
-    panel_h = item_count * row_h + pad * 2
+    item_count = max(1, len(chars)) + 1
+    panel_w = 260   # wider — needs room for "+ Save current as new profile…"
+    panel_h = item_count * row_h + profile_rows_h + pad * 2
     panel_x = char_view_button_rect.x
     panel_y = char_view_button_rect.bottom + 2
     if panel_x + panel_w > WIDTH:
@@ -10847,8 +20056,9 @@ def draw_char_view_dropdown(surface):
                      (panel_x, panel_y, panel_w, panel_h), 1,
                      border_radius=4)
 
-    f_row = pygame.font.SysFont("Consolas", 12)
-    f_dim = pygame.font.SysFont("Consolas", 10, italic=True)
+    f_row     = pygame.font.SysFont("Consolas", 12)
+    f_profile = pygame.font.SysFont("Consolas", 10)
+    f_dim     = pygame.font.SysFont("Consolas", 10, italic=True)
     cy = panel_y + pad
 
     # Top row: "Follow live character"
@@ -10878,7 +20088,6 @@ def draw_char_view_dropdown(surface):
             pygame.draw.rect(surface, (40, 40, 52), row_rect)
         is_active = (name == active_view_char)
         is_live   = (name == current_char_name)
-        # Active/live indicators in the label.
         prefix = "●" if is_active else "○"
         suffix = "  (live)" if is_live else ""
         color = (220, 220, 230) if is_active else (180, 180, 195)
@@ -10889,6 +20098,73 @@ def draw_char_view_dropdown(surface):
             "kind": "select_char", "name": name,
         }))
         cy += row_h
+
+    # Profile section — ALWAYS renders at the bottom of the dropdown
+    # for the currently active character. Was previously gated on
+    # `is_active` inside the per-character loop, which meant if
+    # active_view_char didn't match any folder (empty / new install /
+    # mismatched casing), the entire profile UI silently disappeared.
+    # Rendering it unconditionally as its own section guarantees the
+    # save row is always reachable.
+    if profiles:
+        # Separator line above the profile section so it reads as
+        # distinct from the character list.
+        pygame.draw.line(surface, (60, 60, 75),
+                         (panel_x + 8, cy + 2),
+                         (panel_x + panel_w - 8, cy + 2))
+        cy += 4
+        # Small header label.
+        section_who = active_view_char or "(no character)"
+        hdr_label = f"Profiles for {section_who}"
+        hs = f_dim.render(hdr_label, True, (180, 180, 200))
+        surface.blit(hs, (panel_x + 8, cy))
+        cy += hs.get_height() + 2
+        for prof in profiles:
+            prow_rect = pygame.Rect(panel_x + 12, cy,
+                                     panel_w - 16, 18)
+            ph = prow_rect.collidepoint(pygame.mouse.get_pos())
+            if ph:
+                pygame.draw.rect(surface, (38, 42, 56), prow_rect)
+            is_active_prof = (prof == active_profile_name)
+            p_prefix = "●" if is_active_prof else "○"
+            p_color  = ((140, 220, 140) if is_active_prof
+                        else (200, 205, 220))
+            p_label  = f"{p_prefix} {prof}"
+            ps = f_profile.render(p_label, True, p_color)
+            surface.blit(ps,
+                (panel_x + 20,
+                 cy + (18 - ps.get_height()) // 2))
+            # Delete button on the right (except Default).
+            if prof != "Default":
+                del_rect = pygame.Rect(prow_rect.right - 18,
+                                        cy + 3, 14, 12)
+                pygame.draw.rect(surface, (90, 50, 60),
+                                 del_rect, border_radius=2)
+                dx = f_profile.render("×", True, (240, 200, 200))
+                surface.blit(dx,
+                    (del_rect.x + (del_rect.w - dx.get_width()) // 2,
+                     del_rect.y + (del_rect.h - dx.get_height()) // 2 - 1))
+                char_view_dropdown_rects.append(
+                    (del_rect, {"kind": "delete_profile",
+                                "name": prof}))
+            char_view_dropdown_rects.append((prow_rect, {
+                "kind": "select_profile", "name": prof,
+            }))
+            cy += 18
+        # "+ Save current as new profile…" row — clearly highlighted
+        # in light blue so it stands out as the action row.
+        new_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
+        nh = new_rect.collidepoint(pygame.mouse.get_pos())
+        if nh:
+            pygame.draw.rect(surface, (45, 55, 80), new_rect)
+        ns = f_profile.render("+ Save current as new profile…", True,
+                               (180, 200, 255))
+        surface.blit(ns,
+            (panel_x + 20, cy + (18 - ns.get_height()) // 2))
+        char_view_dropdown_rects.append((new_rect, {
+            "kind": "new_profile",
+        }))
+        cy += 18
 
 
 def dispatch_char_view_dropdown_click(mx, my):
@@ -10914,6 +20190,29 @@ def dispatch_char_view_dropdown_click(mx, my):
                 target = action.get("name")
                 if target:
                     _switch_active_view(target)
+            elif kind == "select_profile":
+                # Switch to the named profile under the active char.
+                # Profile rows only render under the active character,
+                # so we don't need to re-resolve which char this is for.
+                target = action.get("name")
+                if target:
+                    switch_to_profile(target)
+                # Keep the dropdown open so the user can immediately
+                # confirm the switch / pick another profile.
+                return True
+            elif kind == "new_profile":
+                # Open the small naming modal. Dropdown stays open so
+                # cancelling the modal returns the user to the same
+                # picker they were on.
+                global profile_name_modal_open, profile_name_modal_text
+                profile_name_modal_open = True
+                profile_name_modal_text = ""
+                return True
+            elif kind == "delete_profile":
+                target = action.get("name")
+                if target:
+                    delete_profile(target)
+                return True
             char_view_dropdown_open = False
             return True
 
@@ -11001,7 +20300,7 @@ def _inventory_get_search_results():
 
 
 def draw_inventory_dropdown(surface):
-    """Render the inventory dropdown panel below the 'Bags' button if
+    """Render the inventory dropdown panel below the 'Inventory' button if
     inventory_dropdown_open is True. Populates inventory_dropdown_rects
     with click targets for the main click handler.
 
@@ -11014,13 +20313,23 @@ def draw_inventory_dropdown(surface):
         gearswap_referenced_items.
     """
     global inventory_dropdown_rects
+    # Globals rebound inside View A (search-box rect) and View C (slip
+    # navigation back-out) must be declared at the function scope's
+    # top, BEFORE any read of those names. Python's syntactic rule:
+    # if a name appears in `global` anywhere in a function, it can't
+    # be read earlier than that declaration. View C's entry guard
+    # (`if inventory_active_slip is not None:`) is a read, so the
+    # `global` for it has to live up here, not down inside the if.
+    global inventory_active_slip
+    global inventory_show_slip_list
+    global inventory_search_box_rect, inventory_search_scroll
     inventory_dropdown_rects = []
     if not inventory_dropdown_open:
         return
     if not inventory_button_rect:
         return
 
-    # Layout: anchor below the Bags button. Width fixed, height
+    # Layout: anchor below the Inventory button. Width fixed, height
     # bounded; we'll scroll if we overflow.
     geom = _inventory_panel_geometry()
     if not geom:
@@ -11042,17 +20351,283 @@ def draw_inventory_dropdown(surface):
 
     cy = panel_y + pad
 
+    # ── View C: slip detail (drill-in from Porter Slips section) ────────
+    # Highest priority — when the user clicked a slip in the bag-list,
+    # this branch renders its contents instead of either View A or B.
+    # Mirrors View B's layout closely (back arrow, title, scrollable
+    # list of items as BG-Wiki hyperlinks) but reads from
+    # inventory_slip_state instead of inventory_state.
+    if inventory_active_slip is not None:
+        slip_id = inventory_active_slip
+        slip = inventory_slip_state.get(slip_id)
+        if slip is None:
+            # Slip no longer in the snapshot (e.g. player sold it
+            # between clicks). Fall back to bag list.
+            inventory_active_slip = None
+            return
+        slip_items = list(slip.get("items") or [])
+        slip_items.sort(key=lambda it: (it.get("name") or "").lower())
+        default_name = slip.get("name") or f"Slip #{slip_id}"
+        slip_nicks = _porter_slip_nicknames_for_player()
+        nick = slip_nicks.get(slip_id, "").strip()
+        title_text = nick if nick else default_name
+
+        # Header: back button + slip name + count. Mirrors View B.
+        back_w = 28
+        back_rect = pygame.Rect(panel_x + 2, cy, back_w, row_h)
+        if back_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, (40, 40, 52), back_rect)
+        back_surf = title_font.render("‹", True, (220, 220, 230))
+        if back_surf.get_width() < 4:
+            back_surf = title_font.render("<", True, (220, 220, 230))
+        surface.blit(back_surf,
+            (back_rect.x + (back_w - back_surf.get_width()) // 2,
+             back_rect.y + (row_h - back_surf.get_height()) // 2))
+        inventory_dropdown_rects.append((back_rect, {"kind": "back_slip"}))
+
+        title_surf = title_font.render(
+            f"{title_text}  ({len(slip_items)} items)",
+            True, (220, 200, 150))
+        surface.blit(title_surf,
+            (panel_x + back_w + 6,
+             cy + (row_h - title_surf.get_height()) // 2))
+        cy += row_h
+        # When a nickname is showing, append the default name as a
+        # dim subline so the user still knows which slip this is.
+        if nick:
+            sub = small_font.render(default_name, True, COL_LABEL_DIM)
+            surface.blit(sub, (panel_x + back_w + 6, cy))
+            cy += sub.get_height() + 2
+        else:
+            cy += 4
+
+        # Scrollable item list. Reuse the per-bag scroll dict but key
+        # it on a synthetic bag name so the slip's scroll position
+        # doesn't clobber a real bag's. Per-frame storage; not
+        # persisted, which is fine since the dropdown closes often.
+        slip_scroll_key = f"__slip__{slip_id}"
+        list_top    = cy
+        list_bottom = panel_y + panel_h - pad
+        available_rows = max(1, (list_bottom - list_top) // row_h)
+        scroll = inventory_bag_scroll.get(slip_scroll_key, 0)
+        max_scroll = max(0, len(slip_items) - available_rows)
+        scroll = max(0, min(scroll, max_scroll))
+        inventory_bag_scroll[slip_scroll_key] = scroll
+
+        if not slip_items:
+            ph = small_font.render("(no items stored on this slip)",
+                                   True, COL_LABEL_DIM)
+            surface.blit(ph, (panel_x + pad, cy + 2))
+            return
+
+        visible = slip_items[scroll:scroll + available_rows]
+        for it in visible:
+            nm = it.get("name", "") or f"#{it.get('id', 0)}"
+            row_rect = pygame.Rect(panel_x + 2, cy,
+                                   panel_w - 4, row_h)
+            is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
+            if is_hover:
+                pygame.draw.rect(surface, (40, 40, 52), row_rect)
+
+            # Check mark column (left): ✓ if referenced in gearswap.
+            # Matches the bag-detail view's visual language.
+            if _item_in_gearswap(nm):
+                ck = label_font.render("✓", True, (140, 200, 140))
+                if ck.get_width() < 3:
+                    ck = label_font.render("*", True, (140, 200, 140))
+                surface.blit(ck,
+                    (panel_x + pad,
+                     cy + (row_h - ck.get_height()) // 2))
+
+            # Item name. Truncated if it overflows the row.
+            name_x = panel_x + pad + 18
+            name_max_w = panel_w - (name_x - panel_x) - pad - 4
+            name_color = ((140, 220, 255) if is_hover
+                          else (220, 220, 230))
+            name_surf = label_font.render(nm, True, name_color)
+            if name_surf.get_width() > name_max_w:
+                # Binary-search for the longest fitting prefix.
+                lo, hi = 1, len(nm)
+                while lo < hi:
+                    mid = (lo + hi + 1) // 2
+                    trial = nm[:mid] + "…"
+                    if label_font.size(trial)[0] <= name_max_w:
+                        lo = mid
+                    else:
+                        hi = mid - 1
+                nm_disp = nm[:lo] + "…"
+                name_surf = label_font.render(nm_disp,
+                                              True, name_color)
+            name_y = cy + (row_h - name_surf.get_height()) // 2
+            surface.blit(name_surf, (name_x, name_y))
+            if is_hover:
+                pygame.draw.line(surface, name_color,
+                    (name_x, name_y + name_surf.get_height() - 1),
+                    (name_x + name_surf.get_width(),
+                     name_y + name_surf.get_height() - 1))
+
+            inventory_dropdown_rects.append((row_rect, {
+                "kind": "open_item_url",
+                "url":  _bgwiki_item_url(nm),
+            }))
+            cy += row_h
+
+        # Scroll buttons (top-right) when overflow. Same shape as
+        # the bag-detail view. We bind the same "scroll" kind but
+        # with the slip_scroll_key so the click handler routes it
+        # to inventory_bag_scroll[slip_scroll_key].
+        if max_scroll > 0:
+            up_rect = pygame.Rect(panel_x + panel_w - 44,
+                                  panel_y + 4, 18, 18)
+            dn_rect = pygame.Rect(panel_x + panel_w - 22,
+                                  panel_y + 4, 18, 18)
+            for r, label in ((up_rect, "▲"), (dn_rect, "▼")):
+                pygame.draw.rect(surface, (60, 60, 75), r,
+                                 border_radius=2)
+                ts = label_font.render(label, True, (220, 220, 230))
+                if ts.get_width() < 4:
+                    ts = label_font.render(
+                        "^" if label == "▲" else "v",
+                        True, (220, 220, 230))
+                surface.blit(ts,
+                    (r.x + (r.w - ts.get_width()) // 2,
+                     r.y + (r.h - ts.get_height()) // 2))
+            inventory_dropdown_rects.append((up_rect, {
+                "kind": "scroll", "bag": slip_scroll_key, "delta": -1,
+            }))
+            inventory_dropdown_rects.append((dn_rect, {
+                "kind": "scroll", "bag": slip_scroll_key, "delta": 1,
+            }))
+        return
+
+    # ── View D: porter-slip LIST (middle level) ─────────────────────────
+    # Reached when the user clicked the "Porter Slips" entry in the
+    # bag-list view. Shows one row per slip the player owns; click a
+    # slip to drill into View C (its contents). Back arrow returns to
+    # the bag-list. Mirrors View B's header layout (back + title).
+    if inventory_show_slip_list:
+        # Header.
+        back_w = 28
+        back_rect = pygame.Rect(panel_x + 2, cy, back_w, row_h)
+        if back_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, (40, 40, 52), back_rect)
+        back_surf = title_font.render("‹", True, (220, 220, 230))
+        if back_surf.get_width() < 4:
+            back_surf = title_font.render("<", True, (220, 220, 230))
+        surface.blit(back_surf,
+            (back_rect.x + (back_w - back_surf.get_width()) // 2,
+             back_rect.y + (row_h - back_surf.get_height()) // 2))
+        inventory_dropdown_rects.append((back_rect,
+                                          {"kind": "back_slip_list"}))
+
+        slips_owned = sorted(inventory_slip_state.keys())
+        title_surf = title_font.render(
+            f"Porter Slips  ({len(slips_owned)} slips)",
+            True, (220, 200, 150))
+        surface.blit(title_surf,
+            (panel_x + back_w + 6,
+             cy + (row_h - title_surf.get_height()) // 2))
+        cy += row_h + 4
+
+        if not slips_owned:
+            ph = small_font.render("(no porter slips in inventory)",
+                                   True, COL_LABEL_DIM)
+            surface.blit(ph, (panel_x + pad, cy + 2))
+            return
+
+        # Per-slip rows. Reuses the nickname display logic from the
+        # earlier inline-section build: nickname (bright) + dim
+        # default-name suffix when set, else default name only.
+        slip_nicks = _porter_slip_nicknames_for_player()
+        for slip_id in slips_owned:
+            slip = inventory_slip_state.get(slip_id) or {}
+            default_name = slip.get("name") or f"Slip #{slip_id}"
+            stored_items = slip.get("items") or []
+            row_rect = pygame.Rect(panel_x + 2, cy,
+                                   panel_w - 4, row_h)
+            if row_rect.collidepoint(pygame.mouse.get_pos()):
+                pygame.draw.rect(surface, (40, 40, 52), row_rect)
+
+            nick = slip_nicks.get(slip_id, "").strip()
+            count_str = f"{len(stored_items):>3}"
+            count_surf = label_font.render(
+                count_str, True, COL_LABEL_DIM)
+            label_max_x = (panel_x + panel_w
+                           - count_surf.get_width() - pad - 4)
+            label_x = panel_x + pad
+
+            if nick:
+                nick_surf = label_font.render(
+                    nick, True, (220, 220, 230))
+                suffix_text = f"  ({default_name})"
+                suffix_surf = small_font.render(
+                    suffix_text, True, COL_LABEL_DIM)
+                avail = label_max_x - label_x
+                if (nick_surf.get_width()
+                        + suffix_surf.get_width() > avail):
+                    if nick_surf.get_width() + 20 <= avail:
+                        budget = avail - nick_surf.get_width()
+                        trimmed = suffix_text
+                        while (suffix_surf.get_width() > budget
+                               and len(trimmed) > 4):
+                            trimmed = trimmed[:-2] + "…"
+                            suffix_surf = small_font.render(
+                                trimmed, True, COL_LABEL_DIM)
+                    else:
+                        trimmed = nick
+                        while (nick_surf.get_width() > avail
+                               and len(trimmed) > 4):
+                            trimmed = trimmed[:-2] + "…"
+                            nick_surf = label_font.render(
+                                trimmed, True, (220, 220, 230))
+                        suffix_surf = None
+                surface.blit(nick_surf,
+                    (label_x,
+                     cy + (row_h - nick_surf.get_height()) // 2))
+                if suffix_surf is not None:
+                    surface.blit(suffix_surf,
+                        (label_x + nick_surf.get_width(),
+                         cy + (row_h - suffix_surf.get_height()) // 2))
+            else:
+                label_surf = label_font.render(
+                    default_name, True, (220, 220, 230))
+                if label_x + label_surf.get_width() > label_max_x:
+                    trimmed = default_name
+                    while (label_surf.get_width()
+                            > label_max_x - label_x
+                            and len(trimmed) > 4):
+                        trimmed = trimmed[:-2] + "…"
+                        label_surf = label_font.render(
+                            trimmed, True, (220, 220, 230))
+                surface.blit(label_surf,
+                    (label_x,
+                     cy + (row_h - label_surf.get_height()) // 2))
+
+            surface.blit(count_surf,
+                (panel_x + panel_w - count_surf.get_width() - pad,
+                 cy + (row_h - count_surf.get_height()) // 2))
+
+            # Same hit-test shape as the old inline section so the
+            # dispatch code path didn't have to fork. Right-click on
+            # this row still opens the nickname editor.
+            inventory_dropdown_rects.append((row_rect, {
+                "kind":         "open_slip",
+                "slip_id":      slip_id,
+                "default_name": default_name,
+            }))
+            cy += row_h
+        return
+
     # ── View A: bag list (or search results when query is set) ─────────
     if inventory_active_bag is None:
-        global inventory_search_box_rect, inventory_search_scroll
         # Header line: total items + freshness.
         total_items = sum(len(inventory_state.get(b, []))
                           for b, _ in INVENTORY_BAG_ORDER)
         if inventory_last_update_ts > 0:
             age_s = int(time.time() - inventory_last_update_ts)
-            hdr_text = f"Bags  ({total_items} items, {age_s}s ago)"
+            hdr_text = f"Inventory  ({total_items} items, {age_s}s ago)"
         else:
-            hdr_text = "Bags  (waiting for lua…)"
+            hdr_text = "Inventory  (waiting for lua…)"
         hdr_surf = title_font.render(hdr_text, True, (220, 200, 150))
         surface.blit(hdr_surf, (panel_x + pad, cy))
         cy += hdr_surf.get_height() + 4
@@ -11267,6 +20842,43 @@ def draw_inventory_dropdown(surface):
             }))
             cy += row_h
 
+        # ── Porter Slips entry row ──────────────────────────────────
+        # Single bag-style row showing how many slips the player owns.
+        # Clicking enters View D (the slip-list) — same drill-in
+        # pattern as clicking a bag enters View B. We DON'T enumerate
+        # individual slips here so the bag-list view stays tidy and
+        # consistent with the wardrobe/safe rows above it.
+        #
+        # Always shown, even when the player owns zero slips, so the
+        # entry is a stable navigation landmark rather than something
+        # that pops in and out of the bag list as you trade slips
+        # around. The count column reflects current ownership; the
+        # sub-view (View D) shows actual slip rows only for slips
+        # in inventory.
+        row_rect = pygame.Rect(panel_x + 2, cy,
+                               panel_w - 4, row_h)
+        if row_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, (40, 40, 52), row_rect)
+        label_surf = label_font.render(
+            "Porter Slips", True, (220, 220, 230))
+        count_str  = f"{len(inventory_slip_state):>3}"
+        count_surf = label_font.render(
+            count_str, True, COL_LABEL_DIM)
+        surface.blit(label_surf,
+            (panel_x + pad,
+             cy + (row_h - label_surf.get_height()) // 2))
+        surface.blit(count_surf,
+            (panel_x + panel_w - count_surf.get_width() - pad,
+             cy + (row_h - count_surf.get_height()) // 2))
+        # Click → enter slip-list (View D). Right-click on this
+        # top-level row is intentionally a no-op (no nickname to
+        # set on the Porter-Slips section itself); individual
+        # slip nicknames are set from the View D row right-click.
+        inventory_dropdown_rects.append((row_rect, {
+            "kind": "open_slip_list",
+        }))
+        cy += row_h
+
         # Footer hint about gearswap scan status.
         cy += 4
         if gearswap_folder_path:
@@ -11399,16 +21011,20 @@ def dispatch_inventory_dropdown_click(mx, my):
     handler should `continue` so the click doesn't fall through to
     panel drag/url handlers underneath."""
     global inventory_dropdown_open, inventory_active_bag
+    global inventory_active_slip
+    global inventory_show_slip_list
     global inventory_bag_scroll
     global inventory_search_query, inventory_search_focused
     global inventory_search_scroll, inventory_search_results_key
 
-    # Always-eat the toggle button click — clicking 'Bags' should
+    # Always-eat the toggle button click — clicking 'Inventory' should
     # never fall through to drag.
     if inventory_button_rect and inventory_button_rect.collidepoint(mx, my):
         inventory_dropdown_open = not inventory_dropdown_open
         if not inventory_dropdown_open:
             inventory_active_bag = None    # reset to bag-list view next open
+            inventory_active_slip = None
+            inventory_show_slip_list = False
             inventory_search_focused = False
         return True
 
@@ -11421,12 +21037,49 @@ def dispatch_inventory_dropdown_click(mx, my):
             kind = action.get("kind")
             if kind == "open_bag":
                 inventory_active_bag = action["bag"]
+                inventory_active_slip = None
+                inventory_show_slip_list = False
                 inventory_bag_scroll[action["bag"]] = 0
                 inventory_search_focused = False
-            elif kind == "back":
+            elif kind == "open_slip_list":
+                # Enter the middle view (one row per owned slip).
+                # Click came from the bag-list view's "Porter Slips"
+                # row. Reset bag/slip detail state so the
+                # View-priority chain resolves to View D.
+                inventory_show_slip_list = True
+                inventory_active_bag = None
+                inventory_active_slip = None
+                inventory_search_focused = False
+            elif kind == "open_slip":
+                # Drill into a porter slip's contents (deepest view).
+                # Came from View D (slip-list). We KEEP
+                # inventory_show_slip_list True so back-arrow from
+                # the detail returns here, not all the way to the
+                # bag-list — matches the "back goes one level up"
+                # behavior the user asked for.
+                inventory_active_slip = action["slip_id"]
                 inventory_active_bag = None
                 inventory_search_focused = False
+            elif kind == "back":
+                # Back from bag-detail (View B) → bag-list (View A).
+                inventory_active_bag = None
+                inventory_search_focused = False
+            elif kind == "back_slip":
+                # Back from slip-detail (View C). Returns to the
+                # slip-list (View D), NOT the bag-list — one level
+                # up. inventory_show_slip_list stays True from the
+                # earlier open_slip_list; we only clear active_slip.
+                inventory_active_slip = None
+                inventory_search_focused = False
+            elif kind == "back_slip_list":
+                # Back from slip-list (View D) → bag-list (View A).
+                inventory_show_slip_list = False
+                inventory_search_focused = False
             elif kind == "scroll":
+                # Used for both bag-detail and slip-detail scroll.
+                # action["bag"] holds either a real bag key OR a
+                # synthetic "__slip__<id>" key — both route through
+                # the same inventory_bag_scroll dict.
                 bag = action["bag"]
                 cur = inventory_bag_scroll.get(bag, 0)
                 inventory_bag_scroll[bag] = max(0, cur + action["delta"])
@@ -11461,8 +21114,123 @@ def dispatch_inventory_dropdown_click(mx, my):
     # Click outside panel + outside button = close the dropdown.
     inventory_dropdown_open = False
     inventory_active_bag = None
+    inventory_active_slip = None
+    inventory_show_slip_list = False
     inventory_search_focused = False
     return False
+
+
+def dispatch_inventory_dropdown_right_click(mx, my):
+    """Right-click dispatcher for the inventory dropdown.
+
+    Currently handles only one case: right-clicking a porter slip row
+    in the bag-list view opens the nickname editor modal for that
+    slip. All other right-clicks (anywhere else in the panel, or
+    when the panel is closed) return False so the click can fall
+    through to other handlers.
+
+    Returns True if the right-click was consumed.
+    """
+    global inventory_slip_nickname_editor
+    if not inventory_dropdown_open:
+        return False
+    for rect, action in inventory_dropdown_rects:
+        if not rect.collidepoint(mx, my):
+            continue
+        if action.get("kind") != "open_slip":
+            continue
+        # Open the editor pre-filled with the current nickname (or
+        # empty if none set). The default name is shown as the
+        # placeholder/hint in the modal.
+        slip_id = action["slip_id"]
+        default_name = action.get("default_name") or f"Slip #{slip_id}"
+        slip_nicks = _porter_slip_nicknames_for_player()
+        current_nick = slip_nicks.get(slip_id, "")
+        inventory_slip_nickname_editor = {
+            "slip_id":      slip_id,
+            "default_name": default_name,
+            "text":         current_nick,
+            "cursor":       len(current_nick),
+            "cursor_blink": time.time(),
+        }
+        return True
+    return False
+
+
+def draw_inventory_slip_nickname_editor(surface):
+    """Render the porter-slip nickname editor modal if open.
+
+    A small centered modal anchored to the inventory dropdown panel
+    (NOT the whole screen — keeps the editor visually connected to
+    what the user right-clicked). Title shows the default slip name
+    so the user knows which slip they're editing. Single-line text
+    input below; Enter to save, Esc to cancel, empty string clears
+    the nickname. Mirrors the sim_nickname_editor style for visual
+    consistency.
+
+    State lives in inventory_slip_nickname_editor (or None when not
+    open). The text input event handler in the KEYDOWN dispatcher
+    reads/writes that state; this function just renders it.
+
+    No-op when state is None.
+    """
+    if inventory_slip_nickname_editor is None:
+        return
+    ed = inventory_slip_nickname_editor
+    geom = _inventory_panel_geometry()
+    if not geom:
+        return
+    panel_x, panel_y, panel_w, panel_h = geom
+
+    # Modal: centered over the dropdown panel, slightly narrower so
+    # the panel chrome shows around the edges (signals modality).
+    ep_w = max(260, panel_w - 24)
+    ep_h = 110
+    ep_x = panel_x + (panel_w - ep_w) // 2
+    ep_y = panel_y + (panel_h - ep_h) // 2
+
+    # Backdrop dim over the dropdown panel only (not the whole
+    # screen — the dropdown is itself a popover, dimming the rest
+    # of OmniWatch would be visually confusing).
+    backdrop = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+    backdrop.fill((0, 0, 0, 160))
+    surface.blit(backdrop, (panel_x, panel_y))
+
+    # Modal panel
+    pygame.draw.rect(surface, (32, 32, 42),
+                     (ep_x, ep_y, ep_w, ep_h), border_radius=6)
+    pygame.draw.rect(surface, (90, 100, 130),
+                     (ep_x, ep_y, ep_w, ep_h), 1, border_radius=6)
+
+    # Fonts — match the dropdown's font choices.
+    title_font  = pygame.font.SysFont("Consolas", 12, bold=True)
+    label_font  = pygame.font.SysFont("Consolas", 11)
+    small_font  = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    # Title: which slip is being renamed.
+    default_name = ed.get("default_name") or "?"
+    title_text = f"Rename: {default_name}"
+    t_surf = title_font.render(title_text, True, (220, 200, 150))
+    surface.blit(t_surf, (ep_x + 10, ep_y + 8))
+
+    # Hint line below title.
+    hint = "Enter to save · Esc to cancel · empty clears"
+    h_surf = small_font.render(hint, True, (140, 145, 155))
+    surface.blit(h_surf, (ep_x + 10, ep_y + 28))
+
+    # Input box.
+    box = pygame.Rect(ep_x + 10, ep_y + 52, ep_w - 20, 28)
+    pygame.draw.rect(surface, (20, 20, 28), box, border_radius=3)
+    pygame.draw.rect(surface, (110, 130, 170), box, 1, border_radius=3)
+
+    # Text + blinking cursor. Cursor toggles ~every 530ms.
+    txt = ed.get("text", "")
+    show_cursor = (
+        int((time.time() - ed.get("cursor_blink", 0)) * 1.9) % 2 == 0)
+    rendered = txt + ("|" if show_cursor else "")
+    i_surf = label_font.render(rendered, True, (230, 230, 240))
+    surface.blit(i_surf, (box.x + 6,
+                          box.y + (box.height - i_surf.get_height()) // 2))
 
 
 # ── Simulation window ───────────────────────────────────────────────────────
@@ -12509,6 +22277,3891 @@ def draw_sim_import_modal(surface):
                      (imp_btn.right + 10, cy + 4))
 
 
+def _draw_checkbox_check(surface, cb_rect, color=(140, 220, 140)):
+    """Draw a ✓ inside a checkbox-style rect using pygame primitives.
+
+    Used instead of `font.render("✓")` because the bundled Consolas
+    SysFont doesn't reliably ship the Unicode checkmark glyph — on
+    most Windows installs it renders as a blank-width fallback, so
+    enabled checkboxes look empty. Two line segments forming a tick
+    shape (short stroke down-right, long stroke up-right) reads as
+    a clear check regardless of font availability.
+
+    cb_rect is the checkbox rectangle (typically 14×14 px). The
+    check is drawn 2px inside each edge so it visually fits without
+    overlapping the box border.
+    """
+    inset = 2
+    p1 = (cb_rect.x + inset,
+          cb_rect.y + cb_rect.h // 2 + 1)
+    p2 = (cb_rect.x + cb_rect.w // 2 - 1,
+          cb_rect.bottom - inset - 1)
+    p3 = (cb_rect.right - inset,
+          cb_rect.y + inset + 1)
+    pygame.draw.lines(surface, color, False, [p1, p2, p3], 2)
+
+
+def draw_currency_settings_modal(surface):
+    """Render the currency cycler subdialog if open. A small centered
+    panel with six checkboxes (one per currency), a +/- spinner for
+    the cycle interval, and a Close button. Refills
+    currency_settings_modal_rects each frame with click targets.
+
+    State is read straight from settings[] so toggling immediately
+    affects the header cycler. Closing the modal commits nothing extra
+    — settings already auto-persist via the standard save path.
+    """
+    global currency_settings_modal_rects
+    currency_settings_modal_rects = []
+    if not currency_settings_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(420, sw - 40)
+    # Compute height from the actual currency-row count instead of
+    # hardcoding 280px. With 6 currencies the old 280 had headroom;
+    # with 9 the modal bled off the bottom of the screen (Tokens and
+    # Ichor were under the header strip / clipped). Breakdown:
+    #   title_block   ≈ 50  (title + subtitle + gap)
+    #   interval_row  ≈ 32  (spinner)
+    #   divider       ≈ 8
+    #   rows          = 22 * len(CURRENCY_CYCLE_KEYS)
+    #   close_block   ≈ 50
+    title_block_h = 50
+    interval_h    = 32
+    divider_h     = 8
+    row_h         = 22
+    close_block_h = 50
+    rows_h = row_h * len(CURRENCY_CYCLE_KEYS)
+    mh = (title_block_h + interval_h + divider_h + rows_h + close_block_h)
+    # Floor at the original 280 so the modal can't look cramped on
+    # the smallest installs (1-2 currencies enabled is still a 9-
+    # row schema; future additions might also shrink the list).
+    mh = max(mh, 280)
+    # Ceiling at screen height − 40 so even on tiny windows the
+    # modal stays bordered top + bottom.
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim (also a click-catcher to close on outside click).
+    # When transparent_background is ON, the LWA_COLORKEY compositor
+    # filter relies on every "empty" pixel still being COL_BG. Filling
+    # the screen with a (0,0,0,150) overlay paints those pixels with a
+    # different color and the colorkey stops triggering — so the modal
+    # looks fine but the surrounding window goes opaque. Skip the
+    # visual dim in that case; the click target still registers below
+    # so clicking outside the panel still dismisses.
+    if not setting("transparent_background"):
+        backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        backdrop.fill((0, 0, 0, 150))
+        surface.blit(backdrop, (0, 0))
+    currency_settings_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "cur_backdrop"}))
+
+    # Panel.
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    # Re-register the panel itself as a click-eater so panel-internal
+    # clicks that miss a control don't fall through to the backdrop
+    # and dismiss the modal accidentally.
+    currency_settings_modal_rects.append(
+        (panel, {"action": "cur_panel_bg"}))
+
+    # Fonts.
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    pad = 14
+    cy_y = my + pad
+
+    # Title.
+    t_surf = title_font.render(
+        "Currency Cycler", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    # Subtitle/hint.
+    sub_surf = small_font.render(
+        "Pick which currencies appear in the header rotation.",
+        True, (160, 160, 175))
+    surface.blit(sub_surf, (mx + pad, cy_y))
+    cy_y += sub_surf.get_height() + 10
+
+    # Cycle interval spinner (− value + label).
+    interval = setting("header_currency_cycle_seconds") or 5
+    try:
+        interval = int(interval)
+    except (TypeError, ValueError):
+        interval = 5
+    iv_label = label_font.render(
+        "Cycle interval:", True, (220, 220, 230))
+    surface.blit(iv_label, (mx + pad, cy_y + 4))
+    iv_lbl_w = iv_label.get_width()
+
+    # Minus button.
+    minus_rect = pygame.Rect(mx + pad + iv_lbl_w + 12, cy_y, 22, 22)
+    pygame.draw.rect(surface, (50, 50, 65), minus_rect, border_radius=3)
+    pygame.draw.rect(surface, (110, 110, 130), minus_rect, 1,
+                     border_radius=3)
+    m_surf = label_font.render("−", True, (220, 220, 230))
+    surface.blit(m_surf,
+        (minus_rect.x + (22 - m_surf.get_width()) // 2,
+         minus_rect.y + (22 - m_surf.get_height()) // 2))
+    currency_settings_modal_rects.append(
+        (minus_rect, {"action": "cur_interval", "delta": -1}))
+
+    # Value display.
+    val_surf = label_font.render(
+        f"{interval}s", True, (220, 195, 90))
+    val_x = minus_rect.right + 8
+    surface.blit(val_surf,
+        (val_x, cy_y + (22 - val_surf.get_height()) // 2))
+
+    # Plus button.
+    plus_rect = pygame.Rect(val_x + 40, cy_y, 22, 22)
+    pygame.draw.rect(surface, (50, 50, 65), plus_rect, border_radius=3)
+    pygame.draw.rect(surface, (110, 110, 130), plus_rect, 1,
+                     border_radius=3)
+    p_surf = label_font.render("+", True, (220, 220, 230))
+    surface.blit(p_surf,
+        (plus_rect.x + (22 - p_surf.get_width()) // 2,
+         plus_rect.y + (22 - p_surf.get_height()) // 2))
+    currency_settings_modal_rects.append(
+        (plus_rect, {"action": "cur_interval", "delta": 1}))
+
+    # Range hint.
+    range_surf = small_font.render(
+        " (2-10s)", True, (140, 145, 160))
+    surface.blit(range_surf,
+        (plus_rect.right + 8,
+         cy_y + (22 - range_surf.get_height()) // 2))
+
+    cy_y += 32
+
+    # Divider.
+    pygame.draw.line(surface, (60, 60, 75),
+                     (mx + pad, cy_y),
+                     (mx + mw - pad, cy_y), 1)
+    cy_y += 8
+
+    # Per-currency checkboxes.
+    for key, name, setting_key in CURRENCY_CYCLE_KEYS:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, 22)
+        # Hover highlight.
+        if row_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, (40, 40, 52), row_rect,
+                             border_radius=2)
+
+        # Checkbox.
+        cb_size = 14
+        cb_rect = pygame.Rect(mx + pad + 4,
+                              cy_y + (22 - cb_size) // 2,
+                              cb_size, cb_size)
+        pygame.draw.rect(surface, (30, 30, 40), cb_rect,
+                         border_radius=2)
+        pygame.draw.rect(surface, (110, 130, 170), cb_rect, 1,
+                         border_radius=2)
+        is_on = bool(setting(setting_key))
+        if is_on:
+            _draw_checkbox_check(surface, cb_rect)
+
+        # Label + current value preview.
+        name_surf = label_font.render(name, True, (220, 220, 230))
+        surface.blit(name_surf,
+            (cb_rect.right + 8,
+             cy_y + (22 - name_surf.get_height()) // 2))
+        # Show the current value as a faint suffix so the user can
+        # confirm at a glance that data is actually flowing.
+        cur_val = currency_state.get(key, 0)
+        val_text = f"({cur_val:,})"
+        val_s = small_font.render(val_text, True, (140, 145, 160))
+        surface.blit(val_s,
+            (mx + mw - pad - val_s.get_width(),
+             cy_y + (22 - val_s.get_height()) // 2))
+
+        currency_settings_modal_rects.append(
+            (row_rect, {"action": "cur_toggle",
+                        "key": setting_key}))
+        cy_y += 22
+
+    # Close button at bottom right.
+    cy_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, cy_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    currency_settings_modal_rects.append(
+        (close_rect, {"action": "cur_close"}))
+
+
+def dispatch_currency_settings_click(mx, my):
+    """Resolve a click against the currency settings modal. Returns
+    True if consumed. Walks the rects list in reverse so foreground
+    controls (buttons, checkboxes) take priority over the panel
+    background catcher and the backdrop."""
+    global currency_settings_modal_open
+    global currency_cycle_index, currency_cycle_last_advance
+    global settings_menu_open
+    if not currency_settings_modal_open:
+        return False
+    for rect, action in reversed(currency_settings_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action")
+        if what == "cur_backdrop":
+            # Outside-click closes.
+            currency_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "cur_panel_bg":
+            # Click inside panel but not on a control — swallow so
+            # the click doesn't fall through to the backdrop.
+            return True
+        if what == "cur_close":
+            currency_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "cur_toggle":
+            key = action["key"]
+            cur = bool(setting(key))
+            settings[key] = not cur
+            apply_setting_side_effects(key, not cur)
+            save_settings()
+            # Reset cycle so the user lands on a sensible entry
+            # rather than a now-disabled one.
+            currency_cycle_index = 0
+            currency_cycle_last_advance = time.time()
+            return True
+        if what == "cur_interval":
+            delta = action.get("delta", 0)
+            cur = setting("header_currency_cycle_seconds") or 5
+            try:
+                cur = int(cur)
+            except (TypeError, ValueError):
+                cur = 5
+            new_val = max(2, min(10, cur + delta))
+            if new_val != cur:
+                settings["header_currency_cycle_seconds"] = new_val
+                apply_setting_side_effects(
+                    "header_currency_cycle_seconds", new_val)
+                save_settings()
+            return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Party Panel settings modal — mirrors the currency modal's pattern:
+# centered popup, backdrop dim, panel of controls, Close button.
+# Holds the nine party settings that used to live inline in the
+# settings dropdown. Each control reads/writes the underlying setting
+# via setting() / settings[key] and triggers apply_setting_side_effects
+# + save_settings on change.
+# ──────────────────────────────────────────────────────────────────────
+
+# Row definitions for the party modal. Tuple shape:
+#   (setting_key, display_label, control_kind, help_optional)
+#   control_kind: "bool" | "enum" | "button"
+# Order is the render order in the modal — keep logically grouped
+# (visibility toggles first, then column toggles, then formatting,
+# then the blacklist editor).
+_PARTY_MODAL_ROWS = [
+    ("show_party",            "Show party panel",        "bool"),
+    ("show_alliance",         "Show alliance",           "bool"),
+    ("party_show_pets",       "Show pets",               "bool"),
+    ("party_show_buffs",      "Show buffs",              "bool"),
+    ("party_show_debuffs",    "Show debuffs",            "bool"),
+    ("party_buff_font_size",  "Buff/debuff font size",   "enum"),
+    ("party_buff_icon_grid",  "Compact icon grid",       "bool"),
+    ("specific_buff_names",   "Specific buff names (self)", "bool"),
+    ("edit_buff_blacklist",   "Edit buffs / debuffs",    "button"),
+]
+
+
+def draw_party_settings_modal(surface):
+    """Render the Party Panel subdialog if open. Refills
+    party_settings_modal_rects each frame with click targets.
+
+    Control rendering:
+      bool   — checkbox + label (full-row click toggle)
+      enum   — checkbox-row layout but the right side shows the
+               current option name in a small pill; click cycles
+               through options
+      button — checkbox-row layout but the right side shows an
+               "Open..." pill; click triggers the registered action
+               (in practice: edit_buff_blacklist → open the JSON
+               in the user's default editor).
+    """
+    global party_settings_modal_rects
+    party_settings_modal_rects = []
+    if not party_settings_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    # Generous width for label + control on the right.
+    mw = min(500, sw - 40)
+    # Height grows with row count: title block + N*row_h + close
+    # button + padding. row_h = 26 keeps things readable without
+    # feeling sparse.
+    title_block_h = 50
+    row_h         = 26
+    close_block_h = 50
+    pad           = 14
+    mh = title_block_h + len(_PARTY_MODAL_ROWS) * row_h + close_block_h
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim — click closes. Skip the visual fill when
+    # transparent_background is on (see currency modal note about
+    # the LWA_COLORKEY interaction); click target still registers.
+    if not setting("transparent_background"):
+        backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        backdrop.fill((0, 0, 0, 150))
+        surface.blit(backdrop, (0, 0))
+    party_settings_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "party_backdrop"}))
+
+    # Panel.
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    # Swallow panel-internal misclicks so they don't dismiss the
+    # modal via the backdrop catch.
+    party_settings_modal_rects.append(
+        (panel, {"action": "party_panel_bg"}))
+
+    # Fonts (match the currency modal's font choices for visual
+    # consistency).
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    cy_y = my + pad
+
+    # Title + subtitle.
+    t_surf = title_font.render("Party Panel", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    sub_surf = small_font.render(
+        "Show/hide rows and configure buff & debuff columns.",
+        True, (160, 160, 175))
+    surface.blit(sub_surf, (mx + pad, cy_y))
+    cy_y += sub_surf.get_height() + 10
+
+    # Rows.
+    for setting_key, display_label, kind in _PARTY_MODAL_ROWS:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        # Hover highlight (mirrors currency modal).
+        if row_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, (40, 40, 52), row_rect,
+                             border_radius=2)
+
+        if kind == "bool":
+            # Checkbox-style toggle.
+            cb_size = 14
+            cb_rect = pygame.Rect(mx + pad + 4,
+                                  cy_y + (row_h - cb_size) // 2 - 1,
+                                  cb_size, cb_size)
+            pygame.draw.rect(surface, (30, 30, 40), cb_rect,
+                             border_radius=2)
+            pygame.draw.rect(surface, (110, 130, 170), cb_rect, 1,
+                             border_radius=2)
+            is_on = bool(setting(setting_key))
+            if is_on:
+                _draw_checkbox_check(surface, cb_rect)
+            # Label.
+            name_surf = label_font.render(display_label, True,
+                                           (220, 220, 230))
+            surface.blit(name_surf,
+                (cb_rect.right + 8,
+                 cy_y + (row_h - name_surf.get_height()) // 2 - 1))
+            # Whole-row click toggles.
+            party_settings_modal_rects.append(
+                (row_rect, {"action": "party_toggle",
+                            "key": setting_key}))
+
+        elif kind == "enum":
+            # Label on the left (no checkbox — this isn't a toggle).
+            name_surf = label_font.render(display_label, True,
+                                           (220, 220, 230))
+            surface.blit(name_surf,
+                (mx + pad + 4,
+                 cy_y + (row_h - name_surf.get_height()) // 2 - 1))
+            # Current option pill on the right; click cycles forward.
+            # Pull current value + the schema's option list to
+            # determine the next value. Falls back to "medium" if
+            # the schema entry is missing (shouldn't happen, but
+            # defensive).
+            schema = _setting_schema(setting_key)
+            options       = (schema.get("options") if schema else None) or ["small", "medium", "large"]
+            option_labels = (schema.get("option_labels") if schema
+                             else None) or [s.title() for s in options]
+            cur_val = setting(setting_key) or options[0]
+            try:
+                cur_idx = options.index(cur_val)
+            except ValueError:
+                cur_idx = 0
+            cur_label = option_labels[cur_idx]
+            pill_text = f"{cur_label}"
+            pill_surf = label_font.render(pill_text, True, (220, 195, 90))
+            pill_pad_x = 10
+            pill_w = pill_surf.get_width() + pill_pad_x * 2
+            pill_h = 20
+            pill_rect = pygame.Rect(
+                mx + mw - pad - pill_w,
+                cy_y + (row_h - pill_h) // 2 - 1,
+                pill_w, pill_h)
+            pygame.draw.rect(surface, (50, 50, 65), pill_rect,
+                             border_radius=3)
+            pygame.draw.rect(surface, (110, 130, 170), pill_rect, 1,
+                             border_radius=3)
+            surface.blit(pill_surf,
+                (pill_rect.x + pill_pad_x,
+                 pill_rect.y + (pill_h - pill_surf.get_height()) // 2))
+            party_settings_modal_rects.append(
+                (pill_rect, {"action": "party_enum_cycle",
+                             "key": setting_key,
+                             "options": list(options)}))
+
+        elif kind == "button":
+            # Label on the left, action pill on the right.
+            name_surf = label_font.render(display_label, True,
+                                           (220, 220, 230))
+            surface.blit(name_surf,
+                (mx + pad + 4,
+                 cy_y + (row_h - name_surf.get_height()) // 2 - 1))
+            btn_text = "Open..."
+            btn_surf = label_font.render(btn_text, True, (220, 220, 230))
+            btn_pad_x = 10
+            btn_w = btn_surf.get_width() + btn_pad_x * 2
+            btn_h = 20
+            btn_rect = pygame.Rect(
+                mx + mw - pad - btn_w,
+                cy_y + (row_h - btn_h) // 2 - 1,
+                btn_w, btn_h)
+            pygame.draw.rect(surface, (60, 70, 90), btn_rect,
+                             border_radius=3)
+            pygame.draw.rect(surface, (140, 160, 200), btn_rect, 1,
+                             border_radius=3)
+            surface.blit(btn_surf,
+                (btn_rect.x + btn_pad_x,
+                 btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
+            # Look up the action key from the schema so dispatch can
+            # invoke it via the action registry.
+            schema = _setting_schema(setting_key)
+            action_key = (schema or {}).get("action", "")
+            party_settings_modal_rects.append(
+                (btn_rect, {"action": "party_action",
+                            "action_key": action_key}))
+
+        cy_y += row_h
+
+    # Close button at bottom right.
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    party_settings_modal_rects.append(
+        (close_rect, {"action": "party_close"}))
+
+
+def dispatch_party_settings_click(mx, my):
+    """Resolve a click against the party panel modal. Returns True if
+    consumed. Reverse-iterates rects so foreground controls beat the
+    panel/backdrop catches."""
+    global party_settings_modal_open
+    global settings_menu_open
+    if not party_settings_modal_open:
+        return False
+    for rect, action in reversed(party_settings_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action")
+        if what == "party_backdrop":
+            party_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "party_panel_bg":
+            return True
+        if what == "party_close":
+            party_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "party_toggle":
+            key = action["key"]
+            cur = bool(setting(key))
+            settings[key] = not cur
+            apply_setting_side_effects(key, not cur)
+            save_settings()
+            return True
+        if what == "party_enum_cycle":
+            key = action["key"]
+            options = action.get("options", [])
+            if not options:
+                return True
+            cur = setting(key) or options[0]
+            try:
+                cur_idx = options.index(cur)
+            except ValueError:
+                cur_idx = -1
+            next_val = options[(cur_idx + 1) % len(options)]
+            settings[key] = next_val
+            apply_setting_side_effects(key, next_val)
+            save_settings()
+            return True
+        if what == "party_action":
+            action_key = action.get("action_key", "")
+            handler = _SETTINGS_ACTIONS.get(action_key)
+            if callable(handler):
+                try:
+                    handler()
+                except Exception as e:
+                    print(f"[OmniWatch] party action {action_key!r}: {e!r}")
+            return True
+    return False
+
+
+def _setting_schema(key):
+    """Look up a setting's schema entry from SETTINGS_SCHEMA by key.
+    Returns the dict or None. Used by the party modal to read enum
+    options + action mappings without duplicating that data inline."""
+    for entry in SETTINGS_SCHEMA:
+        if entry.get("key") == key:
+            return entry
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Display settings modal — opacity, UI scale, transparent background,
+# and a Hide display action. Mirrors the Party Panel modal's style
+# but adds int/float spinner rows (minus / value / plus) for the
+# numeric settings. The hide-display row is an action button that
+# fires _toggle_display_hidden.
+# ──────────────────────────────────────────────────────────────────────
+
+# Row table. Tuple shape: (setting_key, display_label, control_kind)
+# where control_kind is one of: "int" | "float" | "bool" | "action".
+# "action" is special — instead of toggling a setting it fires an
+# action handler from _SETTINGS_ACTIONS (the action key is read from
+# the row's auxiliary fourth element, present only for action rows).
+_DISPLAY_MODAL_ROWS = [
+    ("window_opacity",         "Window opacity %",       "int"),
+    ("global_ui_scale",        "Global UI scale",        "float"),
+    ("transparent_background", "Transparent background", "bool"),
+    # show_hide_nub controls whether the floating nub ("eye") renders
+    # at all. Off = nub completely hidden; on = nub visible and can be
+    # clicked to hide/show the panels. Defaults to on. The earlier
+    # toggle here used an action that flipped display_hidden — which
+    # hid the panels but left the eye visible, which was the opposite
+    # of what was asked for. A direct bool toggle on show_hide_nub
+    # makes the row do exactly what its label says.
+    ("show_hide_nub",          "Show toggle nub (eye)",  "bool"),
+]
+
+
+def draw_display_settings_modal(surface):
+    """Render the Display subdialog if open. Refills
+    display_settings_modal_rects each frame with click targets.
+
+    Control rendering:
+      int    — label on left, [−] [value] [+] spinner on right.
+               min/max/step come from the setting's schema.
+      float  — same as int but value formatted as f"{v:.2f}".
+      bool   — checkbox + label (whole-row click toggles).
+      action — label + [Toggle] pill on right; click runs the action.
+    """
+    global display_settings_modal_rects
+    display_settings_modal_rects = []
+    if not display_settings_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(520, sw - 40)
+    title_block_h = 50
+    row_h         = 28      # slightly taller than party (spinners need it)
+    close_block_h = 50
+    pad           = 14
+    mh = title_block_h + len(_DISPLAY_MODAL_ROWS) * row_h + close_block_h
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim — click closes. Skip the visual fill when
+    # transparent_background is on (see currency modal note);
+    # click target still registers.
+    if not setting("transparent_background"):
+        backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        backdrop.fill((0, 0, 0, 150))
+        surface.blit(backdrop, (0, 0))
+    display_settings_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "disp_backdrop"}))
+
+    # Panel.
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    display_settings_modal_rects.append(
+        (panel, {"action": "disp_panel_bg"}))
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    cy_y = my + pad
+
+    # Title + subtitle.
+    t_surf = title_font.render("Display", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    sub_surf = small_font.render(
+        "Window appearance and visibility controls.",
+        True, (160, 160, 175))
+    surface.blit(sub_surf, (mx + pad, cy_y))
+    cy_y += sub_surf.get_height() + 10
+
+    for setting_key, display_label, kind in _DISPLAY_MODAL_ROWS:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        if row_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, (40, 40, 52), row_rect,
+                             border_radius=2)
+
+        # Label (always on the left).
+        name_surf = label_font.render(display_label, True,
+                                       (220, 220, 230))
+        surface.blit(name_surf,
+            (mx + pad + 4,
+             cy_y + (row_h - name_surf.get_height()) // 2 - 1))
+
+        if kind == "bool":
+            # Right-side checkbox (mirror Party modal but anchor to
+            # the right so labels align with int/float rows above).
+            cb_size = 14
+            cb_rect = pygame.Rect(
+                mx + mw - pad - cb_size - 4,
+                cy_y + (row_h - cb_size) // 2 - 1,
+                cb_size, cb_size)
+            pygame.draw.rect(surface, (30, 30, 40), cb_rect,
+                             border_radius=2)
+            pygame.draw.rect(surface, (110, 130, 170), cb_rect, 1,
+                             border_radius=2)
+            is_on = bool(setting(setting_key))
+            if is_on:
+                _draw_checkbox_check(surface, cb_rect)
+            # Whole-row click toggles.
+            display_settings_modal_rects.append(
+                (row_rect, {"action": "disp_toggle",
+                            "key": setting_key}))
+
+        elif kind in ("int", "float"):
+            schema = _setting_schema(setting_key) or {}
+            cur = setting(setting_key)
+            if cur is None:
+                cur = schema.get("default", 0)
+            try:
+                cur = float(cur) if kind == "float" else int(cur)
+            except (TypeError, ValueError):
+                cur = float(schema.get("default", 0)) if kind == "float" else int(schema.get("default", 0))
+            # Minus button.
+            spinner_y = cy_y + (row_h - 22) // 2 - 1
+            minus_w = 22
+            plus_w  = 22
+            # Compute value pill width based on formatted text.
+            if kind == "float":
+                val_text = f"{cur:.2f}"
+            else:
+                val_text = f"{cur}"
+            val_surf = label_font.render(val_text, True, (220, 195, 90))
+            val_pad_x = 10
+            val_w = max(val_surf.get_width() + val_pad_x * 2, 44)
+            gap = 4
+            total_spinner_w = minus_w + gap + val_w + gap + plus_w
+            right_edge = mx + mw - pad - 4
+            spinner_x  = right_edge - total_spinner_w
+            # Render minus.
+            minus_rect = pygame.Rect(spinner_x, spinner_y, minus_w, 22)
+            pygame.draw.rect(surface, (50, 50, 65), minus_rect,
+                             border_radius=3)
+            pygame.draw.rect(surface, (110, 110, 130), minus_rect, 1,
+                             border_radius=3)
+            m_surf = label_font.render("−", True, (220, 220, 230))
+            surface.blit(m_surf,
+                (minus_rect.x + (minus_w - m_surf.get_width()) // 2,
+                 minus_rect.y + (22 - m_surf.get_height()) // 2))
+            display_settings_modal_rects.append(
+                (minus_rect, {"action": "disp_spinner",
+                              "key": setting_key,
+                              "kind": kind,
+                              "delta": -1}))
+            # Value pill.
+            val_rect = pygame.Rect(minus_rect.right + gap, spinner_y,
+                                    val_w, 22)
+            pygame.draw.rect(surface, (30, 30, 40), val_rect,
+                             border_radius=3)
+            pygame.draw.rect(surface, (110, 130, 170), val_rect, 1,
+                             border_radius=3)
+            surface.blit(val_surf,
+                (val_rect.x + (val_w - val_surf.get_width()) // 2,
+                 val_rect.y + (22 - val_surf.get_height()) // 2))
+            # Plus button.
+            plus_rect = pygame.Rect(val_rect.right + gap, spinner_y,
+                                     plus_w, 22)
+            pygame.draw.rect(surface, (50, 50, 65), plus_rect,
+                             border_radius=3)
+            pygame.draw.rect(surface, (110, 110, 130), plus_rect, 1,
+                             border_radius=3)
+            p_surf = label_font.render("+", True, (220, 220, 230))
+            surface.blit(p_surf,
+                (plus_rect.x + (plus_w - p_surf.get_width()) // 2,
+                 plus_rect.y + (22 - p_surf.get_height()) // 2))
+            display_settings_modal_rects.append(
+                (plus_rect, {"action": "disp_spinner",
+                             "key": setting_key,
+                             "kind": kind,
+                             "delta": 1}))
+
+        elif kind == "action":
+            # Hide display button.
+            btn_text = "Toggle"
+            btn_surf = label_font.render(btn_text, True, (220, 220, 230))
+            btn_pad_x = 12
+            btn_w = btn_surf.get_width() + btn_pad_x * 2
+            btn_h = 22
+            btn_rect = pygame.Rect(
+                mx + mw - pad - btn_w - 4,
+                cy_y + (row_h - btn_h) // 2 - 1,
+                btn_w, btn_h)
+            pygame.draw.rect(surface, (60, 70, 90), btn_rect,
+                             border_radius=3)
+            pygame.draw.rect(surface, (140, 160, 200), btn_rect, 1,
+                             border_radius=3)
+            surface.blit(btn_surf,
+                (btn_rect.x + btn_pad_x,
+                 btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
+            display_settings_modal_rects.append(
+                (btn_rect, {"action": "disp_action",
+                            "action_key": setting_key}))
+
+        cy_y += row_h
+
+    # Close button.
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    display_settings_modal_rects.append(
+        (close_rect, {"action": "disp_close"}))
+
+
+def dispatch_display_settings_click(mx, my):
+    """Resolve a click against the Display modal. Returns True if
+    consumed. Reverse-iterates rects so foreground controls beat the
+    panel/backdrop catches."""
+    global display_settings_modal_open
+    global settings_menu_open
+    if not display_settings_modal_open:
+        return False
+    for rect, action in reversed(display_settings_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action")
+        if what == "disp_backdrop":
+            display_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "disp_panel_bg":
+            return True
+        if what == "disp_close":
+            display_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "disp_toggle":
+            key = action["key"]
+            cur = bool(setting(key))
+            # Use set_setting() — the canonical path used by the old
+            # settings dropdown. It coerces through the schema,
+            # persists to disk, AND fires apply_setting_side_effects
+            # in one step. Going manually (settings[key] = v + apply
+            # + save) is functionally similar but skips coercion,
+            # which can break side-effect handlers that expect the
+            # post-coerce type. transparent_background not visually
+            # responding was the symptom.
+            set_setting(key, not cur)
+            return True
+        if what == "disp_spinner":
+            key   = action["key"]
+            kind  = action["kind"]
+            delta = action["delta"]
+            schema = _setting_schema(key) or {}
+            cur = setting(key)
+            if cur is None:
+                cur = schema.get("default", 0)
+            step  = schema.get("step", 1)
+            lo    = schema.get("min", 0)
+            hi    = schema.get("max", 100)
+            try:
+                if kind == "float":
+                    cur_v = float(cur)
+                    new_v = cur_v + float(step) * delta
+                    new_v = max(float(lo), min(float(hi), new_v))
+                    # Round to step precision so 1.0 + 0.25 doesn't
+                    # turn into 1.2499999999 due to fp accumulation.
+                    new_v = round(new_v / float(step)) * float(step)
+                    new_v = round(new_v, 4)
+                else:
+                    cur_v = int(cur)
+                    new_v = cur_v + int(step) * delta
+                    new_v = max(int(lo), min(int(hi), new_v))
+            except (TypeError, ValueError):
+                return True
+            if new_v != cur:
+                set_setting(key, new_v)
+            return True
+        if what == "disp_action":
+            action_key = action.get("action_key", "")
+            handler = _SETTINGS_ACTIONS.get(action_key)
+            if callable(handler):
+                try:
+                    handler()
+                except Exception as e:
+                    print(f"[OmniWatch] display action {action_key!r}: {e!r}")
+            return True
+    return False
+
+
+def _draw_modal_row(surface, row_rect, kind, key, display_label,
+                     mouse_pos, click_rects, label_font, action_prefix):
+    """Generic Configure-modal row renderer. Supports bool, int,
+    float, enum, action. Appends click targets to `click_rects` with
+    payloads keyed off `action_prefix` so each modal's dispatcher can
+    route them to its own state. Used by the Header and Inventory
+    modals; older modals (Currency, Party, Display) inline their own
+    row code and don't go through this helper.
+
+    Layout: label on the left, control on the right. Hover
+    highlight on the whole row. Schema (min/max/step, options,
+    option_labels, button_text, action) is read from
+    `_setting_schema(key)` so callers only need to specify the kind
+    and the display label.
+    """
+    # Hover highlight.
+    if row_rect.collidepoint(mouse_pos):
+        pygame.draw.rect(surface, (40, 40, 52), row_rect,
+                         border_radius=2)
+    # Label.
+    name_surf = label_font.render(display_label, True, (220, 220, 230))
+    surface.blit(name_surf,
+        (row_rect.x + 4,
+         row_rect.y + (row_rect.h - name_surf.get_height()) // 2))
+
+    schema = _setting_schema(key) or {}
+
+    if kind == "bool":
+        cb_size = 14
+        cb_rect = pygame.Rect(
+            row_rect.right - 4 - cb_size,
+            row_rect.y + (row_rect.h - cb_size) // 2,
+            cb_size, cb_size)
+        pygame.draw.rect(surface, (30, 30, 40), cb_rect,
+                         border_radius=2)
+        pygame.draw.rect(surface, (110, 130, 170), cb_rect, 1,
+                         border_radius=2)
+        if bool(setting(key)):
+            _draw_checkbox_check(surface, cb_rect)
+        click_rects.append((row_rect.copy(),
+            {"action": f"{action_prefix}_toggle", "key": key}))
+
+    elif kind in ("int", "float"):
+        cur = setting(key)
+        if cur is None:
+            cur = schema.get("default", 0)
+        try:
+            cur_val = float(cur) if kind == "float" else int(cur)
+        except (TypeError, ValueError):
+            cur_val = float(schema.get("default", 0)) if kind == "float" else int(schema.get("default", 0))
+        # Format the value text.
+        if kind == "float":
+            val_text = f"{cur_val:.2f}"
+        else:
+            val_text = f"{cur_val}"
+        val_surf = label_font.render(val_text, True, (220, 195, 90))
+        val_pad_x = 10
+        val_w = max(val_surf.get_width() + val_pad_x * 2, 56)
+        minus_w = 22
+        plus_w  = 22
+        gap = 4
+        total_w = minus_w + gap + val_w + gap + plus_w
+        right_edge = row_rect.right - 4
+        spinner_x = right_edge - total_w
+        spinner_y = row_rect.y + (row_rect.h - 22) // 2
+        # Minus.
+        minus_rect = pygame.Rect(spinner_x, spinner_y, minus_w, 22)
+        pygame.draw.rect(surface, (50, 50, 65), minus_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 110, 130), minus_rect, 1,
+                         border_radius=3)
+        m_surf = label_font.render("−", True, (220, 220, 230))
+        surface.blit(m_surf,
+            (minus_rect.x + (minus_w - m_surf.get_width()) // 2,
+             minus_rect.y + (22 - m_surf.get_height()) // 2))
+        click_rects.append((minus_rect,
+            {"action": f"{action_prefix}_spinner", "key": key,
+             "kind": kind, "delta": -1}))
+        # Value pill.
+        val_rect = pygame.Rect(minus_rect.right + gap, spinner_y,
+                                val_w, 22)
+        pygame.draw.rect(surface, (30, 30, 40), val_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 130, 170), val_rect, 1,
+                         border_radius=3)
+        surface.blit(val_surf,
+            (val_rect.x + (val_w - val_surf.get_width()) // 2,
+             val_rect.y + (22 - val_surf.get_height()) // 2))
+        # Plus.
+        plus_rect = pygame.Rect(val_rect.right + gap, spinner_y,
+                                 plus_w, 22)
+        pygame.draw.rect(surface, (50, 50, 65), plus_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 110, 130), plus_rect, 1,
+                         border_radius=3)
+        p_surf = label_font.render("+", True, (220, 220, 230))
+        surface.blit(p_surf,
+            (plus_rect.x + (plus_w - p_surf.get_width()) // 2,
+             plus_rect.y + (22 - p_surf.get_height()) // 2))
+        click_rects.append((plus_rect,
+            {"action": f"{action_prefix}_spinner", "key": key,
+             "kind": kind, "delta": 1}))
+
+    elif kind == "enum":
+        options       = schema.get("options") or []
+        option_labels = schema.get("option_labels") or options
+        cur = setting(key) or (options[0] if options else "")
+        try:
+            idx = options.index(cur)
+        except (ValueError, TypeError):
+            idx = 0
+        cur_label = option_labels[idx] if idx < len(option_labels) else str(cur)
+        # Layout: [<] [ value ] [>] right-aligned. The arrows are
+        # symmetric to the spinner's − / + buttons (same dimensions
+        # and styling) so enum rows visually align with int/float
+        # rows above them.
+        arrow_w  = 22
+        gap      = 4
+        pill_h   = 22
+        pill_surf = label_font.render(cur_label, True, (220, 195, 90))
+        pill_pad_x = 10
+        pill_w = max(pill_surf.get_width() + pill_pad_x * 2, 80)
+        total_w  = arrow_w + gap + pill_w + gap + arrow_w
+        right_edge = row_rect.right - 4
+        ctl_x = right_edge - total_w
+        ctl_y = row_rect.y + (row_rect.h - pill_h) // 2
+        # Left arrow (prev).
+        left_rect = pygame.Rect(ctl_x, ctl_y, arrow_w, pill_h)
+        pygame.draw.rect(surface, (50, 50, 65), left_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 110, 130), left_rect, 1,
+                         border_radius=3)
+        lt_surf = label_font.render("<", True, (220, 220, 230))
+        surface.blit(lt_surf,
+            (left_rect.x + (arrow_w - lt_surf.get_width()) // 2,
+             left_rect.y + (pill_h - lt_surf.get_height()) // 2))
+        click_rects.append((left_rect,
+            {"action": f"{action_prefix}_enum_cycle",
+             "key": key, "options": list(options), "delta": -1}))
+        # Value pill (center).
+        pill_rect = pygame.Rect(left_rect.right + gap, ctl_y,
+                                 pill_w, pill_h)
+        pygame.draw.rect(surface, (30, 30, 40), pill_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 130, 170), pill_rect, 1,
+                         border_radius=3)
+        surface.blit(pill_surf,
+            (pill_rect.x + (pill_w - pill_surf.get_width()) // 2,
+             pill_rect.y + (pill_h - pill_surf.get_height()) // 2))
+        # Right arrow (next).
+        right_rect = pygame.Rect(pill_rect.right + gap, ctl_y,
+                                  arrow_w, pill_h)
+        pygame.draw.rect(surface, (50, 50, 65), right_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 110, 130), right_rect, 1,
+                         border_radius=3)
+        rt_surf = label_font.render(">", True, (220, 220, 230))
+        surface.blit(rt_surf,
+            (right_rect.x + (arrow_w - rt_surf.get_width()) // 2,
+             right_rect.y + (pill_h - rt_surf.get_height()) // 2))
+        click_rects.append((right_rect,
+            {"action": f"{action_prefix}_enum_cycle",
+             "key": key, "options": list(options), "delta": 1}))
+
+    elif kind == "action":
+        btn_text   = schema.get("button_text") or "Open..."
+        action_key = schema.get("action", "")
+        btn_surf = label_font.render(btn_text, True, (220, 220, 230))
+        btn_pad_x = 12
+        btn_w = btn_surf.get_width() + btn_pad_x * 2
+        btn_h = 22
+        btn_rect = pygame.Rect(
+            row_rect.right - 4 - btn_w,
+            row_rect.y + (row_rect.h - btn_h) // 2,
+            btn_w, btn_h)
+        pygame.draw.rect(surface, (60, 70, 90), btn_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (140, 160, 200), btn_rect, 1,
+                         border_radius=3)
+        surface.blit(btn_surf,
+            (btn_rect.x + btn_pad_x,
+             btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
+        click_rects.append((btn_rect,
+            {"action": f"{action_prefix}_action",
+             "action_key": action_key}))
+
+
+def _dispatch_modal_row_action(payload, action_prefix):
+    """Shared dispatcher for row actions. Returns True if the payload
+    was consumed; the caller is still responsible for closing/backdrop
+    actions (those vary per modal). Routes by the action suffix —
+    `_toggle`, `_spinner`, `_enum_cycle`, `_action`.
+
+    Called from each modal's dispatch fn after it's checked for its
+    own backdrop/panel/close payloads."""
+    what = payload.get("action", "")
+    if not what.startswith(action_prefix + "_"):
+        return False
+    suffix = what[len(action_prefix) + 1:]
+    if suffix == "toggle":
+        key = payload["key"]
+        cur = bool(setting(key))
+        set_setting(key, not cur)
+        return True
+    if suffix == "spinner":
+        key   = payload["key"]
+        kind  = payload["kind"]
+        delta = payload["delta"]
+        schema = _setting_schema(key) or {}
+        cur = setting(key)
+        if cur is None:
+            cur = schema.get("default", 0)
+        step = schema.get("step", 1)
+        lo   = schema.get("min", 0)
+        hi   = schema.get("max", 100)
+        try:
+            if kind == "float":
+                cur_v = float(cur)
+                new_v = cur_v + float(step) * delta
+                new_v = max(float(lo), min(float(hi), new_v))
+                new_v = round(new_v / float(step)) * float(step)
+                new_v = round(new_v, 4)
+            else:
+                cur_v = int(cur)
+                new_v = cur_v + int(step) * delta
+                new_v = max(int(lo), min(int(hi), new_v))
+        except (TypeError, ValueError):
+            return True
+        if new_v != cur:
+            set_setting(key, new_v)
+        return True
+    if suffix == "enum_cycle":
+        key = payload["key"]
+        options = payload.get("options", [])
+        if not options:
+            return True
+        delta = int(payload.get("delta", 1))
+        cur = setting(key) or options[0]
+        try:
+            idx = options.index(cur)
+        except ValueError:
+            idx = 0
+        next_idx = (idx + delta) % len(options)
+        set_setting(key, options[next_idx])
+        return True
+    if suffix == "action":
+        action_key = payload.get("action_key", "")
+        handler = _SETTINGS_ACTIONS.get(action_key)
+        if callable(handler):
+            try:
+                handler()
+            except Exception as e:
+                print(f"[OmniWatch] modal action {action_key!r}: {e!r}")
+        return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Header settings modal — reset zone timer, Vana'diel time offset,
+# server picker, points tracker on/off + type. Uses _draw_modal_row /
+# _dispatch_modal_row_action so the body is mostly just the row
+# definitions.
+# ──────────────────────────────────────────────────────────────────────
+_HEADER_MODAL_ROWS = [
+    ("show_time",            "Show time",               "bool"),
+    ("clock_cycle_enabled",  "Cycle VT / OS time",      "bool"),
+    ("clock_cycle_sec",      "VT/OS cycle seconds",     "int"),
+    ("vana_time_offset_min", "Adjust Vana'diel time",   "int"),
+    ("show_weather",         "Show weather",            "bool"),
+    ("show_events",          "Show events",             "bool"),
+    ("show_location",        "Show location",           "bool"),
+    ("show_clock_seconds",   "Show clock seconds",      "bool"),
+    ("clock_timezone",       "OS clock time zone",      "enum"),
+    ("ffxi_server",          "Server",                  "enum"),
+    ("show_header_points",   "Show points tracker",     "bool"),
+    ("header_points_focus",  "Points type",             "enum"),
+]
+
+
+def draw_header_settings_modal(surface):
+    """Render the Header subdialog if open."""
+    global header_settings_modal_rects
+    header_settings_modal_rects = []
+    if not header_settings_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(520, sw - 40)
+    title_block_h = 50
+    row_h = 28
+    close_block_h = 50
+    pad = 14
+    mh = title_block_h + len(_HEADER_MODAL_ROWS) * row_h + close_block_h
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop (skip visual fill when transparent_background is on
+    # so the LWA_COLORKEY compositor filter still triggers).
+    if not setting("transparent_background"):
+        bd = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        bd.fill((0, 0, 0, 150))
+        surface.blit(bd, (0, 0))
+    header_settings_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "head_backdrop"}))
+
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    header_settings_modal_rects.append(
+        (panel, {"action": "head_panel_bg"}))
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    cy_y = my + pad
+    t_surf = title_font.render("Header", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    sub_surf = small_font.render(
+        "Header items: zone timer, Vana'diel clock, server, points.",
+        True, (160, 160, 175))
+    surface.blit(sub_surf, (mx + pad, cy_y))
+    cy_y += sub_surf.get_height() + 10
+
+    mouse_pos = pygame.mouse.get_pos()
+    for key, label, kind in _HEADER_MODAL_ROWS:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        _draw_modal_row(surface, row_rect, kind, key, label,
+                         mouse_pos, header_settings_modal_rects,
+                         label_font, "head")
+        cy_y += row_h
+
+    # Close.
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    header_settings_modal_rects.append(
+        (close_rect, {"action": "head_close"}))
+
+
+def dispatch_header_settings_click(mx, my):
+    global header_settings_modal_open
+    global settings_menu_open
+    if not header_settings_modal_open:
+        return False
+    for rect, action in reversed(header_settings_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == "head_backdrop":
+            header_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "head_panel_bg":
+            return True
+        if what == "head_close":
+            header_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if _dispatch_modal_row_action(action, "head"):
+            return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Inventory settings modal — show/hide inventory button + GearSwap
+# folder picker.
+# ──────────────────────────────────────────────────────────────────────
+_INVENTORY_MODAL_ROWS = [
+    ("show_inventory_button", "Show 'Inventory' button", "bool"),
+    ("gearswap_folder",       "GearSwap folder",         "action"),
+]
+
+
+def draw_inventory_settings_modal(surface):
+    global inventory_settings_modal_rects
+    inventory_settings_modal_rects = []
+    if not inventory_settings_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(520, sw - 40)
+    title_block_h = 50
+    row_h = 28
+    close_block_h = 50
+    pad = 14
+    mh = title_block_h + len(_INVENTORY_MODAL_ROWS) * row_h + close_block_h
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    if not setting("transparent_background"):
+        bd = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        bd.fill((0, 0, 0, 150))
+        surface.blit(bd, (0, 0))
+    inventory_settings_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "inv_backdrop"}))
+
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    inventory_settings_modal_rects.append(
+        (panel, {"action": "inv_panel_bg"}))
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    cy_y = my + pad
+    t_surf = title_font.render("Inventory", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    sub_surf = small_font.render(
+        "Inventory dropdown visibility and GearSwap folder.",
+        True, (160, 160, 175))
+    surface.blit(sub_surf, (mx + pad, cy_y))
+    cy_y += sub_surf.get_height() + 10
+
+    mouse_pos = pygame.mouse.get_pos()
+    for key, label, kind in _INVENTORY_MODAL_ROWS:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        _draw_modal_row(surface, row_rect, kind, key, label,
+                         mouse_pos, inventory_settings_modal_rects,
+                         label_font, "inv")
+        cy_y += row_h
+
+    # Help text right above the Close button — explains the
+    # purpose of the gearswap folder picker so users know what
+    # picking it actually does for them.
+    hint_surf = small_font.render(
+        "Gear used in gearswap files will be marked in inventory.",
+        True, (150, 155, 170))
+    surface.blit(hint_surf,
+        (mx + pad, my + mh - pad - 24 - hint_surf.get_height() - 6))
+
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    inventory_settings_modal_rects.append(
+        (close_rect, {"action": "inv_close"}))
+
+
+def dispatch_inventory_settings_click(mx, my):
+    global inventory_settings_modal_open
+    global settings_menu_open
+    if not inventory_settings_modal_open:
+        return False
+    for rect, action in reversed(inventory_settings_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == "inv_backdrop":
+            inventory_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "inv_panel_bg":
+            return True
+        if what == "inv_close":
+            inventory_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if _dispatch_modal_row_action(action, "inv"):
+            return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Statistics settings modal — show/hide panel + gear settings wizard
+# + stats-layout JSON editor. Three rows. The gear row carries a
+# small italic helper line directly underneath it explaining what
+# "gear settings" actually does — necessary because the row label
+# is terse and the wizard's purpose isn't obvious from the button
+# text alone.
+# ──────────────────────────────────────────────────────────────────────
+
+_STATISTICS_MODAL_ROWS = [
+    ("show_statistics",    "Show statistics panel", "bool"),
+    ("open_gear_settings", "Gear settings",         "action"),
+    ("open_stats_layout",  "Edit stats layout",     "action"),
+]
+
+# Per-row helper text, keyed by setting_key. Rendered as a small
+# italic line directly below the row in the modal. None / missing =
+# no helper, render as a plain row.
+_STATISTICS_ROW_HELPERS = {
+    "open_gear_settings": "Define self or ally gear that affects buffs.",
+}
+
+
+def draw_statistics_settings_modal(surface):
+    """Render the Statistics subdialog if open. Mostly mirrors
+    Header/Inventory but accounts for per-row helper text under
+    rows listed in _STATISTICS_ROW_HELPERS — the modal height grows
+    to fit each helper as an extra ~14px line."""
+    global statistics_settings_modal_rects
+    statistics_settings_modal_rects = []
+    if not statistics_settings_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(520, sw - 40)
+    title_block_h = 50
+    row_h         = 28
+    helper_h      = 16     # extra height for an italic helper line
+    close_block_h = 50
+    pad           = 14
+    # Tally height: each row is row_h, plus helper_h per row that has
+    # a helper. Centralizing the math here keeps adding/removing
+    # helpers a one-line change.
+    rows_h = sum(
+        row_h + (helper_h if _STATISTICS_ROW_HELPERS.get(key) else 0)
+        for key, _, _ in _STATISTICS_MODAL_ROWS)
+    mh = title_block_h + rows_h + close_block_h
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim — skip fill when transparent_background is on
+    # (see currency modal note about LWA_COLORKEY interaction).
+    if not setting("transparent_background"):
+        bd = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        bd.fill((0, 0, 0, 150))
+        surface.blit(bd, (0, 0))
+    statistics_settings_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "stats_backdrop"}))
+
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    statistics_settings_modal_rects.append(
+        (panel, {"action": "stats_panel_bg"}))
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    cy_y = my + pad
+    t_surf = title_font.render("Statistics", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    sub_surf = small_font.render(
+        "Stats panel visibility, gear values, and layout editor.",
+        True, (160, 160, 175))
+    surface.blit(sub_surf, (mx + pad, cy_y))
+    cy_y += sub_surf.get_height() + 10
+
+    mouse_pos = pygame.mouse.get_pos()
+    for key, label, kind in _STATISTICS_MODAL_ROWS:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        _draw_modal_row(surface, row_rect, kind, key, label,
+                         mouse_pos, statistics_settings_modal_rects,
+                         label_font, "stats")
+        cy_y += row_h
+        # Optional per-row helper text rendered directly under the
+        # row, slightly indented so it visually associates with the
+        # row above rather than the next one below.
+        helper_text = _STATISTICS_ROW_HELPERS.get(key)
+        if helper_text:
+            h_surf = small_font.render(helper_text, True,
+                                        (150, 155, 170))
+            surface.blit(h_surf, (mx + pad + 8, cy_y))
+            cy_y += helper_h
+
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    statistics_settings_modal_rects.append(
+        (close_rect, {"action": "stats_close"}))
+
+
+def dispatch_statistics_settings_click(mx, my):
+    global statistics_settings_modal_open
+    global settings_menu_open
+    if not statistics_settings_modal_open:
+        return False
+    for rect, action in reversed(statistics_settings_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == "stats_backdrop":
+            statistics_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if what == "stats_panel_bg":
+            return True
+        if what == "stats_close":
+            statistics_settings_modal_open = False
+            settings_menu_open = True
+            return True
+        if _dispatch_modal_row_action(action, "stats"):
+            return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Header clock modal — Stopwatch + Countdown Timer
+# Triggered by clicking the HH:MM clock in the header (between the
+# inventory button and the zone block). One modal with two halves:
+#   Top:    Stopwatch — Start/Pause + Reset, runs upward
+#   Bottom: Countdown — set duration, Start/Pause + Reset, beeps + flashes at 0
+# Driven by os.time() so both halves are unaffected by frame rate.
+# ──────────────────────────────────────────────────────────────────────
+
+def _stopwatch_elapsed():
+    """Total seconds the stopwatch should display: banked + (if
+    running) live delta from last start. Float to preserve tenths."""
+    if stopwatch_running:
+        return stopwatch_accumulated + (time.time() - stopwatch_started_at)
+    return stopwatch_accumulated
+
+
+def _format_stopwatch(secs):
+    """Stopwatch HH:MM:SS.t — always includes hours field even at
+    zero so the layout doesn't jitter when crossing the 1h mark.
+    Tenths suffix gives the visual feedback that "yes, this is
+    actively running" without needing to render at 100Hz."""
+    s = max(0, secs)
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    sec_int  = int(s % 60)
+    tenths   = int((s - int(s)) * 10)
+    return f"{h:d}:{m:02d}:{sec_int:02d}.{tenths}"
+
+
+def _format_countdown(secs):
+    """Countdown HH:MM:SS — same digit slots as stopwatch sans tenths
+    (countdown integer-seconds is plenty granular)."""
+    s = max(0, int(secs))
+    h = s // 3600
+    m = (s % 3600) // 60
+    sec_int = s % 60
+    return f"{h:d}:{m:02d}:{sec_int:02d}"
+
+
+def _countdown_remaining_now():
+    """Compute the live countdown remaining. When running, the
+    countdown_started_at timestamp anchors the calculation against
+    os.time(); when paused or stopped, countdown_remaining_sec holds
+    the last value. Returns int seconds (>=0)."""
+    if countdown_running and countdown_started_at > 0:
+        elapsed = time.time() - countdown_started_at
+        rem = countdown_remaining_sec - elapsed
+        if rem < 0:
+            rem = 0
+        return max(0, int(rem))
+    return max(0, int(countdown_remaining_sec))
+
+
+def _tick_countdown():
+    """Advance the countdown by one frame. Called from the main
+    render loop just before drawing the modal so the displayed
+    remaining time tracks the actual countdown. When the countdown
+    hits 0, sets countdown_finished_at to the current time (used by
+    the modal renderer for the red-flash). Plays a brief beep on
+    transition to zero — pygame.mixer might not be initialized on
+    all installs, so the play is pcall'd."""
+    global countdown_running, countdown_remaining_sec
+    global countdown_started_at, countdown_finished_at
+    if not countdown_running:
+        return
+    rem = _countdown_remaining_now()
+    if rem <= 0:
+        # Latch to 0, mark finished. Only fire the beep on the
+        # transition tick, not every subsequent frame.
+        if countdown_remaining_sec > 0 or countdown_finished_at == 0.0:
+            countdown_finished_at = time.time()
+            try:
+                # Lightweight system beep — works without mixer setup.
+                # On Windows uses winsound; elsewhere falls back to
+                # writing the BEL char to stdout. Both are graceful
+                # no-ops if the platform doesn't support them.
+                if sys.platform.startswith("win"):
+                    import winsound
+                    winsound.Beep(880, 250)
+                else:
+                    sys.stdout.write("\a")
+                    sys.stdout.flush()
+            except Exception:
+                pass
+        countdown_remaining_sec = 0
+        countdown_running = False
+        countdown_started_at = 0.0
+
+
+def draw_clock_modal(surface):
+    """Render the stopwatch/countdown modal if clock_modal_open.
+
+    Layout:
+      ┌─ Clock ─────────────────────────────┐
+      │ Local time: 4:32 pm                  │
+      │                                       │
+      │ STOPWATCH                             │
+      │      1:23:45.6                        │  ← big mono digits
+      │  [ Start ]  [ Reset ]                 │
+      │                                       │
+      │ COUNTDOWN  [ - ][ - ] 5:00 [ + ][ + ] │  ← +/- 1m and 10s buttons
+      │      5:00                             │
+      │  [ Start ]  [ Reset ]                 │
+      │                                                              [Close] │
+      └──────────────────────────────────────┘
+    """
+    global clock_modal_rects
+    clock_modal_rects = []
+    if not clock_modal_open:
+        return
+
+    # Tick countdown first so the displayed values reflect this frame.
+    _tick_countdown()
+
+    sw, sh = surface.get_size()
+    mw = min(440, sw - 40)
+    mh = 320
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim (transparent-bg-aware, like other modals).
+    if not setting("transparent_background"):
+        bd = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        bd.fill((0, 0, 0, 150))
+        surface.blit(bd, (0, 0))
+    clock_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "clock_backdrop"}))
+
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    clock_modal_rects.append((panel, {"action": "clock_panel_bg"}))
+
+    title_font  = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font  = pygame.font.SysFont("Consolas", 12)
+    digits_font = pygame.font.SysFont("Consolas", 28, bold=True)
+    small_font  = pygame.font.SysFont("Consolas", 11)
+
+    pad = 14
+    cy_y = my + pad
+
+    # Title.
+    t_surf = title_font.render("Clock", True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+
+    # Local OS time subtitle. Uses the same tz lookup as the header
+    # clock so the modal's reading matches what the user clicked on
+    # rather than showing two different "now"s. When tz is non-Local
+    # the subtitle gets a "(EST)" suffix so it's clear which zone.
+    tz_name = setting("clock_timezone") or "Local"
+    tz_offset = CLOCK_TIMEZONES.get(tz_name)
+    if tz_offset is None:
+        local_now = time.localtime()
+    else:
+        local_now = time.gmtime(time.time() + tz_offset * 3600)
+    hh12 = local_now.tm_hour % 12 or 12
+    am_pm = "am" if local_now.tm_hour < 12 else "pm"
+    tz_tag = (f"  ({tz_name})" if tz_name != "Local" else "")
+    local_str = (
+        f"Local time: {hh12:d}:{local_now.tm_min:02d}:"
+        f"{local_now.tm_sec:02d} {am_pm}{tz_tag}")
+    s_surf = small_font.render(local_str, True, (160, 160, 175))
+    surface.blit(s_surf, (mx + pad, cy_y))
+    cy_y += s_surf.get_height() + 12
+
+    # ── Stopwatch section ────────────────────────────────────────
+    sw_label = label_font.render("STOPWATCH", True, (200, 180, 130))
+    surface.blit(sw_label, (mx + pad, cy_y))
+    cy_y += sw_label.get_height() + 4
+
+    sw_elapsed = _stopwatch_elapsed()
+    sw_digits = digits_font.render(_format_stopwatch(sw_elapsed),
+                                    True, (220, 230, 240))
+    surface.blit(sw_digits, (mx + (mw - sw_digits.get_width()) // 2,
+                              cy_y))
+    cy_y += sw_digits.get_height() + 6
+
+    # Stopwatch buttons.
+    btn_w, btn_h = 80, 24
+    btn_gap = 10
+    btns_total = btn_w * 2 + btn_gap
+    btn_start_x = mx + (mw - btns_total) // 2
+    sw_btn1_rect = pygame.Rect(btn_start_x, cy_y, btn_w, btn_h)
+    sw_btn2_rect = pygame.Rect(btn_start_x + btn_w + btn_gap, cy_y,
+                                btn_w, btn_h)
+    sw_btn1_label = "Pause" if stopwatch_running else "Start"
+    sw_btn1_color = ((200, 110, 110) if stopwatch_running
+                     else (110, 200, 110))
+    pygame.draw.rect(surface, sw_btn1_color, sw_btn1_rect,
+                     border_radius=4)
+    pygame.draw.rect(surface, (180, 180, 220), sw_btn1_rect, 1,
+                     border_radius=4)
+    b1l = label_font.render(sw_btn1_label, True, (30, 30, 40))
+    surface.blit(b1l, (sw_btn1_rect.x + (btn_w - b1l.get_width()) // 2,
+                       sw_btn1_rect.y + (btn_h - b1l.get_height()) // 2))
+    clock_modal_rects.append(
+        (sw_btn1_rect, {"action": "sw_toggle"}))
+
+    pygame.draw.rect(surface, (140, 140, 160), sw_btn2_rect,
+                     border_radius=4)
+    pygame.draw.rect(surface, (180, 180, 220), sw_btn2_rect, 1,
+                     border_radius=4)
+    b2l = label_font.render("Reset", True, (30, 30, 40))
+    surface.blit(b2l, (sw_btn2_rect.x + (btn_w - b2l.get_width()) // 2,
+                       sw_btn2_rect.y + (btn_h - b2l.get_height()) // 2))
+    clock_modal_rects.append(
+        (sw_btn2_rect, {"action": "sw_reset"}))
+    cy_y += btn_h + 14
+
+    # Section divider.
+    pygame.draw.line(surface, (60, 70, 90),
+                     (mx + pad, cy_y),
+                     (mx + mw - pad, cy_y))
+    cy_y += 10
+
+    # ── Countdown section ────────────────────────────────────────
+    cd_label = label_font.render("COUNTDOWN", True, (200, 180, 130))
+    surface.blit(cd_label, (mx + pad, cy_y))
+    cy_y += cd_label.get_height() + 4
+
+    # Adjustment buttons: [-1m][-10s] [time display] [+10s][+1m]
+    adj_btn_w = 32
+    adj_gap = 4
+    time_box_w = 100
+    total_adj = adj_btn_w * 4 + adj_gap * 4 + time_box_w
+    adj_x = mx + (mw - total_adj) // 2
+    adj_y = cy_y
+
+    def _adj_button(rect, label, action_name):
+        pygame.draw.rect(surface, (60, 70, 90), rect, border_radius=3)
+        pygame.draw.rect(surface, (140, 160, 200), rect, 1,
+                         border_radius=3)
+        ls = small_font.render(label, True, (220, 220, 230))
+        surface.blit(ls,
+            (rect.x + (rect.w - ls.get_width()) // 2,
+             rect.y + (rect.h - ls.get_height()) // 2))
+        clock_modal_rects.append((rect, {"action": action_name}))
+
+    m1_rect  = pygame.Rect(adj_x,                         adj_y, adj_btn_w, 22)
+    s10_rect = pygame.Rect(adj_x + adj_btn_w + adj_gap,   adj_y, adj_btn_w, 22)
+    _adj_button(m1_rect,  "-1m",  "cd_minus_min")
+    _adj_button(s10_rect, "-10s", "cd_minus_10s")
+    # Time display in the middle.
+    display_secs = _countdown_remaining_now() if countdown_running else countdown_duration_sec
+    # Red flash when finished (within 1s of finish timestamp).
+    finished_recent = (countdown_finished_at > 0
+                       and time.time() - countdown_finished_at < 1.0)
+    cd_color = (255, 90, 90) if finished_recent else (220, 230, 240)
+    cd_digits_font = pygame.font.SysFont("Consolas", 22, bold=True)
+    cd_digits = cd_digits_font.render(_format_countdown(display_secs),
+                                       True, cd_color)
+    time_box_x = adj_x + (adj_btn_w + adj_gap) * 2
+    surface.blit(cd_digits,
+        (time_box_x + (time_box_w - cd_digits.get_width()) // 2,
+         adj_y + (22 - cd_digits.get_height()) // 2))
+    p10_rect = pygame.Rect(time_box_x + time_box_w + adj_gap, adj_y,
+                           adj_btn_w, 22)
+    pm_rect  = pygame.Rect(p10_rect.right + adj_gap, adj_y,
+                           adj_btn_w, 22)
+    _adj_button(p10_rect, "+10s", "cd_plus_10s")
+    _adj_button(pm_rect,  "+1m",  "cd_plus_min")
+    cy_y += 22 + 12
+
+    # Countdown buttons.
+    cd_btn1_rect = pygame.Rect(btn_start_x, cy_y, btn_w, btn_h)
+    cd_btn2_rect = pygame.Rect(btn_start_x + btn_w + btn_gap, cy_y,
+                                btn_w, btn_h)
+    cd_btn1_label = "Pause" if countdown_running else "Start"
+    cd_btn1_color = ((200, 110, 110) if countdown_running
+                     else (110, 200, 110))
+    pygame.draw.rect(surface, cd_btn1_color, cd_btn1_rect,
+                     border_radius=4)
+    pygame.draw.rect(surface, (180, 180, 220), cd_btn1_rect, 1,
+                     border_radius=4)
+    b1l = label_font.render(cd_btn1_label, True, (30, 30, 40))
+    surface.blit(b1l, (cd_btn1_rect.x + (btn_w - b1l.get_width()) // 2,
+                       cd_btn1_rect.y + (btn_h - b1l.get_height()) // 2))
+    clock_modal_rects.append(
+        (cd_btn1_rect, {"action": "cd_toggle"}))
+
+    pygame.draw.rect(surface, (140, 140, 160), cd_btn2_rect,
+                     border_radius=4)
+    pygame.draw.rect(surface, (180, 180, 220), cd_btn2_rect, 1,
+                     border_radius=4)
+    b2l = label_font.render("Reset", True, (30, 30, 40))
+    surface.blit(b2l, (cd_btn2_rect.x + (btn_w - b2l.get_width()) // 2,
+                       cd_btn2_rect.y + (btn_h - b2l.get_height()) // 2))
+    clock_modal_rects.append(
+        (cd_btn2_rect, {"action": "cd_reset"}))
+
+    # Close button at bottom right.
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    clock_modal_rects.append((close_rect, {"action": "clock_close"}))
+
+
+def dispatch_clock_modal_click(mx, my):
+    """Click router for the clock modal. Stopwatch + countdown
+    controls; backdrop and Close dismiss; +/- buttons adjust the
+    countdown duration in 10-second or 1-minute increments."""
+    global clock_modal_open
+    global stopwatch_running, stopwatch_started_at, stopwatch_accumulated
+    global countdown_running, countdown_remaining_sec
+    global countdown_duration_sec, countdown_started_at
+    global countdown_finished_at
+    if not clock_modal_open:
+        return False
+    for rect, action in reversed(clock_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == "clock_backdrop":
+            clock_modal_open = False
+            return True
+        if what == "clock_panel_bg":
+            return True
+        if what == "clock_close":
+            clock_modal_open = False
+            return True
+        # Stopwatch controls.
+        if what == "sw_toggle":
+            if stopwatch_running:
+                # Pause: bank the run and clear start.
+                stopwatch_accumulated += time.time() - stopwatch_started_at
+                stopwatch_started_at = 0.0
+                stopwatch_running = False
+            else:
+                # Start (or resume from pause).
+                stopwatch_started_at = time.time()
+                stopwatch_running = True
+            return True
+        if what == "sw_reset":
+            stopwatch_running = False
+            stopwatch_started_at = 0.0
+            stopwatch_accumulated = 0.0
+            return True
+        # Countdown controls.
+        if what == "cd_toggle":
+            if countdown_running:
+                # Pause: collapse remaining to absolute.
+                rem = _countdown_remaining_now()
+                countdown_remaining_sec = rem
+                countdown_started_at = 0.0
+                countdown_running = False
+            else:
+                # Start (or resume). Use the displayed (paused)
+                # remaining or, if zero, fall back to the set
+                # duration so "Start" after a finished countdown
+                # restarts the same length.
+                if countdown_remaining_sec <= 0:
+                    countdown_remaining_sec = countdown_duration_sec
+                if countdown_remaining_sec > 0:
+                    countdown_started_at = time.time()
+                    countdown_running = True
+                    countdown_finished_at = 0.0
+            return True
+        if what == "cd_reset":
+            countdown_running = False
+            countdown_started_at = 0.0
+            countdown_remaining_sec = countdown_duration_sec
+            countdown_finished_at = 0.0
+            return True
+        # Countdown duration adjust. Edits the SET duration so
+        # next Start uses the new value; if not running, also
+        # updates the live remaining display.
+        if what == "cd_plus_min":
+            countdown_duration_sec += 60
+            if not countdown_running:
+                countdown_remaining_sec = countdown_duration_sec
+            return True
+        if what == "cd_minus_min":
+            countdown_duration_sec = max(0, countdown_duration_sec - 60)
+            if not countdown_running:
+                countdown_remaining_sec = countdown_duration_sec
+            return True
+        if what == "cd_plus_10s":
+            countdown_duration_sec += 10
+            if not countdown_running:
+                countdown_remaining_sec = countdown_duration_sec
+            return True
+        if what == "cd_minus_10s":
+            countdown_duration_sec = max(0, countdown_duration_sec - 10)
+            if not countdown_running:
+                countdown_remaining_sec = countdown_duration_sec
+            return True
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Profile name modal — single-input dialog for naming a new layout
+# profile. Opens from the char-view dropdown's "+ Save current as
+# new profile…" row. Enter commits + closes; Esc / backdrop cancel.
+# Keystrokes are routed by the main event loop into
+# profile_name_modal_text via the keydown handler below.
+# ──────────────────────────────────────────────────────────────────────
+
+def draw_profile_name_modal(surface):
+    """Render the profile-name input modal. Plain centered popup with
+    a label, a single-line text field, and Cancel/Save buttons."""
+    global profile_name_modal_rects
+    profile_name_modal_rects = []
+    if not profile_name_modal_open:
+        return
+
+    sw, sh = surface.get_size()
+    mw = min(380, sw - 40)
+    mh = 130
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    if not setting("transparent_background"):
+        bd = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        bd.fill((0, 0, 0, 150))
+        surface.blit(bd, (0, 0))
+    profile_name_modal_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "pn_backdrop"}))
+
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    profile_name_modal_rects.append((panel, {"action": "pn_panel_bg"}))
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    pad = 14
+    cy_y = my + pad
+    t = title_font.render("Save layout profile", True, (220, 200, 150))
+    surface.blit(t, (mx + pad, cy_y))
+    cy_y += t.get_height() + 2
+    s = small_font.render(
+        "Names the current layout. Switch profiles via the character "
+        "dropdown.", True, (160, 160, 175))
+    surface.blit(s, (mx + pad, cy_y))
+    cy_y += s.get_height() + 10
+
+    # Text field.
+    field_h = 26
+    field_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, field_h)
+    pygame.draw.rect(surface, (18, 22, 30), field_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), field_rect, 1,
+                     border_radius=3)
+    # Render the user-typed string + a blinking-style caret.
+    caret_on = ((time.time() * 2) % 2) < 1.0
+    shown = profile_name_modal_text + ("│" if caret_on else " ")
+    txt_surf = label_font.render(shown, True, (220, 220, 235))
+    surface.blit(txt_surf,
+        (field_rect.x + 6,
+         field_rect.y + (field_h - txt_surf.get_height()) // 2))
+    cy_y += field_h + 10
+
+    # Cancel + Save buttons.
+    btn_w, btn_h = 90, 24
+    save_x = mx + mw - pad - btn_w
+    cancel_x = save_x - btn_w - 8
+    save_rect   = pygame.Rect(save_x, cy_y, btn_w, btn_h)
+    cancel_rect = pygame.Rect(cancel_x, cy_y, btn_w, btn_h)
+    # Save (green) — disabled-looking if empty text.
+    save_active = bool(profile_name_modal_text.strip())
+    save_color = ((110, 200, 110) if save_active else (60, 80, 60))
+    pygame.draw.rect(surface, save_color, save_rect, border_radius=4)
+    pygame.draw.rect(surface, (180, 180, 220), save_rect, 1,
+                     border_radius=4)
+    sl = label_font.render("Save", True, (30, 30, 40))
+    surface.blit(sl,
+        (save_rect.x + (btn_w - sl.get_width()) // 2,
+         save_rect.y + (btn_h - sl.get_height()) // 2))
+    profile_name_modal_rects.append(
+        (save_rect, {"action": "pn_save"}))
+    # Cancel (gray).
+    pygame.draw.rect(surface, (90, 90, 105), cancel_rect, border_radius=4)
+    pygame.draw.rect(surface, (180, 180, 220), cancel_rect, 1,
+                     border_radius=4)
+    cl = label_font.render("Cancel", True, (30, 30, 40))
+    surface.blit(cl,
+        (cancel_rect.x + (btn_w - cl.get_width()) // 2,
+         cancel_rect.y + (btn_h - cl.get_height()) // 2))
+    profile_name_modal_rects.append(
+        (cancel_rect, {"action": "pn_cancel"}))
+
+
+def dispatch_profile_name_modal_click(mx, my):
+    global profile_name_modal_open, profile_name_modal_text
+    if not profile_name_modal_open:
+        return False
+    for rect, action in reversed(profile_name_modal_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == "pn_backdrop" or what == "pn_cancel":
+            profile_name_modal_open = False
+            profile_name_modal_text = ""
+            return True
+        if what == "pn_panel_bg":
+            return True
+        if what == "pn_save":
+            name = profile_name_modal_text.strip()
+            if name:
+                save_profile_as(name)
+                profile_name_modal_open = False
+                profile_name_modal_text = ""
+            return True
+    return False
+
+
+def handle_profile_name_modal_keydown(event):
+    """Route a pygame.KEYDOWN event into the profile-name text field.
+    Returns True if consumed. Called from the main event loop."""
+    global profile_name_modal_open, profile_name_modal_text
+    if not profile_name_modal_open:
+        return False
+    if event.key == pygame.K_ESCAPE:
+        profile_name_modal_open = False
+        profile_name_modal_text = ""
+        return True
+    if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+        name = profile_name_modal_text.strip()
+        if name:
+            save_profile_as(name)
+            profile_name_modal_open = False
+            profile_name_modal_text = ""
+        return True
+    if event.key == pygame.K_BACKSPACE:
+        profile_name_modal_text = profile_name_modal_text[:-1]
+        return True
+    # Accept printable characters with reasonable length cap.
+    ch = event.unicode
+    if ch and ch.isprintable() and len(profile_name_modal_text) < 40:
+        profile_name_modal_text += ch
+        return True
+    return True   # consume any other key while modal is open
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Generic Configure-subdialog factory
+#
+# Used by Recast Timer / Buff Timer / Chat Panel / Skillchain /
+# Target Card / DPS Tracker / HotBar — each one is just a config
+# table + an open action that flips its state's open flag.
+#
+# Why a factory instead of seven parallel functions: those seven
+# modals are almost identical (rows in, rows out, single Close
+# button, same hover/backdrop behavior). Hand-coding seven near-
+# duplicate draw + dispatch pairs would be ~800 lines of essentially
+# the same code. The factory drops that to ~120 lines + per-modal
+# config tables.
+#
+# State lives in `_subdialog_states[key]` rather than seven globals.
+# Action prefixes are the same as state keys so click rects scope
+# cleanly per-modal.
+# ──────────────────────────────────────────────────────────────────────
+
+_SUBDIALOG_CONFIGS = {
+    "equipment": {
+        "title":    "Equipment",
+        "subtitle": "Equipment panel visibility and ring cooldown timer.",
+        "rows": [
+            ("show_equipment",     "Show equipment panel",  "bool"),
+            ("show_ring_cooldown", "Show ring cooldown",    "bool"),
+            ("ring_cycle_seconds", "Ring cycle interval",   "int"),
+            # Per-ring inclusion toggles. Order matches RING_CYCLE_ORDER
+            # so the modal reads the same direction as the rotation.
+            ("show_ring_warp",        "  Warp Ring (10m)",        "bool"),
+            ("show_ring_dem",         "  Dem Ring (10m)",         "bool"),
+            ("show_ring_holla",       "  Holla Ring (10m)",       "bool"),
+            ("show_ring_mea",         "  Mea Ring (10m)",         "bool"),
+            ("show_ring_echad",       "  Echad Ring (2h)",        "bool"),
+            ("show_ring_trizek",      "  Trizek Ring (2h)",       "bool"),
+            ("show_ring_reraise",     "  Reraise Ring (20h)",     "bool"),
+            ("show_ring_endorsement", "  Endorsement Ring (2h)",  "bool"),
+            ("show_ring_emporox",     "  Emporox's Ring (2h)",    "bool"),
+        ],
+        "helpers": {
+            "show_ring_cooldown":
+                "Cycles through the rings enabled below.",
+        },
+    },
+    "recast": {
+        "title":    "Recast Timer",
+        "subtitle": "Recast timer panel visibility and recast filter.",
+        "rows": [
+            ("show_recast",           "Show recast timer",    "bool"),
+            ("autohide_recast",       "Auto-hide when empty", "bool"),
+            ("edit_recast_blacklist", "Edit list",            "action"),
+        ],
+        "helpers": {
+            "edit_recast_blacklist":
+                "Hide specific recasts by editing the JSON list.",
+        },
+    },
+    "buff_timer": {
+        "title":    "Buff Timer",
+        "subtitle": "Buff timer panel visibility and buff filter.",
+        "rows": [
+            ("show_buff_timer",           "Show buff timer",      "bool"),
+            ("autohide_buff_timer",       "Auto-hide when empty", "bool"),
+            ("edit_buff_timer_blacklist", "Edit list",            "action"),
+        ],
+        "helpers": {
+            "edit_buff_timer_blacklist":
+                "Hide specific buffs by editing the JSON list.",
+        },
+    },
+    "chat": {
+        "title":    "Chat Panel",
+        "subtitle": "Chat panel visibility, font size, and input bar.",
+        "rows": [
+            ("show_chat",          "Show chat panel", "bool"),
+            ("chat_font_size",     "Font size",       "enum"),
+            ("show_chat_composer", "Show input bar",  "bool"),
+        ],
+        "helpers": {},
+    },
+    "skillchain": {
+        "title":    "Skillchain",
+        "subtitle": "Skillchain panel visibility and tracking toggles.",
+        "rows": [
+            ("show_skillchain",     "Show skillchain panel",  "bool"),
+            ("autohide_skillchain", "Auto-hide when inactive", "bool"),
+            ("sc_track_sc",         "Track skillchains",       "bool"),
+            ("sc_track_magic_burst","Track magic burst",       "bool"),
+        ],
+        "helpers": {},
+    },
+    "target_card": {
+        "title":    "Target Card",
+        "subtitle": "Target card visibility and buff/debuff sections.",
+        "rows": [
+            ("show_target",          "Show main target",        "bool"),
+            ("show_subtarget",       "Show sub-target",         "bool"),
+            ("target_show_buffs",    "Main: show buffs / debuffs", "bool"),
+            ("subtarget_show_buffs", "Sub: show buffs / debuffs",  "bool"),
+        ],
+        "helpers": {},
+    },
+    "dps": {
+        "title":    "DPS Tracker",
+        "subtitle": "DPS tracker panel, capture window, and logs.",
+        "rows": [
+            ("show_dps",           "Show DPS panel",       "bool"),
+            ("dps_sparkline",      "DPS sparkline",        "bool"),
+            ("dps_track_party",    "Track party damage",   "bool"),
+            ("dps_window_seconds", "Capture time",         "enum"),
+            ("open_dps_log_csv",   "Open CSV log",         "action"),
+            ("open_dps_log_json",  "Open JSON log",        "action"),
+        ],
+        "helpers": {},
+    },
+    "hotbar": {
+        "title":    "HotBar",
+        "subtitle": "Hotbar panel, hotbar count, and slot editor.",
+        "rows": [
+            ("show_hotbar",          "Show hotbar",     "bool"),
+            ("hotbar_visible_count", "Hotbars shown",   "int"),
+            ("edit_hotbar",          "Edit hotbar",     "action"),
+        ],
+        "helpers": {},
+    },
+}
+
+# Per-subdialog UI state. Initialized once at module load. Each entry
+# has open=False and rects=[]. The factory draws + dispatches against
+# this dict.
+_subdialog_states = {k: {"open": False, "rects": []}
+                     for k in _SUBDIALOG_CONFIGS}
+
+
+def _open_subdialog(state_key):
+    """Open one of the generic Configure subdialogs by key. Closes the
+    parent settings dropdown so the modal isn't visually competing."""
+    if state_key not in _subdialog_states:
+        return
+    _subdialog_states[state_key]["open"] = True
+    global settings_menu_open
+    settings_menu_open = False
+
+
+def _draw_subdialog(surface, state_key):
+    """Render the named subdialog if its open flag is set. Mirrors
+    the Statistics modal's structure (per-row optional helpers,
+    transparent-bg-aware backdrop) so all factory modals share one
+    layout style."""
+    state = _subdialog_states.get(state_key)
+    if state is None:
+        return
+    state["rects"] = []
+    if not state["open"]:
+        return
+    cfg = _SUBDIALOG_CONFIGS[state_key]
+    rows    = cfg["rows"]
+    helpers = cfg.get("helpers", {}) or {}
+    title   = cfg["title"]
+    subtitle = cfg.get("subtitle", "")
+
+    sw, sh = surface.get_size()
+    mw = min(520, sw - 40)
+    title_block_h = 50
+    row_h         = 28
+    helper_h      = 16
+    close_block_h = 50
+    pad           = 14
+    rows_total_h = sum(
+        row_h + (helper_h if helpers.get(key) else 0)
+        for key, _, _ in rows)
+    mh = title_block_h + rows_total_h + close_block_h
+    mh = min(mh, sh - 40)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim — skip fill when transparent_background is on.
+    if not setting("transparent_background"):
+        bd = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        bd.fill((0, 0, 0, 150))
+        surface.blit(bd, (0, 0))
+    state["rects"].append(
+        (pygame.Rect(0, 0, sw, sh),
+         {"action": f"{state_key}_backdrop"}))
+
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    state["rects"].append(
+        (panel, {"action": f"{state_key}_panel_bg"}))
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    cy_y = my + pad
+    t_surf = title_font.render(title, True, (220, 200, 150))
+    surface.blit(t_surf, (mx + pad, cy_y))
+    cy_y += t_surf.get_height() + 2
+    if subtitle:
+        sub_surf = small_font.render(subtitle, True, (160, 160, 175))
+        surface.blit(sub_surf, (mx + pad, cy_y))
+        cy_y += sub_surf.get_height() + 10
+    else:
+        cy_y += 10
+
+    mouse_pos = pygame.mouse.get_pos()
+    for key, label, kind in rows:
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        _draw_modal_row(surface, row_rect, kind, key, label,
+                         mouse_pos, state["rects"],
+                         label_font, state_key)
+        cy_y += row_h
+        helper_text = helpers.get(key)
+        if helper_text:
+            h_surf = small_font.render(helper_text, True,
+                                        (150, 155, 170))
+            surface.blit(h_surf, (mx + pad + 8, cy_y))
+            cy_y += helper_h
+
+    close_y = my + mh - pad - 24
+    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
+                     border_radius=3)
+    cl_surf = label_font.render("Close", True, (220, 220, 230))
+    surface.blit(cl_surf,
+        (close_rect.x + (close_rect.w - cl_surf.get_width()) // 2,
+         close_rect.y + (close_rect.h - cl_surf.get_height()) // 2))
+    state["rects"].append(
+        (close_rect, {"action": f"{state_key}_close"}))
+
+
+def _dispatch_subdialog(state_key, mx, my):
+    """Resolve a click against the named subdialog. Returns True if
+    consumed. Mirrors the Statistics dispatcher's branch order:
+    backdrop / panel_bg / close → then defer to the shared row
+    dispatcher."""
+    global settings_menu_open
+    state = _subdialog_states.get(state_key)
+    if state is None or not state["open"]:
+        return False
+    for rect, action in reversed(state["rects"]):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == f"{state_key}_backdrop":
+            state["open"] = False
+            settings_menu_open = True
+            return True
+        if what == f"{state_key}_panel_bg":
+            return True
+        if what == f"{state_key}_close":
+            state["open"] = False
+            settings_menu_open = True
+            return True
+        if _dispatch_modal_row_action(action, state_key):
+            return True
+    return False
+
+
+def draw_checklist_modal(surface):
+    """Render the checklist modal popup if open. Layout:
+      ┌────────────────────────────────────┐
+      │ [Allies][Spells][Transport][Quests]│  tab bar
+      ├────────────────────────────────────┤
+      │  < Trusts        42 / 87       >   │  header (category cycler)
+      ├────────────────────────────────────┤
+      │  ✓  Apururu                        │  rows (scrollable)
+      │  M  Babban Ny Mheillea             │
+      │  ☐  Cherukiki                      │
+      │  ...                                │
+      └────────────────────────────────────┘
+    Click the box to toggle manual check. Click the label to open
+    BG-wiki for that row. Click outside the panel to close. Click
+    arrows to cycle categories within the current tab. Click a tab
+    to switch to its first category. Mouse wheel scrolls.
+
+    Refills _checklist_click_rects each frame with hit-test targets.
+    Each entry is (pygame.Rect, {"action": <kind>, ...payload}). Kinds:
+      'cl_backdrop'  — outside-click close
+      'cl_panel_bg'  — swallow misclicks inside panel
+      'cl_tab'       — top-level tab button; payload has 'tab_idx'
+      'cl_arrow'     — header arrow; payload has 'direction' ∈ {-1, +1}
+      'cl_box'       — checkbox column; payload has 'item_key'
+      'cl_label'     — row label (BG-wiki link); payload has 'url'
+    """
+    global _checklist_click_rects, _checklist_modal_rect
+    _checklist_click_rects = []
+    _checklist_modal_rect = None
+    if not checklist_modal_open:
+        return
+    if not CHECKLIST_TABS:
+        return
+    cat = _checklist_active_category()
+    if cat is None or not callable(cat.get("row_iter")):
+        return
+    rows = cat["row_iter"]()
+    is_checked = cat["is_checked"]
+
+    sw, sh = surface.get_size()
+    mw = min(460, sw - 60)
+    mh = min(520, sh - 60)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop dim — also serves as the outside-click target.
+    backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    backdrop.fill((0, 0, 0, 150))
+    surface.blit(backdrop, (0, 0))
+    _checklist_click_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "cl_backdrop"}))
+
+    # Panel.
+    panel = pygame.Rect(mx, my, mw, mh)
+    _checklist_modal_rect = panel
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    # Swallow misclicks inside panel so they don't reach the backdrop.
+    _checklist_click_rects.append(
+        (panel, {"action": "cl_panel_bg"}))
+
+    # Fonts.
+    title_font = pygame.font.SysFont("Consolas", 16, bold=True)
+    count_font = pygame.font.SysFont("Consolas", 13)
+    row_font   = pygame.font.SysFont("Consolas", 13)
+    small_font = pygame.font.SysFont("Consolas", 11, italic=True)
+
+    pad = 14
+
+    # ── Tab bar (top-level navigation) ─────────────────────────────────
+    # Auto-sized tab buttons (width = label-text width + horizontal
+    # padding) so labels like "Weapon Skills" and "Transportation"
+    # never get squeezed. When the total width of all tabs exceeds the
+    # modal's inner width, the strip becomes horizontally scrollable
+    # with arrow buttons at each end — same pattern as the chat-panel
+    # tab strip. Active tab is highlighted; clicking a tab switches the
+    # active category set and resets the per-tab category index +
+    # scroll.
+    global checklist_tab_hscroll
+    tab_h = 26
+    tab_band_rect = pygame.Rect(mx, my, mw, tab_h)
+    pygame.draw.rect(surface, (28, 32, 42), tab_band_rect,
+                     border_radius=6)
+    # Bottom edge separator.
+    pygame.draw.line(surface, (60, 72, 92),
+                     (mx, my + tab_h), (mx + mw, my + tab_h))
+    tab_font = pygame.font.SysFont("Consolas", 12, bold=True)
+    mpos_tabs = pygame.mouse.get_pos()
+
+    # ── Measure every tab first ────────────────────────────────────
+    # We need the total width up front to know whether the strip
+    # overflows (and thus whether to show scroll arrows). Tab widths
+    # are independent — each is sized to fit its own label.
+    tab_pad_x = 14   # horizontal padding inside each tab button
+    tab_gap   = 0    # tab buttons sit edge-to-edge (no inter-tab gap)
+    tab_meta = []    # list of (ti, label, tab_w)
+    for ti, tab in enumerate(CHECKLIST_TABS):
+        name_w = tab_font.size(tab["label"])[0]
+        t_w = name_w + tab_pad_x * 2
+        tab_meta.append((ti, tab["label"], t_w))
+    total_tabs_w = (sum(m[2] for m in tab_meta)
+                    + tab_gap * max(0, len(tab_meta) - 1))
+
+    # ── Reserve arrow zones / compute the scrollable strip ─────────
+    arrow_w  = tab_h            # square arrow buttons sized to tab height
+    overflow = total_tabs_w > mw
+
+    # Always reserve space for the left/right arrows. They render
+    # regardless of whether the tab strip overflows — when all tabs
+    # fit, the arrows still act as a "previous tab / next tab"
+    # navigator (handy on mobile-feeling clicks where the user wants
+    # arrow keys rather than aiming at small tab buttons). When the
+    # strip DOES overflow, the same arrows additionally drive
+    # horizontal scroll-into-view via the auto-scroll logic below.
+    inner_left  = mx + arrow_w
+    inner_right = mx + mw - arrow_w
+    inner_w     = inner_right - inner_left
+    max_scroll  = max(0, total_tabs_w - inner_w) if overflow else 0
+    if overflow:
+        # Auto-scroll: if the currently active tab would land off-
+        # screen, slide the strip so it's visible. Keeps the active
+        # tab in view across tab switches without forcing the user to
+        # hunt for it manually.
+        if 0 <= checklist_current_tab < len(tab_meta):
+            active_x0 = sum(m[2] + tab_gap for m in tab_meta[:checklist_current_tab])
+            active_w  = tab_meta[checklist_current_tab][2]
+            active_x1 = active_x0 + active_w
+            if active_x0 < checklist_tab_hscroll:
+                checklist_tab_hscroll = active_x0
+            elif active_x1 > checklist_tab_hscroll + inner_w:
+                checklist_tab_hscroll = active_x1 - inner_w
+        # Clamp persisted hscroll into range.
+        if checklist_tab_hscroll < 0:
+            checklist_tab_hscroll = 0
+        elif checklist_tab_hscroll > max_scroll:
+            checklist_tab_hscroll = max_scroll
+        clip_left, clip_w = inner_left, inner_w
+        tab_x0 = inner_left - checklist_tab_hscroll
+    else:
+        # Strip fits — no horizontal scroll, just center the tabs
+        # within the inner area (between the always-present arrows).
+        checklist_tab_hscroll = 0
+        clip_left, clip_w = inner_left, inner_w
+        tab_x0 = inner_left + max(0, (inner_w - total_tabs_w) // 2)
+
+    # ── Draw tabs (clipped to the visible inner strip) ─────────────
+    prev_clip = surface.get_clip()
+    surface.set_clip(pygame.Rect(clip_left, my, clip_w, tab_h))
+    tx = tab_x0
+    for (ti, label, t_w) in tab_meta:
+        t_rect = pygame.Rect(tx, my, t_w, tab_h)
+        is_active = (ti == checklist_current_tab)
+        is_hover  = t_rect.collidepoint(mpos_tabs) and not is_active
+        if is_active:
+            bg_col = (52, 62, 82)
+            fg_col = (235, 220, 160)
+        elif is_hover:
+            bg_col = (38, 44, 58)
+            fg_col = (210, 215, 225)
+        else:
+            bg_col = (28, 32, 42)
+            fg_col = (170, 180, 200)
+        # Skip drawing tabs fully outside the visible strip — the clip
+        # would hide them anyway, but the early-out also avoids needless
+        # surface allocations for the off-screen ones.
+        if tx + t_w >= clip_left and tx <= clip_left + clip_w:
+            if is_active or is_hover:
+                inner = t_rect.inflate(-2, -2)
+                pygame.draw.rect(surface, bg_col, inner, border_radius=4)
+            lbl = tab_font.render(label, True, fg_col)
+            surface.blit(lbl,
+                (t_rect.centerx - lbl.get_width() // 2,
+                 t_rect.centery - lbl.get_height() // 2))
+        # Hit-target: clamp to the visible portion so a half-scrolled
+        # edge tab still clicks correctly AND clicks inside the arrow
+        # zones don't fall through to an off-screen tab beneath them.
+        vis_l = max(tx, clip_left)
+        vis_r = min(tx + t_w, clip_left + clip_w)
+        if vis_r > vis_l:
+            _checklist_click_rects.append(
+                (pygame.Rect(vis_l, my, vis_r - vis_l, tab_h),
+                 {"action": "cl_tab", "tab_idx": ti}))
+        tx += t_w + tab_gap
+    surface.set_clip(prev_clip)
+
+    # ── Tab-nav arrows (always rendered) ───────────────────────────
+    # Click semantics: arrows step the ACTIVE TAB by ±1 (cycling at
+    # the ends, see cl_tab_nav handler). When the strip overflows the
+    # active-tab change naturally triggers scroll-into-view via the
+    # block above. Arrow color fades when there's no neighboring tab
+    # to step to.
+    n_tabs = len(tab_meta)
+    cur_ti = checklist_current_tab
+    has_prev = (n_tabs > 1 and cur_ti > 0)
+    has_next = (n_tabs > 1 and cur_ti < n_tabs - 1)
+    # Left arrow.
+    l_rect = pygame.Rect(mx, my, arrow_w, tab_h)
+    pygame.draw.rect(surface, (28, 32, 42), l_rect)
+    pygame.draw.line(surface, (60, 72, 92),
+                     (l_rect.right, my), (l_rect.right, my + tab_h))
+    l_col = (220, 230, 250) if has_prev else (90, 95, 105)
+    pygame.draw.polygon(
+        surface, l_col,
+        [(l_rect.x + l_rect.w * 3 // 5, l_rect.y + 5),
+         (l_rect.x + l_rect.w * 2 // 5, l_rect.centery),
+         (l_rect.x + l_rect.w * 3 // 5, l_rect.bottom - 5)])
+    _checklist_click_rects.append(
+        (l_rect, {"action": "cl_tab_nav", "direction": -1}))
+    # Right arrow.
+    r_rect = pygame.Rect(mx + mw - arrow_w, my, arrow_w, tab_h)
+    pygame.draw.rect(surface, (28, 32, 42), r_rect)
+    pygame.draw.line(surface, (60, 72, 92),
+                     (r_rect.x, my), (r_rect.x, my + tab_h))
+    r_col = (220, 230, 250) if has_next else (90, 95, 105)
+    pygame.draw.polygon(
+        surface, r_col,
+        [(r_rect.x + r_rect.w * 2 // 5, r_rect.y + 5),
+         (r_rect.x + r_rect.w * 3 // 5, r_rect.centery),
+         (r_rect.x + r_rect.w * 2 // 5, r_rect.bottom - 5)])
+    _checklist_click_rects.append(
+        (r_rect, {"action": "cl_tab_nav", "direction": +1}))
+
+    # ── Header: < label    X / Y    > ──────────────────────────────────
+    # Sits just below the tab bar; same band geometry as before but
+    # offset by tab_h.
+    header_h = 36
+    header_rect = pygame.Rect(mx, my + tab_h, mw, header_h)
+    # Subtle header background to separate from list.
+    pygame.draw.rect(surface, (32, 38, 50),
+                     header_rect)
+    pygame.draw.line(surface, (60, 72, 92),
+                     (mx, my + tab_h + header_h),
+                     (mx + mw, my + tab_h + header_h))
+
+    # Compute X / Y. X = union of auto and manual sets, intersected
+    # with the master list so unknown stray names don't inflate the count.
+    sets = checklist_known.get(cat["key"], {})
+    auto = sets.get("auto", set())
+    manual = sets.get("manual", set())
+    known_keys = {k for k, _disp in rows}
+    have = (auto | manual) & known_keys
+    x_count = len(have)
+    y_count = len(known_keys)
+
+    # The header band's Y origin shifts down by the tab bar height so
+    # arrows / title don't draw on top of the tab buttons.
+    hdr_top = my + tab_h
+
+    # Left arrow.
+    arr_w = 28
+    larrow_rect = pygame.Rect(mx + 6, hdr_top + 6, arr_w, header_h - 12)
+    is_l_hover = larrow_rect.collidepoint(pygame.mouse.get_pos())
+    arr_col = (220, 230, 250) if is_l_hover else (160, 180, 210)
+    pygame.draw.polygon(
+        surface, arr_col,
+        [(larrow_rect.x + 18, larrow_rect.y + 4),
+         (larrow_rect.x + 8,  larrow_rect.centery),
+         (larrow_rect.x + 18, larrow_rect.bottom - 4)])
+    _checklist_click_rects.append(
+        (larrow_rect, {"action": "cl_arrow", "direction": -1}))
+
+    # Right arrow.
+    rarrow_rect = pygame.Rect(mx + mw - arr_w - 6, hdr_top + 6,
+                              arr_w, header_h - 12)
+    is_r_hover = rarrow_rect.collidepoint(pygame.mouse.get_pos())
+    arr_col = (220, 230, 250) if is_r_hover else (160, 180, 210)
+    pygame.draw.polygon(
+        surface, arr_col,
+        [(rarrow_rect.right - 18, rarrow_rect.y + 4),
+         (rarrow_rect.right - 8,  rarrow_rect.centery),
+         (rarrow_rect.right - 18, rarrow_rect.bottom - 4)])
+    _checklist_click_rects.append(
+        (rarrow_rect, {"action": "cl_arrow", "direction": +1}))
+
+    # Title centered between arrows, with a leading marker that tells
+    # the user at a glance whether the category is auto-detected
+    # (green ●) or manual-only (red ●). Manual-only categories are
+    # listed in CHECKLIST_MANUAL_ONLY; everything else gets the auto
+    # marker. The two dots use the same glyph but different colors,
+    # so the markers line up vertically across categories.
+    is_manual = cat["key"] in CHECKLIST_MANUAL_ONLY
+    marker_text = "●"
+    marker_col  = (220, 110, 110) if is_manual else (140, 200, 150)
+    marker_surf = title_font.render(marker_text, True, marker_col)
+    title_surf = title_font.render(cat["label"], True, (235, 220, 160))
+    count_surf = count_font.render(
+        f"{x_count} / {y_count}", True, (180, 200, 220))
+    # Layout: [marker] [Title]  [count]  centered as a group. The
+    # marker sits 6px before the title text.
+    marker_gap = 6
+    group_w = (marker_surf.get_width() + marker_gap
+               + title_surf.get_width() + 14 + count_surf.get_width())
+    gx = mx + (mw - group_w) // 2
+    gy_m = hdr_top + (header_h - marker_surf.get_height()) // 2
+    gy_t = hdr_top + (header_h - title_surf.get_height()) // 2
+    gy_c = hdr_top + (header_h - count_surf.get_height()) // 2
+    surface.blit(marker_surf, (gx, gy_m))
+    tx = gx + marker_surf.get_width() + marker_gap
+    surface.blit(title_surf, (tx, gy_t))
+    surface.blit(count_surf, (tx + title_surf.get_width() + 14, gy_c))
+
+    # Reserved space below the header for the row list. No subtitle
+    # is rendered any more — the manual / auto status is conveyed by
+    # the title's red/green dot marker, and the legend at the footer
+    # explains the symbols.
+    sub_h = 0
+
+    # ── List area (scrollable) ─────────────────────────────────────────
+    list_top = hdr_top + header_h + sub_h
+    list_bot = my + mh - pad - 14   # room for footer hint
+    list_h = list_bot - list_top
+    row_h = 22
+    inner_x = mx + pad
+    inner_w = mw - pad * 2
+    # Small breathing-room gap before the first row. Without this,
+    # row 0 renders flush against the header band's bottom edge,
+    # making it look cramped (especially noticeable on tabs where
+    # the first row's checkbox lines up with the header separator).
+    # The gap is INSIDE the clipped area so when the user scrolls
+    # down, content slides naturally underneath — only the very-top
+    # frame gets the cushion.
+    list_top_pad = 4
+
+    # Clamp scroll.
+    max_scroll = max(0, len(rows) * row_h + list_top_pad - list_h)
+    global checklist_scroll
+    if checklist_scroll < 0:
+        checklist_scroll = 0
+    if checklist_scroll > max_scroll:
+        checklist_scroll = max_scroll
+
+    # Clip subsurface so rows don't bleed outside the list area.
+    list_clip = pygame.Rect(mx + 2, list_top, mw - 4, list_h)
+    prev_clip = surface.get_clip()
+    surface.set_clip(list_clip)
+
+    # Draw each row.
+    mpos = pygame.mouse.get_pos()
+    for i, (item_key, disp) in enumerate(rows):
+        ry = list_top + list_top_pad + i * row_h - checklist_scroll
+        if ry + row_h < list_top - row_h:
+            continue   # off-screen above (cheap skip)
+        if ry > list_bot + row_h:
+            break       # off-screen below — list is sorted by position
+        rrect = pygame.Rect(inner_x, ry, inner_w, row_h - 2)
+
+        # Hover highlight (only if cursor is in the visible list area).
+        in_list = list_clip.collidepoint(mpos)
+        if in_list and rrect.collidepoint(mpos):
+            hl = pygame.Surface(rrect.size, pygame.SRCALPHA)
+            hl.fill((255, 255, 255, 14))
+            surface.blit(hl, rrect.topleft)
+
+        # Check-state badge. Manual and auto render identically — once
+        # a row is checked, the source doesn't matter visually; what
+        # matters is "you have this." Auto stays live-derived from the
+        # game state; manual is persisted user input. Both green ✓.
+        state = is_checked(item_key)
+        is_check_filled = state in ("auto", "manual")
+        box_size = 14
+        box = pygame.Rect(inner_x + 2,
+                          ry + (row_h - box_size) // 2,
+                          box_size, box_size)
+        pygame.draw.rect(surface, (60, 70, 88), box, 1, border_radius=2)
+        if is_check_filled:
+            # Green checkmark — same glyph regardless of auto/manual.
+            col = (130, 220, 140)
+            pygame.draw.lines(surface, col, False, [
+                (box.x + 3, box.centery),
+                (box.x + 6, box.bottom - 3),
+                (box.right - 2, box.y + 2),
+            ], 2)
+
+        # Determine whether the label is link-able (the category has a
+        # url_builder AND it returns a non-empty URL for this row).
+        # We resolve the URL once per draw so we can both color the
+        # label correctly AND store it on the click rect payload.
+        url = None
+        url_builder = cat.get("url_builder") if cat else None
+        if callable(url_builder):
+            try:
+                url = url_builder(item_key, disp)
+            except Exception:
+                url = None
+
+        # Compute label rect FIRST (independent of color) so we can
+        # check link-hover before deciding the final color. We pick
+        # one color and render once — no double-render/flicker.
+        lbl_x = inner_x + box_size + 10
+        # Use a temp surface measurement only for sizing the click rect
+        # (height is uniform across colors).
+        _tmp_h = row_font.get_height()
+        lbl_y_pre = ry + (row_h - _tmp_h) // 2
+        # Label click rect spans from end-of-box to right edge of the
+        # row. This gives a generous click target — anywhere right of
+        # the checkbox is "the name."
+        lbl_rect = pygame.Rect(
+            lbl_x - 4, ry, rrect.right - (lbl_x - 4), row_h - 2)
+        label_hovered = (in_list and url
+                         and lbl_rect.collidepoint(mpos))
+
+        # Label color: link-hover wins, otherwise check-state tint
+        # (same mint-green for both auto and manual — see badge above),
+        # otherwise neutral text gray.
+        if label_hovered:
+            label_col = (135, 195, 255)   # matches OW's other link cues
+        elif is_check_filled:
+            label_col = (210, 240, 215)
+        else:
+            label_col = (220, 225, 235)
+        lbl_surf = row_font.render(disp, True, label_col)
+        lbl_y = ry + (row_h - lbl_surf.get_height()) // 2
+        surface.blit(lbl_surf, (lbl_x, lbl_y))
+        # Underline on hover reinforces the link affordance.
+        if label_hovered:
+            underline_y = lbl_y + lbl_surf.get_height() - 1
+            pygame.draw.line(surface, label_col,
+                             (lbl_x, underline_y),
+                             (lbl_x + lbl_surf.get_width(), underline_y),
+                             1)
+
+        # Register click targets — ONLY for rows fully inside the
+        # visible list area, so scrolled-off rows don't poach clicks
+        # from the header arrows or footer hint (this clamp prevents
+        # an old bug where negative-Y row rects landed in the arrow
+        # band and stole the click).
+        #
+        # Two separate targets per row:
+        #   - The box: toggles the manual check (the original row
+        #     action, narrowed to just the checkbox area).
+        #   - The label: opens the BG-wiki link (when a URL exists).
+        # The label rect is appended AFTER the box rect so that, in the
+        # reverse-walk dispatch, the box still wins for clicks inside
+        # the box area (its rect is a strict subset of the label band
+        # would-be reach, but we draw the box first and use distinct
+        # rects, so no overlap actually occurs).
+        if (rrect.top >= list_top and rrect.bottom <= list_bot):
+            # Slightly expand the box hit area for easier clicking —
+            # the visible box is 14px but accept clicks within the
+            # full row height column to the left of the label start.
+            box_hit = pygame.Rect(
+                inner_x, ry, (lbl_x - 4) - inner_x, row_h - 2)
+            _checklist_click_rects.append(
+                (box_hit, {"action": "cl_box", "item_key": item_key}))
+            if url:
+                _checklist_click_rects.append(
+                    (lbl_rect, {"action": "cl_label", "url": url}))
+
+    surface.set_clip(prev_clip)
+
+    # Scrollbar (only when needed). Wider than a hairline so it can
+    # actually be grabbed with the mouse; track + thumb rects + the
+    # max_scroll value are captured for the click + drag handlers
+    # in dispatch_checklist_modal_click and the MOUSEMOTION block.
+    global _checklist_scrollbar_thumb_rect, _checklist_scrollbar_track_rect
+    global _checklist_scrollbar_max_scroll
+    _checklist_scrollbar_thumb_rect = None
+    _checklist_scrollbar_track_rect = None
+    _checklist_scrollbar_max_scroll = 0
+    if max_scroll > 0:
+        sb_w = 8
+        bar_track_x = mx + mw - sb_w - 2
+        bar_track_y = list_top
+        bar_track_h = list_h
+        track_rect = pygame.Rect(bar_track_x, bar_track_y, sb_w, bar_track_h)
+        _checklist_scrollbar_track_rect = track_rect
+        _checklist_scrollbar_max_scroll = max_scroll
+        # Track background. The slightly muted color keeps it from
+        # competing with row content at the right edge while still
+        # being visible enough to find by eye.
+        pygame.draw.rect(surface, (40, 46, 60),
+                         track_rect, border_radius=3)
+        # Thumb sized proportional to (visible / total). Floor at
+        # 28px so it's always grabbable even on huge lists.
+        natural_h = max(1, len(rows) * row_h)
+        thumb_h = max(28, int(bar_track_h * list_h / natural_h))
+        thumb_h = min(thumb_h, bar_track_h)
+        thumb_y = bar_track_y + int(
+            (bar_track_h - thumb_h) * checklist_scroll / max_scroll)
+        thumb_rect = pygame.Rect(bar_track_x, thumb_y, sb_w, thumb_h)
+        _checklist_scrollbar_thumb_rect = thumb_rect
+        # Hover/drag affordance: lighter thumb color while engaged.
+        is_dragging = _checklist_scroll_drag is not None
+        mouse_p = pygame.mouse.get_pos()
+        is_hover = thumb_rect.collidepoint(mouse_p)
+        thumb_col = ((180, 200, 230) if (is_dragging or is_hover)
+                     else (110, 130, 170))
+        pygame.draw.rect(surface, thumb_col, thumb_rect, border_radius=3)
+
+    # Footer hint: legend for the title's red/green dot plus the
+    # close affordance. The dot in the legend renders in the same
+    # red as the manual-category title marker, with the explanatory
+    # text in the muted gray used by the rest of the modal chrome.
+    hint_dot = small_font.render("●", True, (220, 110, 110))
+    hint_text = small_font.render(
+        " Denotes manual tab   ·   Click outside to close",
+        True, (140, 150, 170))
+    hint_total_w = hint_dot.get_width() + hint_text.get_width()
+    hint_x = mx + (mw - hint_total_w) // 2
+    hint_y = my + mh - 18
+    surface.blit(hint_dot, (hint_x, hint_y))
+    surface.blit(hint_text,
+                 (hint_x + hint_dot.get_width(),
+                  hint_y + (hint_dot.get_height() - hint_text.get_height()) // 2))
+
+
+def draw_achievement_banner(surface):
+    """If the easter-egg achievement banner is currently active, draw
+    it as a flashing pass-through overlay across the middle of the
+    screen. Banner duration is set by _achievement_banner_until_ts
+    (a unix-seconds deadline); this fn no-ops once that deadline
+    passes. Pass-through means clicks underneath still register —
+    we don't push anything into _checklist_click_rects or the like.
+
+    Flashing pattern: the background and border colors alternate
+    every 200ms between two warm/celebratory palettes. Title text
+    stays steady gold so it's always readable; the cycle is purely
+    chrome."""
+    now = time.time()
+    if now >= _achievement_banner_until_ts:
+        return
+    sw, sh = surface.get_size()
+    # Banner is a centered horizontal band. Width ≈ 90% of screen,
+    # height ≈ 110px, two stacked text rows (title + subtitle).
+    bw = min(sw - 40, 720)
+    bh = 110
+    bx = (sw - bw) // 2
+    by = (sh - bh) // 2
+    # Flash phase: cycle every ~200ms. Two palette frames.
+    phase = int(now * 5) % 2
+    if phase == 0:
+        bg_col    = (60, 20, 80, 230)      # purple-magenta
+        edge_col  = (255, 215, 100)        # bright gold
+    else:
+        bg_col    = (20, 30, 90, 230)      # deep blue
+        edge_col  = (255, 130, 200)        # hot pink
+    # Translucent fill drawn onto an SRCALPHA surface so the screen
+    # underneath stays visible. The user CAN still see what's behind
+    # the banner (which suits "pass-through" semantics — clicks work
+    # AND vision works).
+    panel = pygame.Surface((bw, bh), pygame.SRCALPHA)
+    panel.fill(bg_col)
+    surface.blit(panel, (bx, by))
+    # Thick border in the flash color. Two passes (inner + outer)
+    # give a chunky party-banner feel without needing a separate
+    # asset.
+    pygame.draw.rect(surface, edge_col, (bx, by, bw, bh), 4,
+                     border_radius=10)
+    pygame.draw.rect(surface, (255, 255, 255),
+                     (bx + 4, by + 4, bw - 8, bh - 8), 1,
+                     border_radius=8)
+    # Title text. Steady gold so the message is readable through
+    # the flashes. Use a larger, bolder font than the modal chrome.
+    big_font   = get_font("Consolas", 28, bold=True)
+    sub_font   = get_font("Consolas", 16, bold=True)
+    title_txt  = "Congratulations!!"
+    sub_txt    = "You beat Final Fantasy XI!"
+    title_surf = big_font.render(title_txt, True, (255, 230, 130))
+    sub_surf   = sub_font.render(sub_txt,   True, (255, 245, 200))
+    # Stack the two lines, centered.
+    total_h = title_surf.get_height() + 6 + sub_surf.get_height()
+    ty = by + (bh - total_h) // 2
+    surface.blit(title_surf,
+                 (bx + (bw - title_surf.get_width()) // 2, ty))
+    surface.blit(sub_surf,
+                 (bx + (bw - sub_surf.get_width()) // 2,
+                  ty + title_surf.get_height() + 6))
+
+
+def _achievement_periodic_check():
+    """Throttled wrapper around _checklist_check_achievement called
+    from the main draw loop. Caps the check rate to roughly 1Hz so
+    we don't spend a tiny but pointless amount of CPU re-walking
+    every category on every frame. Early-exits once the achievement
+    is unlocked so the runtime cost falls to a single timestamp
+    comparison forever after."""
+    global _achievement_last_check_ts
+    if _achievement_unlocked:
+        return
+    now = time.time()
+    if now - _achievement_last_check_ts < 1.0:
+        return
+    _achievement_last_check_ts = now
+    _checklist_check_achievement()
+
+
+def dispatch_checklist_modal_click(mx, my):
+    """Resolve a click against the checklist modal. Returns True if
+    the click was consumed (so the caller skips other handlers)."""
+    global checklist_modal_open, checklist_current_category
+    global checklist_current_tab, checklist_scroll
+    global checklist_tab_hscroll
+    global _checklist_scroll_drag
+    if not checklist_modal_open:
+        return False
+    # Scrollbar hit-tests run FIRST so a click on the thumb wins over
+    # the panel-bg catch-all that swallows in-panel non-control clicks.
+    # Thumb click → start a drag (recorded in _checklist_scroll_drag,
+    # consumed by the MOUSEMOTION handler). Track click outside the
+    # thumb → page-jump in that direction by roughly one thumb-height.
+    thumb_r = _checklist_scrollbar_thumb_rect
+    track_r = _checklist_scrollbar_track_rect
+    if thumb_r is not None and thumb_r.collidepoint(mx, my):
+        _checklist_scroll_drag = {
+            "origin_mouse_y": my,
+            "origin_scroll":  checklist_scroll,
+            "track_top":      track_r.top,
+            "track_h":        track_r.h,
+            "thumb_h":        thumb_r.h,
+            "max_scroll":     _checklist_scrollbar_max_scroll,
+        }
+        return True
+    if track_r is not None and track_r.collidepoint(mx, my):
+        # Page jump in the direction of the click. Step ≈ one thumb-
+        # height worth of content scroll, which approximates a
+        # visible-window page. Clamp on the next frame's draw.
+        step_pixels = max(40, int(thumb_r.h if thumb_r else 60))
+        if thumb_r is not None and my < thumb_r.top:
+            checklist_scroll = max(0, checklist_scroll - step_pixels)
+        else:
+            checklist_scroll += step_pixels
+        return True
+    # Walk rects in reverse so the more-specific overlays (rows, arrows)
+    # match before the panel/backdrop catch-alls.
+    for rect, payload in reversed(_checklist_click_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = payload.get("action")
+        if what == "cl_backdrop":
+            checklist_modal_open = False
+            return True
+        if what == "cl_panel_bg":
+            # Click inside panel but not on a control — swallow so it
+            # doesn't fall through to the backdrop.
+            return True
+        if what == "cl_tab":
+            # Switch to a different top-level tab. Reset the per-tab
+            # category index + scroll so we land cleanly on the new
+            # tab's first category. No-op if the user clicked the
+            # already-active tab.
+            new_tab = payload.get("tab_idx", 0)
+            if 0 <= new_tab < len(CHECKLIST_TABS):
+                if new_tab != checklist_current_tab:
+                    checklist_current_tab = new_tab
+                    checklist_current_category = 0
+                    checklist_scroll = 0
+            return True
+        if what == "cl_tab_nav":
+            # Step the active tab by ±1 (no wrap-around at the ends).
+            # Mirrors the </> arrows under the strip but operates on
+            # TABS rather than sub-categories. When the tab strip
+            # overflows, the next-frame draw's scroll-into-view logic
+            # will slide the newly-active tab into the visible band
+            # automatically.
+            d = payload.get("direction", 1)
+            new_tab = checklist_current_tab + d
+            if 0 <= new_tab < len(CHECKLIST_TABS):
+                checklist_current_tab = new_tab
+                checklist_current_category = 0
+                checklist_scroll = 0
+            return True
+        if what == "cl_arrow":
+            # Cycle within the CURRENT tab's category list, not the
+            # full CHECKLIST_CATEGORIES. This lets each tab have its
+            # own bounded loop without spilling into adjacent groups.
+            keys = _checklist_active_category_keys()
+            n = len(keys)
+            if n > 0:
+                d = payload.get("direction", 1)
+                checklist_current_category = (
+                    checklist_current_category + d) % n
+                checklist_scroll = 0
+            return True
+        if what == "cl_box":
+            # Click on the checkbox area — toggle the manual check.
+            # This is the original row-click action, now narrowed to
+            # just the box so the label can carry the BG-wiki link.
+            item_key = payload.get("item_key")
+            if item_key:
+                _checklist_toggle_manual(item_key)
+            return True
+        if what == "cl_label":
+            # Click on the row's label — open the BG-wiki URL in the
+            # user's default browser. webbrowser.open is non-blocking
+            # on every platform we run (it spawns and returns); the
+            # try/except guards against the rare case where no browser
+            # is registered (headless CI etc).
+            url = payload.get("url")
+            if url:
+                try:
+                    webbrowser.open(url, new=2, autoraise=True)
+                except Exception as e:
+                    print(f"[OmniWatch] could not open browser: {e!r}")
+            return True
+    return False
+
+
+# ═════════════════════════════════════════════════════════════════════
+# ── Campaigns Modal Render + Click Dispatch ─────────────────────────
+# Simple scrollable list of cards. Each card shows:
+#   • Title (bold, larger font)
+#   • Date range "X → Y" (muted color)
+#   • Summary blurb
+#   • Bonus bullets (if parsed)
+# Header has a Refresh button and an X close button.
+# Click anywhere outside the panel closes it.
+# ═════════════════════════════════════════════════════════════════════
+
+def draw_campaigns_modal(surface):
+    """Render the Current Campaigns modal popup if open. Layout:
+      ┌───────────────────────────────────────┐
+      │ Ongoing Events           [↻] [X]      │  header
+      ├───────────────────────────────────────┤
+      │ ╔═══════════════════════════════════╗ │
+      │ ║ 24th Vana'versary Celebration    ║ │  card
+      │ ║ Wed, May 13 → Tue, June 9         ║ │
+      │ ║ A variety of bonuses including…  ║ │
+      │ ║ • Sparks doubled                  ║ │
+      │ ║ • Conquest tally bonus            ║ │
+      │ ╚═══════════════════════════════════╝ │
+      │ ╔═══════════════════════════════════╗ │
+      │ ║ ...                               ║ │
+      │ ╚═══════════════════════════════════╝ │
+      └───────────────────────────────────────┘
+    Mouse wheel scrolls. Click backdrop to close. Click ↻ to refresh
+    from the live feed. Click a card to open its source URL in a browser.
+
+    Refills _campaigns_click_rects each frame for the dispatcher."""
+    global _campaigns_click_rects, _campaigns_modal_rect
+    _campaigns_click_rects = []
+    _campaigns_modal_rect = None
+    if not campaigns_modal_open:
+        return
+
+    # While the modal is visible, keep the DI banner in sync with the
+    # live whereisdi feed. _di_maybe_refresh self-throttles to one
+    # actual network call per WHEREISDI_REFRESH_INTERVAL_SEC and is
+    # safe to call every frame — it short-circuits if either throttle
+    # gate hasn't elapsed. Without this, opening the modal once and
+    # leaving it open during play would let the DI location go stale
+    # against the website.
+    _di_maybe_refresh()
+
+    sw, sh = surface.get_size()
+    mw = min(540, sw - 60)
+    mh = min(640, sh - 60)
+    mx = (sw - mw) // 2
+    my = (sh - mh) // 2
+
+    # Backdrop (semi-transparent, full-screen). A click on it closes.
+    backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    backdrop.fill((0, 0, 0, 180))
+    surface.blit(backdrop, (0, 0))
+    _campaigns_click_rects.append(
+        (pygame.Rect(0, 0, sw, sh), {"action": "cmp_backdrop"}))
+
+    # Panel background — slightly translucent so the panel feels like
+    # a real overlay rather than a flat rectangle.
+    panel_rect = pygame.Rect(mx, my, mw, mh)
+    _campaigns_modal_rect = panel_rect
+    pygame.draw.rect(surface, (28, 28, 38), panel_rect, border_radius=8)
+    pygame.draw.rect(surface, (90, 90, 120), panel_rect, 2, border_radius=8)
+    # Swallow non-control clicks inside the panel so they don't fall
+    # through to the backdrop close.
+    _campaigns_click_rects.append(
+        (panel_rect.copy(), {"action": "cmp_panel_bg"}))
+
+    # ── Header bar ──
+    title_font = pygame.font.SysFont("arial", 20, bold=True)
+    body_font  = pygame.font.SysFont("arial", 14)
+    small_font = pygame.font.SysFont("arial", 12)
+    bonus_font = pygame.font.SysFont("arial", 12, italic=True)
+
+    header_h = 38
+    header_rect = pygame.Rect(mx, my, mw, header_h)
+    pygame.draw.rect(surface, (40, 40, 55), header_rect,
+                     border_top_left_radius=8, border_top_right_radius=8)
+    title_surf = title_font.render("Ongoing Events", True, (235, 235, 245))
+    surface.blit(title_surf, (mx + 14, my + 8))
+
+    # Refresh button — uses a wider rect with plain text since the
+    # ↻ unicode glyph isn't reliably available in pygame's default
+    # SysFont (renders as a hollow placeholder box on Windows when
+    # the active font lacks that codepoint).
+    refresh_w = 64
+    refresh_rect = pygame.Rect(mx + mw - 110, my + 7, refresh_w, 24)
+    refresh_bg = (60, 90, 60) if not campaigns_fetch_in_flight else (90, 90, 50)
+    pygame.draw.rect(surface, refresh_bg, refresh_rect, border_radius=4)
+    pygame.draw.rect(surface, (130, 160, 130), refresh_rect, 1,
+                     border_radius=4)
+    refresh_label = "Refreshing" if campaigns_fetch_in_flight else "Refresh"
+    refresh_surf = small_font.render(refresh_label, True, (235, 245, 235))
+    surface.blit(refresh_surf,
+                 (refresh_rect.x + (refresh_w - refresh_surf.get_width())//2,
+                  refresh_rect.y + (24 - refresh_surf.get_height())//2))
+    _campaigns_click_rects.append(
+        (refresh_rect.copy(), {"action": "cmp_refresh"}))
+
+    # Close button
+    close_size = 24
+    close_rect = pygame.Rect(mx + mw - 38, my + 7, close_size, close_size)
+    pygame.draw.rect(surface, (90, 50, 50), close_rect, border_radius=4)
+    pygame.draw.rect(surface, (160, 130, 130), close_rect, 1, border_radius=4)
+    close_surf = title_font.render("X", True, (245, 235, 235))
+    surface.blit(close_surf,
+                 (close_rect.x + (close_size - close_surf.get_width())//2,
+                  close_rect.y + (close_size - close_surf.get_height())//2 - 2))
+    _campaigns_click_rects.append(
+        (close_rect.copy(), {"action": "cmp_close"}))
+
+    # ── Persistent info banners (above the scrollable content) ──
+    # Two side-by-side boxes that stay fixed when the user scrolls
+    # the campaigns list below. Cooper's "look at the top of the
+    # modal first" pattern: the rotating RoE objective and the
+    # current Domain Invasion location are the two pieces of info
+    # he checks most often. Putting them in fixed boxes means he
+    # doesn't have to scroll to the top to see them — useful when
+    # he's deep in the campaigns list reading sub-campaign details
+    # and just wants a quick glance at where DI is.
+    banner_top    = my + header_h + 6
+    banner_h      = 56
+    banner_gap    = 8
+    banner_outer_w = mw - 16          # leave 8px L/R margin like content
+    box_w         = (banner_outer_w - banner_gap) // 2
+    banner_label_font = pygame.font.SysFont("arial", 11, bold=True)
+    banner_value_font = pygame.font.SysFont("arial", 14, bold=True)
+    banner_meta_font  = pygame.font.SysFont("arial", 11, italic=True)
+
+    # ── Box 1: Rotating RoE Objective ──
+    # Limited-Time Records of Eminence objective for the current
+    # 4-hour slot. Schedule is fixed (real-world clock, Pacific TZ),
+    # so we compute it locally with no network round-trip — just a
+    # table lookup keyed by (day_of_week, slot).
+    roe_rect = pygame.Rect(mx + 8, banner_top, box_w, banner_h)
+    pygame.draw.rect(surface, (45, 45, 65), roe_rect, border_radius=6)
+    pygame.draw.rect(surface, (110, 110, 150), roe_rect, 1, border_radius=6)
+    roe_label = banner_label_font.render("LIMITED-TIME ROE OBJECTIVE",
+                                          True, (180, 180, 210))
+    surface.blit(roe_label,
+                 (roe_rect.x + 10,
+                  roe_rect.y + 6))
+    roe_lookup = _roe_current_objective()
+    if roe_lookup is not None:
+        roe_name, roe_seconds_left, roe_next_name = roe_lookup
+        roe_value = banner_value_font.render(roe_name, True, (220, 200, 130))
+        # Truncate if too wide for the box
+        if roe_value.get_width() > box_w - 20:
+            for i in range(len(roe_name) - 1, 0, -1):
+                test = roe_name[:i] + "…"
+                ts = banner_value_font.render(test, True, (220, 200, 130))
+                if ts.get_width() <= box_w - 20:
+                    roe_value = ts
+                    break
+        surface.blit(roe_value,
+                     (roe_rect.x + 10,
+                      roe_rect.y + 22))
+        countdown = _roe_format_countdown(roe_seconds_left)
+        if countdown and roe_next_name:
+            # Show what's coming up next in the meta line. Format is
+            # compact since the line is tight: "next: <name> in 2h 35m".
+            # If the name overflows the box width, progressively
+            # truncate it (keeping the time intact — that's the part
+            # the user actually scans for).
+            meta_text = f"next: {roe_next_name} in {countdown}"
+            roe_meta = banner_meta_font.render(meta_text, True, (140, 140, 170))
+            if roe_meta.get_width() > box_w - 20:
+                # Truncate just the name portion, preserve "in N".
+                suffix = f" in {countdown}"
+                for i in range(len(roe_next_name) - 1, 0, -1):
+                    test = f"next: {roe_next_name[:i]}…{suffix}"
+                    ts = banner_meta_font.render(test, True, (140, 140, 170))
+                    if ts.get_width() <= box_w - 20:
+                        roe_meta = ts
+                        break
+            surface.blit(roe_meta,
+                         (roe_rect.x + 10,
+                          roe_rect.y + banner_h - 16))
+    else:
+        roe_value = banner_value_font.render(
+            "(rotation lookup failed)", True, (200, 130, 130))
+        surface.blit(roe_value,
+                     (roe_rect.x + 10,
+                      roe_rect.y + 22))
+
+    # ── Box 2: Domain Invasion (whereisdi.com) ──
+    di_rect = pygame.Rect(mx + 8 + box_w + banner_gap, banner_top,
+                           box_w, banner_h)
+    pygame.draw.rect(surface, (50, 55, 50), di_rect, border_radius=6)
+    pygame.draw.rect(surface, (110, 150, 110), di_rect, 1, border_radius=6)
+    di_server = di_state.get("server") or _di_current_server()
+    if di_server:
+        di_label_text = f"DOMAIN INVASION • {di_server.upper()}"
+    else:
+        di_label_text = "DOMAIN INVASION"
+    di_label = banner_label_font.render(di_label_text, True, (180, 210, 180))
+    surface.blit(di_label,
+                 (di_rect.x + 10,
+                  di_rect.y + 6))
+    # Show location, freshness, or status text depending on state.
+    if not di_server:
+        # No server configured. Point the user at the new settings
+        # entry rather than the Lua broadcast path — most users will
+        # just pick their server from the dropdown.
+        di_value_text = "(set your server in Settings)"
+        di_value_col  = (220, 180, 130)
+    elif di_state.get("location"):
+        di_value_text = di_state["location"]
+        di_value_col  = (220, 240, 180)
+    elif di_fetch_in_flight:
+        di_value_text = "fetching…"
+        di_value_col  = (190, 190, 210)
+    elif di_state.get("error"):
+        di_value_text = "(fetch failed — try Refresh)"
+        di_value_col  = (220, 180, 180)
+    else:
+        di_value_text = "(no data yet)"
+        di_value_col  = (190, 190, 210)
+    di_value = banner_value_font.render(di_value_text, True, di_value_col)
+    # Truncate visually if too wide for the box (zone names are usually
+    # short enough but just in case).
+    if di_value.get_width() > box_w - 20:
+        # Re-render truncated. Find longest prefix that fits.
+        for i in range(len(di_value_text) - 1, 0, -1):
+            test = di_value_text[:i] + "…"
+            test_surf = banner_value_font.render(test, True, di_value_col)
+            if test_surf.get_width() <= box_w - 20:
+                di_value = test_surf
+                break
+    surface.blit(di_value,
+                 (di_rect.x + 10,
+                  di_rect.y + 22))
+    # Freshness line (last updated) — or hint if server unknown
+    if not di_server:
+        di_meta = banner_meta_font.render(
+            "Settings → Header → Server", True, (180, 150, 130))
+        surface.blit(di_meta,
+                     (di_rect.x + 10,
+                      di_rect.y + banner_h - 16))
+    else:
+        fresh = _di_freshness_text()
+        if fresh:
+            di_meta = banner_meta_font.render(
+                f"updated {fresh}", True, (150, 180, 150))
+            surface.blit(di_meta,
+                         (di_rect.x + 10,
+                          di_rect.y + banner_h - 16))
+
+    # ── Box 3 & 4: Transport schedules (Airship | Ferry) ──
+    # Same dimensions / styling as the RoE/DI row above so the modal
+    # reads as "two stacked rows of two boxes". Each shows ONE route
+    # at a time; clicking the box cycles to the next route in the
+    # respective list (8 airships, 6 directional ferries).
+    tr_top = banner_top + banner_h + 6     # tight gap below RoE/DI
+    tr_h   = banner_h                       # same height as row 1
+    # Reset transport click rects each render — banner geometry can
+    # shift if the modal width changes.
+    _transport_click_rects.clear()
+
+    # Auto-cycle tick: rotate to next route every
+    # TRANSPORT_AUTO_CYCLE_SEC seconds. Stale timestamps (modal was
+    # closed for a while) reset without advancing so a re-open
+    # doesn't trigger an immediate cycle. Manual clicks also bump
+    # the timestamp in dispatch_campaigns_modal_click, so a manual
+    # cycle gives the user the full interval to read the new route
+    # before another auto-tick fires.
+    global transport_airship_idx, transport_airship_last_cycle_ts
+    global transport_ferry_idx,   transport_ferry_last_cycle_ts
+    _now_ts = time.time()
+    # Airship auto-cycle
+    if (transport_airship_last_cycle_ts == 0.0
+            or _now_ts - transport_airship_last_cycle_ts
+                > TRANSPORT_STALE_THRESHOLD_SEC):
+        transport_airship_last_cycle_ts = _now_ts
+    elif (_now_ts - transport_airship_last_cycle_ts
+            >= TRANSPORT_AUTO_CYCLE_SEC):
+        if TRANSPORT_AIRSHIPS:
+            transport_airship_idx = ((transport_airship_idx + 1)
+                                     % len(TRANSPORT_AIRSHIPS))
+        transport_airship_last_cycle_ts = _now_ts
+    # Ferry auto-cycle (same logic, independent timer)
+    if (transport_ferry_last_cycle_ts == 0.0
+            or _now_ts - transport_ferry_last_cycle_ts
+                > TRANSPORT_STALE_THRESHOLD_SEC):
+        transport_ferry_last_cycle_ts = _now_ts
+    elif (_now_ts - transport_ferry_last_cycle_ts
+            >= TRANSPORT_AUTO_CYCLE_SEC):
+        if TRANSPORT_FERRIES:
+            transport_ferry_idx = ((transport_ferry_idx + 1)
+                                   % len(TRANSPORT_FERRIES))
+        transport_ferry_last_cycle_ts = _now_ts
+
+    # Helper that draws one transport box and returns its rect (we
+    # collect the rect into _transport_click_rects below). Kept inline
+    # so it captures all the font/color locals from the enclosing
+    # scope without re-passing them.
+    def _draw_transport_box(rect, label_text, routes, idx, mode_key,
+                             border_col, fill_col, value_col):
+        pygame.draw.rect(surface, fill_col, rect, border_radius=6)
+        pygame.draw.rect(surface, border_col, rect, 1, border_radius=6)
+        # Top label
+        lbl = banner_label_font.render(label_text, True, border_col)
+        surface.blit(lbl, (rect.x + 10, rect.y + 6))
+        # Route name (large center line)
+        if not routes:
+            return
+        idx = idx % len(routes)
+        route_name, offset_vs, cycle_vs, board_vs = routes[idx]
+        # Compute countdown for the currently-selected route
+        ev = _next_transport_event(offset_vs, cycle_vs, board_vs)
+        # Status flips the color a bit: amber when waiting, green
+        # while actively boarding (a "now is the time" signal).
+        if ev["status"] == "boarding":
+            name_col = (170, 230, 170)
+        else:
+            name_col = value_col
+        val = banner_value_font.render(route_name, True, name_col)
+        # Truncate visually if too wide for the box
+        if val.get_width() > rect.w - 20:
+            for i in range(len(route_name) - 1, 0, -1):
+                t = route_name[:i] + "…"
+                ts = banner_value_font.render(t, True, name_col)
+                if ts.get_width() <= rect.w - 20:
+                    val = ts
+                    break
+        surface.blit(val, (rect.x + 10, rect.y + 22))
+        # Meta line: countdown + next-event label + VD time of event.
+        # Include the cycle index "(3/8)" so cycling-mode discoverability
+        # is obvious — user can see they're 3 routes into a list of 8.
+        countdown = _format_transport_countdown(ev["earth_secs"])
+        meta_text = (f"{ev['event_label']} in {countdown} "
+                     f"• VD {ev['vana_hhmm']} • ({idx+1}/{len(routes)})")
+        meta = banner_meta_font.render(meta_text, True, (160, 170, 180))
+        # Truncate meta from the right if too wide (drop the cycle
+        # marker first since it's the least essential bit).
+        if meta.get_width() > rect.w - 20:
+            short = f"{ev['event_label']} in {countdown}"
+            meta = banner_meta_font.render(short, True, (160, 170, 180))
+        surface.blit(meta, (rect.x + 10, rect.y + tr_h - 16))
+        # Whole-box click cycles to the next route. Recorded with
+        # the mode_key so the dispatcher knows which list to advance.
+        _transport_click_rects.append(
+            (rect.copy(),
+             {"action": "tr_cycle", "mode": mode_key,
+              "list_len": len(routes)}))
+
+    # Airship box (left half)
+    air_rect = pygame.Rect(mx + 8, tr_top, box_w, tr_h)
+    _draw_transport_box(
+        air_rect, "AIRSHIP", TRANSPORT_AIRSHIPS,
+        transport_airship_idx, "airship",
+        border_col=(170, 140, 200),
+        fill_col=(55, 50, 70),
+        value_col=(210, 195, 240))
+    # Ferry box (right half)
+    ferry_rect = pygame.Rect(mx + 8 + box_w + banner_gap, tr_top,
+                              box_w, tr_h)
+    _draw_transport_box(
+        ferry_rect, "FERRY", TRANSPORT_FERRIES,
+        transport_ferry_idx, "ferry",
+        border_col=(140, 180, 200),
+        fill_col=(45, 60, 70),
+        value_col=(190, 220, 240))
+
+    # ── Content area (clipped, scrollable) ──
+    content_top    = tr_top + tr_h + 8
+    content_bottom = my + mh - 26  # leave room for footer
+    content_rect   = pygame.Rect(mx + 8, content_top,
+                                  mw - 16, content_bottom - content_top)
+    prev_clip = surface.get_clip()
+    surface.set_clip(content_rect)
+
+    if not campaigns_entries:
+        # Empty state. Different message for "loading" vs "tried and failed".
+        if campaigns_fetch_in_flight or campaigns_last_fetched == 0:
+            msg = "Loading events from PlayOnline…"
+        elif campaigns_fetch_failed:
+            msg = ("Could not reach the PlayOnline feed.\n"
+                   "Click Refresh to retry, or check your connection.")
+        else:
+            msg = "No active events found."
+        for i, line in enumerate(msg.split("\n")):
+            surf = body_font.render(line, True, (200, 200, 210))
+            surface.blit(surf,
+                         (content_rect.x + (content_rect.w - surf.get_width())//2,
+                          content_rect.y + 30 + i * 20))
+        surface.set_clip(prev_clip)
+        # Footer below
+        _draw_campaigns_footer(surface, mx, my, mw, mh, small_font)
+        return
+
+    # ── Render cards, grouped by status (current / upcoming / past) ──
+    # Each group gets a colored header band at the top so the user can
+    # tell at a glance which campaigns are running NOW vs which are
+    # upcoming. Within each group, individual event cards render as
+    # before. Cooper requested this sectioned layout to mirror bg-wiki's
+    # "Ongoing and Upcoming Events" widget convention.
+    card_x = content_rect.x
+    card_w = content_rect.w
+    inner_pad_x = 12
+    inner_pad_y = 10
+    card_gap = 8
+    group_header_h = 32          # height of the colored section band
+    group_top_gap = 10           # space above each section header
+    group_bottom_gap = 4         # space below header before first card
+
+    # Build a flat list of "render items" interleaving group headers
+    # with cards. Each item is a dict so we can dispatch on type during
+    # the render pass. campaigns_entries is already sorted by the
+    # _campaigns_sort_key (current group first, then upcoming by date
+    # ascending), so iterating in order naturally groups same-status
+    # entries together. We just inject a header whenever the group
+    # changes.
+    render_items = []  # list of dicts: {type:"header"|"card", ...}
+    avail_text_w = card_w - 2 * inner_pad_x
+    prev_group_key = None
+
+    for entry in campaigns_entries:
+        group_key, group_label = _campaigns_group_for(entry)
+        if group_key != prev_group_key:
+            # New group: inject a header item.
+            render_items.append({
+                "type":      "header",
+                "label":     group_label,
+                "color":     _campaigns_group_color(group_key),
+                "group_key": group_key,
+                "height":    group_header_h + group_top_gap + group_bottom_gap,
+            })
+            prev_group_key = group_key
+
+        # Card layout (same as before; just packaged into a dict).
+        title       = entry.get("title", "") or "(untitled)"
+        period_s    = entry.get("period_start", "") or ""
+        period_e    = entry.get("period_end", "") or ""
+        summary     = entry.get("summary", "") or ""
+        bonuses     = entry.get("bonuses", []) or []
+        subcamps    = entry.get("subcampaigns", []) or []
+        # Wrap title at the card width
+        title_lines = _campaigns_wrap_text(title, body_font, avail_text_w)
+        # Date line — shortened for display ("Friday, May 22" → "Fri May 22")
+        date_str = _campaigns_format_period(period_s, period_e)
+
+        # If we got rich sub-campaign data from the detail page, prefer
+        # it: skip the generic summary blurb (which is just the
+        # umbrella event's marketing copy) and skip the bullet list
+        # (which would duplicate the sub-campaign content). The
+        # sub-campaign cards carry all the actionable info.
+        if subcamps:
+            summary_lines = []
+            bonus_lines = []
+        else:
+            # Wrap summary
+            summary_lines = _campaigns_wrap_text(summary, small_font, avail_text_w)
+            if len(summary_lines) > 4:
+                # Truncate long summaries; full text is on the source page.
+                summary_lines = summary_lines[:4]
+                summary_lines[-1] = summary_lines[-1].rstrip() + "…"
+            # Bonus lines — keep short, cap at 6
+            bonus_lines = []
+            for b in bonuses[:6]:
+                wrapped = _campaigns_wrap_text("• " + b, bonus_font, avail_text_w)
+                bonus_lines.extend(wrapped[:2])  # max 2 wrapped lines per bullet
+
+        # Pre-wrap each sub-campaign's name + description for accurate
+        # height measurement. The list interleaves two item types:
+        #   {"type": "phase", "label": str, "label_lines": [str, ...]}
+        #   {"type": "sc",    "name_lines": [...], "desc_lines": [...]}
+        # When the parent campaign is in KNOWN_CAMPAIGN_PHASES, phase
+        # headers are inserted between groups; otherwise sub-campaigns
+        # render flat (the entire list is one implicit group).
+        wrapped_subs = []
+        parent_title_for_phase = entry.get("title", "")
+        phase_groups = _campaigns_phase_groups(parent_title_for_phase,
+                                                subcamps[:40])  # 40-cap
+        # Track total sub-campaigns rendered across all phases. Caps
+        # at 40 globally (the previous limit) so a misbehaving page
+        # can't blow up the modal even if the mapping table grows.
+        rendered_count = 0
+        for phase_label, phase_subs in phase_groups:
+            if rendered_count >= 40:
+                break
+            # Add a phase header row IF we have a label (None means
+            # this event has no phase mapping, so we render a single
+            # flat group with no header).
+            if phase_label is not None:
+                # Wrap the phase label so long labels still fit in
+                # narrow modals. Phase labels are short (~30 chars)
+                # so they rarely wrap, but cheap to support.
+                label_lines = _campaigns_wrap_text(
+                    phase_label, bonus_font, avail_text_w - 12)
+                wrapped_subs.append({
+                    "type":        "phase",
+                    "label":       phase_label,
+                    "label_lines": label_lines,
+                })
+            for sc in phase_subs:
+                if rendered_count >= 40:
+                    break
+                n_lines = _campaigns_wrap_text(sc.get("name", ""),
+                                                bonus_font, avail_text_w - 12)
+                d_lines = _campaigns_wrap_text(sc.get("description", ""),
+                                                small_font, avail_text_w - 12)
+                if len(d_lines) > 4:
+                    d_lines = d_lines[:4]
+                    d_lines[-1] = d_lines[-1].rstrip() + "…"
+                wrapped_subs.append({
+                    "type":       "sc",
+                    "name_lines": n_lines,
+                    "desc_lines": d_lines,
+                })
+                rendered_count += 1
+
+        title_h   = len(title_lines) * (body_font.get_linesize() + 2)
+        date_h    = 18 if date_str else 0
+        summary_h = len(summary_lines) * (small_font.get_linesize() + 1) if summary_lines else 0
+        bonus_h   = len(bonus_lines)   * (bonus_font.get_linesize() + 1) if bonus_lines else 0
+        # Sub-campaigns: each one is (name lines) + (desc lines) + a
+        # small inter-block gap. Phase headers add a small fixed band
+        # plus padding above/below to set them off visually.
+        sub_h = 0
+        for item in wrapped_subs:
+            if item["type"] == "phase":
+                # Phase header: top gap + label line(s) + bottom gap
+                sub_h += 8  # space above header
+                sub_h += (len(item["label_lines"])
+                          * (bonus_font.get_linesize() + 1))
+                sub_h += 4  # space below header
+            else:
+                sub_h += (len(item["name_lines"])
+                          * (bonus_font.get_linesize() + 1))
+                sub_h += (len(item["desc_lines"])
+                          * (small_font.get_linesize() + 1))
+                sub_h += 6  # gap between sub-campaigns
+        if wrapped_subs:
+            sub_h += 4  # extra space above first item
+        spacer_h  = 4 if (summary_lines or bonus_lines or wrapped_subs) else 0
+        total_h = (inner_pad_y * 2 + title_h + date_h + spacer_h
+                   + summary_h + bonus_h + sub_h)
+        render_items.append({
+            "type":           "card",
+            "entry":          entry,
+            "title_lines":    title_lines,
+            "date_str":       date_str,
+            "summary_lines":  summary_lines,
+            "bonus_lines":    bonus_lines,
+            "wrapped_subs":   wrapped_subs,
+            "height":         total_h,
+        })
+
+    # Compute total content height including all headers and inter-card
+    # gaps. Headers already factor in their own top/bottom spacing in
+    # their "height" field; cards need card_gap between consecutive
+    # cards within the same group.
+    total_content_h = 0
+    last_was_card = False
+    for itm in render_items:
+        if itm["type"] == "card" and last_was_card:
+            total_content_h += card_gap
+        total_content_h += itm["height"]
+        last_was_card = (itm["type"] == "card")
+    max_scroll = max(0, total_content_h - content_rect.h)
+
+    global campaigns_scroll
+    campaigns_scroll = max(0, min(campaigns_scroll, max_scroll))
+
+    y_cursor = content_top - campaigns_scroll
+    last_was_card = False
+    for itm in render_items:
+        if itm["type"] == "header":
+            # ── Group section header ──
+            # A colored band stretching the full content width, with
+            # the group label centered in it. Acts as a visual divider
+            # between groups (Current / Starting <date> / Past).
+            header_y = y_cursor + group_top_gap
+            header_rect = pygame.Rect(card_x, header_y,
+                                       card_w, group_header_h)
+            # Cull if fully outside view
+            if (header_rect.bottom < content_rect.top
+                    or header_rect.top > content_rect.bottom):
+                y_cursor += itm["height"]
+                last_was_card = False
+                continue
+            pygame.draw.rect(surface, itm["color"], header_rect,
+                             border_radius=6)
+            # Subtle border for definition
+            pygame.draw.rect(surface, (200, 220, 200),
+                             header_rect, 1, border_radius=6)
+            label_surf = title_font.render(itm["label"], True,
+                                            (245, 245, 245))
+            surface.blit(label_surf,
+                         (header_rect.x
+                          + (header_rect.w - label_surf.get_width()) // 2,
+                          header_rect.y
+                          + (header_rect.h - label_surf.get_height()) // 2))
+            y_cursor += itm["height"]
+            last_was_card = False
+            continue
+
+        # ── Event card ──
+        entry        = itm["entry"]
+        title_lines  = itm["title_lines"]
+        date_str     = itm["date_str"]
+        summary_lines = itm["summary_lines"]
+        bonus_lines  = itm["bonus_lines"]
+        wrapped_subs = itm["wrapped_subs"]
+        total_h      = itm["height"]
+        # Cards within the same group get a small gap between them; the
+        # first card after a header has no extra gap (the header already
+        # provides separation).
+        if last_was_card:
+            y_cursor += card_gap
+        card_rect = pygame.Rect(card_x, y_cursor, card_w, total_h)
+        last_was_card = True
+        # Cull cards entirely outside the clipped content area to skip
+        # paint work for items the user has scrolled past.
+        if card_rect.bottom < content_rect.top or card_rect.top > content_rect.bottom:
+            y_cursor += total_h
+            continue
+
+        # Card background
+        pygame.draw.rect(surface, (45, 45, 58), card_rect, border_radius=6)
+        pygame.draw.rect(surface, (75, 75, 95), card_rect, 1, border_radius=6)
+        # Make the card itself clickable (opens source URL).
+        # IMPORTANT: clip the click-target rect to the visible content
+        # area. The card_rect may extend ABOVE content_rect.top (when
+        # the user has scrolled and the top of this card is partially
+        # off-screen) or below content_rect.bottom. Visually that's
+        # fine — surface.set_clip(content_rect) above prevents drawing
+        # outside the content area — but the click-test code below
+        # doesn't see the visual clip; it just collides against the
+        # raw rect. Without clipping the click rect, the scrolled-up
+        # portion of a card would extend up under the header bar and
+        # swallow clicks meant for the Refresh / Close buttons.
+        link = entry.get("link", "")
+        if link:
+            click_rect = card_rect.clip(content_rect)
+            if click_rect.width > 0 and click_rect.height > 0:
+                _campaigns_click_rects.append(
+                    (click_rect, {"action": "cmp_card", "url": link}))
+
+        ty = card_rect.y + inner_pad_y
+        # Title
+        for ln in title_lines:
+            surf = body_font.render(ln, True, (245, 230, 180))  # warm gold
+            surface.blit(surf, (card_rect.x + inner_pad_x, ty))
+            ty += body_font.get_linesize() + 2
+        # Date range
+        if date_str:
+            surf = small_font.render(date_str, True, (180, 200, 240))
+            surface.blit(surf, (card_rect.x + inner_pad_x, ty))
+            ty += 18
+        # Summary (only when we have no sub-campaigns to show — the
+        # umbrella summary duplicates what the sub-campaign cards
+        # already convey when we have detail-page data).
+        for ln in summary_lines:
+            surf = small_font.render(ln, True, (210, 210, 220))
+            surface.blit(surf, (card_rect.x + inner_pad_x, ty))
+            ty += small_font.get_linesize() + 1
+        # Bonus bullets (only when no sub-campaigns parsed)
+        for ln in bonus_lines:
+            surf = bonus_font.render(ln, True, (170, 220, 170))
+            surface.blit(surf, (card_rect.x + inner_pad_x, ty))
+            ty += bonus_font.get_linesize() + 1
+
+        # Sub-campaigns block: each item is either a phase header
+        # (rendered as a small colored band with the phase label) or
+        # a sub-campaign row (name in light green-italic above an
+        # indented description).
+        if wrapped_subs:
+            ty += 4  # gap above first item
+        for item in wrapped_subs:
+            if item["type"] == "phase":
+                # Phase header: a thin band that visually breaks
+                # the sub-campaign stream into phase groups. Same
+                # color treatment as the modal's top-level group
+                # bands (warm muted blue) so it reads as "schedule
+                # divider" rather than a card.
+                ty += 8  # top padding
+                band_x = card_rect.x + inner_pad_x + 2
+                band_w = card_rect.w - (inner_pad_x * 2) - 4
+                band_h = (len(item["label_lines"])
+                          * (bonus_font.get_linesize() + 1)) + 2
+                band_rect = pygame.Rect(band_x, ty - 1, band_w, band_h)
+                pygame.draw.rect(surface, (55, 70, 95), band_rect,
+                                  border_radius=4)
+                pygame.draw.rect(surface, (90, 120, 160), band_rect, 1,
+                                  border_radius=4)
+                for ll in item["label_lines"]:
+                    surf = bonus_font.render(ll, True, (200, 220, 245))
+                    # Center the label horizontally in the band.
+                    lw = surf.get_width()
+                    lx = band_x + max(4, (band_w - lw) // 2)
+                    surface.blit(surf, (lx, ty))
+                    ty += bonus_font.get_linesize() + 1
+                ty += 4  # bottom padding
+                continue
+            # Sub-campaign row.
+            sub_x = card_rect.x + inner_pad_x + 4
+            for nl in item["name_lines"]:
+                surf = bonus_font.render(nl, True, (190, 230, 170))
+                surface.blit(surf, (sub_x, ty))
+                ty += bonus_font.get_linesize() + 1
+            for dl in item["desc_lines"]:
+                surf = small_font.render(dl, True, (210, 210, 220))
+                surface.blit(surf, (sub_x + 8, ty))  # double-indent desc
+                ty += small_font.get_linesize() + 1
+            ty += 6  # gap between sub-campaigns
+
+        y_cursor += total_h
+
+    surface.set_clip(prev_clip)
+
+    # Re-append the header button click rects AFTER all card rects.
+    # The dispatcher iterates in reverse so later entries match first;
+    # this guarantees Refresh and Close always win against any card
+    # rect that might overlap their position (the card click rects
+    # are already clipped to content_rect above, so this is a
+    # belt-and-suspenders defense). Without this, scrolling could
+    # cause a card rect to intercept clicks on the header buttons
+    # despite the visual clip.
+    _campaigns_click_rects.append(
+        (refresh_rect.copy(), {"action": "cmp_refresh"}))
+    _campaigns_click_rects.append(
+        (close_rect.copy(), {"action": "cmp_close"}))
+
+    # Scroll hint: draw a faint scrollbar on the right edge if content
+    # overflows. Purely informational — not draggable in this modal.
+    if max_scroll > 0:
+        track_x = mx + mw - 6
+        track_y = content_top
+        track_h = content_rect.h
+        thumb_h = max(20, int(track_h * (content_rect.h / total_content_h)))
+        thumb_y = track_y + int((track_h - thumb_h)
+                                 * (campaigns_scroll / max_scroll))
+        pygame.draw.rect(surface, (60, 60, 75),
+                         pygame.Rect(track_x, track_y, 4, track_h),
+                         border_radius=2)
+        pygame.draw.rect(surface, (130, 130, 160),
+                         pygame.Rect(track_x, thumb_y, 4, thumb_h),
+                         border_radius=2)
+
+    # ── Footer ──
+    _draw_campaigns_footer(surface, mx, my, mw, mh, small_font)
+
+
+def _draw_campaigns_footer(surface, mx, my, mw, mh, font):
+    """Render the small status line at the bottom of the campaigns
+    modal — shows last-fetched time + a hint if we're stale/offline."""
+    if campaigns_last_fetched:
+        age = time.time() - campaigns_last_fetched
+        if age < 90:
+            stamp = "just now"
+        elif age < 3600:
+            stamp = f"{int(age // 60)} min ago"
+        elif age < 86400:
+            stamp = f"{int(age // 3600)} hr ago"
+        else:
+            stamp = f"{int(age // 86400)} d ago"
+        msg = f"Last updated: {stamp}"
+        if campaigns_fetch_failed:
+            msg += "  •  (refresh failed)"
+    elif campaigns_fetch_in_flight:
+        msg = "Fetching…"
+    else:
+        msg = "No data fetched yet."
+    surf = font.render(msg, True, (140, 140, 160))
+    surface.blit(surf, (mx + 14, my + mh - 18))
+
+
+def _campaigns_wrap_text(text, font, max_w):
+    """Word-wrap a single line of text against a pygame font + pixel
+    width budget. Returns a list of strings each fitting within max_w.
+    Handles long unbreakable tokens by hard-cutting them so a single
+    monster URL doesn't overflow the card."""
+    if not text:
+        return []
+    lines = []
+    for paragraph in text.split("\n"):
+        if not paragraph.strip():
+            continue
+        words = paragraph.split()
+        cur = ""
+        for w in words:
+            trial = (cur + " " + w).strip() if cur else w
+            if font.size(trial)[0] <= max_w:
+                cur = trial
+            else:
+                if cur:
+                    lines.append(cur)
+                # If single word is wider than max_w, hard-cut it.
+                if font.size(w)[0] > max_w:
+                    chunk = ""
+                    for ch in w:
+                        if font.size(chunk + ch)[0] <= max_w:
+                            chunk += ch
+                        else:
+                            if chunk:
+                                lines.append(chunk)
+                            chunk = ch
+                    cur = chunk
+                else:
+                    cur = w
+        if cur:
+            lines.append(cur)
+    return lines
+
+
+def _campaigns_format_period(start_str, end_str):
+    """Compact the PlayOnline-style date strings for display.
+
+    PlayOnline writes "Friday, May 22, 2026, at 1:00 a.m. (PDT)" which
+    is too wide for our card. Reduce to "Fri May 22 → Mon Jun 1" while
+    preserving the time + tz on hover if we ever add tooltips.
+    Returns the formatted "A → B" string, or just A if B is empty."""
+    def shorten(s):
+        if not s:
+            return ""
+        # Try to extract "<Day-of-week>, <Month> <Day>" and shorten.
+        m = re.match(
+            r"\s*([A-Z][a-z]+),?\s+([A-Z][a-z]+)\s+(\d{1,2})"
+            r"(?:,?\s+(\d{4}))?",
+            s,
+        )
+        if not m:
+            return s.strip()
+        dow = m.group(1)[:3]
+        mon = m.group(2)[:3]
+        day = m.group(3)
+        # Year is omitted unless it differs from the current real year.
+        return f"{dow} {mon} {day}"
+    a = shorten(start_str)
+    b = shorten(end_str)
+    if a and b:
+        return f"{a}  →  {b}"
+    return a or b
+
+
+def dispatch_campaigns_modal_click(mx, my):
+    """Resolve a click against the campaigns modal. Returns True if
+    the click was consumed."""
+    global campaigns_modal_open, campaigns_scroll
+    global transport_airship_idx, transport_ferry_idx
+    global transport_airship_last_cycle_ts, transport_ferry_last_cycle_ts
+    if not campaigns_modal_open:
+        return False
+    # Transport boxes — check FIRST so their whole-box click target
+    # isn't swallowed by any backdrop/panel catch-all sitting below.
+    # Reverse-iterate for the same reason the campaigns dispatcher
+    # does (later-added rects win on overlap).
+    for rect, payload in reversed(_transport_click_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        if payload.get("action") == "tr_cycle":
+            mode = payload.get("mode", "")
+            list_len = max(1, int(payload.get("list_len", 1)))
+            # Bump the auto-cycle timestamp too — without this, an
+            # auto-tick could fire 50ms after the user's manual click
+            # and rotate again immediately, which would feel like the
+            # click ate a route.
+            _now = time.time()
+            if mode == "airship":
+                transport_airship_idx = (transport_airship_idx + 1) % list_len
+                transport_airship_last_cycle_ts = _now
+            elif mode == "ferry":
+                transport_ferry_idx = (transport_ferry_idx + 1) % list_len
+                transport_ferry_last_cycle_ts = _now
+            return True
+    # Walk in reverse so specific controls beat the panel/backdrop
+    # catch-alls.
+    for rect, payload in reversed(_campaigns_click_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = payload.get("action")
+        if what == "cmp_backdrop":
+            campaigns_modal_open = False
+            return True
+        if what == "cmp_panel_bg":
+            return True  # swallow stray panel clicks
+        if what == "cmp_close":
+            campaigns_modal_open = False
+            return True
+        if what == "cmp_refresh":
+            # Refresh fires BOTH the campaigns list AND the DI banner.
+            # The user expects "Refresh" to refresh everything visible
+            # in the modal — they'd be (rightly) confused if the DI
+            # banner kept showing stale data after clicking it just
+            # because our cache TTL hadn't elapsed yet.
+            _force_campaigns_refresh()
+            _force_di_refresh()
+            return True
+        if what == "cmp_card":
+            url = payload.get("url")
+            if url:
+                try:
+                    webbrowser.open(url, new=2, autoraise=True)
+                except Exception as e:
+                    print(f"[OmniWatch] could not open browser: {e!r}")
+            return True
+    return False
+
+
 def dispatch_sim_import_click(mx, my):
     """Resolve a click against the import modal. Returns True if consumed.
     Only active while sim_import_open."""
@@ -12848,20 +26501,39 @@ def draw_settings_menu(surface):
     mouse_pos = pygame.mouse.get_pos()
 
     for section in SETTINGS_SECTIONS:
-        # Section header strip.
-        sec_surf = title_font.render(section.upper(), True, (200, 180, 130))
-        surface.blit(sec_surf, (mx + pad, cy + 2))
-        # Underline running across the row.
-        pygame.draw.line(surface, (90, 90, 110),
-                         (mx + pad, cy + sec_h - 2),
-                         (mx + w - pad, cy + sec_h - 2))
-        cy += sec_h
+        # Sections whose name begins with an underscore render an
+        # UNNAMED header strip — the underline divider draws but
+        # the section name doesn't. Visually separates the loose
+        # group from the section above without giving it a label.
+        # Empty unnamed sections render nothing at all (no divider,
+        # no placeholder) — there'd be nothing to separate from.
+        is_loose = section.startswith("_")
+        section_entries_check = grouped[section]
+        if is_loose and not section_entries_check:
+            continue
+
+        if is_loose:
+            # Divider only, no name text. Same Y position as a normal
+            # header's underline so the visual rhythm matches.
+            pygame.draw.line(surface, (90, 90, 110),
+                             (mx + pad, cy + sec_h - 2),
+                             (mx + w - pad, cy + sec_h - 2))
+            cy += sec_h
+        else:
+            # Section header strip.
+            sec_surf = title_font.render(section.upper(), True, (200, 180, 130))
+            surface.blit(sec_surf, (mx + pad, cy + 2))
+            # Underline running across the row.
+            pygame.draw.line(surface, (90, 90, 110),
+                             (mx + pad, cy + sec_h - 2),
+                             (mx + w - pad, cy + sec_h - 2))
+            cy += sec_h
 
         section_entries = grouped[section]
         if not section_entries:
-            # Empty section: show a subtle placeholder so the user
+            # Empty named section: show a subtle placeholder so the user
             # sees the section exists but has nothing to configure
-            # yet. Italic + dim so it doesn't fight with real entries.
+            # yet. (Empty loose sections were already skipped above.)
             ph_surf = placeholder_font.render(
                 "(no settings yet)", True, (110, 110, 130))
             surface.blit(ph_surf,
@@ -13052,7 +26724,29 @@ def draw_settings_menu(surface):
                     btn_w, btn_h)
                 # Hover-lift like the toggle pills.
                 is_btn_hover = btn_rect.collidepoint(*mouse_pos)
-                btn_color = (200, 180, 130) if is_btn_hover else (180, 160, 110)
+                # CONFIGURE buttons get a light-blue tint so they
+                # visually distinguish themselves from the action
+                # buttons (OPEN / RESET / EDIT / PICK) — they do
+                # something fundamentally different (open a
+                # subdialog) so deserve a distinct color. EXIT is
+                # red to mark it as a destructive / one-way action
+                # — clicking it ends the session. The "Open log
+                # folder" button gets a light-purple tint as a
+                # one-off — it does its own thing (spawns an
+                # explorer window on the log dir) and the color
+                # makes it easy to spot when reporting bugs.
+                if btn_text == "CONFIGURE":
+                    btn_color = ((170, 210, 240) if is_btn_hover
+                                  else (140, 185, 220))
+                elif btn_text == "EXIT":
+                    btn_color = ((230, 110, 110) if is_btn_hover
+                                  else (200, 80, 80))
+                elif schema.get("key") == "open_crash_log":
+                    btn_color = ((195, 175, 225) if is_btn_hover
+                                  else (170, 145, 205))
+                else:
+                    btn_color = ((200, 180, 130) if is_btn_hover
+                                  else (180, 160, 110))
                 pygame.draw.rect(surface, btn_color, btn_rect,
                                  border_radius=8)
                 surface.blit(btn_surf,
@@ -14550,6 +28244,423 @@ def _chat_composer_send():
     chat_composer_cursor = 0
 
 
+# ── Click-on-sender-name actions ─────────────────────────────────────────
+# Mouse interactions on rendered sender names in the chat panel. The
+# rendering side records per-frame hit-test rects into
+# _chat_clickable_senders (entries: {"rect", "name", "actor_class"}).
+# These helpers are called from the main MOUSEBUTTONDOWN handler when
+# a click hits one of those rects.
+#
+# Left-click → populate the chat composer with a tell to that name. We
+# deliberately do NOT fire the /tell immediately: the user almost always
+# wants to type a message first. Switching the composer channel to
+# "tell" + filling the tell-target field + focusing the message input
+# is the natural setup for that.
+#
+# Right-click → open a context menu next to the rect with "Send Tell"
+# and "Invite to Party". "Send Tell" reuses the left-click setup;
+# "Invite to Party" fires `/pcmd add <name>` directly via the same UDP
+# rail the hotbar buttons use.
+
+def _chat_compose_tell_to(name):
+    """Set up the composer to send a tell to `name`.
+
+    Switches the composer to the "tell" channel (index 1 in
+    CHAT_COMPOSER_CHANNELS), populates the tell-target field, focuses
+    the message body input (so the user can immediately start typing
+    without an extra click), and shows the composer if hidden. The
+    user still has to type a message and hit send / Enter — we never
+    fire a /tell automatically from a click, since that would make
+    accidental clicks send empty tells.
+
+    Safe to call with an empty `name` (no-op).
+    """
+    if not name:
+        return
+    global chat_composer_channel, chat_composer_tell_to
+    global chat_composer_tell_to_cursor
+    global chat_composer_focused, chat_composer_tell_to_focused
+    global chat_composer_visible
+    # Find the "tell" channel index by key, in case the channels list
+    # is reordered later (safer than hard-coding 1).
+    tell_idx = 1
+    for i, (key, _label, _prefix) in enumerate(CHAT_COMPOSER_CHANNELS):
+        if key == "tell":
+            tell_idx = i
+            break
+    chat_composer_channel = tell_idx
+    chat_composer_tell_to = name
+    chat_composer_tell_to_cursor = len(name)
+    # Focus the MESSAGE body, not the tell-target, since the target is
+    # now filled in. The user wants to start typing the message.
+    chat_composer_focused = True
+    chat_composer_tell_to_focused = False
+    if not chat_composer_visible:
+        chat_composer_visible = True
+
+
+def _chat_invite_to_party(name):
+    """Send /pcmd add <name> via the UDP command rail.
+
+    Same dispatch path used by hotbar windower-kind buttons and the
+    composer send helper. If the target is already in your party, or
+    you're not the party leader, FFXI will reject the invite with its
+    own error message — we don't try to validate client-side. The
+    in-game error feedback is more informative than anything we'd
+    invent.
+
+    No-op for empty name.
+    """
+    if not name:
+        return
+    try:
+        payload = ("input /pcmd add " + name).encode("utf-8")
+        sock_cmd_out.sendto(payload, CMD_OUT_ADDR)
+        print(f"[OmniWatch] invite -> {name}")
+    except Exception as e:
+        print(f"[OmniWatch] invite failed: {e!r}")
+
+
+def _chat_blacklist_add(name):
+    """Add `name` to the OmniWatch routing-config blacklist.
+
+    Writes to _meta.blacklist in omniwatch_chat_routing.json (same
+    field the routing GUI's footer manages — the "Mytoy ×" chip row
+    you see in the GUI). NOT to FFXI's server-side /blist: OmniWatch
+    chat is a local overlay concern, separate from the in-game
+    blacklist by design. Blacklisting in the overlay should NOT
+    affect what FFXI itself sees, only what the OW chat panel shows.
+
+    Two-step update for instant effect with no reload required:
+      1. Add to _chat_blacklist live set so the very next filter pass
+         hides messages from this sender (chat panel updates on the
+         next frame).
+      2. Append to _meta.blacklist in the JSON file so the entry
+         survives an addon reload / restart.
+
+    The live set is compared case-insensitively (lowercase strings);
+    the JSON stores the original-case name to match the GUI display
+    convention ("Mytoy" not "mytoy"). De-duplicates on both sides.
+
+    Known race: if the routing GUI is open at the same time, its
+    Save will rewrite the whole file with its in-memory blacklist
+    snapshot — possibly clobbering our addition. The GUI footer text
+    already tells users to "Reload OmniWatch to apply", so collision
+    in practice is rare and self-recovering (re-add and don't reopen
+    the GUI mid-session).
+
+    No-op for empty name.
+    """
+    if not name:
+        return
+    name_clean = name.strip()
+    if not name_clean:
+        return
+
+    global _chat_blacklist
+    # Live set update first. Filter takes effect on the next frame's
+    # _chat_classify_for_routing call — chat panel immediately hides
+    # messages from this sender without a reload.
+    _chat_blacklist = set(_chat_blacklist) if _chat_blacklist else set()
+    _chat_blacklist.add(name_clean.lower())
+
+    # Persist to JSON. Pull current file, splice our entry into
+    # _meta.blacklist, rewrite. We do this manually rather than
+    # routing through the GUI's save_config helper because that helper
+    # rewrites the WHOLE config (stripping empty actor sections, etc.);
+    # we only want to touch _meta.blacklist, leaving everything else
+    # byte-for-byte intact in case the user has hand-edited the rest.
+    try:
+        path = os.path.join(SETTINGS_DIR, "omniwatch_chat_routing.json")
+    except Exception as e:
+        print(f"[OmniWatch] blacklist add: bad path: {e!r}")
+        return
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        else:
+            data = {}
+        meta = data.get("_meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            data["_meta"] = meta
+        # Existing list (or empty if missing / wrong type).
+        cur = meta.get("blacklist")
+        if not isinstance(cur, list):
+            cur = []
+        # De-dupe case-insensitively against existing entries while
+        # preserving original casing where present. If the name is
+        # already there in any case, skip the write — live set update
+        # above is still beneficial (it normalizes to lowercase) but
+        # we don't need to touch the file.
+        cur_lower = {s.strip().lower() for s in cur
+                     if isinstance(s, str) and s.strip()}
+        if name_clean.lower() in cur_lower:
+            print(f"[OmniWatch] blacklist add: {name_clean!r} already "
+                  "in routing config (live set refreshed)")
+            return
+        cur.append(name_clean)
+        # Sort for stable file diffs — matches the GUI's save behavior.
+        meta["blacklist"] = sorted(cur, key=str.lower)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"[OmniWatch] blacklist add: {name_clean} → "
+              "omniwatch_chat_routing.json")
+    except Exception as e:
+        print(f"[OmniWatch] blacklist add failed for {name_clean!r}: {e!r}")
+
+
+def _chat_open_name_context_menu(name, actor_class, anchor_pos):
+    """Open the right-click context menu for a chat sender name.
+
+    Stores the menu state in _chat_name_context_menu; the actual
+    rendering happens in draw_chat_panel (which positions the menu
+    near anchor_pos and records per-item rects for hit-testing).
+
+    All names get the same three items (Send Tell, Invite to Party,
+    Blacklist) regardless of actor_class — even self/party. Per the
+    design call: party/self click is harmless (tell to a party member
+    works fine, invite is silently rejected by FFXI for already-in-party
+    targets, blacklist on a self/party name is the user's call).
+
+    The Blacklist item carries a `gap_before` flag that the menu
+    renderer uses to insert extra vertical space + a separator line
+    above it. Misclick safety: blacklist is a one-way action in FFXI
+    (no undo confirmation), so the visual gap keeps it from sitting
+    directly under Invite where an off-by-one click might land.
+    """
+    global _chat_name_context_menu
+    _chat_name_context_menu = {
+        "name":        name,
+        "actor_class": actor_class or "other",
+        "anchor":      anchor_pos,    # (x, y) where the menu opens
+        "items": [
+            {"label": "Send Tell",       "action": "tell",      "rect": None},
+            {"label": "Invite to Party", "action": "invite",    "rect": None},
+            {"label": "Blacklist Add",   "action": "blacklist", "rect": None,
+             "gap_before": True},
+        ],
+    }
+
+
+def _chat_close_name_context_menu():
+    """Dismiss the context menu, if open."""
+    global _chat_name_context_menu
+    _chat_name_context_menu = None
+
+
+def _chat_handle_name_context_action(action, name):
+    """Dispatch a context-menu item's action.
+
+    Called when the user clicks one of the menu items in
+    _chat_name_context_menu. Closes the menu unconditionally after
+    dispatch so the menu doesn't linger after the action fires.
+    """
+    if action == "tell":
+        _chat_compose_tell_to(name)
+    elif action == "invite":
+        _chat_invite_to_party(name)
+    elif action == "blacklist":
+        _chat_blacklist_add(name)
+    _chat_close_name_context_menu()
+
+
+def _chat_update_name_hover(mx, my):
+    """Update _chat_name_hover based on current mouse position.
+
+    Walks _chat_clickable_senders and sets the hover state to the
+    sender name whose rect contains (mx, my), or None if no rect
+    matches. Cheap — typically <50 entries, single collidepoint per.
+    Called from MOUSEMOTION; the next draw paints accordingly.
+    """
+    global _chat_name_hover
+    hit = None
+    for entry in _chat_clickable_senders:
+        try:
+            if entry["rect"].collidepoint(mx, my):
+                hit = entry["name"]
+                break
+        except Exception:
+            continue
+    _chat_name_hover = hit
+
+
+def _chat_handle_name_click(button, mx, my):
+    """Check if (mx, my) hit a clickable sender name and act on it.
+
+    Returns True if a name was hit and the click was consumed.
+    `button` is the pygame mouse button index (1 = left, 3 = right).
+    Should be called BEFORE more generic chat-panel click handlers so
+    a click on a name doesn't fall through to e.g. tab switching.
+    """
+    for entry in _chat_clickable_senders:
+        try:
+            if not entry["rect"].collidepoint(mx, my):
+                continue
+        except Exception:
+            continue
+        name = entry.get("name") or ""
+        actor_class = entry.get("actor_class") or "other"
+        if not name:
+            return False
+        if button == 1:
+            _chat_compose_tell_to(name)
+            return True
+        if button == 3:
+            _chat_open_name_context_menu(name, actor_class, (mx, my))
+            return True
+        return False
+    return False
+
+
+def _chat_handle_name_context_click(button, mx, my):
+    """Hit-test the open context menu, if any.
+
+    Returns True if the click was consumed (either by selecting an
+    item or by clicking outside the menu, which dismisses it).
+    """
+    if _chat_name_context_menu is None:
+        return False
+    # Any click while the menu is open consumes the event — either as
+    # an item selection or as a dismiss. This is standard menu UX:
+    # the menu has modal focus until resolved.
+    for item in _chat_name_context_menu.get("items", []):
+        r = item.get("rect")
+        if r is not None and r.collidepoint(mx, my):
+            # Left-click selects; right-click on a menu item also
+            # selects (slightly forgiving — user already opened the
+            # menu, they probably meant to click).
+            if button in (1, 3):
+                action = item.get("action")
+                name = _chat_name_context_menu.get("name") or ""
+                _chat_handle_name_context_action(action, name)
+                return True
+    # Click was inside the menu's overall rect but not on any item?
+    # Still consume to prevent accidental fall-through. Otherwise it's
+    # outside the menu → dismiss.
+    menu_rect = _chat_name_context_menu.get("rect")
+    if menu_rect is not None and menu_rect.collidepoint(mx, my):
+        return True
+    _chat_close_name_context_menu()
+    return True
+
+
+def _chat_draw_name_context_menu(surface):
+    """Render the open context menu, if any, and record item rects.
+
+    Called from draw_chat_panel after all other chat rendering so the
+    menu sits ON TOP of everything else in the panel. Sets each item's
+    rect for hit-testing on the next click.
+
+    Layout:
+      ┌────────────────────────┐
+      │ <Name>                 │   ← header row (non-clickable label)
+      ├────────────────────────┤
+      │ Send Tell              │   ← item row
+      │ Invite to Party        │   ← item row
+      └────────────────────────┘
+
+    Width is sized to fit the longest item label + name. Anchored at
+    the click position; if it would clip off the right/bottom edge of
+    the surface, shift it left/up to stay on-screen.
+    """
+    if _chat_name_context_menu is None:
+        return
+    menu = _chat_name_context_menu
+    name = menu.get("name") or ""
+    items = menu.get("items", [])
+    if not items:
+        return
+
+    # Font + sizing.
+    font = _chat_get_font("meta", 12)
+    pad_x = 10
+    pad_y = 5
+    row_h = font.get_linesize() + 2
+    # Extra vertical space inserted above any item that carries the
+    # `gap_before` flag (currently only Blacklist). Acts as a visual
+    # "section break" so a misclick from the row above doesn't slide
+    # into a destructive action.
+    gap_h = 6     # blank pixels above the gapped item
+    sep_h = 1     # separator line drawn inside the gap
+    header_text = font.render(name, True, CHAT_YELL_ZONE_COLOR)
+    item_surfs = []
+    for it in items:
+        item_surfs.append(font.render(it.get("label") or "",
+                                      True, (230, 230, 230)))
+    max_w = header_text.get_width()
+    for s in item_surfs:
+        if s.get_width() > max_w:
+            max_w = s.get_width()
+    menu_w = max_w + pad_x * 2
+    # Sum extra height from any gap_before items so the backdrop is
+    # tall enough to contain them. Counting it once here keeps the
+    # menu_h / menu_rect / clamping math in one place.
+    gap_total = 0
+    for it in items:
+        if it.get("gap_before"):
+            gap_total += gap_h
+    # Header row + separator + items rows + gaps.
+    menu_h = row_h + 1 + row_h * len(items) + gap_total + pad_y * 2
+
+    # Anchor; clamp to surface bounds.
+    ax, ay = menu.get("anchor", (0, 0))
+    sw, sh = surface.get_size()
+    mx = min(ax, sw - menu_w - 2)
+    my = min(ay, sh - menu_h - 2)
+    if mx < 0:
+        mx = 0
+    if my < 0:
+        my = 0
+    menu_rect = pygame.Rect(mx, my, menu_w, menu_h)
+    menu["rect"] = menu_rect
+
+    # Backdrop.
+    bg = pygame.Surface((menu_w, menu_h), pygame.SRCALPHA)
+    bg.fill((24, 28, 36, 240))
+    surface.blit(bg, menu_rect.topleft)
+    pygame.draw.rect(surface, (100, 110, 130), menu_rect, 1)
+
+    # Header label (the name in pale yellow, non-clickable).
+    cy = my + pad_y
+    surface.blit(header_text, (mx + pad_x, cy))
+    cy += row_h
+    # Separator line.
+    pygame.draw.line(surface, (60, 70, 85),
+                     (mx + 4, cy), (mx + menu_w - 4, cy), 1)
+    cy += 1
+
+    # Item rows. Record each row's rect for hit-testing. Hover
+    # highlight uses the live mouse position. Items flagged
+    # `gap_before` get extra vertical space plus a thin separator
+    # line inserted above them — the misclick-safety affordance for
+    # destructive actions like Blacklist.
+    mouse_pos = pygame.mouse.get_pos()
+    for i, it in enumerate(items):
+        if it.get("gap_before"):
+            # Inject the gap, with a separator centered vertically
+            # within it. The separator runs the full menu width
+            # (minus a small inset) so it visually belongs to the
+            # menu rather than to either neighboring item.
+            sep_y = cy + (gap_h // 2)
+            pygame.draw.line(surface, (60, 70, 85),
+                             (mx + 4, sep_y), (mx + menu_w - 4, sep_y),
+                             sep_h)
+            cy += gap_h
+        item_rect = pygame.Rect(mx + 1, cy, menu_w - 2, row_h)
+        it["rect"] = item_rect
+        if item_rect.collidepoint(mouse_pos):
+            hov_bg = pygame.Surface((item_rect.width, item_rect.height),
+                                    pygame.SRCALPHA)
+            hov_bg.fill((60, 80, 110, 220))
+            surface.blit(hov_bg, item_rect.topleft)
+        surface.blit(item_surfs[i], (mx + pad_x, cy + 1))
+        cy += row_h
+
+
 def _chat_composer_handle_keydown(event):
     """Process a pygame KEYDOWN event for the composer.
 
@@ -14776,7 +28887,14 @@ def _draw_chat_composer(surface, x, y, w, body_font, meta_font, cjk_font):
     # Channel name (clickable — same as right arrow)
     ch_rect = pygame.Rect(cx, y + 2, chname_w, h - 4)
     _chat_composer_rect_channel = ch_rect
-    ch_surf = name_font.render(ch_label, True, CHAT_COMPOSER_CHANNEL_FG)
+    # Tint the label to match the channel's chat color (party teal, unity
+    # gold, ls1 green, etc.) so the selector reads at a glance. Falls back
+    # to the neutral foreground for any unmapped key.
+    _ch_color_class = CHAT_COMPOSER_CHANNEL_COLOR_CLASS.get(_ch_key)
+    _ch_name_color = (CHAT_SEGMENT_COLORS.get(_ch_color_class,
+                                              CHAT_COMPOSER_CHANNEL_FG)
+                      if _ch_color_class else CHAT_COMPOSER_CHANNEL_FG)
+    ch_surf = name_font.render(ch_label, True, _ch_name_color)
     surface.blit(ch_surf,
                  (ch_rect.x + (ch_rect.w - ch_surf.get_width()) // 2,
                   ch_rect.y + (ch_rect.h - ch_surf.get_height()) // 2))
@@ -15222,6 +29340,131 @@ def draw_skillchain_panel(surface, x, y, scale=1.0, locked=False):
     return (pw, ph)
 
 
+def draw_chat_tab_rclick_popup(surface):
+    """Render the right-click tab popup if one is open.
+
+    A small floating menu anchored at the right-click position with
+    one button: 'Hide tab'. Click that button to add the tab's
+    index to the hidden_chat_tabs setting (causing it to vanish
+    from the tab strip). Click anywhere else to dismiss the popup
+    without changes.
+
+    Drawn AFTER the chat panel so it floats above the tab strip.
+    Per-frame click rects are written to _chat_tab_rclick_rects for
+    the main left-click handler to consume.
+    """
+    global _chat_tab_rclick_rects
+    _chat_tab_rclick_rects = []
+    if _chat_tab_rclick_tab is None or _chat_tab_rclick_anchor is None:
+        return
+    if not (0 <= _chat_tab_rclick_tab < len(chat_tab_names)):
+        return   # defensive — stale index after tab list change
+
+    ax, ay = _chat_tab_rclick_anchor
+    tab_label = chat_tab_names[_chat_tab_rclick_tab][0]
+    title_font = _chat_get_font("meta", 11)
+    # Two text rows: a small header showing which tab the popup
+    # targets, and the actionable button below.
+    hdr_text  = f"Tab: {tab_label}"
+    btn_text  = "Hide tab"
+    hdr_w     = title_font.size(hdr_text)[0]
+    btn_w     = title_font.size(btn_text)[0]
+    pad       = 8
+    row_h     = 20
+    panel_w   = max(hdr_w, btn_w) + pad * 2 + 6
+    panel_h   = row_h * 2 + pad
+    # Keep the popup on-screen — clamp to surface bounds.
+    sw, sh = surface.get_size()
+    px = min(max(0, ax), sw - panel_w)
+    py = min(max(0, ay), sh - panel_h)
+
+    # Backdrop with a 1px border so it visually pops above chat.
+    panel_rect = pygame.Rect(px, py, panel_w, panel_h)
+    pygame.draw.rect(surface, (30, 34, 42), panel_rect, border_radius=3)
+    pygame.draw.rect(surface, (140, 160, 200), panel_rect, 1,
+                     border_radius=3)
+    # Eat clicks on the panel background so they don't dismiss the
+    # popup (a click on the panel chrome is still inside the popup).
+    _chat_tab_rclick_rects.append(
+        (panel_rect, {"action": "rclick_panel_bg"}))
+
+    # Header label.
+    hdr_surf = title_font.render(hdr_text, True, (180, 190, 200))
+    surface.blit(hdr_surf, (px + pad, py + pad // 2))
+
+    # "Hide tab" button.
+    btn_rect = pygame.Rect(px + pad - 2, py + row_h + 2,
+                            panel_w - (pad - 2) * 2, row_h - 2)
+    mouse_pos = pygame.mouse.get_pos()
+    is_hov   = btn_rect.collidepoint(mouse_pos)
+    bg = (90, 50, 60) if is_hov else (55, 40, 48)
+    pygame.draw.rect(surface, bg, btn_rect, border_radius=2)
+    pygame.draw.rect(surface, (180, 120, 140), btn_rect, 1,
+                     border_radius=2)
+    btn_surf = title_font.render(btn_text, True,
+        (255, 220, 220) if is_hov else (220, 200, 205))
+    surface.blit(btn_surf,
+        (btn_rect.x + (btn_rect.w - btn_surf.get_width()) // 2,
+         btn_rect.y + (btn_rect.h - btn_surf.get_height()) // 2))
+    _chat_tab_rclick_rects.append(
+        (btn_rect, {"action": "rclick_hide_tab"}))
+
+
+def dispatch_chat_tab_rclick_popup_click(mx, my, button=1):
+    """Handle a left-click while the tab right-click popup is open.
+
+    Returns True if the click was consumed (either by the Hide
+    button or by clicking the panel background). Returns False if
+    the click missed the popup entirely — in that case the caller
+    should also dismiss the popup AND let the click fall through
+    to whatever it would normally hit.
+    """
+    global _chat_tab_rclick_tab, _chat_tab_rclick_anchor
+    global chat_active_tab
+    if _chat_tab_rclick_tab is None:
+        return False
+    target_tab = _chat_tab_rclick_tab
+    # Iterate in REVERSE order so the most-specific (innermost) rect
+    # wins over outer ones. The panel-background rect is added first
+    # but contains the Hide button rect added after — without
+    # reversed(), a click on the button would hit the background
+    # first and return early as "click on chrome", missing the hide.
+    for rect, action in reversed(_chat_tab_rclick_rects):
+        if not rect.collidepoint(mx, my):
+            continue
+        what = action.get("action", "")
+        if what == "rclick_panel_bg":
+            # Click on the popup chrome but not a button — eat it
+            # but keep the popup open so the user can still click
+            # the Hide button. Same UX as a desktop context menu.
+            return True
+        if what == "rclick_hide_tab":
+            _current = list(settings.get("hidden_chat_tabs") or [])
+            if target_tab not in _current:
+                _current.append(target_tab)
+                set_setting("hidden_chat_tabs", _current)
+            # If we just hid the active tab, bump to the first
+            # visible remaining tab.
+            if chat_active_tab == target_tab:
+                for i in range(len(chat_tab_names)):
+                    if i not in _current:
+                        chat_active_tab = i
+                        chat_tab_unread[i] = 0
+                        break
+            print(f"[chat-tab] hid tab {target_tab} "
+                  f"({chat_tab_names[target_tab][0]!r}) via "
+                  f"right-click popup; hidden list now {_current}")
+            _chat_tab_rclick_tab    = None
+            _chat_tab_rclick_anchor = None
+            return True
+    # Click landed outside the popup — dismiss without changes.
+    # Returning False lets the click also fall through to the
+    # normal handler so the user can do whatever they intended.
+    _chat_tab_rclick_tab    = None
+    _chat_tab_rclick_anchor = None
+    return False
+
+
 def draw_chat_panel(surface, x, y, locked=False):
     """Render the chat panel at (x, y).
 
@@ -15230,8 +29473,16 @@ def draw_chat_panel(surface, x, y, locked=False):
     chat_tab_rects each frame for the mousedown handler to consume.
     """
     global _chat_jump_badge_rect, chat_tab_rects
+    global _chat_clickable_senders
 
     pw, ph = chat_panel_size()
+
+    # Reset per-frame clickable-sender hit-test list. Populated inside
+    # the message-rendering loop below whenever a sender name is blitted
+    # (left-click → /tell composer, right-click → context menu). Reset
+    # here so a hidden chat panel or a re-layout can't leak stale
+    # rectangles into the next frame's hit-tests.
+    _chat_clickable_senders = []
 
     # Background
     bg_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
@@ -15302,6 +29553,34 @@ def draw_chat_panel(surface, x, y, locked=False):
     _chat_clear_all_button_rect = _draw_hdr_button(
         "Clear All", _chat_clear_tab_button_rect.right + _gap, _clr_all_w)
 
+    # "Show all tabs" — anchored to the right side of the header,
+    # just LEFT of the Filters gear button (which is right-edge
+    # anchored). Renders only when at least one tab is hidden so
+    # there's something to unhide. Putting it on the right keeps
+    # the left-side cluster (Clear Tab / Clear All) tight and
+    # avoids hit-confusion with the destructive Clear buttons.
+    global _chat_show_all_button_rect
+    _chat_show_all_button_rect = None
+    _hidden_now = settings.get("hidden_chat_tabs") or []
+    if _hidden_now:
+        _sa_label = f"Show all tabs ({len(_hidden_now)})"
+        _sa_w     = max(110, title_font.size(_sa_label)[0] + 16)
+        # Position: right of Filters minus gap minus our width.
+        _sa_x = gear_rect.x - _gap - _sa_w
+        _sa_r = pygame.Rect(_sa_x, y + 1, _sa_w, gear_h)
+        _sa_hov = _sa_r.collidepoint(mouse_pos)
+        _sa_bg  = (60, 80, 70, 220) if _sa_hov else (40, 46, 56, 200)
+        _sa_surf = pygame.Surface((_sa_r.width, _sa_r.height),
+                                   pygame.SRCALPHA)
+        _sa_surf.fill(_sa_bg)
+        surface.blit(_sa_surf, _sa_r.topleft)
+        _sa_t = title_font.render(_sa_label, True,
+            (240, 240, 240) if _sa_hov else (180, 200, 190))
+        surface.blit(_sa_t,
+            (_sa_r.x + (_sa_r.width  - _sa_t.get_width())  // 2,
+             _sa_r.y + (_sa_r.height - _sa_t.get_height()) // 2))
+        _chat_show_all_button_rect = _sa_r
+
     # Read font sizes once per draw based on chat_font_size setting.
     # Tab strip height scales with tab font so the strip doesn't look
     # cramped on Large or oversized on Small.
@@ -15332,7 +29611,14 @@ def draw_chat_panel(surface, x, y, locked=False):
     # never abbreviated — overflow is handled by sideways scrolling.
     global _chat_tab_hscroll, _chat_tab_arrow_rects
     tab_meta = []   # list of (tab_idx, full, tab_w, badge_text, badge_w, name_w)
+    # Per-tab hide state lives in settings as a list of indices the
+    # user has hidden via right-click. The set is populated lazily
+    # from the persisted list each frame (cheap — typically <14
+    # entries). When all tabs are visible the set is empty.
+    hidden_tabs = set(settings.get("hidden_chat_tabs") or [])
     for tab_idx, (_short, full) in enumerate(chat_tab_names):
+        if tab_idx in hidden_tabs:
+            continue   # user hid this tab via right-click
         active = (tab_idx == chat_active_tab)
         unread = chat_tab_unread.get(tab_idx, 0) if not active else 0
         name_w = tab_font.size(full)[0]
@@ -15501,6 +29787,30 @@ def draw_chat_panel(surface, x, y, locked=False):
     # we have visible_lines + scroll covered.
     events = list(chat_events)
 
+    # Total physical lines across the FULL filtered+wrapped chat —
+    # not just what we rendered. Used for two things:
+    #   1. Scroll anchoring (below): keep the user's view stable when
+    #      new events arrive while scrolled up.
+    #   2. Scrollbar thumb sizing: without this, the rendering loop's
+    #      early-break (it stops once it has enough lines to cover
+    #      the visible window + a 10-line buffer) would make
+    #      physical_lines_total grow as the user scrolls UP and
+    #      shrink as they scroll DOWN — and thus make the thumb
+    #      visibly resize. With true_total in hand the thumb size
+    #      stays anchored to the real chat depth, only changing
+    #      when actual messages arrive or filter changes.
+    # Cost is one extra full-history walk per chat-panel frame. For
+    # typical chat sizes (sub-1000 events) this is cheap (~100µs).
+    true_total = 0
+    for ev in events:
+        try:
+            if not active_filter(ev):
+                continue
+        except Exception:
+            continue
+        w = _chat_wrap_cached(ev, body_font, cjk_font, text_max_w)
+        true_total += len(w) if w else 1
+
     # Scroll anchoring: when the user has scrolled UP, new events arriving
     # at the bottom must NOT slide their view. active_scroll is measured
     # in visible-lines-from-bottom, so if N new physical lines were
@@ -15509,15 +29819,6 @@ def draw_chat_panel(surface, x, y, locked=False):
     # we leave it 0 so autoscroll keeps showing the newest line. Done
     # BEFORE the walk so `needed` below accounts for the bumped offset.
     if active_scroll > 0:
-        true_total = 0
-        for ev in events:
-            try:
-                if not active_filter(ev):
-                    continue
-            except Exception:
-                continue
-            w = _chat_wrap_cached(ev, body_font, cjk_font, text_max_w)
-            true_total += len(w) if w else 1
         prev_total = _chat_tab_line_total.get(chat_active_tab)
         if prev_total is not None and true_total > prev_total:
             active_scroll = active_scroll + (true_total - prev_total)
@@ -15678,6 +29979,11 @@ def draw_chat_panel(surface, x, y, locked=False):
             # the addon load order and Windower version; this content-
             # based detection works regardless.
             _saw_outgoing_tell_marker = False
+            # Event-level actor_class for per-segment clickable rects.
+            # Used by the right-click context menu (some actions could
+            # gate on class later — invite to a self/party row is a
+            # silent no-op, but we don't suppress the menu).
+            _ev_actor_class_seg = ev.get("actor_class") or "other"
             for span_text, span_color_class in spans:
                 if not span_text:
                     continue
@@ -15716,15 +30022,164 @@ def draw_chat_panel(surface, x, y, locked=False):
                         and player_self_name
                         and player_self_name in span_text):
                     color = CHAT_SELF_NAME_COLOR
+                # Override 3 (hover): ch_*-class sender span whose text
+                # matches the current mouse-hover name → brighten to
+                # CHAT_NAME_HOVER_COLOR. Applied AFTER the self-name
+                # override so the hover wins even on your own name —
+                # consistent visual feedback that the cell is clickable.
+                # Note: span_text for chat_packets-emitted sender spans
+                # is the bare name (no delimiter), so direct equality
+                # against _chat_name_hover is correct.
+                _is_sender_span = (
+                    isinstance(span_color_class, str)
+                    and span_color_class.startswith("ch_")
+                    and span_color_class != "ch_other"
+                    and span_color_class != "ch_system"
+                )
+                if (_is_sender_span and _chat_name_hover
+                        and _chat_name_hover == span_text):
+                    color = CHAT_NAME_HOVER_COLOR
                 span_surf = _chat_render_mixed(span_text, body_font,
                                                 cjk_font, color)
                 surface.blit(span_surf, (cur_x, ly))
+                # Record sender-span rect for click-handler hit-tests.
+                # Excludes ch_other and ch_system because those are
+                # generic catch-alls (NPC dialog, system messages) where
+                # the "sender" isn't a real player you can tell/invite.
+                if _is_sender_span and span_text:
+                    _chat_clickable_senders.append({
+                        "rect": pygame.Rect(cur_x, ly,
+                                            span_surf.get_width(),
+                                            span_surf.get_height()),
+                        "name": span_text,
+                        "actor_class": _ev_actor_class_seg,
+                    })
                 cur_x += span_surf.get_width()
         elif sender_marker:
             # Pass 1: sender in orange.
-            sender_surf = _chat_render_mixed(sender_marker, body_font,
-                                             cjk_font, seg["sender_color"])
-            surface.blit(sender_surf, (text_x, ly))
+            #
+            # Special-case /yell (mode 11): FFXI yells arrive shaped
+            # "Sender[ZoneName]: msg" — the originator's zone is embedded
+            # in brackets right after the name. Rendering that entire
+            # region in CHAT_SENDER_COLOR makes the zone tag fight the
+            # speaker name for visual weight. Split the sender_marker
+            # into name + bracket portions and paint the bracket in a
+            # paler yellow so the eye reads "name first, zone second".
+            #
+            # Detection is conservative: only fires when mode==11 AND a
+            # '[' appears in the sender_marker AND a matching ']' appears
+            # before the trailing ': ' delimiter. If the shape doesn't
+            # match (yell without zone tag, or some other channel that
+            # happens to contain brackets), fall through to the unified
+            # single-color render below.
+            #
+            # In both sub-branches, we extract the bare sender NAME
+            # (no brackets, no trailing colon/space, no '>>') and record
+            # its blit rect into _chat_clickable_senders so the mouse
+            # handler can left-click → /tell composer or right-click →
+            # context menu. The name color also switches to the hover
+            # tint when the mouse is currently over this name.
+            _ev_actor_class = ev.get("actor_class") or "other"
+            _split_rendered = False
+            _clickable_name = None
+            _clickable_rect = None
+            if mode == 11 and "[" in sender_marker and "]" in sender_marker:
+                _lb = sender_marker.find("[")
+                _rb = sender_marker.find("]", _lb)
+                # Ensure both brackets land BEFORE the sender-region
+                # boundary (msg_offset). _lb > 0 guarantees we don't
+                # color a name that starts with '[' (degenerate case).
+                if 0 < _lb < _rb < seg["msg_offset"]:
+                    name_part   = sender_marker[:_lb]
+                    zone_part   = sender_marker[_lb:_rb + 1]   # includes [ ]
+                    tail_part   = sender_marker[_rb + 1:]       # the " : " suffix
+                    # Hover state: brighten the name color when this is
+                    # the sender under the mouse.
+                    _name_clean = name_part.rstrip()
+                    _name_color = (CHAT_NAME_HOVER_COLOR
+                                   if _chat_name_hover == _name_clean
+                                   else seg["sender_color"])
+                    name_surf = _chat_render_mixed(name_part, body_font,
+                                                   cjk_font, _name_color)
+                    zone_surf = _chat_render_mixed(zone_part, body_font,
+                                                   cjk_font, CHAT_YELL_ZONE_COLOR)
+                    tail_surf = _chat_render_mixed(tail_part, body_font,
+                                                   cjk_font, seg["sender_color"])
+                    _cx = text_x
+                    surface.blit(name_surf, (_cx, ly))
+                    # Record the name rect for hit-testing BEFORE we
+                    # advance past it. Use the rstripped name (not the
+                    # raw name_part which may have trailing whitespace).
+                    if _name_clean:
+                        _clickable_name = _name_clean
+                        _clickable_rect = pygame.Rect(_cx, ly,
+                                                      name_surf.get_width(),
+                                                      name_surf.get_height())
+                    _cx += name_surf.get_width()
+                    surface.blit(zone_surf, (_cx, ly)); _cx += zone_surf.get_width()
+                    surface.blit(tail_surf, (_cx, ly)); _cx += tail_surf.get_width()
+                    _sender_width = _cx - text_x
+                    _split_rendered = True
+            if not _split_rendered:
+                # Unsplit sender: blit the whole sender_marker as one
+                # surface (orange) but extract the bare name for the
+                # hit-test rect. The name portion is sender_marker
+                # minus the trailing delimiter (": ", ">> ", or ") ").
+                # We approximate by finding the FIRST occurrence of any
+                # of those delimiters and slicing off everything from
+                # there. If no delimiter found, the whole marker is the
+                # name (defensive — shouldn't happen for properly-split
+                # senders, but doesn't break if it does).
+                _name_clean = sender_marker
+                for _delim in (" : ", ">> ", ") ", "] ", "> "):
+                    _di = sender_marker.find(_delim)
+                    if _di >= 0:
+                        _name_clean = sender_marker[:_di]
+                        break
+                # '>>' prefix on incoming tells — drop it from the clean
+                # name so right-click on ">>Wormfood : " gives just
+                # "Wormfood".
+                if _name_clean.startswith(">>"):
+                    _name_clean = _name_clean[2:]
+                # Build the rendered sender surface, switching to hover
+                # color if this name is currently hovered. The HOVER
+                # paints the WHOLE sender_marker region (including the
+                # delimiter) for simplicity — looks fine and lets us
+                # reuse the single-surface code path.
+                _name_color = (CHAT_NAME_HOVER_COLOR
+                               if (_name_clean
+                                   and _chat_name_hover == _name_clean)
+                               else seg["sender_color"])
+                sender_surf = _chat_render_mixed(sender_marker, body_font,
+                                                 cjk_font, _name_color)
+                surface.blit(sender_surf, (text_x, ly))
+                _sender_width = sender_surf.get_width()
+                # Hit-test rect covers only the NAME portion of the
+                # blitted surface. We compute the name's pixel width
+                # by measuring the clean-name string with the same
+                # mixed-font measurer used during wrap, so the rect
+                # doesn't include the trailing colon/space/etc.
+                if _name_clean:
+                    _name_w = _chat_measure_mixed(_name_clean,
+                                                  body_font, cjk_font)
+                    if _name_w > 0:
+                        # If we stripped a '>>' prefix, the rect should
+                        # start after the '>>' glyph too. Measure that
+                        # explicitly so the hit area aligns visually.
+                        _prefix_offset = 0
+                        if sender_marker.startswith(">>"):
+                            _prefix_offset = _chat_measure_mixed(
+                                ">>", body_font, cjk_font)
+                        _clickable_name = _name_clean
+                        _clickable_rect = pygame.Rect(
+                            text_x + _prefix_offset, ly,
+                            _name_w, sender_surf.get_height())
+            if _clickable_name and _clickable_rect is not None:
+                _chat_clickable_senders.append({
+                    "rect": _clickable_rect,
+                    "name": _clickable_name,
+                    "actor_class": _ev_actor_class,
+                })
             # Pass 2: message body in mode color, positioned right
             # after the sender region. Slice the segment text using
             # msg_offset so we render only the post-sender portion.
@@ -15733,7 +30188,7 @@ def draw_chat_panel(surface, x, y, locked=False):
                 msg_surf = _chat_render_mixed(msg_part, body_font,
                                               cjk_font, seg["color"])
                 surface.blit(msg_surf,
-                             (text_x + sender_surf.get_width(), ly))
+                             (text_x + _sender_width, ly))
         else:
             body_surf = _chat_render_mixed(seg["text"], body_font,
                                            cjk_font, seg["color"])
@@ -15762,6 +30217,65 @@ def draw_chat_panel(surface, x, y, locked=False):
                       by + (bh - text_surf.get_height()) // 2))
         _chat_jump_badge_rect = pygame.Rect(bx, by, bw, bh)
 
+    # ── Scrollbar (right edge of content area) ──────────────────
+    # Only renders when there's overflow (more filtered lines than fit
+    # in the visible window). Track + thumb rects + max_scroll are
+    # captured each frame for the click + drag handlers in the main
+    # event loop. Sized to match the checklist scrollbar (8px wide,
+    # 28px min thumb) so the two feel like the same widget.
+    #
+    # IMPORTANT: thumb size and scrollbar max_scroll are computed
+    # against `true_total` (the unbounded full-history line count),
+    # NOT against `physical_lines_total` (which only counts what we
+    # actually rendered before the early-break optimization kicked
+    # in). Using physical_lines_total would make the thumb visibly
+    # grow as the user scrolls toward the newest message — because
+    # less of the buffer needs rendering when near the bottom — and
+    # shrink as they scroll up. true_total stays anchored to real
+    # chat depth so thumb size only changes when new messages
+    # actually arrive.
+    global _chat_scrollbar_thumb_rect, _chat_scrollbar_track_rect
+    global _chat_scrollbar_max_scroll
+    _chat_scrollbar_thumb_rect = None
+    _chat_scrollbar_track_rect = None
+    _chat_scrollbar_max_scroll = 0
+    sb_max_scroll = max(0, true_total - visible_lines)
+    if sb_max_scroll > 0 and true_total > visible_lines:
+        cb_w = 8
+        cb_x = x + pw - cb_w - 4
+        # Track spans the message content area, not the full panel —
+        # avoids overlapping the header strip or composer row.
+        cb_track_y = content_y
+        cb_track_h = content_h
+        cb_track = pygame.Rect(cb_x, cb_track_y, cb_w, cb_track_h)
+        _chat_scrollbar_track_rect = cb_track
+        _chat_scrollbar_max_scroll = sb_max_scroll
+        pygame.draw.rect(surface, (40, 46, 60),
+                         cb_track, border_radius=3)
+        # Thumb: proportion of visible / total filtered lines. Uses
+        # true_total so size stays stable as the user scrolls (only
+        # actual chat growth shrinks it).
+        thumb_h = max(28, int(cb_track_h * visible_lines
+                              / max(1, true_total)))
+        thumb_h = min(thumb_h, cb_track_h)
+        # Position: active_scroll=0 → thumb at BOTTOM (newest), so the
+        # vertical mapping is inverted relative to checklist. At
+        # sb_max_scroll the thumb sits at the top of the track.
+        avail = cb_track_h - thumb_h
+        # scroll_fraction: 0 at newest (bottom), 1 at oldest (top).
+        scroll_frac = (active_scroll / sb_max_scroll) if sb_max_scroll > 0 else 0
+        scroll_frac = max(0.0, min(1.0, scroll_frac))
+        thumb_y = cb_track_y + int(avail * (1 - scroll_frac))
+        cb_thumb = pygame.Rect(cb_x, thumb_y, cb_w, thumb_h)
+        _chat_scrollbar_thumb_rect = cb_thumb
+        # Hover/drag affordance.
+        is_dragging = _chat_scroll_drag is not None
+        mouse_p = pygame.mouse.get_pos()
+        is_hover = cb_thumb.collidepoint(mouse_p)
+        thumb_col = ((180, 200, 230) if (is_dragging or is_hover)
+                     else (110, 130, 170))
+        pygame.draw.rect(surface, thumb_col, cb_thumb, border_radius=3)
+
     # ── Composer row (bottom of panel) ──────────────────────────
     # Renders last so it sits above the scrollback's last line in
     # z-order (the scrollback is clipped to content_h which excludes
@@ -15771,6 +30285,13 @@ def draw_chat_panel(surface, x, y, locked=False):
         comp_y = y + ph - composer_h
         _draw_chat_composer(surface, x, comp_y, pw,
                             body_font, meta_font, cjk_font)
+
+    # ── Sender-name context menu (right-click popup) ──────────────
+    # Drawn LAST so it sits on top of every other panel element —
+    # composer, badge, content, header. Skips draw when no menu is
+    # open (the common case). Records each menu item's rect into the
+    # menu state dict so the next mousedown can hit-test them.
+    _chat_draw_name_context_menu(surface)
 
 
 # ── Button panel ─────────────────────────────────────────────────────────
@@ -16749,6 +31270,258 @@ def hotbar_select_slot(slot_idx):
               f"{slot_idx + 1}")
 
 
+def _hotbar_slot_at_pos(mx, my):
+    """Returns the slot index under (mx, my) on the PRIMARY hotbar panel
+    if any, else None. Used by the drag-and-drop handler to decide
+    where a drop landed. Only numeric slot indices are returned —
+    page navigation chrome (prev/next/name) returns None because you
+    can't drop a button onto a navigation target.
+
+    Reads from `buttons_rects` (the primary panel's per-frame rect
+    list). Multi-mode panels are intentionally excluded; the editor
+    only operates on the primary panel."""
+    for rect, payload in buttons_rects:
+        # `buttons_rects` payloads can be a bare int (primary slot),
+        # a string (nav target), or a (kind, panel) tuple. We only
+        # care about bare ints.
+        if isinstance(payload, int) and rect.collidepoint(mx, my):
+            return payload
+    return None
+
+
+def _hotbar_nav_arrow_at_pos(mx, my):
+    """Returns 'prev' or 'next' if (mx, my) is over the primary panel's
+    page-navigation arrow, else None. Used by the drag handler so
+    hovering over an arrow mid-drag can flip the page (after a dwell
+    delay) and let the user drop the button on a different page.
+
+    Only the primary panel's arrows count, matching the editor's
+    scope. Multi-panel arrows are ignored."""
+    for rect, payload in buttons_rects:
+        if not rect.collidepoint(mx, my):
+            continue
+        if payload == "__page_prev__":
+            return "prev"
+        if payload == "__page_next__":
+            return "next"
+    return None
+
+
+def _hotbar_swap_slots(src, dst, src_page=None, dst_page=None):
+    """Swap two slots — optionally across different pages — and persist.
+
+    src/dst:           slot indices 0..19 within their respective pages.
+    src_page/dst_page: 0-indexed page numbers; defaults to the
+        currently-displayed page when omitted (the same-page case used
+        by intra-page drag-and-drop).
+
+    The active editor draft follows the moved button so the form keeps
+    pointing at the same logical button after the swap. Cross-page
+    follow works too: if the editor was on slot N of page A and we
+    move that button to slot M of page B, the editor switches to
+    showing page B and selects slot M.
+
+    No-op if the resolved (page, slot) pair is identical for src and
+    dst (drag-and-drop onto the same slot), or if any index is out
+    of range."""
+    global hotbar_edit_slot, hotbar_edit_draft, hotbar_current_page
+
+    if src_page is None: src_page = hotbar_current_page
+    if dst_page is None: dst_page = hotbar_current_page
+
+    # Validate pages.
+    if not (0 <= src_page < len(hotbar_pages)
+            and 0 <= dst_page < len(hotbar_pages)):
+        return
+    src_buttons = hotbar_pages[src_page]["buttons"]
+    dst_buttons = hotbar_pages[dst_page]["buttons"]
+    # Validate slot indices and identity.
+    if not (0 <= src < len(src_buttons)
+            and 0 <= dst < len(dst_buttons)):
+        return
+    if src_page == dst_page and src == dst:
+        return
+
+    # Swap. For same-page swaps, both refs point to the same list so
+    # the two-line tuple swap is correct as-is. For cross-page swaps,
+    # we're moving items between two distinct lists.
+    if src_page == dst_page:
+        src_buttons[src], src_buttons[dst] = (
+            src_buttons[dst], src_buttons[src])
+    else:
+        src_buttons[src], dst_buttons[dst] = (
+            dst_buttons[dst], src_buttons[src])
+
+    # Keep the active page's buttons_config view in sync. buttons_config
+    # is the live reference used by render/click for the CURRENT page.
+    # If the active page is one of the affected ones, refresh it.
+    global buttons_config
+    if hotbar_current_page == src_page:
+        buttons_config = hotbar_pages[hotbar_current_page]["buttons"]
+    elif hotbar_current_page == dst_page:
+        buttons_config = hotbar_pages[hotbar_current_page]["buttons"]
+
+    # Follow the moved button if the editor was on it. Cross-page
+    # follow: switch the editor's active page to the destination
+    # so the user sees their button where they dropped it.
+    if isinstance(hotbar_edit_slot, int):
+        # The editor's "slot" is implicitly scoped to hotbar_current_page,
+        # because select_slot reads from buttons_config. If the editor
+        # was tracking the source, follow it to the destination.
+        if (hotbar_current_page == src_page
+                and hotbar_edit_slot == src):
+            if dst_page != hotbar_current_page:
+                hotbar_current_page = dst_page
+                buttons_config = hotbar_pages[hotbar_current_page]["buttons"]
+            hotbar_edit_slot = dst
+            hotbar_edit_draft = dict(buttons_config[dst])
+        elif (hotbar_current_page == dst_page
+                and hotbar_edit_slot == dst):
+            if src_page != hotbar_current_page:
+                hotbar_current_page = src_page
+                buttons_config = hotbar_pages[hotbar_current_page]["buttons"]
+            hotbar_edit_slot = src
+            hotbar_edit_draft = dict(buttons_config[src])
+
+    save_buttons_config()
+    if src_page == dst_page:
+        print(f"[OmniWatch] hotbar editor: swapped slot {src + 1} ↔ "
+              f"slot {dst + 1} on page {src_page + 1}")
+    else:
+        print(f"[OmniWatch] hotbar editor: swapped "
+              f"page {src_page + 1} slot {src + 1} ↔ "
+              f"page {dst_page + 1} slot {dst + 1}")
+
+
+def draw_hotbar_drag_overlay(surface):
+    """Render the in-flight drag preview: dim the source slot, draw a
+    ghost of the dragged button at the cursor, and highlight the slot
+    under the cursor (if any) as a drop target.
+
+    Strategy: snapshot the source slot's pixels from the just-drawn
+    panel BEFORE applying any drag visualization, then re-use that
+    snapshot every frame as the ghost. The source slot itself gets
+    a dim overlay AFTER we've snapshotted, so the ghost stays clean.
+
+    No-op unless a drag is in progress AND past the movement threshold.
+    Pre-threshold the source button is still in its slot looking
+    normal, so showing a ghost would be jarring."""
+    if hotbar_drag is None or not hotbar_drag.get("active"):
+        return
+    src_rect = hotbar_drag.get("src_rect")
+    if src_rect is None:
+        return
+
+    # Defensive: clip src_rect to the screen so subsurface() doesn't
+    # blow up on a partially off-screen slot. This shouldn't happen
+    # in practice but pygame raises ValueError on out-of-bounds rects.
+    screen_rect = surface.get_rect()
+    clipped = src_rect.clip(screen_rect)
+    if clipped.width <= 0 or clipped.height <= 0:
+        return
+
+    # 1. Capture a snapshot of the source slot if we haven't yet. This
+    #    runs once per drag, before any visualization touches the
+    #    surface, so the ghost is a pristine copy of the button.
+    if hotbar_drag.get("snapshot") is None:
+        try:
+            hotbar_drag["snapshot"] = surface.subsurface(clipped).copy()
+        except (ValueError, pygame.error):
+            return
+    snapshot = hotbar_drag["snapshot"]
+
+    # 2. Dim the source slot — but only when we're still on the page
+    #    where the button lives. If a mid-drag page-flip moved us
+    #    elsewhere, the source slot isn't on screen and dimming its
+    #    coordinates would just darken whatever slot now happens to
+    #    occupy that screen position.
+    on_source_page = (hotbar_drag.get("src_page", hotbar_current_page)
+                      == hotbar_current_page)
+    if on_source_page:
+        dim = pygame.Surface((clipped.width, clipped.height),
+                             pygame.SRCALPHA)
+        dim.fill((10, 10, 14, 170))
+        surface.blit(dim, (clipped.x, clipped.y))
+
+    mx, my = pygame.mouse.get_pos()
+
+    # 3. Page-flip dwell: if the cursor is over a nav arrow, start a
+    #    dwell timer. When the timer crosses HOTBAR_DRAG_DWELL_SEC,
+    #    flip pages and reset the dwell (forcing the user to leave
+    #    and re-enter the arrow to flip again — without this you'd
+    #    cycle through pages every 600ms while parked over the arrow).
+    arrow = _hotbar_nav_arrow_at_pos(mx, my)
+    now_t = time.time()
+    if arrow is None:
+        # Left the arrow. Cancel dwell so a future hover starts fresh.
+        hotbar_drag["hover_arrow"] = None
+        hotbar_drag["hover_start"] = 0.0
+    else:
+        if hotbar_drag.get("hover_arrow") != arrow:
+            # Either a fresh hover or moved between arrows. Reset.
+            hotbar_drag["hover_arrow"] = arrow
+            hotbar_drag["hover_start"] = now_t
+        elif (now_t - hotbar_drag.get("hover_start", now_t)
+              ) >= HOTBAR_DRAG_DWELL_SEC:
+            # Dwell met — flip the page. Pages wrap (mirroring the
+            # behavior of the actual < > arrows when clicked).
+            n_pages = max(1, len(hotbar_pages))
+            delta = -1 if arrow == "prev" else 1
+            new_page = (hotbar_current_page + delta) % n_pages
+            # Use the existing page-set helper so all the side-effects
+            # (panel page mapping, etc.) are correct.
+            _hotbar_panel_set_page(0, new_page)
+            # Reset dwell so the same arrow won't fire again until
+            # the cursor leaves and re-enters.
+            hotbar_drag["hover_start"] = float('inf')
+
+        # Draw a progress ring on the arrow to show dwell timing.
+        # Gives clear visual feedback so the flip doesn't feel
+        # mysterious. Skipped when hover_start is infinity (just
+        # flipped — no progress to show).
+        hs = hotbar_drag.get("hover_start", 0.0)
+        if hs != float('inf'):
+            for rect, payload in buttons_rects:
+                if not rect.collidepoint(mx, my):
+                    continue
+                if payload not in ("__page_prev__", "__page_next__"):
+                    continue
+                progress = min(1.0,
+                    (now_t - hs) / HOTBAR_DRAG_DWELL_SEC)
+                # Background tint to draw attention.
+                hi = pygame.Surface((rect.width, rect.height),
+                                    pygame.SRCALPHA)
+                hi.fill((90, 160, 230, 60))
+                surface.blit(hi, (rect.x, rect.y))
+                # Outline thickness scales with progress.
+                pygame.draw.rect(surface, (160, 200, 255),
+                                 rect, max(1, int(progress * 3) + 1),
+                                 border_radius=2)
+                break
+
+    # 4. Highlight the drop-target slot under the cursor (if any).
+    dst_idx = _hotbar_slot_at_pos(mx, my)
+    if dst_idx is not None and not (
+            on_source_page and dst_idx == hotbar_drag["src_slot"]):
+        for rect, payload in buttons_rects:
+            if isinstance(payload, int) and payload == dst_idx:
+                hi = pygame.Surface((rect.width, rect.height),
+                                    pygame.SRCALPHA)
+                hi.fill((90, 200, 130, 60))
+                surface.blit(hi, (rect.x, rect.y))
+                pygame.draw.rect(surface, (140, 230, 170),
+                                 rect, 2, border_radius=3)
+                break
+
+    # 5. Ghost of the dragged button at the cursor. Centered on the
+    #    cursor so the user "carries" the button as they drag.
+    gx = mx - snapshot.get_width() // 2
+    gy = my - snapshot.get_height() // 2
+    snapshot_alpha = snapshot.copy()
+    snapshot_alpha.set_alpha(190)
+    surface.blit(snapshot_alpha, (gx, gy))
+
+
 # ── Target card ─────────────────────────────────────────────────────────────
 # Base dimensions at scale 1.0. Height grows with ability list, capped so the
 # card never dominates the screen. Widths calibrated for readable text.
@@ -17008,9 +31781,6 @@ def get_mob_icon_scaled(key, size):
 # When the file isn't on disk and `image_url` is non-empty, we fire a
 # background HTTP fetch to populate it. Family icon shows during the
 # fetch — never blocks the render thread.
-
-import threading
-import urllib.request
 
 _mob_image_dir = None
 if MOBDATA_DIR:
@@ -17835,7 +32605,21 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
         # any meaningful family/race/job info to display, so skip the
         # entire family line / icon-job/crystal zones. The card collapses
         # to just title + name + hex + HP bar.
-        _early_fam = ""
+        #
+        # Exception: moogle NPCs. They're race-classified as Moogle in
+        # FFXI's bestiary (ecosystem: Beastmen) and the user often has
+        # a custom moogle icon in their mob_icons folder. Routing
+        # name-matched moogles through the standard family path picks
+        # that icon up for free — same icon you'd see if you targeted
+        # a moogle MOB during a battle event, now showing for the Mog
+        # House moogle too. The name match is case-insensitive and
+        # uses substring detection so it catches "Moogle", "Erudite
+        # Moogle", "Nomad Moogle", "Mog Tablet Moogle", etc.
+        _npc_name = (info or {}).get("name", "") or ""
+        if "moogle" in _npc_name.lower():
+            _early_fam = "moogle"
+        else:
+            _early_fam = ""
     else:
         _early_fam = ""
         if mobdb_entry and mobdb_entry.get("family"):
@@ -18109,16 +32893,25 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
             _mob_img_url  = mobdb_entry.get("image_url") or ""
             if _mob_img_stem:
                 bitmap = get_mob_image_scaled(_mob_img_stem, _mob_img_url, icon_size)
-            # Family fallback in mobicons/: when `image` is left blank in
-            # mob_individuals.json, treat the lowercased family name as
-            # the stem and look for mobicons/<family>.png. Lets the user
-            # share one image across all members of a family without
-            # having to fill in `image` for every entry. A specific
-            # `image` value, when set, still overrides this.
-            if bitmap is None and family:
-                fam_stem = family.strip().lower()
-                if _mob_image_resolve_path(fam_stem):
-                    bitmap = get_mob_image_scaled(fam_stem, "", icon_size)
+        # Family fallback in mobicons/: when no per-mob image
+        # resolved above (either because `image` was blank in
+        # mob_individuals.json OR because the target has no mobdb
+        # entry at all — e.g. the Mog House moogle, which isn't in
+        # the bestiary), treat the lowercased family name as a stem
+        # and look for mobicons/<family>.{png,bmp,jpg}. This lets a
+        # user-supplied moogle.png cover ALL moogles including the
+        # ones that aren't bestiary mobs. A specific `image` value
+        # from the mobdb still overrides this when it resolves.
+        #
+        # Originally this fallback was nested inside the
+        # `if mobdb_entry:` branch above, which meant bestiary-less
+        # NPCs (moogles, vendor NPCs) silently skipped it even when
+        # the user had a matching family icon on disk. Pulling it
+        # out fixes that — same path, just no gate.
+        if bitmap is None and family:
+            fam_stem = family.strip().lower()
+            if _mob_image_resolve_path(fam_stem):
+                bitmap = get_mob_image_scaled(fam_stem, "", icon_size)
         if bitmap is None:
             bitmap = get_mob_icon_scaled(family, icon_size) if family else None
         if bitmap is None and family:
@@ -20111,6 +34904,78 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
                      (x + 1, y + title_h),
                      (x + panel_w - 2, y + title_h))
 
+    # ── Teleport-ring recharge timer ────────────────────────────────
+    # Cycles through the four enchanted-ring cooldowns (Warp, Dem,
+    # Holla, Mea) in the equipment-panel title bar. Display advances
+    # every ring_cycle_seconds (default 5s, user-configurable in the
+    # Equipment Configure modal). Gated behind show_ring_cooldown so
+    # users who don't care can hide it entirely.
+    #
+    # Color rule: green when the currently-displayed ring is ready
+    # (remaining == 0), red while counting down. Format mirrors
+    # the recast panel's MM:SS so it reads consistently. For long
+    # cooldowns (>1h) the format gracefully extends to HH:MM:SS.
+    #
+    # Positioned to the LEFT of the icons-missing badge area so they
+    # don't collide; tracked here in `warp_x_left` so the badge
+    # rendering below knows where to stop. When the ring indicator
+    # is hidden, warp_x_left stays equal to the right edge — no
+    # effect on the badge's right-align math.
+    warp_x_left = x + panel_w - 6
+    if setting("show_ring_cooldown"):
+        # Build the active cycle subset by filtering RING_CYCLE_ORDER
+        # through the per-ring show_ring_<key> toggles each frame.
+        # Cheap (7 dict lookups) and means toggles apply instantly
+        # without any cache to invalidate.
+        active_rings = [
+            (k, lbl) for (k, lbl) in RING_CYCLE_ORDER
+            if setting(f"show_ring_{k}")
+        ]
+        if active_rings:
+            cycle_sec = max(2, int(setting("ring_cycle_seconds") or 5))
+            now_t = time.time()
+            global ring_cycle_index, ring_cycle_last_advance
+            if ring_cycle_last_advance == 0.0:
+                ring_cycle_last_advance = now_t
+            if now_t - ring_cycle_last_advance >= cycle_sec:
+                ring_cycle_index = (ring_cycle_index + 1) % len(active_rings)
+                ring_cycle_last_advance = now_t
+            # Guard against index going out of range after the user
+            # disables enough rings that ring_cycle_index points past
+            # the new tail of active_rings.
+            if ring_cycle_index >= len(active_rings):
+                ring_cycle_index = 0
+
+            ring_key, ring_label = active_rings[ring_cycle_index]
+            remaining = ring_state.get(ring_key, 0)
+
+            # Format: MM:SS for short cooldowns, HH:MM:SS for ≥1hr.
+            # Reraise Ring's 20h cooldown needs the longer format
+            # so 19:42:18 reads as ~19 hours rather than mistaking
+            # the four-digit minutes for some other unit.
+            if remaining >= 3600:
+                hrs  = remaining // 3600
+                mins = (remaining % 3600) // 60
+                secs = remaining % 60
+                time_str = f"{hrs}:{mins:02d}:{secs:02d}"
+            elif remaining > 0:
+                time_str = _format_recast_time(remaining)
+            else:
+                time_str = None
+
+            wr_font = get_font("Consolas", max(6, int(7 * scale)))
+            if time_str:
+                wr_text  = f"{ring_label}  {time_str}"
+                wr_color = (220, 90, 90)   # red — counting down
+            else:
+                wr_text  = ring_label
+                wr_color = (120, 220, 130) # green — ready
+            wr_surf = wr_font.render(wr_text, True, wr_color)
+            wr_x    = x + panel_w - wr_surf.get_width() - 6
+            wr_y    = y + (title_h - wr_surf.get_height()) // 2
+            surface.blit(wr_surf, (wr_x, wr_y))
+            warp_x_left = wr_x - 6
+
     # ── Icons-missing indicator ──────────────────────────────────────
     # If load_icon_surface has recorded misses this session, paint a
     # small red badge at the right edge of the title bar. This is the
@@ -20127,8 +34992,10 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
         badge_text = f"[{n} ICONS MISSING]" if n > 1 else "[ICON MISSING]"
         badge_font = get_font("Consolas", max(9, int(10 * scale)), bold=True)
         badge_surf = badge_font.render(badge_text, True, (255, 80, 80))
-        # Right-align in the title bar with a small margin.
-        bx = x + panel_w - badge_surf.get_width() - 6
+        # Right-align beside the title bar's right edge — but if the
+        # Warp Ring timer is showing, anchor to its left edge instead
+        # so the two don't overlap.
+        bx = warp_x_left - badge_surf.get_width()
         by = y + (title_h - badge_surf.get_height()) // 2
         # Only paint if there's room beside the title text. If the
         # gearswap set name is wide enough to overlap, the badge wins
@@ -20735,13 +35602,27 @@ while running:
                 continue
             new_stats = {}
             new_name, new_mj, new_sj = player_self_name, player_self_mjob, player_self_sjob
+            new_server = player_self_server
             for line in raw.split("\n"):
                 if line.startswith("PLAYER|"):
-                    pparts = line.split("|", 3)
+                    # Format: PLAYER|<name>|<main>|<sub>[|<server>]
+                    # The 5th field (server) is OPTIONAL — older Lua
+                    # builds emit only 4 fields. When present, it's
+                    # the FFXI world name string ("Asura", "Bahamut",
+                    # etc.) which we use to filter the whereisdi.com
+                    # response. Lua side change to emit it:
+                    #     local srv = windower.ffxi.get_info().server
+                    #     local srv_name = res.servers[srv] and
+                    #         res.servers[srv].name or ""
+                    #     line = ("PLAYER|%s|%s|%s|%s"):format(
+                    #         name, main, sub, srv_name)
+                    pparts = line.split("|", 4)
                     if len(pparts) >= 4:
                         new_name = pparts[1]
                         new_mj   = pparts[2]
                         new_sj   = pparts[3]
+                        if len(pparts) >= 5 and pparts[4]:
+                            new_server = pparts[4]
                     continue
                 if not line.startswith("STAT|"):
                     continue
@@ -20763,6 +35644,15 @@ while running:
             player_self_name = new_name
             player_self_mjob = new_mj
             player_self_sjob = new_sj
+            # Server name only mutates on the rare event of a world
+            # transfer; in practice it's set once per session at first
+            # PLAYER packet. Guard against the empty string from older
+            # Lua builds clobbering a previously-detected value.
+            # (No `global` needed — this block runs at module scope
+            # inside the `while running:` loop, so plain assignment
+            # already targets the module-level name.)
+            if new_server:
+                player_self_server = new_server
             # Diagnostic: confirm we got new stats and what defense is.
             # This fires once per accepted STATS packet.
             print(f"[OmniWatch] stats received: {len(new_stats)} keys, "
@@ -21552,12 +36442,478 @@ while running:
                             "id": iid, "count": cnt, "name": nm,
                         })
                 _inv_buffer[bag_name] = items_in_bag
+            elif raw.startswith("INV_SLIP|"):
+                # Format: INV_SLIP|<slip_item_id>|<slip_name>|<count>|<id1>,<name1>;<id2>,<name2>;...
+                # Emitted by the lua side once per porter slip the
+                # player currently holds. The slips library decodes
+                # each slip's extdata bitmask into a flat list of
+                # stored item IDs, which we parse into the per-slip
+                # buffer and atomically swap into inventory_slip_state
+                # on the INV_END sentinel below.
+                parts = raw.split("|", 4)
+                if len(parts) < 5:
+                    continue
+                try:
+                    slip_id = int(parts[1])
+                except ValueError:
+                    continue
+                slip_name = parts[2] or f"Slip #{slip_id}"
+                # count in parts[3] is informational (matches len(body));
+                # we use the actual parsed item count below.
+                body = parts[4]
+                stored_items = []
+                if body:
+                    for ent in body.split(";"):
+                        if not ent:
+                            continue
+                        fields = ent.split(",", 1)
+                        if len(fields) < 1:
+                            continue
+                        try:
+                            iid = int(fields[0])
+                        except ValueError:
+                            continue
+                        nm = fields[1] if len(fields) >= 2 else ""
+                        stored_items.append({"id": iid, "name": nm})
+                _inv_slip_buffer[slip_id] = {
+                    "name":  slip_name,
+                    "items": stored_items,
+                }
+            elif raw.startswith("RINGS|"):
+                # Format: RINGS|warp=N;dem=N;holla=N;mea=N
+                # Each value is seconds remaining (0 = ready).
+                # Emitted by the lua side at 1Hz. The python-side
+                # display cycles through the rings every N seconds
+                # (configurable via ring_cycle_seconds setting).
+                body = raw[len("RINGS|"):]
+                for ent in body.split(";"):
+                    if "=" not in ent:
+                        continue
+                    k, v = ent.split("=", 1)
+                    k = k.strip()
+                    if k in ring_state:
+                        try:
+                            ring_state[k] = max(0, int(v.strip()))
+                        except (ValueError, TypeError):
+                            pass
+                ring_state_last_update = time.time()
+            elif raw.startswith("CURRENCY|"):
+                # Format: CURRENCY|gil=N;sparks=N;accolades=N;gallimaufry=N;
+                #                  temenos=N;apollyon=N;escha_beads=N;
+                #                  nyzul_tokens=N;ichor=N
+                # Single line, fixed schema. Unknown keys are ignored
+                # (forward compat — lua side could add a new currency
+                # without breaking older python). The dict update is
+                # in-place (no atomic swap needed) because each line
+                # contains the full set; reading a half-updated dict
+                # would show last-frame values for at most one frame.
+                body = raw[len("CURRENCY|"):]
+                for ent in body.split(";"):
+                    if "=" not in ent:
+                        continue
+                    k, v = ent.split("=", 1)
+                    k = k.strip()
+                    if k in currency_state:
+                        try:
+                            currency_state[k] = int(v)
+                        except ValueError:
+                            # Lua should always emit ints, but if a
+                            # value ever comes through as a float
+                            # (e.g. "12345.0") trim to int. Anything
+                            # we can't parse stays at its prior value.
+                            try:
+                                currency_state[k] = int(float(v))
+                            except ValueError:
+                                pass
+            elif raw.startswith("POINTS|"):
+                # Format: POINTS|exp=N;exp_tnl=N;cp=N;cp_tnl=N;
+                #                 exemplar=N;exemplar_tnl=N
+                # Same parsing shape as CURRENCY|: one line, fixed
+                # key=value schema, unknown keys ignored. Drives the
+                # header's points tracker widget (EXP / CP / Exemplar).
+                body = raw[len("POINTS|"):]
+                for ent in body.split(";"):
+                    if "=" not in ent:
+                        continue
+                    k, v = ent.split("=", 1)
+                    k = k.strip()
+                    if k in points_state:
+                        try:
+                            points_state[k] = int(v)
+                        except ValueError:
+                            try:
+                                points_state[k] = int(float(v))
+                            except ValueError:
+                                pass
+            elif raw.startswith("TRUSTS|"):
+                # Trust ownership snapshot from Lua. Format:
+                #   TRUSTS|<name1>|<name2>|...|<nameN>
+                # Empty list arrives as bare 'TRUSTS|'. Each name is
+                # res.spells[id].english for spells with type='Trust'.
+                # We normalize against the keys in _trusts_db so name
+                # quirks ("Apururu (UC)" → "apururu (uc)") still match
+                # up with our master list.
+                body = raw[len("TRUSTS|"):]
+                names = [s for s in body.split("|") if s.strip()]
+                # Resolve each Windower display name to the canonical
+                # _trusts_db key. lookup_trust returns the matching rec
+                # but we need the KEY here (the dict key, e.g. lowercase
+                # normalized name). Easier: lookup the record and pull
+                # its name field, then walk db keys for a match.
+                resolved = set()
+                if _trusts_db and _trusts_db.get("trusts"):
+                    db = _trusts_db["trusts"]
+                    for nm in names:
+                        rec = lookup_trust(nm)
+                        if rec is None:
+                            # Unknown to our DB — keep the raw normalized
+                            # form so it still counts toward the X/Y.
+                            resolved.add(nm.strip().lower())
+                            continue
+                        # Find the dict key that points to this record.
+                        target = None
+                        for k, v in db.items():
+                            if v is rec:
+                                target = k
+                                break
+                        resolved.add(target or nm.strip().lower())
+                else:
+                    # No DB loaded — just store names as-is.
+                    resolved = {n.strip().lower() for n in names}
+                checklist_known["trusts"]["auto"] = resolved
+            elif raw.startswith("HOMEPOINTS|"):
+                # Home point attunement snapshot from Lua. Format:
+                #   HOMEPOINTS|<idx>,<idx>,<idx>,...
+                # Indices are 0..127, matching the server-side bitfield
+                # (see _HOMEPOINTS_MASTER for canonical mapping).
+                # Empty list emits 'HOMEPOINTS|' (nothing trailing).
+                #
+                # REPLACE, don't merge. Each menu packet carries the
+                # FULL account-wide attunement state — all 128 bits, not
+                # a per-NPC delta. So this snapshot is authoritative;
+                # whatever's in it is what the player actually has, and
+                # anything NOT in it is something they don't.
+                #
+                # Earlier this was implemented as merge (|=) under the
+                # mistaken belief that one NPC might know less than the
+                # full state. That was wrong — and meant stale indices
+                # written by a previous-build's buggy decode would stay
+                # checked forever, since merge can only add. Replacing
+                # heals from stale state on the very next NPC visit.
+                #
+                # Saved immediately so progress survives a reload
+                # without needing to re-visit an NPC.
+                body = raw[len("HOMEPOINTS|"):]
+                got = {p.strip() for p in body.split(",") if p.strip()}
+                # Only act on non-empty payloads. An empty list from a
+                # transient parse edge would otherwise wipe the user's
+                # set; the menu packet always contains real data when
+                # we receive it.
+                if got and got != checklist_known["homepoints"]["auto"]:
+                    checklist_known["homepoints"]["auto"] = got
+                    try:
+                        _checklist_save()
+                    except Exception as e:
+                        print(f"[OmniWatch] checklist save on HP "
+                              f"update failed: {e!r}")
+            elif raw.startswith("SURVIVAL_GUIDES|"):
+                # Survival Guide attunement snapshot, same shape as
+                # HOMEPOINTS but distinct master list and category.
+                # Each menu packet carries the full account-wide
+                # attunement bitfield, so REPLACE rather than merge.
+                body = raw[len("SURVIVAL_GUIDES|"):]
+                got = {p.strip() for p in body.split(",") if p.strip()}
+                if got and got != checklist_known["survival_guides"]["auto"]:
+                    checklist_known["survival_guides"]["auto"] = got
+                    try:
+                        _checklist_save()
+                    except Exception as e:
+                        print(f"[OmniWatch] checklist save on SG "
+                              f"update failed: {e!r}")
+            elif raw.startswith("BLU_SPELLS|"):
+                # Blue Magic snapshot. Format:
+                #   BLU_SPELLS|<learned1>|<learned2>|...||<master1>|<master2>|...
+                # The '||' splits the payload into two sections:
+                #   - learned: spell names the player has learned
+                #     (filtered from windower.ffxi.get_spells())
+                #   - master:  every BLU spell that exists
+                #     (enumerated from res.spells)
+                # Each section is pipe-delimited spell names. Spell names
+                # never contain pipes so '|' is safe within sections.
+                # Empty sections are valid ('BLU_SPELLS|||<master>' means
+                # no learned spells but the master list is populated).
+                #
+                # Same live-derived semantics as TRUSTS: REPLACE the auto
+                # set on each emit (never persist; rebuilds every cycle
+                # from the current spell list). The master list is also
+                # replaced, but with a "keep last non-empty" guard so a
+                # transient parse failure doesn't wipe the visible rows.
+                body = raw[len("BLU_SPELLS|"):]
+                if "||" in body:
+                    learned_part, _, master_part = body.partition("||")
+                else:
+                    # Malformed payload — old emit format or partial
+                    # data. Treat the whole body as the learned set and
+                    # don't touch the master list.
+                    learned_part, master_part = body, ""
+                learned_names = {
+                    s.strip().lower()
+                    for s in learned_part.split("|") if s.strip()}
+                checklist_known["blu_spells"]["auto"] = learned_names
+
+                if master_part:
+                    master_names = [
+                        s.strip() for s in master_part.split("|")
+                        if s.strip()]
+                    # Only update if non-empty AND different — avoid
+                    # rebuilding the cached list every cycle when
+                    # nothing changed (the list is stable across a
+                    # session; SE only adds spells via patches).
+                    if master_names and master_names != _BLU_SPELLS_MASTER:
+                        _BLU_SPELLS_MASTER.clear()
+                        # Keep names in alphabetical order (already
+                        # sorted by Lua, but enforce here defensively).
+                        master_names.sort(key=lambda s: s.lower())
+                        _BLU_SPELLS_MASTER.extend(master_names)
+            elif raw.startswith("MOUNTS|"):
+                # Mount ownership snapshot. Same shape as BLU_SPELLS:
+                #   MOUNTS|<learned1>|<learned2>|...||<master1>|...
+                # Live-derived auto set (REPLACE every cycle, no
+                # persist). Master list cached with "keep last non-
+                # empty" guard so a transient empty-payload doesn't
+                # wipe the visible rows.
+                body = raw[len("MOUNTS|"):]
+                if "||" in body:
+                    learned_part, _, master_part = body.partition("||")
+                else:
+                    learned_part, master_part = body, ""
+                learned_names = {
+                    s.strip().lower()
+                    for s in learned_part.split("|") if s.strip()}
+                checklist_known["mounts"]["auto"] = learned_names
+
+                if master_part:
+                    master_names = [
+                        s.strip() for s in master_part.split("|")
+                        if s.strip()]
+                    if master_names and master_names != _MOUNTS_MASTER:
+                        _MOUNTS_MASTER.clear()
+                        master_names.sort(key=lambda s: s.lower())
+                        _MOUNTS_MASTER.extend(master_names)
+            elif raw.startswith("SPELLS_"):
+                # Generic per-school spell snapshot. Format:
+                #   SPELLS_<TAG>|<learned1>|...||<master1>|...
+                # Where <TAG> is one of BLM/WHM/SMN/NIN/BRD/GEO. Same
+                # shape as BLU_SPELLS|; the only difference is that the
+                # learned/master pools are bucketed by spell.type on
+                # the Lua side (BlackMagic/WhiteMagic/SummonerPact/
+                # Ninjutsu/BardSong/Geomancy respectively).
+                #
+                # REPLACE the auto set on each emit (live-derived,
+                # never persisted). Master list cached with the
+                # "keep last non-empty" guard so a transient empty
+                # payload doesn't wipe the visible rows.
+                #
+                # Routing table maps wire tag to (category_key,
+                # master_list_ref). Tags not in the map are ignored
+                # so forward-compatible additions on the Lua side
+                # don't crash older python builds.
+                _spell_school_routes = {
+                    "BLM": ("spells_blm", _BLM_SPELLS_MASTER),
+                    "WHM": ("spells_whm", _WHM_SPELLS_MASTER),
+                    "SMN": ("spells_smn", _SMN_SPELLS_MASTER),
+                    "NIN": ("spells_nin", _NIN_SPELLS_MASTER),
+                    "BRD": ("spells_brd", _BRD_SPELLS_MASTER),
+                    "GEO": ("spells_geo", _GEO_SPELLS_MASTER),
+                }
+                # raw = "SPELLS_<TAG>|<body>". Extract tag.
+                _prefix_end = raw.find("|")
+                if _prefix_end > len("SPELLS_"):
+                    _tag = raw[len("SPELLS_"):_prefix_end]
+                    _route = _spell_school_routes.get(_tag)
+                    if _route is not None:
+                        _cat_key, _master_ref = _route
+                        # Whitelist (if any) for this category. Stored
+                        # as exact Windower names; convert to lowercase
+                        # once for the learned-set check below. Master
+                        # filter uses the original-case set since we
+                        # preserve casing in the master list.
+                        _wl_exact = _SPELL_CATEGORY_WHITELISTS.get(_cat_key)
+                        _wl_lower = (
+                            {n.lower() for n in _wl_exact}
+                            if _wl_exact is not None else None)
+                        body = raw[_prefix_end + 1:]
+                        if "||" in body:
+                            learned_part, _, master_part = body.partition("||")
+                        else:
+                            learned_part, master_part = body, ""
+                        learned_names = {
+                            s.strip().lower()
+                            for s in learned_part.split("|") if s.strip()}
+                        # Intersect learned with whitelist if one exists,
+                        # so a spell the player learned but that we've
+                        # explicitly omitted from the curated list (e.g.
+                        # because it's a Windower-internal unlearnable
+                        # entry that somehow got flagged) doesn't show
+                        # up auto-checked against a row that isn't there.
+                        if _wl_lower is not None:
+                            learned_names = learned_names & _wl_lower
+                        if _cat_key in checklist_known:
+                            checklist_known[_cat_key]["auto"] = learned_names
+
+                        if master_part:
+                            master_names = [
+                                s.strip() for s in master_part.split("|")
+                                if s.strip()]
+                            # Filter the streamed master against the
+                            # whitelist. Drops Windower-internal entries
+                            # (Bindga, Curse, Virus, Tractor II, etc.).
+                            # If no whitelist exists for this category,
+                            # the full Windower stream passes through
+                            # unchanged (SMN/NIN/BRD/GEO behavior).
+                            if _wl_exact is not None:
+                                master_names = [
+                                    n for n in master_names
+                                    if n in _wl_exact]
+                            if master_names and master_names != _master_ref:
+                                _master_ref.clear()
+                                master_names.sort(key=lambda s: s.lower())
+                                _master_ref.extend(master_names)
+                    # (Unknown tag / malformed packet: silently ignore.
+                    # Diagnostic prints removed after end-to-end verify.)
+            elif raw.startswith("WS_"):
+                # Weapon Skills snapshot, one packet per weapon type.
+                # Format:
+                #   WS_<TAG>|<learned1>|...||<master1>|...
+                # where <TAG> is one of:
+                #   H2H, DAG, SWD, GSD, AXE, GAX, SCY, POL, KAT, GKT,
+                #   CLB, STF, ARC, MRK
+                #
+                # Same shape and semantics as SPELLS_<TAG>|: live-
+                # derived auto set (REPLACE every cycle, no persist),
+                # master list with "keep last non-empty" guard. WSes
+                # don't have an unlearnable-flag problem in Windower's
+                # res, so no whitelist is needed — the master list
+                # passes through verbatim.
+                _ws_routes = {
+                    "H2H": ("ws_h2h", _WS_H2H_MASTER),
+                    "DAG": ("ws_dag", _WS_DAG_MASTER),
+                    "SWD": ("ws_swd", _WS_SWD_MASTER),
+                    "GSD": ("ws_gsd", _WS_GSD_MASTER),
+                    "AXE": ("ws_axe", _WS_AXE_MASTER),
+                    "GAX": ("ws_gax", _WS_GAX_MASTER),
+                    "SCY": ("ws_scy", _WS_SCY_MASTER),
+                    "POL": ("ws_pol", _WS_POL_MASTER),
+                    "KAT": ("ws_kat", _WS_KAT_MASTER),
+                    "GKT": ("ws_gkt", _WS_GKT_MASTER),
+                    "CLB": ("ws_clb", _WS_CLB_MASTER),
+                    "STF": ("ws_stf", _WS_STF_MASTER),
+                    "ARC": ("ws_arc", _WS_ARC_MASTER),
+                    "MRK": ("ws_mrk", _WS_MRK_MASTER),
+                }
+                _prefix_end = raw.find("|")
+                if _prefix_end > len("WS_"):
+                    _tag = raw[len("WS_"):_prefix_end]
+                    _route = _ws_routes.get(_tag)
+                    if _route is not None:
+                        _cat_key, _master_ref = _route
+                        body = raw[_prefix_end + 1:]
+                        if "||" in body:
+                            learned_part, _, master_part = body.partition("||")
+                        else:
+                            learned_part, master_part = body, ""
+                        learned_names = {
+                            s.strip().lower()
+                            for s in learned_part.split("|") if s.strip()}
+                        if _cat_key in checklist_known:
+                            # WS auto-detection is JOB-DEPENDENT: the
+                            # learned set only contains WSes available
+                            # on the current main+sub job (via
+                            # Windower's get_abilities). Switching
+                            # jobs blanks it. To accumulate "every
+                            # WS this character has ever had access
+                            # to" across job changes, we UNION the
+                            # new learned set into the existing auto
+                            # set rather than replacing it. The auto
+                            # set is persisted across sessions via
+                            # CHECKLIST_AUTO_PERSIST so the union
+                            # survives restarts.
+                            #
+                            # Manual remains strictly user-controlled
+                            # — auto-detect NEVER writes to it. The
+                            # previous implementation promoted auto
+                            # into manual every 5-sec cycle, which
+                            # caused user un-checks to be reverted
+                            # within seconds because the next cycle
+                            # would re-promote the still-in-auto WS.
+                            # By keeping auto and manual as fully
+                            # separate stores, toggles persist.
+                            prev_auto = checklist_known[_cat_key].setdefault(
+                                "auto", set())
+                            new_auto = prev_auto | learned_names
+                            if new_auto != prev_auto:
+                                checklist_known[_cat_key]["auto"] = new_auto
+                                try:
+                                    _checklist_save()
+                                except Exception as e:
+                                    print(f"[OmniWatch] checklist save on "
+                                          f"WS auto-union ({_cat_key}) "
+                                          f"failed: {e!r}")
+
+                        if master_part:
+                            master_names = [
+                                s.strip() for s in master_part.split("|")
+                                if s.strip()]
+                            if master_names and master_names != _master_ref:
+                                _master_ref.clear()
+                                master_names.sort(key=lambda s: s.lower())
+                                _master_ref.extend(master_names)
+            elif raw == "CONGRATS_TEST":
+                # Easter-egg banner preview, triggered by `//ow congrats`.
+                # Schedules the banner without touching the persisted
+                # achievement-unlocked flag so the dev/preview path
+                # doesn't lock the achievement out of legit re-firing
+                # for a first-time completer who triggered the preview
+                # earlier in the same session.
+                try:
+                    _trigger_achievement_banner_for_test()
+                    print("[OmniWatch] CONGRATS_TEST received — "
+                          "banner armed for 5 sec")
+                except Exception as e:
+                    print(f"[OmniWatch] CONGRATS_TEST handler failed: {e!r}")
+            elif raw.startswith("NATION|"):
+                # Player nation/allegiance snapshot. Format:
+                #   NATION|<id>|<name>
+                # id: 0=Sandy, 1=Bastok, 2=Windurst, 3=Jeuno
+                # The name is the human label, already localized by
+                # the Lua side. We store both so the UI can use the
+                # name for display and the id for any future logic
+                # that branches on nation (e.g. coloring outpost rows
+                # by current control). Stored in module-level state;
+                # no persistence needed (re-emits every cycle).
+                body = raw[len("NATION|"):]
+                parts = body.split("|", 1)
+                if len(parts) >= 1:
+                    try:
+                        nid = int(parts[0])
+                    except ValueError:
+                        nid = -1
+                    nname = parts[1].strip() if len(parts) > 1 else ""
+                    _player_nation_state["id"] = nid
+                    _player_nation_state["name"] = nname
             elif raw.startswith("INV_END|"):
                 # Atomic swap. Replace inventory_state with the new
                 # snapshot and clear the staging buffer for the next
                 # round. Update the timestamp so we know freshness.
                 inventory_state = dict(_inv_buffer)
                 _inv_buffer = {}
+                # Slip snapshot mirrors the bag snapshot: same atomic
+                # replacement so the dropdown UI sees a coherent set
+                # of bags + slips together. A slip the player sold
+                # since last snapshot disappears from this dict
+                # because it wasn't emitted in the new round.
+                inventory_slip_state = dict(_inv_slip_buffer)
+                _inv_slip_buffer = {}
                 inventory_last_update_ts = time.time()
             elif raw.startswith("SIM_INV|"):
                 # Sim inventory snapshot: per-slot list of items the
@@ -23311,6 +38667,10 @@ while running:
 
         draw_chat_panel(screen, chat_pos[0], chat_pos[1], panels_locked)
         draw_resize_grip(screen, chat_pos[0] + ch_w, chat_pos[1] + ch_h)
+        # Tab right-click popup. Drawn AFTER the chat panel so it
+        # floats above the tab strip and isn't clipped. The renderer
+        # is a no-op when no popup is open.
+        draw_chat_tab_rclick_popup(screen)
 
     # ── Button panel ─────────────────────────────────────────────────────────
     # 6×2 grid of user-configurable buttons. Default anchor sits below
@@ -23493,6 +38853,12 @@ while running:
         draw_hotbar_editor(screen, _anchor[0], _anchor[1],
                            _anchor[2], _anchor[3])
 
+    # Drag overlay (source slot dim + ghost button at cursor +
+    # drop-target highlight). Only renders when a drag is in progress
+    # and actively past the threshold; pre-threshold the button is
+    # still in its normal slot and looks normal.
+    draw_hotbar_drag_overlay(screen)
+
     # ── Header (drawn last so it sits on top) ────────────────────────────────
     draw_header(screen, WIDTH)
 
@@ -23501,6 +38867,8 @@ while running:
 
     # ── Inventory dropdown (above everything when open) ─────────────────────
     draw_inventory_dropdown(screen)
+    # ── Slip nickname editor (modal — on top of the dropdown when open) ─────
+    draw_inventory_slip_nickname_editor(screen)
 
     # ── Character-view dropdown (small; right of gear button) ───────────────
     draw_char_view_dropdown(screen)
@@ -23508,6 +38876,46 @@ while running:
     # ── Simulation window (developer tool, above almost everything) ─────────
     draw_sim_window(screen)
     draw_sim_import_modal(screen)
+
+    # ── Currency cycler subdialog (subsection of settings, drawn above all) ─
+    draw_currency_settings_modal(screen)
+
+    # ── Party Panel subdialog (subsection of settings, drawn above all) ─────
+    draw_party_settings_modal(screen)
+
+    # ── Display subdialog (subsection of settings, drawn above all) ─────────
+    draw_display_settings_modal(screen)
+
+    # ── Header subdialog ──────────────────────────────────────────────────
+    draw_header_settings_modal(screen)
+
+    # ── Inventory subdialog ──────────────────────────────────────────────
+    draw_inventory_settings_modal(screen)
+
+    # ── Statistics subdialog ─────────────────────────────────────────────
+    draw_statistics_settings_modal(screen)
+
+    # ── Clock modal (stopwatch + countdown, opened from header clock) ──
+    draw_clock_modal(screen)
+
+    # Profile-name modal (single-input dialog for naming a layout
+    # profile). Drawn last in this group so it sits on top.
+    draw_profile_name_modal(screen)
+
+    # ── Generic-factory subdialogs (Recast/Buff/Chat/SC/TC/DPS/HotBar) ──
+    # Each one's renderer is a no-op when its state's open flag is
+    # False, so this is cheap to call every frame in order.
+    for _sk in _SUBDIALOG_CONFIGS:
+        _draw_subdialog(screen, _sk)
+
+    # ── Checklist modal (collectibles tracker, opened from settings) ────────
+    draw_checklist_modal(screen)
+
+    # ── Campaigns modal (PlayOnline events feed, opened from button) ────────
+    draw_campaigns_modal(screen)
+
+    # ── Achievement check (throttled to 1Hz; no-op once unlocked) ─────────
+    _achievement_periodic_check()
 
     # ── Cursor: show a hand when hovering over a hyperlink ──────────────────
     mpos = pygame.mouse.get_pos()
@@ -23603,11 +39011,28 @@ while running:
                 screen.blit(_bs, (_tx + _pad, _ty + _pad))
                 break
 
+    # ── Whole-display hide gate ──────────────────────────────────────────────
+    # When the user has toggled the display off (for a cutscene, etc.),
+    # wipe everything that was just drawn this frame and leave a blank
+    # (transparent, if transparent_background is on) canvas. The nub is
+    # drawn afterwards so it remains visible and clickable. Doing the
+    # clear here — after the normal draw — is simpler and less error-
+    # prone than gating every individual panel draw, and the wasted
+    # draw work is irrelevant while hidden. Input is separately gated
+    # in the event loop so the invisible panels can't be clicked.
+    #
+    # Safety: the hide only takes effect when the nub is enabled. If the
+    # nub setting is off there'd be no on-screen way to unhide, so we
+    # force the display back on rather than risk a soft-lock.
+    _effectively_hidden = display_hidden and bool(setting("show_hide_nub"))
+    if _effectively_hidden:
+        screen.fill(COL_BG)
+
     # ── Position mode banner ─────────────────────────────────────────────────
     # When setup_mode (internal name; user-facing name is "position mode") is
     # True, draw a top-of-screen strip telling the user they're in it and how
     # to exit. Subtle but unmissable.
-    if setup_mode:
+    if setup_mode and not display_hidden:
         banner_h = 26
         banner = pygame.Surface((WIDTH, banner_h), pygame.SRCALPHA)
         banner.fill((180, 60, 130, 200))   # magenta-ish, semi-translucent
@@ -23620,8 +39045,21 @@ while running:
                           (banner_h - bs.get_height()) // 2))
 
     # Config wizard modal (renders LAST so it sits on top of everything,
-    # including settings menu, sim window, banners, etc.).
-    draw_cfgwiz(screen)
+    # including settings menu, sim window, banners, etc.). Suppressed
+    # while the display is hidden.
+    if not _effectively_hidden:
+        draw_cfgwiz(screen)
+
+    # The hide/show nub is drawn dead last so it sits above everything,
+    # and ALWAYS — in both shown and hidden states — so the user can
+    # always toggle the display back on.
+    draw_hide_nub(screen)
+
+    # Achievement banner sits absolutely on top — even above the
+    # hide-nub. Pass-through (no click interception); the only
+    # purpose is celebratory visual feedback. Auto-dismisses when
+    # the 5-second deadline elapses.
+    draw_achievement_banner(screen)
 
     pygame.display.flip()
     clock.tick(60)
@@ -23659,6 +39097,26 @@ while running:
             # Import modal is on top of everything — swallow the wheel so
             # it doesn't scroll panels behind the modal.
             if sim_import_open:
+                continue
+
+            # Checklist modal also top-most. Scroll its row list when
+            # the wheel fires while the modal is open and cursor is
+            # over the panel. ~22px per click (about one row).
+            if checklist_modal_open:
+                if (_checklist_modal_rect is not None
+                        and _checklist_modal_rect.collidepoint(mx, my)):
+                    checklist_scroll = max(0,
+                        checklist_scroll - event.y * 22)
+                continue
+
+            # Campaigns modal — same wheel behavior. ~30px per click
+            # (campaign cards are larger than checklist rows so a
+            # bigger step feels natural).
+            if campaigns_modal_open:
+                if (_campaigns_modal_rect is not None
+                        and _campaigns_modal_rect.collidepoint(mx, my)):
+                    campaigns_scroll = max(0,
+                        campaigns_scroll - event.y * 30)
                 continue
 
             # Sim window first — when open, its scrollbar takes priority
@@ -23761,6 +39219,33 @@ while running:
                 break
 
         elif event.type == pygame.KEYDOWN:
+            # Profile-name modal: highest priority text-input. When open,
+            # eat every keypress (Esc cancels, Enter saves, printables
+            # accumulate into the name buffer). Otherwise we'd risk
+            # other handlers triggering panel toggles etc. mid-name.
+            if profile_name_modal_open:
+                handle_profile_name_modal_keydown(event)
+                continue
+            # Chat-name context menu: Escape always dismisses it,
+            # regardless of which other UI surface is focused. Tested
+            # first because it's a transient popup — once dismissed,
+            # the keystroke fall-through can hit the next handler
+            # normally (composer text input, modal focus, etc.). We
+            # do NOT `continue` here because Escape may also be
+            # meaningful to whatever else is focused.
+            if (event.key == pygame.K_ESCAPE
+                    and _chat_name_context_menu is not None):
+                _chat_close_name_context_menu()
+                # Don't `continue` — let other handlers still process
+                # Escape (composer blur, modal close, etc.).
+
+            # Currency settings modal — Esc closes. Same priority as
+            # other transient modal close-on-Esc handlers below.
+            if (event.key == pygame.K_ESCAPE
+                    and currency_settings_modal_open):
+                currency_settings_modal_open = False
+                continue
+
             # Import-modal text fields (root path / set path) — highest
             # priority when the modal is open and a field is focused.
             if sim_import_open and sim_import_field:
@@ -23941,6 +39426,36 @@ while running:
                     sim_nickname_editor["text"] = sim_nickname_editor.get("text", "") + ch
                     continue
 
+            # Porter slip nickname editor (parallel to sim editor above).
+            # Enter persists the nickname to the per-character JSON file
+            # via _porter_slip_set_nickname (empty string clears it),
+            # Esc cancels without saving, Backspace deletes the last
+            # char, printable input appends. Capped at 32 chars to keep
+            # the dropdown row layout sane.
+            if inventory_slip_nickname_editor is not None:
+                if event.key == pygame.K_RETURN \
+                        or event.key == pygame.K_KP_ENTER:
+                    txt = inventory_slip_nickname_editor.get(
+                        "text", "").strip()
+                    _porter_slip_set_nickname(
+                        inventory_slip_nickname_editor["slip_id"], txt)
+                    inventory_slip_nickname_editor = None
+                    continue
+                if event.key == pygame.K_ESCAPE:
+                    inventory_slip_nickname_editor = None
+                    continue
+                if event.key == pygame.K_BACKSPACE:
+                    cur = inventory_slip_nickname_editor.get("text", "")
+                    inventory_slip_nickname_editor["text"] = cur[:-1]
+                    continue
+                ch = event.unicode
+                if (ch and ch.isprintable()
+                        and len(inventory_slip_nickname_editor.get(
+                            "text", "")) < 32):
+                    cur = inventory_slip_nickname_editor.get("text", "")
+                    inventory_slip_nickname_editor["text"] = cur + ch
+                    continue
+
             # Hotbar editor text input. When a label / command field
             # has focus, swallow keys here before any other handler.
             # The handler returns False for keys it doesn't consume
@@ -23967,12 +39482,68 @@ while running:
                     continue
                 if inventory_dropdown_open:
                     inventory_dropdown_open = False
+                    inventory_active_bag = None
+                    inventory_active_slip = None
+                    inventory_show_slip_list = False
+                    inventory_slip_nickname_editor = None
                     continue
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mx, my = event.pos
 
-            # Window drag: Shift+LMB anywhere in the window initiates
+            # Tab right-click popup — highest priority for LMB so a
+            # click on its "Hide tab" button gets consumed before
+            # falling through to e.g. tab clicks (the popup sits
+            # right over the tab strip). If the popup is open and
+            # the click hit one of its rects, the dispatch returns
+            # True and we skip the rest of the click handling.
+            # If it returns False the popup was dismissed and the
+            # click falls through to be processed normally below.
+            if _chat_tab_rclick_tab is not None:
+                if dispatch_chat_tab_rclick_popup_click(mx, my):
+                    continue
+                # Else: popup dismissed; the click proceeds to
+                # whatever it was actually targeting (a different
+                # tab, the chat body, the gear button, etc.).
+
+            # ── Hide/show nub (highest priority) ────────────────────
+            # The nub must be clickable in BOTH states. Check it first
+            # so it works even when the display is hidden and every
+            # other panel is suppressed. Corner handle = start resize;
+            # body = arm a click-or-drag (click toggles, drag moves).
+            if setting("show_hide_nub"):
+                if (_hide_nub_handle_rect is not None
+                        and _hide_nub_handle_rect.collidepoint(mx, my)):
+                    nx, ny, nsize = _hide_nub_geometry()
+                    _hide_nub_resize = {
+                        "start_size": nsize,
+                        "anchor_x":   mx,
+                        "anchor_y":   my,
+                    }
+                    continue
+                if (_hide_nub_rect is not None
+                        and _hide_nub_rect.collidepoint(mx, my)):
+                    nx, ny, nsize = _hide_nub_geometry()
+                    _hide_nub_drag = {
+                        "grab_dx": mx - nx,
+                        "grab_dy": my - ny,
+                        "anchor_x": mx,
+                        "anchor_y": my,
+                        "moved":   False,
+                    }
+                    continue
+
+            # ── Hidden-state input gate ─────────────────────────────
+            # When the display is hidden, every panel is invisible, so
+            # swallow all other left-clicks (the panels' click rects are
+            # still populated from the pre-clear draw and would otherwise
+            # fire invisibly). The nub above is the only live target.
+            # Mirror the draw-side safety: only gate when the nub is
+            # actually available to toggle back.
+            if display_hidden and setting("show_hide_nub"):
+                continue
+
+
             # a "drag-to-move". We record the starting mouse position
             # (in screen coords) and the starting window position;
             # MOUSEMOTION events with `_borderless_drag` set call
@@ -24017,6 +39588,81 @@ while running:
             # the click while the modal is up.
             if cfgwiz_visible:
                 dispatch_cfgwiz_click(mx, my)
+                continue
+
+            # Currency cycler subdialog — modal that eats every click
+            # while open. Backdrop click closes; controls handle their
+            # own state.
+            if currency_settings_modal_open:
+                dispatch_currency_settings_click(mx, my)
+                continue
+
+            # Party Panel subdialog — same modal pattern. Eats every
+            # click while open; toggles/enum-cycles/action buttons all
+            # handled internally, backdrop or X-button closes.
+            if party_settings_modal_open:
+                dispatch_party_settings_click(mx, my)
+                continue
+
+            # Display subdialog — same modal pattern. Eats every
+            # click while open; spinner buttons, bool toggles, and
+            # the action button all handled internally.
+            if display_settings_modal_open:
+                dispatch_display_settings_click(mx, my)
+                continue
+
+            # Header subdialog.
+            if header_settings_modal_open:
+                dispatch_header_settings_click(mx, my)
+                continue
+
+            # Inventory subdialog.
+            if inventory_settings_modal_open:
+                dispatch_inventory_settings_click(mx, my)
+                continue
+
+            # Statistics subdialog.
+            if statistics_settings_modal_open:
+                dispatch_statistics_settings_click(mx, my)
+                continue
+
+            # Clock modal (stopwatch + countdown).
+            if clock_modal_open:
+                dispatch_clock_modal_click(mx, my)
+                continue
+
+            # Profile-name modal (overlays everything else when open).
+            if profile_name_modal_open:
+                dispatch_profile_name_modal_click(mx, my)
+                continue
+
+            # Generic-factory subdialogs. Walk the configured list;
+            # whichever one is open eats the click. Mutually
+            # exclusive in practice (the open helpers close the
+            # parent dropdown, only one can be opened at a time
+            # via that path) but the loop is defensive.
+            _ate_subdialog_click = False
+            for _sk in _SUBDIALOG_CONFIGS:
+                if _subdialog_states[_sk]["open"]:
+                    dispatch_subdialog_consumed = _dispatch_subdialog(
+                        _sk, mx, my)
+                    _ate_subdialog_click = True
+                    break
+            if _ate_subdialog_click:
+                continue
+
+            # Checklist modal — same modal pattern. Eats every click
+            # while open; row clicks toggle manual checks, arrow clicks
+            # cycle categories, backdrop closes.
+            if checklist_modal_open:
+                dispatch_checklist_modal_click(mx, my)
+                continue
+
+            # Campaigns modal — fetches PlayOnline's events feed. Eats
+            # every click while open; cards open the source URL,
+            # refresh button forces a fresh fetch, backdrop/X close.
+            if campaigns_modal_open:
+                dispatch_campaigns_modal_click(mx, my)
                 continue
 
             # Stats-panel setup-mode interactions. Only active while in
@@ -24171,6 +39817,24 @@ while running:
                 # reach the panels behind.
                 continue
 
+            # Events button (header). Opens the campaigns/events modal.
+            # Checked before inventory so a click on it takes priority
+            # in the unlikely case the rects overlap (shouldn't happen
+            # given band layout but defensive).
+            if (events_button_rect is not None
+                    and events_button_rect.collidepoint(mx, my)):
+                _open_campaigns_modal()
+                continue
+
+            # Header OS clock — opens the stopwatch/countdown modal.
+            # Checked before the inventory button so the clock
+            # always wins if they ever overlap (they shouldn't, but
+            # this is the safer ordering).
+            if (header_clock_button_rect is not None
+                    and header_clock_button_rect.collidepoint(mx, my)):
+                clock_modal_open = True
+                continue
+
             # Inventory dropdown: same pattern as settings menu —
             # toggle on the header button, dispatch on hits inside,
             # close on outside clicks. Drawn above all panels so it
@@ -24184,6 +39848,22 @@ while running:
                     inventory_active_bag = None
                 continue
             if inventory_dropdown_open:
+                # Modal editor: when the porter-slip nickname editor is
+                # open, eat ALL clicks inside the dropdown panel so the
+                # user can't accidentally switch slips / scroll / etc.
+                # while typing. Only Enter (commit) or Esc (cancel)
+                # close the editor — handled in the KEYDOWN dispatcher.
+                # Clicks well outside the panel still fall through to
+                # the outside-click close below, which dismisses the
+                # editor along with the whole dropdown.
+                if inventory_slip_nickname_editor is not None:
+                    _inv_geom = _inventory_panel_geometry()
+                    if _inv_geom is not None:
+                        env = pygame.Rect(*_inv_geom)
+                        if env.collidepoint(mx, my):
+                            continue
+                    # Outside the dropdown — fall through to the close
+                    # logic below, which will also nuke the editor.
                 if dispatch_inventory_dropdown_click(mx, my):
                     continue
                 # Outside-click closes the dropdown. Use the shared
@@ -24194,6 +39874,10 @@ while running:
                     inv_envelope = pygame.Rect(*_inv_geom)
                     if not inv_envelope.collidepoint(mx, my):
                         inventory_dropdown_open = False
+                        inventory_active_bag = None
+                        inventory_active_slip = None
+                        inventory_show_slip_list = False
+                        inventory_slip_nickname_editor = None
                         continue
                 # Click inside envelope but not a control — swallow.
                 continue
@@ -24274,8 +39958,51 @@ while running:
                             break
                         # Numeric index = a real button slot. The editor
                         # only operates on the primary panel.
+                        #
+                        # Drag-and-drop: instead of selecting immediately
+                        # on MOUSEBUTTONDOWN, ARM a drag candidate. We
+                        # don't yet know if this is a click (= select)
+                        # or a drag (= move/swap). The MOUSEMOTION and
+                        # MOUSEBUTTONUP handlers below decide:
+                        #   - if cursor stays within HOTBAR_DRAG_THRESHOLD_PX
+                        #     until button release → click, do select_slot
+                        #   - if cursor moves past threshold → drag mode;
+                        #     on release, swap source slot with whatever
+                        #     slot the cursor is over
+                        # Empty slots can't initiate a useful drag (nothing
+                        # to move), so fall through to the click path
+                        # immediately for them.
                         if target_panel == 0:
-                            hotbar_select_slot(payload_kind)
+                            slot_idx_ = payload_kind
+                            slot_btn = (buttons_config[slot_idx_]
+                                        if 0 <= slot_idx_ < len(buttons_config)
+                                        else None)
+                            is_populated = bool(slot_btn and (
+                                slot_btn.get("label")
+                                or slot_btn.get("icon")
+                                or (slot_btn.get("kind") != "none"
+                                    and slot_btn.get("command"))))
+                            if is_populated:
+                                hotbar_drag = {
+                                    "src_slot":     slot_idx_,
+                                    "src_page":     hotbar_current_page,
+                                    "anchor_x":     mx,
+                                    "anchor_y":     my,
+                                    "active":       False,
+                                    "src_rect":     rect.copy(),
+                                    # Page-flip dwell state for moving
+                                    # a button to a different page mid-
+                                    # drag. Populated by MOUSEMOTION
+                                    # when the cursor hovers over a
+                                    # nav arrow.
+                                    "hover_arrow":  None,   # None | "prev" | "next"
+                                    "hover_start":  0.0,    # time.time() of dwell start
+                                }
+                            else:
+                                # Empty: just go straight to select
+                                # (lets user click an empty slot to
+                                # start editing it).
+                                hotbar_select_slot(slot_idx_)
                         slot_hit = True
                         break
                     if slot_hit:
@@ -24431,6 +40158,59 @@ while running:
                             for _r, _ti in chat_tab_rects:
                                 print(f"   tab {_ti} rect={_r}")
 
+            # Chat-name context menu: if a context menu is open, EVERY
+            # click first goes through the menu's hit-test. Selecting an
+            # item dispatches the action; clicking outside dismisses.
+            # Returns True in either case, consuming the click before
+            # any other handler sees it (so a click outside the menu
+            # doesn't accidentally hit a tab / badge / button below).
+            if _chat_handle_name_context_click(1, mx, my):
+                continue
+
+            # Chat-name left-click: hit-test the per-frame
+            # _chat_clickable_senders list, populated by draw_chat_panel.
+            # A hit sets up the composer for /tell <name> and consumes
+            # the event so it doesn't fall through to tab/badge clicks
+            # (the sender rects live in the content area below the tab
+            # strip, so no overlap is expected — but consuming early is
+            # safer if a future layout puts them on top of something).
+            if _chat_handle_name_click(1, mx, my):
+                continue
+
+            # Chat scrollbar thumb: start a drag. The MOUSEMOTION
+            # handler computes the new scroll value from the mouse
+            # delta, and the MOUSEBUTTONUP handler clears the drag.
+            # Track click outside the thumb does a page-jump.
+            if _chat_scrollbar_thumb_rect is not None \
+               and _chat_scrollbar_thumb_rect.collidepoint(mx, my):
+                _chat_scroll_drag = {
+                    "origin_mouse_y": my,
+                    "origin_scroll":  chat_tab_scroll.get(chat_active_tab, 0),
+                    "track_top":      _chat_scrollbar_track_rect.top,
+                    "track_h":        _chat_scrollbar_track_rect.h,
+                    "thumb_h":        _chat_scrollbar_thumb_rect.h,
+                    "max_scroll":     _chat_scrollbar_max_scroll,
+                }
+                continue
+            if _chat_scrollbar_track_rect is not None \
+               and _chat_scrollbar_track_rect.collidepoint(mx, my):
+                # Page jump. Up-click increases scroll (older), down-
+                # click decreases (newer). One thumb-height worth.
+                cur = chat_tab_scroll.get(chat_active_tab, 0)
+                step = max(3, int(_chat_scrollbar_thumb_rect.h
+                                  * _chat_scrollbar_max_scroll
+                                  / max(1, _chat_scrollbar_track_rect.h)))
+                if my < _chat_scrollbar_thumb_rect.top:
+                    new = cur + step
+                else:
+                    new = cur - step
+                if new < 0:
+                    new = 0
+                if new > _chat_scrollbar_max_scroll:
+                    new = _chat_scrollbar_max_scroll
+                chat_tab_scroll[chat_active_tab] = new
+                continue
+
             # Chat jump-to-bottom badge: also functional UI; bypasses
             # the lock gate for the same reason. Set by draw_chat_panel
             # each frame when scrolled up; clicking resets scroll to
@@ -24476,6 +40256,20 @@ while running:
                             chat_tab_unread[_ti] = 0
                 except Exception as _e:
                     print(f"[OmniWatch] clear all failed: {_e}")
+                continue
+
+            # Show-all-tabs button: clears the user's hidden-tab
+            # list, making every previously hidden tab reappear in
+            # the strip. Persists via set_setting (same path the
+            # right-click hide uses) so the clear is profile-scoped
+            # and survives restart.
+            if _chat_show_all_button_rect is not None \
+               and _chat_show_all_button_rect.collidepoint(mx, my):
+                _was_hidden = list(settings.get("hidden_chat_tabs") or [])
+                if _was_hidden:
+                    set_setting("hidden_chat_tabs", [])
+                    print(f"[chat-tab] show all tabs: cleared "
+                          f"hidden list (was {_was_hidden})")
                 continue
 
             # Routing settings button in the chat header. Launches the
@@ -24776,12 +40570,59 @@ while running:
                     panel_order.append(key)
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            # Right-click dispatch — try in order: open chat-name context
+            # menu (highest priority since it's a transient UI element),
+            # else fall through to sim-window right-click nickname edit.
+            mx, my = event.pos
+
+            # Hidden display swallows right-clicks too (no visible panels
+            # to act on). Gate matches the left-click / draw safety.
+            if display_hidden and setting("show_hide_nub"):
+                continue
+
+            # If a chat-name context menu is already open, right-click
+            # routes through it (selecting an item or dismissing). This
+            # mirrors the left-click flow but on button 3 — opening a
+            # second menu over the first is a UX anti-pattern.
+            if _chat_handle_name_context_click(3, mx, my):
+                continue
+
+            # Chat tab right-click → open a small "Hide tab" popup
+            # at the click position. The user must click the popup
+            # button to actually hide; right-clicking another tab
+            # moves the popup; left-clicking anywhere else dismisses.
+            # Persists nothing here — the actual hide goes through
+            # the popup's click handler in the left-click block.
+            if chat_panel_visible and chat_tab_rects:
+                _hit_tab = None
+                for _rect, _tidx in chat_tab_rects:
+                    if _rect.collidepoint(mx, my):
+                        _hit_tab = _tidx
+                        break
+                if _hit_tab is not None:
+                    _chat_tab_rclick_tab    = _hit_tab
+                    _chat_tab_rclick_anchor = (mx, my)
+                    continue
+
+            # Chat-name right-click: hit-test sender rects; a hit opens
+            # the context menu (Send Tell / Invite to Party) at the
+            # click position. Returning early avoids the click also
+            # falling through to sim-window logic below.
+            if _chat_handle_name_click(3, mx, my):
+                continue
+
+            # Inventory dropdown right-click: hit-tests porter-slip
+            # rows; a hit opens the nickname editor modal. Returns
+            # False (and falls through) when the click was outside
+            # the dropdown or on a non-slip element.
+            if dispatch_inventory_dropdown_right_click(mx, my):
+                continue
+
             # Right-click: nickname-edit on sim window equipment dropdown
             # options. Lets the user assign a friendly name to a specific
             # augmented item (e.g. "Cam DD" for one Camulus's Mantle and
             # "Cam Acc" for another). Stored persistently keyed by
             # (item_id, augment_fingerprint).
-            mx, my = event.pos
             if sim_window_open:
                 handled = False
                 # Walk in reverse so dropdown options take priority over
@@ -24867,6 +40708,73 @@ while running:
                     continue
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            # ── Scrollbar drag release ─────────────────────────────
+            # Clears any active scrollbar drag (checklist or chat).
+            # Done first so a release outside the panel still ends
+            # the drag — without this the user would be "stuck" in
+            # drag mode after dragging off the scrollbar.
+            if _checklist_scroll_drag is not None:
+                _checklist_scroll_drag = None
+                continue
+            if _chat_scroll_drag is not None:
+                _chat_scroll_drag = None
+                continue
+
+            # ── Hide/show nub: resize / drag / click release ────────
+            # Resolved before the hotbar drag so a nub interaction can't
+            # leak into panel handling. A resize or a moved drag just
+            # persists geometry; an unmoved drag is a click → toggle the
+            # whole display.
+            if _hide_nub_resize is not None:
+                nx, ny, nsize = _hide_nub_geometry()
+                _hide_nub_save_geometry(nx, ny, nsize)
+                _hide_nub_resize = None
+                continue
+            if _hide_nub_drag is not None:
+                nx, ny, nsize = _hide_nub_geometry()
+                if _hide_nub_drag["moved"]:
+                    _hide_nub_save_geometry(nx, ny, nsize)
+                else:
+                    # Unmoved = click = toggle the display.
+                    display_hidden = not display_hidden
+                    print(f"[OmniWatch] display "
+                          f"{'hidden' if display_hidden else 'shown'}")
+                _hide_nub_drag = None
+                continue
+
+            # ── Hotbar editor: drag release ─────────────────────────
+            # Highest-priority on button-up because an in-flight drag
+            # owns the next release regardless of what the cursor is
+            # currently over. Two outcomes:
+            #   active = False → it was just a click; do the deferred
+            #                    slot-select that MOUSEBUTTONDOWN
+            #                    skipped.
+            #   active = True  → real drag; find the slot under the
+            #                    cursor and SWAP. Drop on the same slot
+            #                    or outside the grid = no-op.
+            if hotbar_drag is not None and hotbar_edit_mode:
+                drag = hotbar_drag
+                hotbar_drag = None
+                if drag["active"]:
+                    mx_u, my_u = event.pos
+                    dst = _hotbar_slot_at_pos(mx_u, my_u)
+                    src_page = drag.get("src_page", hotbar_current_page)
+                    dst_page = hotbar_current_page
+                    # Reject drops on chrome (nav arrows, etc.) and
+                    # drops on the SAME (page, slot) as the source.
+                    if dst is not None and not (
+                            src_page == dst_page
+                            and dst == drag["src_slot"]):
+                        _hotbar_swap_slots(
+                            drag["src_slot"], dst,
+                            src_page=src_page, dst_page=dst_page)
+                    # else: invalid drop, fall back to nothing.
+                else:
+                    # Click, not drag. Honor the user's selection
+                    # intent now that we know it wasn't a drag.
+                    hotbar_select_slot(drag["src_slot"])
+                continue
+
             # End stats cell drag/click (setup mode only).
             if _stats_cell_drag is not None:
                 drag = _stats_cell_drag
@@ -25142,6 +41050,51 @@ while running:
                 _chat_composer_handle_textinput(event.text)
                 continue
 
+        elif (event.type == pygame.MOUSEMOTION
+              and _hide_nub_resize is not None):
+            # Resize the nub from its corner handle. Size grows with the
+            # larger of the x/y deltas so dragging out diagonally feels
+            # natural. Clamped to min/max. Live (not saved until release).
+            dx = event.pos[0] - _hide_nub_resize["anchor_x"]
+            dy = event.pos[1] - _hide_nub_resize["anchor_y"]
+            grow = max(dx, dy)
+            new_size = _hide_nub_resize["start_size"] + grow
+            new_size = max(_HIDE_NUB_MIN_SIZE,
+                           min(_HIDE_NUB_MAX_SIZE, int(new_size)))
+            settings["hide_nub_size"] = new_size
+
+        elif (event.type == pygame.MOUSEMOTION
+              and _hide_nub_drag is not None):
+            # Move the nub. Mark moved=True once past the threshold so
+            # the button-up handler knows this was a drag (reposition)
+            # not a click (toggle).
+            nx = event.pos[0] - _hide_nub_drag["grab_dx"]
+            ny = event.pos[1] - _hide_nub_drag["grab_dy"]
+            _, _, nsize = _hide_nub_geometry()
+            nx = max(0, min(WIDTH - nsize, nx))
+            ny = max(0, min(HEIGHT - nsize, ny))
+            settings["hide_nub_x"] = int(nx)
+            settings["hide_nub_y"] = int(ny)
+            if not _hide_nub_drag["moved"]:
+                ddx = event.pos[0] - _hide_nub_drag["anchor_x"]
+                ddy = event.pos[1] - _hide_nub_drag["anchor_y"]
+                if (abs(ddx) + abs(ddy)) >= _HIDE_NUB_DRAG_THRESHOLD_PX:
+                    _hide_nub_drag["moved"] = True
+
+        elif event.type == pygame.MOUSEMOTION and hotbar_drag is not None:
+            # Hotbar drag-in-progress: once the cursor has moved past
+            # HOTBAR_DRAG_THRESHOLD_PX from the mouse-down anchor,
+            # promote the drag to active. Once active, every subsequent
+            # frame's draw will show the ghost button at the current
+            # cursor pos (read from pygame.mouse.get_pos() in
+            # draw_hotbar_drag_overlay below), so we don't need to
+            # store cur_x/cur_y here — just trigger the active flip.
+            if not hotbar_drag["active"]:
+                dx = event.pos[0] - hotbar_drag["anchor_x"]
+                dy = event.pos[1] - hotbar_drag["anchor_y"]
+                if (dx * dx + dy * dy) >= (HOTBAR_DRAG_THRESHOLD_PX ** 2):
+                    hotbar_drag["active"] = True
+
         elif event.type == pygame.MOUSEMOTION and _stats_cell_drag is not None:
             # Stats cell drag-in-progress (only valid in setup mode).
             # Track cursor for ghost render. Promote to "started" once
@@ -25207,6 +41160,50 @@ while running:
             mx, my = event.pos
             sim_window_pos[0] = mx - sim_window_drag[0]
             sim_window_pos[1] = my - sim_window_drag[1]
+
+        elif (event.type == pygame.MOUSEMOTION
+              and _checklist_scroll_drag is not None):
+            # Drag the checklist scrollbar thumb. New scroll = origin
+            # scroll plus the mouse delta translated from track-pixels
+            # back into scroll-pixels via the (track_h - thumb_h) ↔
+            # max_scroll mapping. The draw clamp on the next frame
+            # handles overshoot at either end.
+            drag = _checklist_scroll_drag
+            _, my = event.pos
+            dy = my - drag["origin_mouse_y"]
+            usable = max(1, drag["track_h"] - drag["thumb_h"])
+            max_scroll = drag.get("max_scroll", 0)
+            if max_scroll > 0:
+                new_scroll = drag["origin_scroll"] + int(dy * max_scroll / usable)
+                if new_scroll < 0:
+                    new_scroll = 0
+                if new_scroll > max_scroll:
+                    new_scroll = max_scroll
+                checklist_scroll = new_scroll
+
+        elif (event.type == pygame.MOUSEMOTION
+              and _chat_scroll_drag is not None):
+            # Drag the chat panel scrollbar thumb. Direction is
+            # INVERTED relative to checklist — chat_tab_scroll counts
+            # lines back from the newest (0 = stick to bottom), so a
+            # downward mouse-drag should DECREASE the scroll value
+            # (move toward newest), and upward should INCREASE (move
+            # toward oldest). The thumb visually follows the mouse:
+            # drag thumb up → see older messages → scroll value rises.
+            drag = _chat_scroll_drag
+            _, my = event.pos
+            dy = my - drag["origin_mouse_y"]
+            usable = max(1, drag["track_h"] - drag["thumb_h"])
+            max_scroll = drag.get("max_scroll", 0)
+            if max_scroll > 0:
+                # Negative dy (mouse up) → +scroll (older).
+                # Positive dy (mouse down) → -scroll (newer).
+                new_scroll = drag["origin_scroll"] - int(dy * max_scroll / usable)
+                if new_scroll < 0:
+                    new_scroll = 0
+                if new_scroll > max_scroll:
+                    new_scroll = max_scroll
+                chat_tab_scroll[chat_active_tab] = new_scroll
 
         elif event.type == pygame.MOUSEMOTION and dragging_key is not None:
             mx, my = event.pos
@@ -25396,6 +41393,19 @@ while running:
                     target_w   = max(40, mx - px)
                     new_scale  = drag_start_scale * (target_w / max(1, start_w))
                     panel_scales[dragging_key] = max(MIN_SCALE, min(MAX_SCALE, new_scale))
+
+        elif event.type == pygame.MOUSEMOTION:
+            # Generic mouse-move handler — fires whenever no drag/resize
+            # operation is in progress (those have specific elif guards
+            # above and take priority). We use this slot to refresh
+            # hover state for clickable chat sender names. Cheap: a
+            # single collidepoint walk over the per-frame
+            # _chat_clickable_senders list (~tens of entries).
+            try:
+                _chat_update_name_hover(*event.pos)
+            except Exception:
+                # Defensive: a malformed event shouldn't kill the loop.
+                pass
 
 # Save on quit too, in case the window was closed mid-drag.
 save_layout()

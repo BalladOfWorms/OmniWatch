@@ -1,11 +1,99 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.5.2'
+_addon.version  = '1.6.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
 local socket  = require('socket')
 local packets = require('packets')   -- registers string:unpack(), string:pack(), etc.
+
+-- Porter Slips library. Ships with stock Windower (addons/libs/slips.lua),
+-- but we pcall the require so a missing/non-standard install doesn't kill
+-- OmniWatch startup. When the global is nil the inventory emit silently
+-- skips the slip section — the rest of the inventory snapshot still
+-- works normally. slips exposes:
+--   slips.storages           : list of slip item IDs (e.g. {30391, 30392, ...})
+--   slips.items[slip_item_id]: candidate item list for that slip
+--   slips.get_player_items() : map { slip_item_id -> list of stored item IDs }
+-- The library handles the bitmask math (each slip's extdata is a packed
+-- bitmask of which entries in slips.items[slip_id] are currently stored).
+--
+-- Stored on _G (not as a top-level local) because the main chunk of
+-- OmniWatch.lua is at Lua 5.1's 200-local limit; adding a new local
+-- here would push it over. The emit function later reads _G._ow_slips
+-- once and caches it in a local for hot-loop access.
+_G._ow_slips = nil
+do
+    local ok, mod = pcall(require, 'slips')
+    if ok and type(mod) == 'table' then
+        _G._ow_slips = mod
+    else
+        -- Non-fatal: log once on startup so the user knows porter-slip
+        -- contents won't surface in the inventory dropdown. The bag
+        -- listing itself remains fully functional.
+        windower.add_to_chat(207,
+            '[OmniWatch] slips library not loaded — porter slip ' ..
+            'contents will not be shown in the Inventory dropdown.')
+    end
+end
+
+-- ── Currency cache (tier-1 + tier-2) ──────────────────────────────────────
+-- Six currencies that surface in the OmniWatch header cycler:
+--   gil          — already in windower.ffxi.get_items().gil (no packet needed)
+--   sparks       — Sparks of Eminence  (tier-1, packet 0x113)
+--   accolades    — Unity Accolades     (tier-1, packet 0x113)
+--   gallimaufry  — Gallimaufry         (tier-2, packet 0x118)
+--   temenos      — Temenos Units       (tier-2, packet 0x118)
+--   apollyon     — Apollyon Units      (tier-2, packet 0x118)
+--
+-- Filled by the incoming-chunk handler below as the server pushes these
+-- packets (which it does on zone change, opening the currency menu, etc.).
+-- To keep values fresh without requiring the user to manually open the
+-- menu, we also INJECT outgoing 0x10F (currency-1 request) and 0x10F
+-- with sub-id 2 (currency-2 request) on load and every few minutes.
+-- This matches the standard pattern used by Windower's `Currencies`,
+-- `Sparks`, and `curtracker` addons.
+--
+-- Stored on _G to avoid pushing the main chunk over Lua 5.1's 200-local
+-- limit (same reason as _ow_slips above).
+_G._ow_currency_cache = {
+    gil          = 0,    -- mirrors gearswap_gil; emitted for symmetry
+    sparks       = 0,
+    accolades    = 0,
+    gallimaufry  = 0,
+    temenos      = 0,
+    apollyon     = 0,
+    escha_beads  = 0,
+    nyzul_tokens = 0,
+    ichor        = 0,
+}
+-- Timestamp (os.clock) of the last outbound currency request. Used to
+-- throttle re-requests to once every CURRENCY_REQUEST_INTERVAL seconds.
+_G._ow_currency_last_request = 0
+
+-- ── Points tracker cache (EXP / CP / Exemplar) ───────────────────────────
+-- The header has a "points tracker" widget that shows ONE of the three
+-- below at a time, selected by the user in settings. Each entry has a
+-- current value and a "to next" threshold so the header can render
+-- "current/needed" format consistently.
+--
+-- exp     — from packet 0x061 (Char Stats); labels TBD per fields.lua
+-- cp      — capacity points; live-read via
+--           windower.ffxi.get_player().job_points[main_job].cp.
+--           Threshold is fixed: 30000 CP per JP earned.
+-- exemplar — from packet 0x061 (Char Stats); labels
+--           'Current Exemplar Points' / 'Required Exemplar Points'
+--
+-- Stored on _G to avoid the main-chunk local limit (same as the
+-- currency cache).
+_G._ow_points_cache = {
+    exp           = 0,
+    exp_tnl       = 0,
+    cp            = 0,
+    cp_tnl        = 30000,   -- fixed: 30,000 CP = 1 JP
+    exemplar      = 0,
+    exemplar_tnl  = 0,
+}
 
 -- ── Simulation module (optional) ──────────────────────────────────────────
 -- Loads simulation/OmniWatch_Sim.lua at startup if present. When sim mode
@@ -857,6 +945,50 @@ local OW_BLU_TRAIT_TABLES = {
     zanshin           = {points={  8,  16,  24}, pct={ 15,  25,  35}, stat='zanshin', gift=true , label='Zanshin'},
 }
 
+-- Subjob trait-point contributions, mirrored from the bluGuide addon's
+-- res/traits.lua `subs` tables (the reference implementation that matches
+-- /checkparam). A subjob that grants the SAME trait contributes POINTS to
+-- that trait's pool — it does NOT add a separate flat value, and it does
+-- NOT stack additively with the BLU set spells. The game takes the
+-- effective points as max(spell_points(+gift), sub_points), then a single
+-- tier lookup. So e.g. /DNC gives Accuracy Bonus 8 points (= tier I = +10
+-- acc on its own); set enough BLU acc spells to exceed 8 points and the
+-- BLU pool wins instead — never both summed. Keyed by the trait-table key
+-- used in OW_BLU_TRAIT_TABLES above. Subjobs not listed for a trait grant
+-- 0 points for it.
+local OW_BLU_TRAIT_SUBS = {
+    acc_bonus     = { DNC = 8,  DRG = 8,  RNG = 16 },
+    attack_bonus  = { WAR = 8,  DRG = 8,  DRK = 16 },
+    auto_refresh  = { PLD = 8,  SMN = 8 },
+    auto_regen    = { WHM = 8,  RUN = 8 },
+    clear_mind    = { SMN = 24, BLM = 24, SCH = 16, GEO = 16, RDM = 8 },
+    conserve_mp   = { SCH = 8,  BLM = 16, GEO = 24 },
+    counter       = { MNK = 8 },
+    defense_bonus = { WAR = 8,  PLD = 16 },
+    da            = { WAR = 8,  THF = 16 },
+    triple_attack = { WAR = 8,  THF = 16 },
+    dw            = { NIN = 24, DNC = 16 },
+    evasion_bonus = { THF = 16, DNC = 16, PUP = 8 },
+    fast_cast     = { RDM = 24 },
+    gilfinder     = { THF = 16 },
+    mab           = { BLM = 16, RDM = 16 },
+    mbb           = { BLM = 8 },
+    mdb           = { RUN = 16, WHM = 16, RDM = 16 },
+    max_hp_boost  = { RUN = 16, MNK = 16, NIN = 16, WAR = 8, PLD = 8 },
+    max_mp_boost  = { SMN = 16, GEO = 8,  SCH = 8 },
+    rapid_shot    = { RNG = 8,  COR = 8 },
+    resist_silence= { BRD = 8,  SCH = 8 },
+    resist_gravity= { THF = 16 },
+    resist_sleep  = { PLD = 16 },
+    resist_slow   = { PUP = 16, BST = 16, SMN = 16, DNC = 8 },
+    sc_bonus      = { DNC = 8 },
+    store_tp      = { SAM = 16 },
+    undead_killer = { PLD = 8 },
+    zanshin       = { SAM = 16 },
+    inquartata    = { RUN = 24 },
+    tenacity      = { RUN = 24 },
+}
+
 -- Cache the equipped-set summary so the per-frame stat compute doesn't
 -- redo the spell-name → table lookup. Invalidated whenever the
 -- equipped spells signal changes (we re-poll on each get_player tick
@@ -944,14 +1076,58 @@ local function ow_resolve_blu_set(spell_ids, jp_summary)
     end
 
     -- Step 2: apply gift bonus (+8 per gift) to gift-eligible categories.
-    -- Gifts only matter if the trait already has at least 1 set point
-    -- from spells (you can't get a trait purely from gifts), per the
-    -- BG-wiki hotfix note. So only categories with >0 spell points
-    -- receive the boost.
+    -- Per the BG-wiki hotfix: a trait must already be UNLOCKED by spell
+    -- points alone before a gift can boost it — you cannot use the gift to
+    -- reach tier I from fewer than 8 points. The unlock threshold is the
+    -- first tier value, tbl.points[1] (8 for the standard traits). Gating
+    -- on >0 (any points) was the pre-hotfix behaviour and wrongly turned a
+    -- single 4-point acc spell + 2 gifts (4+16=20) into a tier-II trait
+    -- (+22 acc) when /checkparam shows it grants nothing (4 < 8 = not
+    -- unlocked). Verified against isolated (no-subjob) captures: every
+    -- single sub-8-point spell reads 0, while two such spells (8 pts total)
+    -- correctly unlock and take the gift. Each spell's points come from its
+    -- own trait field (e.g. Vanity Dive acc_bonus=4, Anvil Lightning=8).
     local gift_bonus = (jp_summary.gifts or 0) * 8
     for cat, tbl in pairs(OW_BLU_TRAIT_TABLES) do
-        if tbl.gift and gift_bonus > 0 and (trait_pts[cat] or 0) > 0 then
+        local first_threshold = (tbl.points and tbl.points[1]) or 8
+        if tbl.gift and gift_bonus > 0
+                and (trait_pts[cat] or 0) >= first_threshold then
             trait_pts[cat] = trait_pts[cat] + gift_bonus
+        end
+    end
+
+    -- Step 2b: fold in the SUBJOB trait-point contribution (bluGuide model).
+    -- A subjob that grants the same trait contributes POINTS to that
+    -- trait's pool, and the game uses max(spell_pool, sub_points) for the
+    -- tier lookup — the BLU spells and the subjob trait do NOT stack
+    -- additively (they're the same trait). So we take the higher of the
+    -- already-accumulated spell points (with gift) and the subjob's points.
+    -- This is why, with /DNC (Accuracy Bonus 8 pts = tier I), a small BLU
+    -- acc set shows the DNC tier, and a larger BLU set overtakes it —
+    -- matching /checkparam exactly, instead of summing the two (which read
+    -- ~10 high). GearInfo's get_player_acc_from_job ALSO adds the subjob's
+    -- Accuracy/Attack Bonus into the base acc/att, so for those two traits
+    -- the merge must avoid double-counting (handled at merge time via the
+    -- sub-value subtraction); here we just make the TIER reflect the max so
+    -- the trait value itself is correct for every trait.
+    do
+        local p = windower.ffxi.get_player()
+        local sj = p and p.sub_job and p.sub_job:upper()
+        local slvl = p and (p.sub_job_level or 0) or 0
+        if sj and slvl >= 30 then
+            for cat, subtbl in pairs(OW_BLU_TRAIT_SUBS) do
+                local sub_pts = subtbl[sj]
+                if sub_pts and sub_pts > 0 then
+                    -- RNG's 16-pt acc/etc. needs lvl 30+ too; bluGuide's
+                    -- tables already encode the at-cap value, and a BLU
+                    -- main always has a high-level sub here, so the >=30
+                    -- gate is sufficient for the trait to be active.
+                    local cur = trait_pts[cat] or 0
+                    if sub_pts > cur then
+                        trait_pts[cat] = sub_pts
+                    end
+                end
+            end
         end
     end
 
@@ -2089,6 +2265,11 @@ udp_dps:setpeername("127.0.0.1", 5010)
 -- waist, legs, feet.
 local udp_inv = socket.udp()
 udp_inv:setpeername("127.0.0.1", 5012)
+-- Also exposed on _G so packet-listener do/end blocks defined later in
+-- this file (e.g. the Home Point attunement listener) can send on the
+-- same inventory channel without bringing the local in scope. Plain
+-- alias — same socket, same peer.
+_G._ow_udp_inv = udp_inv
 
 -- ── Chat stream (port 5013) ───────────────────────────────────────────────
 -- Carries chat-text events (say/party/tell/LS/yell/system) and synthesized
@@ -2147,8 +2328,1469 @@ local function _ow_emit_inventory_snapshot()
             bag_name, #entries, table.concat(entries, ';'))
         pcall(function() udp_inv:send(payload) end)
     end
+
+    -- ── Porter Slip contents ─────────────────────────────────────────────
+    -- For every porter slip the player holds (across all bags), emit a
+    -- line listing the items currently registered to it. Sent BEFORE the
+    -- INV_END sentinel so Python's atomic-swap reader picks up slip data
+    -- with the same snapshot timestamp as the bag data.
+    --
+    -- Wire format (one line per slip the player owns):
+    --   INV_SLIP|<slip_item_id>|<slip_name>|<count>|<id1>,<name1>;<id2>,<name2>;...
+    --
+    -- The slips library handles the bitmask math: each slip's extdata is a
+    -- packed bitmask of which entries in slips.items[slip_id] are stored;
+    -- get_player_items() decodes this into a flat list of item IDs.
+    --
+    -- Skip silently if the slips lib didn't load on startup, or if the
+    -- player owns no slips. Empty slips (zero items registered) are still
+    -- emitted with count=0 so the Python panel can show "Slip 01 (0 items)"
+    -- consistently with non-empty ones — gives the user a stable list of
+    -- their slips even before they've registered anything.
+    if _G._ow_slips and _G._ow_slips.get_player_items then
+        local _slips = _G._ow_slips    -- cache global → local for hot loop
+        local ok, player_slips = pcall(_slips.get_player_items)
+        if ok and type(player_slips) == 'table' then
+            -- Build the set of slip IDs the player actually holds. The
+            -- library's get_player_items() initializes EVERY slip ID to
+            -- an empty list regardless of ownership — so we can't just
+            -- iterate that table. We have to scan the bag data we
+            -- already pulled and check each item's id against the
+            -- canonical slip list.
+            --
+            -- _slips.storages is a list of all slip item IDs; building a
+            -- set lets us check `held_slips[it.id]` in O(1) per bag
+            -- item. Fast enough that walking every bag a second time is
+            -- imperceptible.
+            local slip_id_set = {}
+            for _, sid in ipairs(_slips.storages) do
+                slip_id_set[sid] = true
+            end
+            local held_slips = {}     -- slip_id → true for slips owned
+            for _, bag_name in ipairs(_OW_BAG_INV_BAGS) do
+                local bag_data = items[bag_name]
+                if type(bag_data) == 'table' then
+                    for slot = 1, 80 do
+                        local it = bag_data[slot]
+                        if type(it) == 'table' and it.id
+                                and slip_id_set[it.id] then
+                            held_slips[it.id] = true
+                        end
+                    end
+                end
+            end
+
+            -- Walk slips.storages for stable ordering (canonical Slip
+            -- 01..08 sequence), emit ONLY for slips the player owns.
+            -- Empty slips (zero items registered) still emit with
+            -- count=0 so the user sees "Slip 05 (0 items)" if they
+            -- own an empty slip — gives a stable list of held slips
+            -- even before anything's registered to a fresh one.
+            for _, slip_id in ipairs(_slips.storages) do
+                if held_slips[slip_id] then
+                    local stored = player_slips[slip_id] or {}
+                    local slip_name = ''
+                    if res.items and res.items[slip_id] then
+                        slip_name = res.items[slip_id].english
+                                 or res.items[slip_id].en or ''
+                    end
+                    if slip_name == '' then
+                        slip_name = '#' .. tostring(slip_id)
+                    end
+                    slip_name = _ow_sanitize_item_name(slip_name)
+
+                    local item_entries = {}
+                    -- stored is a list (sometimes T{} / L{} from Windower's
+                    -- container library); use ipairs for a flat walk.
+                    for _, iid in ipairs(stored) do
+                        local nm = ''
+                        if res.items and res.items[iid] then
+                            nm = res.items[iid].english
+                              or res.items[iid].en or ''
+                        end
+                        if nm == '' then nm = '#' .. tostring(iid) end
+                        nm = _ow_sanitize_item_name(nm)
+                        item_entries[#item_entries + 1] =
+                            string.format('%d,%s', iid, nm)
+                    end
+                    local slip_payload = string.format(
+                        'INV_SLIP|%d|%s|%d|%s',
+                        slip_id, slip_name, #item_entries,
+                        table.concat(item_entries, ';'))
+                    pcall(function() udp_inv:send(slip_payload) end)
+                end
+            end
+        end
+    end
+
+    pcall(function()
+        -- ── Currency snapshot ────────────────────────────────────────
+        -- Pull the latest values from gil (live read) + the cached
+        -- tier-1/2 currencies (filled by the incoming-chunk handler
+        -- registered below). One line, simple key=value pairs;
+        -- Python parses with str.split.
+        --
+        -- Always-emitted: even when the cached values are 0 because we
+        -- haven't received the first packet yet, the python side needs
+        -- something so the header doesn't show stale data from before
+        -- the last login. Zero is a fine placeholder.
+        local gil_val = 0
+        if items and items.gil then
+            gil_val = tonumber(items.gil) or 0
+        end
+        local cur = _G._ow_currency_cache or {}
+        local payload = string.format(
+            'CURRENCY|gil=%d;sparks=%d;accolades=%d;' ..
+            'gallimaufry=%d;temenos=%d;apollyon=%d;' ..
+            'escha_beads=%d;nyzul_tokens=%d;ichor=%d',
+            gil_val,
+            tonumber(cur.sparks) or 0,
+            tonumber(cur.accolades) or 0,
+            tonumber(cur.gallimaufry) or 0,
+            tonumber(cur.temenos) or 0,
+            tonumber(cur.apollyon) or 0,
+            tonumber(cur.escha_beads) or 0,
+            tonumber(cur.nyzul_tokens) or 0,
+            tonumber(cur.ichor) or 0)
+        udp_inv:send(payload)
+    end)
+
+    pcall(function()
+        -- ── Points snapshot ───────────────────────────────────────────
+        -- Three trackable point types:
+        --   exp / exp_tnl       — from packet 0x061 cache
+        --   cp / cp_tnl         — live-read from get_player().job_points;
+        --                          tnl is fixed at 30000 per JP
+        --   exemplar / exemplar_tnl — from packet 0x061 cache
+        --
+        -- CP is read fresh every snapshot because it's available
+        -- live through the player table; we don't have to wait for
+        -- a packet. EXP and Exemplar come from cache because they
+        -- only update on packet receive.
+        local pts = _G._ow_points_cache or {}
+        local cp_val      = 0
+        local cp_tnl_val  = tonumber(pts.cp_tnl) or 30000
+        local player = windower.ffxi.get_player and windower.ffxi.get_player()
+        if player and player.main_job and player.job_points then
+            local mj_key = string.lower(player.main_job)
+            local jp_entry = player.job_points[mj_key]
+            if type(jp_entry) == 'table' and jp_entry.cp then
+                cp_val = tonumber(jp_entry.cp) or 0
+            end
+        end
+        local points_payload = string.format(
+            'POINTS|exp=%d;exp_tnl=%d;cp=%d;cp_tnl=%d;' ..
+            'exemplar=%d;exemplar_tnl=%d',
+            tonumber(pts.exp) or 0,
+            tonumber(pts.exp_tnl) or 0,
+            cp_val,
+            cp_tnl_val,
+            tonumber(pts.exemplar) or 0,
+            tonumber(pts.exemplar_tnl) or 0)
+        udp_inv:send(points_payload)
+    end)
+
+    pcall(function()
+        -- ── Trust ownership snapshot ──────────────────────────────────
+        -- Walks the player's known spells and emits the names of those
+        -- that resolve to category='Trust' in res.spells. Python uses
+        -- this for the checklist's Trusts category (auto-checked rows).
+        --
+        -- Emitted alongside currencies/points so the same throttle
+        -- cadence drives all the slow-changing metadata. The list is
+        -- only 30-130 names so a single packet is plenty.
+        --
+        -- Format: TRUSTS|<name1>|<name2>|...|<nameN>
+        -- An empty list emits 'TRUSTS|' (no trailing names). The
+        -- separator is '|' because trust names never contain it (and
+        -- res.spells normalizes English names without pipes).
+        local owned = {}
+        if windower.ffxi.get_spells and res and res.spells then
+            local ok_spells, spells = pcall(windower.ffxi.get_spells)
+            if ok_spells and type(spells) == 'table' then
+                for sid, has in pairs(spells) do
+                    if has then
+                        local spell = res.spells[sid]
+                        if spell and spell.type == 'Trust' then
+                            local nm = spell.english or spell.en or ''
+                            if nm ~= '' then
+                                owned[#owned + 1] = nm
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        table.sort(owned)
+        local trust_payload = 'TRUSTS|' .. table.concat(owned, '|')
+        udp_inv:send(trust_payload)
+    end)
+
+    pcall(function()
+        -- ── BLU spell ownership snapshot ──────────────────────────────
+        -- Mirrors the trust snapshot but for Blue Magic. Walks the
+        -- player's known spells filtering for type=='BlueMagic' (learned
+        -- set), AND enumerates res.spells for every BLU spell that
+        -- exists in the game (master list). Both lists are sent so the
+        -- python side doesn't need to hardcode a master list that goes
+        -- stale when SE adds new spells.
+        --
+        -- Format: BLU_SPELLS|<learned1>|<learned2>|...||<master1>|<master2>|...
+        -- The '||' is the section separator. Spell names never contain
+        -- pipes so '|' is safe within each section. Names use spell.en
+        -- (Windower's English field) to match the same source any
+        -- gearswap addon would use.
+        --
+        -- Throttle: rides the same cadence as trusts (slow-changing
+        -- metadata snapshot). Spell learning happens at most a few
+        -- times per session for an active player.
+        local learned, master = {}, {}
+        if windower.ffxi.get_spells and res and res.spells then
+            local ok_spells, spells = pcall(windower.ffxi.get_spells)
+            if ok_spells and type(spells) == 'table' then
+                for sid, has in pairs(spells) do
+                    if has then
+                        local spell = res.spells[sid]
+                        if spell and spell.type == 'BlueMagic' then
+                            local nm = spell.english or spell.en or ''
+                            if nm ~= '' then
+                                learned[#learned + 1] = nm
+                            end
+                        end
+                    end
+                end
+            end
+            -- Master list: every BLU spell that exists in res.spells,
+            -- regardless of whether the player has learned it. This is
+            -- the same source Windower's BLU addons use.
+            for _, spell in pairs(res.spells) do
+                if spell and spell.type == 'BlueMagic' then
+                    local nm = spell.english or spell.en or ''
+                    if nm ~= '' then
+                        master[#master + 1] = nm
+                    end
+                end
+            end
+        end
+        table.sort(learned)
+        table.sort(master)
+        local blu_payload = 'BLU_SPELLS|' ..
+            table.concat(learned, '|') .. '||' ..
+            table.concat(master, '|')
+        udp_inv:send(blu_payload)
+    end)
+
+    pcall(function()
+        -- ── Mount ownership snapshot ─────────────────────────────────
+        -- Mirrors the BLU snapshot: two pipe-separated sections holding
+        -- the learned set and the master list. Mounts come back from
+        -- windower.ffxi.get_abilities().mounts as an array of ids (the
+        -- key items that grant each mount), and the master list lives
+        -- in res.mounts keyed by mount-id.
+        --
+        -- Format: MOUNTS|<learned1>|<learned2>|...||<master1>|...
+        -- Names use mount.english (Windower's English field). Mount
+        -- names never contain pipes so '|' is safe within each section.
+        local learned, master = {}, {}
+        if windower.ffxi.get_abilities and res and res.mounts then
+            local ok_abil, abilities = pcall(windower.ffxi.get_abilities)
+            if ok_abil and type(abilities) == 'table' then
+                -- abilities.mounts is an array of mount IDs the player
+                -- owns. Walk it and resolve each to the canonical
+                -- english name via res.mounts.
+                if type(abilities.mounts) == 'table' then
+                    for _, mid in pairs(abilities.mounts) do
+                        local m = res.mounts[mid]
+                        if m then
+                            local nm = m.english or m.en or m.name or ''
+                            if nm ~= '' then
+                                learned[#learned + 1] = nm
+                            end
+                        end
+                    end
+                end
+            end
+            -- Master list: every mount that exists in res.mounts.
+            for _, m in pairs(res.mounts) do
+                if m then
+                    local nm = m.english or m.en or m.name or ''
+                    if nm ~= '' then
+                        master[#master + 1] = nm
+                    end
+                end
+            end
+        end
+        table.sort(learned)
+        table.sort(master)
+        local mount_payload = 'MOUNTS|' ..
+            table.concat(learned, '|') .. '||' ..
+            table.concat(master, '|')
+        udp_inv:send(mount_payload)
+    end)
+
+    pcall(function()
+        -- ── Spells by school (BLM/WHM/SMN/NIN/BRD/GEO) ───────────────
+        -- Generic per-school spell snapshot. Mirrors BLU_SPELLS' shape
+        -- (learned|...||master|...) but parameterised over res.spells
+        -- type strings, so all the caster checklists auto-mark from the
+        -- same packet stream. One packet per school keeps decoding
+        -- simple: python routes on the packet prefix, no schema needed.
+        --
+        -- Schools handled:
+        --   BlackMagic   → SPELLS_BLM
+        --   WhiteMagic   → SPELLS_WHM
+        --   SummonerPact → SPELLS_SMN
+        --   Ninjutsu     → SPELLS_NIN
+        --   BardSong     → SPELLS_BRD
+        --   Geomancy     → SPELLS_GEO
+        --
+        -- BlueMagic intentionally NOT included here — that category has
+        -- its own dedicated emit above with the same shape, kept
+        -- separate for backward compatibility with the BLU_SPELLS|
+        -- packet python already parses.
+        --
+        -- Format per school:
+        --   SPELLS_<TAG>|<learned1>|<learned2>|...||<master1>|...
+        -- Empty learned-section is valid ('SPELLS_WHM|||<master>'
+        -- means no spells learned but the master list is present).
+        local school_to_tag = {
+            BlackMagic   = 'BLM',
+            WhiteMagic   = 'WHM',
+            SummonerPact = 'SMN',
+            Ninjutsu     = 'NIN',
+            BardSong     = 'BRD',
+            Geomancy     = 'GEO',
+        }
+
+        if windower.ffxi.get_spells and res and res.spells then
+            -- Walk learned spells once, bucketing by school. Buckets
+            -- are keyed by the WIRE TAG ('BLM'/'WHM'/...), not the
+            -- spell.type string ('BlackMagic'/'WhiteMagic'/...), so
+            -- the emit loop below can read `learned_by_school[tag]`
+            -- directly. Use the VALUE side of pairs() to initialize.
+            local learned_by_school = {}
+            for _, tag in pairs(school_to_tag) do
+                learned_by_school[tag] = {}
+            end
+            local ok_spells, spells = pcall(windower.ffxi.get_spells)
+            if ok_spells and type(spells) == 'table' then
+                for sid, has in pairs(spells) do
+                    if has then
+                        local spell = res.spells[sid]
+                        if spell then
+                            local tag = school_to_tag[spell.type]
+                            if tag then
+                                local nm = spell.english or spell.en or ''
+                                if nm ~= '' then
+                                    local bucket = learned_by_school[tag]
+                                    bucket[#bucket + 1] = nm
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Walk master res.spells once, bucketing by school. Same
+            -- TAG-keyed structure as the learned table above.
+            local master_by_school = {}
+            for _, tag in pairs(school_to_tag) do
+                master_by_school[tag] = {}
+            end
+            for _, spell in pairs(res.spells) do
+                if spell then
+                    local tag = school_to_tag[spell.type]
+                    if tag then
+                        local nm = spell.english or spell.en or ''
+                        if nm ~= '' then
+                            local bucket = master_by_school[tag]
+                            bucket[#bucket + 1] = nm
+                        end
+                    end
+                end
+            end
+
+            -- Emit one packet per school.
+            for _, tag in pairs(school_to_tag) do
+                local learned_arr = learned_by_school[tag]
+                local master_arr  = master_by_school[tag]
+                table.sort(learned_arr)
+                table.sort(master_arr)
+                local payload = 'SPELLS_' .. tag .. '|' ..
+                    table.concat(learned_arr, '|') .. '||' ..
+                    table.concat(master_arr, '|')
+                udp_inv:send(payload)
+            end
+        end
+    end)
+
+    pcall(function()
+        -- ── Weapon Skills by skill type (H2H / Dagger / Sword / etc) ─
+        -- Walks windower.ffxi.get_abilities().weapon_skills (an array
+        -- of WS IDs the player has unlocked across all jobs) and
+        -- enumerates res.weapon_skills for the master list. Buckets by
+        -- res.weapon_skills[id].skill — the integer matching the
+        -- skills.lua weapon-type ID (1=Hand-to-Hand, 2=Dagger, ...
+        -- 12=Staff, 25=Archery, 26=Marksmanship). One packet per
+        -- weapon type so python can render a tab per type.
+        --
+        -- Wire format per weapon type:
+        --   WS_<TAG>|<learned1>|<learned2>|...||<master1>|...
+        -- where <TAG> is the python-side category key suffix:
+        --   H2H, DAG, SWD, GSD, AXE, GAX, SCY, POL, KAT, GKT,
+        --   CLB, STF, ARC, MRK
+        --
+        -- Includes "unlearnable" WSes too: Windower's
+        -- res.weapon_skills has no unlearnable flag and the file is
+        -- clean (no -1 icons / no empty levels — every entry is a
+        -- real WS the canonical resource extractor produced).
+        local skill_to_tag = {
+            [1]  = 'H2H',  -- Hand-to-Hand
+            [2]  = 'DAG',  -- Dagger
+            [3]  = 'SWD',  -- Sword
+            [4]  = 'GSD',  -- Great Sword
+            [5]  = 'AXE',  -- Axe
+            [6]  = 'GAX',  -- Great Axe
+            [7]  = 'SCY',  -- Scythe
+            [8]  = 'POL',  -- Polearm
+            [9]  = 'KAT',  -- Katana
+            [10] = 'GKT',  -- Great Katana
+            [11] = 'CLB',  -- Club
+            [12] = 'STF',  -- Staff
+            [25] = 'ARC',  -- Archery
+            [26] = 'MRK',  -- Marksmanship
+        }
+
+        if windower.ffxi.get_abilities and res and res.weapon_skills then
+            -- Learned WS IDs come from get_abilities().weapon_skills,
+            -- which is an array of integer IDs (one per WS unlocked).
+            local learned_by_tag = {}
+            for _, tag in pairs(skill_to_tag) do
+                learned_by_tag[tag] = {}
+            end
+            local ok_abil, abilities = pcall(windower.ffxi.get_abilities)
+            if ok_abil and type(abilities) == 'table'
+               and type(abilities.weapon_skills) == 'table' then
+                for _, wsid in pairs(abilities.weapon_skills) do
+                    local ws = res.weapon_skills[wsid]
+                    if ws and ws.skill then
+                        local tag = skill_to_tag[ws.skill]
+                        if tag then
+                            local nm = ws.english or ws.en or ''
+                            if nm ~= '' then
+                                local bucket = learned_by_tag[tag]
+                                bucket[#bucket + 1] = nm
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Master: walk res.weapon_skills.
+            local master_by_tag = {}
+            for _, tag in pairs(skill_to_tag) do
+                master_by_tag[tag] = {}
+            end
+            for _, ws in pairs(res.weapon_skills) do
+                if ws and ws.skill then
+                    local tag = skill_to_tag[ws.skill]
+                    if tag then
+                        local nm = ws.english or ws.en or ''
+                        if nm ~= '' then
+                            local bucket = master_by_tag[tag]
+                            bucket[#bucket + 1] = nm
+                        end
+                    end
+                end
+            end
+
+            -- Emit one packet per weapon type.
+            for _, tag in pairs(skill_to_tag) do
+                local learned_arr = learned_by_tag[tag]
+                local master_arr  = master_by_tag[tag]
+                table.sort(learned_arr)
+                table.sort(master_arr)
+                local payload = 'WS_' .. tag .. '|' ..
+                    table.concat(learned_arr, '|') .. '||' ..
+                    table.concat(master_arr, '|')
+                udp_inv:send(payload)
+            end
+        end
+    end)
+
+    pcall(function()
+        -- ── Player nation snapshot ───────────────────────────────────
+        -- Lightweight metadata the Outpost Warps checklist uses to
+        -- annotate its header. Sent on the same cadence as the other
+        -- inventory-side snapshots since nation is essentially static
+        -- per-session (it can only change via the Immigration NPC).
+        --
+        -- Format: NATION|<id>|<name>
+        -- Where <id> is 0=Sandy, 1=Bastok, 2=Windy, 3=Other/Jeuno.
+        -- Always 1-2 fields, never empty (we always know the player's
+        -- nation when get_player() returns).
+        local p = windower.ffxi.get_player and windower.ffxi.get_player()
+        if p and type(p.nation) == 'number' then
+            local names = {
+                [0] = "San d'Oria",
+                [1] = "Bastok",
+                [2] = "Windurst",
+                [3] = "Jeuno",
+            }
+            local nm = names[p.nation] or ("Nation " .. tostring(p.nation))
+            udp_inv:send('NATION|' .. tostring(p.nation) .. '|' .. nm)
+        end
+    end)
+
     pcall(function() udp_inv:send('INV_END|' .. tostring(os.time())) end)
     _ow_bag_inv_last_emit = os.clock()
+end
+
+-- ── Currency packet handler ──────────────────────────────────────────────
+-- Listens for the two currency update packets the server pushes:
+--   0x113 — Currency Info     (tier-1: Sparks, Accolades, Conquest Pts, …)
+--   0x118 — Currency Info 2   (tier-2: Gallimaufry, Temenos, Apollyon, …)
+--
+-- Uses packets.parse() to extract labeled fields rather than hardcoding
+-- byte offsets. fields.lua has had history of wrong offsets (Accolades
+-- once was off; curtracker shipped a fix), so we lookup by label and
+-- skip silently if a field is missing — that way the addon keeps working
+-- if Windower's fields.lua doesn't have everything we need.
+--
+-- The field labels used here come from the canonical Windower fields.lua;
+-- they're the spaces-and-capitalization-sensitive names of the slots in
+-- the parsed packet. If Square Enix renames or moves a currency, only
+-- this one map needs updating.
+--
+-- Wrapped in a do...end block so the field-map table and request helper
+-- don't add top-level locals — the OmniWatch main chunk is at Lua 5.1's
+-- 200-local ceiling and any new local up here would push it over. Inside
+-- a do block the variables are scoped and don't count against the main
+-- chunk's limit.
+do
+    local _OW_CURRENCY_FIELDS = {
+        ['Sparks of Eminence'] = 'sparks',
+        ['Unity Accolades']    = 'accolades',
+        ['Gallimaufry']        = 'gallimaufry',
+        -- Tier-2 limbus currencies. The field labels in Windower's
+        -- fields.lua are 'Temenos Units' and 'Apollyon Units' per
+        -- live-packet inspection (the //ow currencydebug dump). Note
+        -- the in-game spelling is Temenos (Greek τέμενος), NOT
+        -- Tenemos — a common misspelling. Earlier guesses at
+        -- 'Temenos Currency' / 'Apollyon Currency' / bare 'Temenos'
+        -- and 'Apollyon' all missed; only the 'Units' suffix is
+        -- correct. Listing both -Units and the older legacy forms
+        -- so we keep working on installs whose fields.lua hasn't
+        -- been updated.
+        ['Temenos Units']      = 'temenos',
+        ['Apollyon Units']     = 'apollyon',
+        ['Temenos Currency']   = 'temenos',
+        ['Apollyon Currency']  = 'apollyon',
+        ['Temenos']            = 'temenos',
+        ['Apollyon']           = 'apollyon',
+        -- Escha Beads (Escha zone currency for upper-tier crafting/
+        -- alluvion skirmish rewards). Windower's fields.lua
+        -- typically labels this 'Escha Beads', but some forks use
+        -- a bare 'Beads'. Listing both for robustness — if neither
+        -- matches on this install, run //ow currencydebug while
+        -- opening the currency menu, find the field label in the
+        -- dump, and add it here.
+        ['Escha Beads']        = 'escha_beads',
+        ['Beads']              = 'escha_beads',
+        -- Nyzul Isle tokens. The packet field name is one of these
+        -- in practice:
+        --   'Nyzul Isle Assault Points' — most common modern label
+        --   'Nyzul Tokens'              — abbreviated form
+        --   'Tokens'                    — older minimal label
+        -- Including all three so any current install works without
+        -- a fields.lua update.
+        ['Nyzul Isle Assault Points'] = 'nyzul_tokens',
+        ['Nyzul Tokens']              = 'nyzul_tokens',
+        ['Tokens']                    = 'nyzul_tokens',
+        -- Ichor (Reisenjima trial / yorcia currency). Usually shows
+        -- up as 'Therion Ichor' in fields.lua but the bare 'Ichor'
+        -- form exists on some forks.
+        ['Therion Ichor']      = 'ichor',
+        ['Ichor']              = 'ichor',
+    }
+
+    ow_safe_register('incoming chunk', function(id, data)
+        if id ~= 0x113 and id ~= 0x118 then return end
+        local ok, parsed = pcall(packets.parse, 'incoming', data)
+        if not ok or type(parsed) ~= 'table' then
+            if _G._ow_currency_debug then
+                windower.add_to_chat(123, string.format(
+                    '[OW currency] 0x%03X parse FAILED: %s',
+                    id, tostring(parsed)))
+            end
+            return
+        end
+        local cache = _G._ow_currency_cache
+        if type(cache) ~= 'table' then return end
+
+        -- Debug: dump every parsed field so we can see what labels
+        -- Windower's fields.lua actually produces for this install.
+        -- We only print numeric fields (the ones likely to be currencies)
+        -- and skip obvious header noise to keep the output readable.
+        if _G._ow_currency_debug then
+            local field_lines = {}
+            for k, v in pairs(parsed) do
+                local nv = tonumber(v)
+                if nv and nv > 0
+                        and k ~= '_size' and k ~= '_sequence'
+                        and k ~= '_raw' and k ~= 'sub_kind' then
+                    field_lines[#field_lines + 1] =
+                        string.format('%s=%s', tostring(k), tostring(nv))
+                end
+            end
+            -- Sort for stable output.
+            table.sort(field_lines)
+            windower.add_to_chat(207, string.format(
+                '[OW currency] 0x%03X fields (%d nonzero numeric): %s',
+                id, #field_lines, table.concat(field_lines, ', ')))
+        end
+
+        local matched = 0
+        for label, key in pairs(_OW_CURRENCY_FIELDS) do
+            local v = parsed[label]
+            if v ~= nil then
+                local n = tonumber(v)
+                if n then
+                    cache[key] = n
+                    matched = matched + 1
+                end
+            end
+        end
+        if _G._ow_currency_debug then
+            windower.add_to_chat(207, string.format(
+                '[OW currency] 0x%03X matched %d of our known labels',
+                id, matched))
+        end
+    end)
+
+    -- ── Currency request injection ───────────────────────────────────
+    -- The server only pushes 0x113 / 0x118 on certain triggers (zone
+    -- change, opening the in-game currency menu, certain quest steps).
+    -- Without a nudge, an OmniWatch session that stays in one zone
+    -- for hours never sees fresh values.
+    --
+    -- Two outgoing packets refresh both currency tiers:
+    --   0x10F "Currency Menu"   → triggers 0x113 (Sparks, Accolades, …)
+    --   0x115 "Currency Menu 2" → triggers 0x118 (Gallimaufry,
+    --                              Temenos, Apollyon, …)
+    -- Both have zero custom fields. We send them together once per
+    -- interval, driven by the prerender loop calling
+    -- _G._ow_request_currency_update.
+    local CURRENCY_REQUEST_INTERVAL = 300   -- seconds (5 minutes)
+    _G._ow_request_currency_update = function()
+        local now = os.clock()
+        if (now - (_G._ow_currency_last_request or 0))
+                < CURRENCY_REQUEST_INTERVAL then
+            return
+        end
+        -- Tier-1 + tier-2 each have their own request packet, and
+        -- each triggers a different incoming response:
+        --   outgoing 0x10F → incoming 0x113 (tier-1: Sparks, Accolades, …)
+        --   outgoing 0x115 → incoming 0x118 (tier-2: Gallimaufry,
+        --                                    Temenos, Apollyon, …)
+        -- Per Windower's data.lua both outgoing requests are
+        -- "Currency Menu" / "Currency Menu 2" with zero custom
+        -- fields. This is the same pattern Ivaar's Currencies
+        -- addon uses to refresh both tiers.
+        --
+        -- Use packets.inject(packet) — NOT
+        -- windower.packets.inject_outgoing — because the latter
+        -- expects a pre-built BINARY STRING, while packets.new()
+        -- returns a TABLE. packets.inject() does the build →
+        -- string → inject for us in one call.
+        local r1_ok, r1_err = pcall(function()
+            local p = packets.new('outgoing', 0x10F, {})
+            packets.inject(p)
+        end)
+        local r2_ok, r2_err = pcall(function()
+            local p = packets.new('outgoing', 0x115, {})
+            packets.inject(p)
+        end)
+        if _G._ow_currency_debug then
+            windower.add_to_chat(207, string.format(
+                '[OW currency] request 0x10F: %s | 0x115: %s',
+                (r1_ok and 'OK' or ('FAIL ' .. tostring(r1_err))),
+                (r2_ok and 'OK' or ('FAIL ' .. tostring(r2_err)))))
+        end
+        _G._ow_currency_last_request = now
+    end
+end
+
+-- ── Points handler (EXP / Exemplar from 0x061, CP live-read) ─────────────
+-- Same shape as the currency block above. Listens for incoming 0x061
+-- ("Char Stats") packets which carry experience and exemplar fields.
+-- Capacity Points (CP) are NOT in 0x061 — they come from a per-job
+-- table on the player struct, which we read directly each prerender
+-- tick (no packet handler needed).
+--
+-- Wrapped in do...end so the field-label map doesn't push the main
+-- chunk past Lua 5.1's 200-local ceiling.
+--
+-- The actual fields.lua label for "current experience" varies between
+-- builds — pointwatch reads it via raw byte offsets because the labels
+-- in fields.lua have been unreliable for these fields. To stay
+-- portable, the map below lists every plausible variant; we accept
+-- whichever one the user's fields.lua actually exposes. The
+-- //ow pointsdebug command (defined elsewhere) dumps the parsed fields
+-- so unknown installs can be diagnosed.
+do
+    local _OW_POINTS_FIELDS = {
+        -- Current experience. The canonical labels in Windower's
+        -- fields.lua (confirmed via live //ow pointsdebug dump) are
+        -- 'Current EXP' and 'Required EXP'. Older / forked builds
+        -- may use the longer 'Experience Points' / 'Experience
+        -- Points TNL' style, so both forms are listed.
+        ['Current EXP']                = 'exp',
+        ['Required EXP']               = 'exp_tnl',
+        ['Experience Points']          = 'exp',
+        ['Experience']                 = 'exp',
+        ['Current Experience']         = 'exp',
+        ['Experience Points TNL']      = 'exp_tnl',
+        ['Experience Needed']          = 'exp_tnl',
+        ['Required Experience']        = 'exp_tnl',
+        ['Experience TNL']             = 'exp_tnl',
+        -- Exemplar from the canonical fields.lua (confirmed labels).
+        ['Current Exemplar Points']    = 'exemplar',
+        ['Required Exemplar Points']   = 'exemplar_tnl',
+    }
+
+    ow_safe_register('incoming chunk', function(id, data)
+        if id ~= 0x061 then return end
+        local ok, parsed = pcall(packets.parse, 'incoming', data)
+        if not ok or type(parsed) ~= 'table' then
+            if _G._ow_points_debug then
+                windower.add_to_chat(123, string.format(
+                    '[OW points] 0x061 parse FAILED: %s',
+                    tostring(parsed)))
+            end
+            return
+        end
+        local cache = _G._ow_points_cache
+        if type(cache) ~= 'table' then return end
+
+        -- Diagnostic dump: list every numeric field with its value.
+        -- Same pattern as the currency-debug handler.
+        if _G._ow_points_debug then
+            local field_lines = {}
+            for k, v in pairs(parsed) do
+                local nv = tonumber(v)
+                if nv and nv > 0
+                        and k ~= '_size' and k ~= '_sequence'
+                        and k ~= '_raw' and k ~= 'sub_kind' then
+                    field_lines[#field_lines + 1] =
+                        string.format('%s=%s', tostring(k), tostring(nv))
+                end
+            end
+            table.sort(field_lines)
+            windower.add_to_chat(207, string.format(
+                '[OW points] 0x061 fields (%d nonzero numeric): %s',
+                #field_lines, table.concat(field_lines, ', ')))
+        end
+
+        local matched = 0
+        for label, key in pairs(_OW_POINTS_FIELDS) do
+            local v = parsed[label]
+            if v ~= nil then
+                local n = tonumber(v)
+                if n then
+                    cache[key] = n
+                    matched = matched + 1
+                end
+            end
+        end
+        if _G._ow_points_debug then
+            windower.add_to_chat(207, string.format(
+                '[OW points] 0x061 matched %d of our known labels',
+                matched))
+        end
+    end)
+
+    -- ── Points request injection ─────────────────────────────────────
+    -- Same staleness problem as currencies: the server only pushes
+    -- incoming 0x061 (Char Stats) on certain triggers — zone change,
+    -- gaining/losing experience, opening the Status menu, leveling
+    -- up. If the player parks in town all day, EXP and Exemplar
+    -- values never refresh on their own.
+    --
+    -- Fix: periodically inject outgoing 0x061 ("Equipment Screen")
+    -- which tells the server we're opening the equipment window;
+    -- the server responds by pushing a fresh incoming 0x061 stats
+    -- packet. This is the same mechanism BarFiller and pointwatch
+    -- use to keep their EXP bars live.
+    --
+    -- Per Windower's fields.lua, outgoing 0x061 has one field:
+    --   {ctype='data[4]', label='_unknown1'}  -- "Always zero?"
+    -- packets.new('outgoing', 0x061, {}) fills it with zeros.
+    -- Injection is silent — it does NOT actually open the in-game
+    -- equipment menu, only requests the stats data.
+    --
+    -- Throttled identically to the currency request: once per
+    -- interval, driven by the prerender loop calling
+    -- _G._ow_request_points_update. Defaults to 5 minutes so we
+    -- don't spam the server.
+    _G._ow_points_last_request = 0
+    local POINTS_REQUEST_INTERVAL = 300   -- seconds (5 minutes)
+    _G._ow_request_points_update = function()
+        local now = os.clock()
+        if (now - (_G._ow_points_last_request or 0))
+                < POINTS_REQUEST_INTERVAL then
+            return
+        end
+        local req_ok, req_err = pcall(function()
+            local p = packets.new('outgoing', 0x061, {})
+            packets.inject(p)
+        end)
+        if _G._ow_points_debug then
+            windower.add_to_chat(207, string.format(
+                '[OW points] request 0x061: %s',
+                (req_ok and 'OK' or ('FAIL ' .. tostring(req_err)))))
+        end
+        _G._ow_points_last_request = now
+    end
+
+    -- ── Live event listeners for instant EXP refresh ─────────────────
+    -- The 5-minute throttle is fine for idle sessions, but when the
+    -- player is actively grinding it would feel sluggish to see the
+    -- header lag 5 minutes behind every kill. Windower fires native
+    -- events the instant EXP changes, so we hook those for live
+    -- updates between scheduled requests.
+    --
+    --   'gain experience' — args (amount, chain_number, limit)
+    --     Fires on every EXP gain. `limit` is true for limit points
+    --     (which we don't track separately — they're the same field
+    --     past level 99 anyway).
+    --   'lose experience' — args (amount)
+    --     Death penalty, etc.
+    --   'level up' / 'level down' — TNL resets to a different value,
+    --     so we need a fresh 0x061 to get the new "Required EXP".
+    --
+    -- Strategy: update the cache locally for instant header feedback,
+    -- then ALSO inject a 0x061 request to pick up the authoritative
+    -- value from the server (chain bonus, Exemplar tick, etc.). We
+    -- bypass the throttle for these — they're rare enough that there's
+    -- no spam concern (the throttle exists for the periodic refresh,
+    -- not for event-driven updates).
+    local function _ow_force_points_refresh()
+        _G._ow_points_last_request = 0
+        if _G._ow_request_points_update then
+            pcall(_G._ow_request_points_update)
+        end
+        -- Also force the next inventory snapshot to emit immediately,
+        -- so python sees the new value without waiting for the regular
+        -- snapshot cadence.
+        _ow_bag_inv_last_emit = 0
+    end
+
+    ow_safe_register('gain experience', function(amount, _chain, limit)
+        local cache = _G._ow_points_cache
+        if type(cache) == 'table' and tonumber(amount) then
+            -- Optimistic local update for instant feedback. The 0x061
+            -- request below will overwrite with the authoritative
+            -- value if our math drifts.
+            cache.exp = (tonumber(cache.exp) or 0) + tonumber(amount)
+            -- Clamp so we never display "60000/56000" briefly during
+            -- the round-trip — when current >= required, show the
+            -- cap until the server confirms.
+            local tnl = tonumber(cache.exp_tnl) or 0
+            if tnl > 0 and cache.exp > tnl then
+                cache.exp = tnl
+            end
+        end
+        _ow_force_points_refresh()
+    end)
+
+    ow_safe_register('lose experience', function(amount)
+        local cache = _G._ow_points_cache
+        if type(cache) == 'table' and tonumber(amount) then
+            cache.exp = math.max(0,
+                (tonumber(cache.exp) or 0) - tonumber(amount))
+        end
+        _ow_force_points_refresh()
+    end)
+
+    ow_safe_register('level up', function(_level)
+        -- TNL changes on level up. The optimistic update above can't
+        -- predict the new threshold, so just force a refresh and let
+        -- the server tell us.
+        _ow_force_points_refresh()
+    end)
+    ow_safe_register('level down', function(_level)
+        _ow_force_points_refresh()
+    end)
+end
+
+-- ── Teleport Ring recharge timers ─────────────────────────────────────────
+-- Tracks cooldowns for the four enchanted teleport rings (Warp,
+-- Dem, Holla, Mea) by watching action packets for the player using
+-- one. Same mechanism as the original Warp-Ring-only module:
+--   * a central handle_incoming_action hook receives every action
+--     the addon parses
+--   * we deep-walk the action's numeric fields looking for any of
+--     our tracked item ids
+--   * on match, stamp os.time() as the per-ring use timestamp
+--
+-- Wire format (single line, emitted at 1Hz):
+--     RINGS|warp=<sec>;dem=<sec>;holla=<sec>;mea=<sec>
+--
+-- Per-ring values are seconds remaining (0 = ready). The python side
+-- cycles which ring's status it displays in the equipment-panel
+-- header every N seconds (user-configurable in the Equipment modal).
+--
+-- ID NOTES
+-- --------
+-- Warp Ring's id (28540) was confirmed via Cooper testing. The
+-- other three I've set to my best-guess sequential ids; if any
+-- ring doesn't trigger the timer on first use, enable debug
+-- (//ow warpring) and use the ring — the debug line will print
+-- "WR hook saw action cat=N param=N" with the ring's actual id.
+-- Update the corresponding entry below if param doesn't match.
+do
+    local POLL_SEC = 1
+
+    -- Per-ring config table. Item IDs confirmed by Cooper:
+    --   Warp Ring         28540  600s    (10 min)
+    --   Dem Ring          26177  600s    (10 min)
+    --   Holla Ring        26176  600s    (10 min)
+    --   Mea Ring          26178  600s    (10 min)
+    --   Echad Ring        27556  7200s   (2 hr — instant Adoulin warp)
+    --   Trizek Ring       27557  7200s   (2 hr — instant Ru'Lude warp)
+    --   Reraise Ring      26169  72000s  (20 hr — single-charge reraise)
+    --   Endorsement Ring  28469  7200s   (2 hr — exp/cp bonus)
+    --   Emporox's Ring    28470  7200s   (2 hr — sparks bonus)
+    -- To add another tracked ring, append an entry — the rest of
+    -- the module is generic. The python side picks up any keys
+    -- present in the RINGS|... payload that match its ring_state
+    -- dict (and only those rings; unknown keys are ignored).
+    local RINGS = {
+        { key='warp',        id=28540, name='Warp Ring',        cooldown=600   },
+        { key='dem',         id=26177, name='Dem Ring',         cooldown=600   },
+        { key='holla',       id=26176, name='Holla Ring',       cooldown=600   },
+        { key='mea',         id=26178, name='Mea Ring',         cooldown=600   },
+        { key='echad',       id=27556, name='Echad Ring',       cooldown=7200  },
+        { key='trizek',      id=27557, name='Trizek Ring',      cooldown=7200  },
+        { key='reraise',     id=26169, name='Reraise Ring',     cooldown=72000 },
+        { key='endorsement', id=28469, name='Endorsement Ring', cooldown=7200  },
+        { key='emporox',     id=28470, name="Emporox's Ring",   cooldown=7200  },
+    }
+
+    -- Build a fast id→ring lookup so the action hook can route a
+    -- detected id to the right ring in O(1) instead of scanning.
+    local RING_BY_ID = {}
+    for _, r in ipairs(RINGS) do RING_BY_ID[r.id] = r end
+
+    -- Per-ring state: last_use_at[key] = os.time() of last detected
+    -- use, or nil if never used (or pre-reload). Reload loses this.
+    local _last_use_at = {}
+    local _last_poll   = 0
+
+    local function _compute_remaining(ring)
+        local last = _last_use_at[ring.key]
+        if not last then return 0 end
+        local elapsed = os.time() - last
+        local rem = ring.cooldown - elapsed
+        if rem < 0 then rem = 0 end
+        return rem
+    end
+
+    -- Deep-walks a table looking for any matching ring id. Returns
+    -- the ring entry whose id was found, or nil. Single pass — finds
+    -- the FIRST id match in walk order, which is fine since you
+    -- can only activate one ring per action.
+    local function _find_ring_id_in(t, depth)
+        if depth > 5 then return nil end
+        for k, v in pairs(t) do
+            if type(v) == 'number' then
+                local ring = RING_BY_ID[v]
+                if ring then return ring end
+            elseif type(v) == 'table' then
+                local found = _find_ring_id_in(v, depth + 1)
+                if found then return found end
+            end
+        end
+        return nil
+    end
+
+    -- Action-detection hook called from handle_incoming_action.
+    -- Same approach as the prior warp-ring-only version, just
+    -- generalized to all four rings.
+    _G._ow_warp_ring_check = function(act)
+        if not act or not act.actor_id then return end
+        local player = windower.ffxi.get_player()
+        if not (player and player.id) then return end
+        if act.actor_id ~= player.id then return end
+
+        if _G._ow_warp_ring_debug then
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] ring hook saw action cat=%s param=%s',
+                tostring(act.category), tostring(act.param)))
+        end
+
+        local ring = _find_ring_id_in(act, 0)
+        if ring then
+            _last_use_at[ring.key] = os.time()
+            if _G._ow_warp_ring_debug then
+                windower.add_to_chat(207, string.format(
+                    '[OmniWatch] %s used (id=%d cat=%s); '
+                    .. 'cooldown started (%ds)',
+                    ring.name, ring.id, tostring(act.category),
+                    ring.cooldown))
+            end
+            _last_poll = 0  -- force next emit
+        end
+    end
+
+    -- Periodic emit. Single RINGS|... line carrying all four rings'
+    -- remaining seconds. Python parses and stores per-ring state for
+    -- its cycle display.
+    _G._ow_warp_ring_poll = function()
+        local now = os.clock()
+        if (now - _last_poll) < POLL_SEC then return end
+        _last_poll = now
+        if not udp_inv then return end
+
+        local parts = {}
+        for _, ring in ipairs(RINGS) do
+            parts[#parts+1] = string.format(
+                '%s=%d', ring.key, _compute_remaining(ring))
+        end
+        local payload = 'RINGS|' .. table.concat(parts, ';')
+        pcall(function() udp_inv:send(payload) end)
+    end
+
+    -- Diagnostic.
+    _G._ow_warp_ring_diag = function()
+        local hook_ok = (_G._ow_warp_ring_check ~= nil)
+        local poll_ok = (_G._ow_warp_ring_poll ~= nil)
+        windower.add_to_chat(207, string.format(
+            '[OmniWatch] Teleport Rings: hook=%s poll=%s',
+            hook_ok and 'installed' or 'MISSING',
+            poll_ok and 'installed' or 'MISSING'))
+        for _, ring in ipairs(RINGS) do
+            local rem  = _compute_remaining(ring)
+            local last = _last_use_at[ring.key]
+            local age  = last and (tostring(os.time() - last) .. 's ago')
+                              or 'never'
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch]   %-10s id=%d cd=%ds  last=%s  remaining=%ds',
+                ring.name, ring.id, ring.cooldown, age, rem))
+        end
+        _G._ow_warp_ring_debug = not _G._ow_warp_ring_debug
+        windower.add_to_chat(207,
+            '[OmniWatch] ring debug = '
+            .. tostring(_G._ow_warp_ring_debug)
+            .. ' (when on: prints every player action received)')
+    end
+
+    -- Manual reset of all ring cooldowns.
+    _G._ow_warp_ring_reset = function()
+        for _, ring in ipairs(RINGS) do
+            _last_use_at[ring.key] = nil
+        end
+        _last_poll = 0
+        windower.add_to_chat(207,
+            '[OmniWatch] Teleport Rings: cleared all cooldowns')
+    end
+end
+
+-- ── Home Point attunement listener ────────────────────────────────────────
+-- Sniffs the incoming Home Point NPC menu packets and decodes the
+-- attunement bitfield so the python checklist can mark visited HPs.
+-- Menu packets are 0x032 and 0x034 (NPC interaction start, two
+-- variants). The packet carries a "Menu ID" we can match to identify
+-- a Home Point NPC (8700..8704), and a 32-byte "Menu Parameters" field
+-- whose first 16 bytes are four little-endian uint32s. Each bit N of
+-- the 128-bit concatenation = "HP #N is attuned" (same indexing as
+-- DarkstarProject's homepoint.lua / Windower's res tables).
+--
+-- Emit format to python: HOMEPOINTS|i1,i2,i3,...
+-- Indices are decimal strings; empty list emits 'HOMEPOINTS|'.
+-- Python merges these additively, since reading the bitfield from
+-- one NPC visit doesn't invalidate previous visits.
+--
+-- Wrapped in do...end to keep the OW_HP_MENU_IDS local out of the
+-- main chunk's 200-local pool.
+do
+    local OW_HP_MENU_IDS = {
+        [8700] = true, [8701] = true, [8702] = true,
+        [8703] = true, [8704] = true,
+    }
+
+    -- Dedicated debug log file for HP packet captures. The chat-only
+    -- log is too narrow for full 50+ byte packet dumps (FFXI chat
+    -- truncates around 100 chars), so we mirror the same APPDATA path
+    -- emit.lua uses for chatdebug_log.txt but with a distinct
+    -- filename so we don't churn it up with chat traffic.
+    local _hp_log_file = nil
+    local function _ow_hp_filelog(line)
+        if not _G._ow_hp_debug then return end
+        if not _hp_log_file then
+            local path
+            local appdata = os.getenv('APPDATA')
+            if appdata and appdata ~= '' then
+                appdata = appdata:gsub('\\', '/')
+                path = appdata .. '/OmniWatch/hpdebug_log.txt'
+            else
+                local base = windower.addon_path or ''
+                if base ~= '' and base:sub(-1) ~= '/'
+                                and base:sub(-1) ~= '\\' then
+                    base = base .. '/'
+                end
+                path = base .. 'data/hpdebug_log.txt'
+            end
+            local f, err = io.open(path, 'a')
+            if not f then
+                windower.add_to_chat(123,
+                    '[OW HP] file open failed (' .. tostring(err)
+                    .. '). File log disabled.')
+                return
+            end
+            _hp_log_file = f
+            local now = os.date('*t')
+            f:write(string.format(
+                '\n=== HP debug trace started %04d-%02d-%02d %02d:%02d:%02d ===\n',
+                now.year, now.month, now.day,
+                now.hour, now.min, now.sec))
+        end
+        _hp_log_file:write(line)
+        _hp_log_file:write('\n')
+        _hp_log_file:flush()
+    end
+
+    local function _ow_hp_log(fmt, ...)
+        if _G._ow_hp_debug then
+            local line = string.format('[OW HP] ' .. fmt, ...)
+            windower.add_to_chat(207, line)
+            _ow_hp_filelog(line)
+        end
+    end
+
+    local function _ow_hp_dump_bytes(label, s)
+        if not _G._ow_hp_debug or not s then return end
+        local hex = {}
+        for i = 1, #s do
+            hex[i] = string.format('%02X', s:byte(i))
+        end
+        -- File-only (too long for chat). Format in rows of 16 bytes
+        -- for readability.
+        _ow_hp_filelog(string.format('%s (%d bytes):', label, #s))
+        for row_start = 1, #hex, 16 do
+            local row_end = math.min(row_start + 15, #hex)
+            local row = {}
+            for i = row_start, row_end do
+                row[#row + 1] = hex[i]
+            end
+            _ow_hp_filelog(string.format('  %04X  %s',
+                row_start - 1, table.concat(row, ' ')))
+        end
+    end
+
+    local function _ow_emit_homepoints(idxs)
+        local sock = _G._ow_udp_inv
+        if not sock then
+            _ow_hp_log('emit FAILED: _G._ow_udp_inv not bound yet')
+            return
+        end
+        local payload = 'HOMEPOINTS|' .. table.concat(idxs, ',')
+        local sent_ok, sent_err = pcall(function() sock:send(payload) end)
+        if not sent_ok then
+            _ow_hp_log('UDP send FAILED: %s', tostring(sent_err))
+        else
+            _ow_hp_log('emitted %d indices', #idxs)
+        end
+    end
+
+    ow_safe_register('incoming chunk', function(id, data)
+        if id ~= 0x032 and id ~= 0x034 then return end
+        _ow_hp_log('saw 0x%03X packet, %d bytes', id, #data)
+        -- Always dump the full raw packet to the file log when debug
+        -- is on, regardless of Menu ID. This is the critical bit:
+        -- previous diagnostics only saw the parsed 'Menu Parameters'
+        -- field, which is just one slice of the packet. Looking at the
+        -- whole packet lets us find where the real attunement bitfield
+        -- actually lives.
+        _ow_hp_dump_bytes(string.format('raw 0x%03X', id), data)
+
+        local ok, parsed = pcall(packets.parse, 'incoming', data)
+        if not ok or type(parsed) ~= 'table' then
+            _ow_hp_log('packets.parse FAILED: %s', tostring(parsed))
+            return
+        end
+
+        if _G._ow_hp_debug then
+            local field_names = {}
+            for k, _v in pairs(parsed) do
+                field_names[#field_names + 1] = tostring(k)
+            end
+            table.sort(field_names)
+            _ow_hp_log('parsed fields: %s', table.concat(field_names, ', '))
+            -- Dump every parsed field's value to the file log. For
+            -- string-valued fields, dump as hex (these are the binary
+            -- chunks we need to inspect). For numeric, just print
+            -- the decimal value.
+            for _, k in ipairs(field_names) do
+                local v = parsed[k]
+                if type(v) == 'string' then
+                    _ow_hp_dump_bytes(string.format('  field %q', k), v)
+                elseif type(v) == 'number' then
+                    _ow_hp_filelog(string.format(
+                        '  field %q = %s (0x%X)',
+                        k, tostring(v), v))
+                else
+                    _ow_hp_filelog(string.format(
+                        '  field %q = %s', k, tostring(v)))
+                end
+            end
+        end
+
+        local menu_id = tonumber(parsed['Menu ID'])
+        _ow_hp_log('Menu ID = %s', tostring(menu_id))
+        if not menu_id or not OW_HP_MENU_IDS[menu_id] then
+            _ow_hp_log('Menu ID not in HP set; skipping decode')
+            return
+        end
+
+        local params = parsed['Menu Parameters']
+        if type(params) ~= 'string' then
+            _ow_hp_log('Menu Parameters not a string (got %s)',
+                type(params))
+            return
+        end
+        if #params < 16 then
+            _ow_hp_log('Menu Parameters too short (%d bytes)', #params)
+            return
+        end
+
+        local function u32_le(s, off)
+            local b1, b2, b3, b4 = s:byte(off, off + 3)
+            if not b1 then return 0 end
+            return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+        end
+        -- Attunement bitfield layout INSIDE Menu Parameters:
+        -- Bytes 0..3 are leading metadata (always 00 00 00 00 on real
+        -- captures from a player with HPs attuned — appears to be a
+        -- header / cost / fee field of some kind, not the bitfield).
+        -- Bytes 4..19 are the four little-endian uint32 attunement
+        -- chunks. Bytes 20..31 are unrelated NPC interaction metadata.
+        --
+        -- Verified against a real packet capture from a player who had
+        -- attuned through HP index 121: read at offset 4 yielded
+        -- Sets 0-3 = 0xFFFFFFFF, 0xFFFFFFFF, 0xFFEEFFF7, 0x03FFFFFF.
+        -- That last one has its top 6 bits clear which matches the
+        -- 122-entry master list (indices 0..121, bits 122..127 padded
+        -- to zero). Reading from offset 0 instead produced spurious
+        -- all-FF data that included nonexistent HP indices.
+        --
+        -- Lua strings are 1-indexed, so packet byte offset 4 = Lua
+        -- string offset 5.
+        local sets = {
+            u32_le(params, 5),   -- HPs 0..31
+            u32_le(params, 9),   -- HPs 32..63
+            u32_le(params, 13),  -- HPs 64..95
+            u32_le(params, 17),  -- HPs 96..127
+        }
+        _ow_hp_log('Sets: 0x%08X 0x%08X 0x%08X 0x%08X',
+            sets[1], sets[2], sets[3], sets[4])
+
+        local idxs = {}
+        for set_i = 1, 4 do
+            local v = sets[set_i]
+            local base = (set_i - 1) * 32
+            for bit_i = 0, 31 do
+                if (math.floor(v / (2 ^ bit_i)) % 2) == 1 then
+                    idxs[#idxs + 1] = tostring(base + bit_i)
+                end
+            end
+        end
+        _ow_emit_homepoints(idxs)
+    end)
+end
+
+-- ── Survival Guide attunement listener ────────────────────────────────────
+-- Same shape as the Home Point listener above, but a different set of
+-- Menu IDs (8500/8501) identifies the Survival Guide NPCs, and the
+-- master list is a flat 0..N list keyed by visit-order index rather
+-- than zone+number pairs. The bitfield layout in Menu Parameters is
+-- assumed to mirror Home Points (4-byte leading metadata, then four
+-- little-endian uint32s) — verified-by-default-and-fixed-if-wrong via
+-- the //ow sgdebug toggle which dumps full packet bytes.
+--
+-- Emit format: SURVIVAL_GUIDES|i1,i2,...
+-- Python REPLACES the auto set on each emit (each packet carries the
+-- full attunement state).
+do
+    local OW_SG_MENU_IDS = {
+        [8500] = true,
+        [8501] = true,
+    }
+
+    local _sg_log_file = nil
+    local function _ow_sg_filelog(line)
+        if not _G._ow_sg_debug then return end
+        if not _sg_log_file then
+            local path
+            local appdata = os.getenv('APPDATA')
+            if appdata and appdata ~= '' then
+                appdata = appdata:gsub('\\', '/')
+                path = appdata .. '/OmniWatch/sgdebug_log.txt'
+            else
+                local base = windower.addon_path or ''
+                if base ~= '' and base:sub(-1) ~= '/'
+                                and base:sub(-1) ~= '\\' then
+                    base = base .. '/'
+                end
+                path = base .. 'data/sgdebug_log.txt'
+            end
+            local f, err = io.open(path, 'a')
+            if not f then
+                windower.add_to_chat(123,
+                    '[OW SG] file open failed (' .. tostring(err)
+                    .. '). File log disabled.')
+                return
+            end
+            _sg_log_file = f
+            local now = os.date('*t')
+            f:write(string.format(
+                '\n=== SG debug trace started %04d-%02d-%02d %02d:%02d:%02d ===\n',
+                now.year, now.month, now.day,
+                now.hour, now.min, now.sec))
+        end
+        _sg_log_file:write(line)
+        _sg_log_file:write('\n')
+        _sg_log_file:flush()
+    end
+
+    local function _ow_sg_log(fmt, ...)
+        if _G._ow_sg_debug then
+            local line = string.format('[OW SG] ' .. fmt, ...)
+            windower.add_to_chat(207, line)
+            _ow_sg_filelog(line)
+        end
+    end
+
+    local function _ow_sg_dump_bytes(label, s)
+        if not _G._ow_sg_debug or not s then return end
+        local hex = {}
+        for i = 1, #s do
+            hex[i] = string.format('%02X', s:byte(i))
+        end
+        _ow_sg_filelog(string.format('%s (%d bytes):', label, #s))
+        for row_start = 1, #hex, 16 do
+            local row_end = math.min(row_start + 15, #hex)
+            local row = {}
+            for i = row_start, row_end do
+                row[#row + 1] = hex[i]
+            end
+            _ow_sg_filelog(string.format('  %04X  %s',
+                row_start - 1, table.concat(row, ' ')))
+        end
+    end
+
+    local function _ow_emit_survival_guides(idxs)
+        local sock = _G._ow_udp_inv
+        if not sock then
+            _ow_sg_log('emit FAILED: _G._ow_udp_inv not bound yet')
+            return
+        end
+        local payload = 'SURVIVAL_GUIDES|' .. table.concat(idxs, ',')
+        local sent_ok, sent_err = pcall(function() sock:send(payload) end)
+        if not sent_ok then
+            _ow_sg_log('UDP send FAILED: %s', tostring(sent_err))
+        else
+            _ow_sg_log('emitted %d indices', #idxs)
+        end
+    end
+
+    ow_safe_register('incoming chunk', function(id, data)
+        if id ~= 0x032 and id ~= 0x034 then return end
+        local ok, parsed = pcall(packets.parse, 'incoming', data)
+        if not ok or type(parsed) ~= 'table' then return end
+        local menu_id = tonumber(parsed['Menu ID'])
+        if not menu_id or not OW_SG_MENU_IDS[menu_id] then return end
+
+        -- Past this point we know it's an SG NPC. Log everything when
+        -- debug is on; otherwise stay quiet.
+        _ow_sg_log('saw 0x%03X packet for SG NPC, Menu ID %d, %d bytes',
+            id, menu_id, #data)
+        _ow_sg_dump_bytes(string.format('raw 0x%03X', id), data)
+
+        if _G._ow_sg_debug then
+            local field_names = {}
+            for k, _v in pairs(parsed) do
+                field_names[#field_names + 1] = tostring(k)
+            end
+            table.sort(field_names)
+            _ow_sg_log('parsed fields: %s', table.concat(field_names, ', '))
+            for _, k in ipairs(field_names) do
+                local v = parsed[k]
+                if type(v) == 'string' then
+                    _ow_sg_dump_bytes(string.format('  field %q', k), v)
+                elseif type(v) == 'number' then
+                    _ow_sg_filelog(string.format(
+                        '  field %q = %s (0x%X)',
+                        k, tostring(v), v))
+                end
+            end
+        end
+
+        local params = parsed['Menu Parameters']
+        if type(params) ~= 'string' or #params < 20 then
+            _ow_sg_log('Menu Parameters too short or missing (got %s, %d bytes)',
+                type(params), params and #params or 0)
+            return
+        end
+
+        local function u32_le(s, off)
+            local b1, b2, b3, b4 = s:byte(off, off + 3)
+            if not b1 then return 0 end
+            return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+        end
+        -- Survival Guide bitfield layout is DIFFERENT from Home Points.
+        -- Verified from a real packet capture:
+        --   Menu Parameters bytes 0-3:   00 00 00 00     leading zero
+        --   Menu Parameters bytes 4-11:  XX XX XX XX     8 bytes of menu
+        --                                XX XX XX XX     metadata / pose
+        --   Menu Parameters bytes 12-15: <set 0>         indices 0..31
+        --   Menu Parameters bytes 16-19: <set 1>         indices 32..63
+        --   Menu Parameters bytes 20-23: <set 2>         indices 64..95
+        --   Menu Parameters bytes 24-27: <set 3>         indices 96..127
+        --   Menu Parameters bytes 28-31: trailing flags
+        --
+        -- Reading at offset 4 (the HP layout) yielded indices that
+        -- didn't match the in-game menu. Reading at offset 12 gave
+        -- Set 3 = 0x00000001 (only bit 0 set = index 96 only) — the
+        -- canonical clean trailing-padding pattern for a player who's
+        -- attuned through the lower-numbered indices but not the
+        -- last one (Eastern Adoulin). 98 entries in the master list
+        -- means valid bits run 0..97; any bit 98+ being set would be
+        -- spurious. The offset-12 read produced no spurious high bits.
+        --
+        -- Lua strings are 1-indexed, so byte offset 12 = string offset 13.
+        local sets = {
+            u32_le(params, 13),  -- SGs 0..31
+            u32_le(params, 17),  -- SGs 32..63
+            u32_le(params, 21),  -- SGs 64..95
+            u32_le(params, 25),  -- SGs 96..127
+        }
+        _ow_sg_log('Sets: 0x%08X 0x%08X 0x%08X 0x%08X',
+            sets[1], sets[2], sets[3], sets[4])
+
+        local idxs = {}
+        for set_i = 1, 4 do
+            local v = sets[set_i]
+            local base = (set_i - 1) * 32
+            for bit_i = 0, 31 do
+                if (math.floor(v / (2 ^ bit_i)) % 2) == 1 then
+                    idxs[#idxs + 1] = tostring(base + bit_i)
+                end
+            end
+        end
+        _ow_emit_survival_guides(idxs)
+    end)
 end
 
 -- ── Inventory snapshot builder + sender ──────────────────────────────────
@@ -2528,6 +4170,7 @@ local function _ow_drain_inbound()
                     _ow_stats_last_job     = nil   -- trips the job check
                     _ow_stats_last_hastesig = nil  -- trips the haste check
                     _ow_stats_last_buffsig = nil   -- trips the any-buff check
+                    _ow_stats_last_blusetsig = nil -- trips the BLU set-spell check
                     -- (last_stats_send is a file-local declared after this
                     -- function, so we can't reset it here — but the next
                     -- 1 Hz tick is at most ~1s away and the invalidated
@@ -3057,6 +4700,9 @@ local PW_COMMANDS_HELP = {
                               .. 'Wormfood-Globals heartbeat).'},
     {'testcast',              'Emit a synthetic CAST_START event on yourself '
                               .. '(verifies the cast pipe works end-to-end).'},
+    {'congrats',              'Preview the achievement banner overlay '
+                              .. '(5-second flashing "You beat FFXI" pop-up). '
+                              .. 'Does not affect persisted unlock state.'},
     {'lock [on|off]',         'Toggle panel lock. When locked, panels can\'t '
                               .. 'be dragged or resized -- accidental clicks '
                               .. 'pass through to hyperlinks. Setup mode '
@@ -3158,6 +4804,125 @@ ow_safe_register('addon command', function(command, ...)
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
         windower.add_to_chat(207, string.format('[OW] buff_debug = %s',
             tostring(_ow_buff_debug)))
+    elseif command == 'warpringreset' then
+        -- Manual clear of the Warp Ring cooldown. Useful for
+        -- testing the python display without waiting an hour.
+        if _G._ow_warp_ring_reset then
+            _G._ow_warp_ring_reset()
+        end
+    elseif command == 'warpring' then
+        -- Live diagnostic for the Warp Ring recharge timer. First
+        -- line dumps the current scan result (whether the ring is
+        -- in inventory and its remaining cooldown); second line
+        -- toggles full extdata dumping on every subsequent poll so
+        -- we can verify the field names on this install if the
+        -- timer reads wrong.
+        if _G._ow_warp_ring_diag then
+            _G._ow_warp_ring_diag()
+        else
+            windower.add_to_chat(207,
+                '[OmniWatch] warp ring module not loaded')
+        end
+    elseif command == 'currencydebug' then
+        -- Diagnostic toggle for the header currency cycler. When on:
+        --   • every incoming 0x113/0x118 packet logs its parsed fields
+        --     so we can see what labels Windower's fields.lua actually
+        --     produces in this install
+        --   • every currency-request injection attempt logs success/failure
+        --   • on toggle, the current cache contents print so we know what
+        --     the cycler is reading
+        _G._ow_currency_debug = not _G._ow_currency_debug
+        windower.add_to_chat(207, string.format(
+            '[OW currency] debug = %s', tostring(_G._ow_currency_debug)))
+        if _G._ow_currency_debug then
+            local c = _G._ow_currency_cache or {}
+            windower.add_to_chat(207, string.format(
+                '[OW currency] cache: gil=%s sparks=%s accolades=%s ' ..
+                'gallimaufry=%s temenos=%s apollyon=%s',
+                tostring(c.gil), tostring(c.sparks), tostring(c.accolades),
+                tostring(c.gallimaufry), tostring(c.temenos),
+                tostring(c.apollyon)))
+            -- Force-fire a request so the user sees the result of the
+            -- injection attempt right away rather than waiting on the
+            -- 5-minute throttle.
+            _G._ow_currency_last_request = 0
+            if _G._ow_request_currency_update then
+                pcall(_G._ow_request_currency_update)
+            end
+        end
+    elseif command == 'pointsdebug' then
+        -- Diagnostic toggle for the header points tracker. When on,
+        -- each incoming 0x061 packet logs its parsed numeric fields
+        -- so we can see what labels the user's fields.lua exposes
+        -- for EXP and Exemplar. On toggle, prints the current cache
+        -- (including live-read CP from the player table).
+        _G._ow_points_debug = not _G._ow_points_debug
+        windower.add_to_chat(207, string.format(
+            '[OW points] debug = %s', tostring(_G._ow_points_debug)))
+        if _G._ow_points_debug then
+            local p = _G._ow_points_cache or {}
+            -- Live CP read for the diagnostic.
+            local cp_val = 0
+            local pl = windower.ffxi.get_player and
+                       windower.ffxi.get_player()
+            if pl and pl.main_job and pl.job_points then
+                local mj_key = string.lower(pl.main_job)
+                local je = pl.job_points[mj_key]
+                if type(je) == 'table' and je.cp then
+                    cp_val = tonumber(je.cp) or 0
+                end
+            end
+            windower.add_to_chat(207, string.format(
+                '[OW points] cache: exp=%s/%s cp=%s/%s exemplar=%s/%s',
+                tostring(p.exp), tostring(p.exp_tnl),
+                tostring(cp_val), tostring(p.cp_tnl),
+                tostring(p.exemplar), tostring(p.exemplar_tnl)))
+            -- Force-fire a points request so the user sees the
+            -- injection attempt right away rather than waiting on
+            -- the 5-minute throttle. Mirrors the currencydebug pattern.
+            _G._ow_points_last_request = 0
+            if _G._ow_request_points_update then
+                pcall(_G._ow_request_points_update)
+            end
+        end
+    elseif command == 'hpdebug' then
+        -- Diagnostic toggle for the Home Point attunement listener.
+        -- When on, every incoming 0x032/0x034 packet is fully dumped
+        -- (raw hex + parsed field values) to
+        --   %APPDATA%/OmniWatch/hpdebug_log.txt
+        -- so we can see the COMPLETE packet, not just the chat-
+        -- truncated preview. Chat still gets a one-line summary.
+        _G._ow_hp_debug = not _G._ow_hp_debug
+        windower.add_to_chat(207, string.format(
+            '[OW HP] debug = %s. Full packet dumps go to '
+            .. '%%APPDATA%%/OmniWatch/hpdebug_log.txt. '
+            .. 'Now talk to a Home Point NPC.',
+            tostring(_G._ow_hp_debug)))
+    elseif command == 'sgdebug' then
+        -- Same diagnostic for Survival Guide menu (Menu IDs 8500/8501).
+        -- Writes to sgdebug_log.txt. Use to verify the bitfield offset
+        -- and that the master-list indexing matches in-game.
+        _G._ow_sg_debug = not _G._ow_sg_debug
+        windower.add_to_chat(207, string.format(
+            '[OW SG] debug = %s. Full packet dumps go to '
+            .. '%%APPDATA%%/OmniWatch/sgdebug_log.txt. '
+            .. 'Now talk to a Survival Guide NPC.',
+            tostring(_G._ow_sg_debug)))
+    elseif command == 'congrats' then
+        -- One-shot test trigger for the achievement banner overlay.
+        -- Sends a single CONGRATS_TEST packet on the inventory
+        -- channel; the Python side responds by setting the banner's
+        -- visibility deadline 5 seconds into the future. This does
+        -- NOT touch the persisted achievement-unlocked flag, so it
+        -- can be re-run safely for visual previews.
+        local ok, err = pcall(function() udp_inv:send('CONGRATS_TEST') end)
+        if ok then
+            windower.add_to_chat(207,
+                '[OW congrats] banner triggered (5 sec)')
+        else
+            windower.add_to_chat(207, string.format(
+                '[OW congrats] send failed: %s', tostring(err)))
+        end
     elseif command == 'dwtest' then
         -- One-shot DW-needed readout. The DW math (required pct, total
         -- haste) is computed inside ow_send_stats, NOT ow_compute_stats —
@@ -3513,6 +5278,103 @@ ow_safe_register('addon command', function(command, ...)
         for _, k in ipairs(sk) do
             windower.add_to_chat(207, string.format(
                 '  %s = %s', k, tostring(blu_stats[k])))
+        end
+    elseif command == 'spelldump' then
+        -- //ow spelldump [school]  Diagnostic for the SPELLS_<TAG>|
+        -- per-school emitter. Walks windower.ffxi.get_spells() and
+        -- res.spells the same way the inventory snapshot does, then
+        -- prints a summary so we can see why a school is empty.
+        --
+        -- Without args: dumps all 6 schools (counts only).
+        -- With school arg (blm/whm/smn/nin/brd/geo): also lists the
+        -- learned spell names so we can confirm what auto-marks.
+        local school_to_tag = {
+            BlackMagic   = 'BLM',
+            WhiteMagic   = 'WHM',
+            SummonerPact = 'SMN',
+            Ninjutsu     = 'NIN',
+            BardSong     = 'BRD',
+            Geomancy     = 'GEO',
+        }
+        local target = args[1] and args[1]:upper() or nil
+        if not (windower.ffxi.get_spells and res and res.spells) then
+            windower.add_to_chat(207, '[OW] spelldump: get_spells '
+                .. 'or res.spells unavailable')
+            return
+        end
+        local ok_spells, spells = pcall(windower.ffxi.get_spells)
+        if not ok_spells or type(spells) ~= 'table' then
+            windower.add_to_chat(207,
+                '[OW] spelldump: get_spells() failed: '
+                .. tostring(spells))
+            return
+        end
+        -- Bucket counts
+        local learned_by_tag = {}
+        local master_by_tag  = {}
+        for _, tag in pairs(school_to_tag) do
+            learned_by_tag[tag] = {}
+            master_by_tag[tag]  = 0
+        end
+        for sid, has in pairs(spells) do
+            if has then
+                local sp = res.spells[sid]
+                if sp then
+                    local tag = school_to_tag[sp.type]
+                    if tag then
+                        local nm = sp.english or sp.en or sp.name or '?'
+                        local b = learned_by_tag[tag]
+                        b[#b + 1] = nm
+                    end
+                end
+            end
+        end
+        for _, sp in pairs(res.spells) do
+            if sp then
+                local tag = school_to_tag[sp.type]
+                if tag then
+                    master_by_tag[tag] = master_by_tag[tag] + 1
+                end
+            end
+        end
+        -- Summary line per school
+        windower.add_to_chat(207,
+            '[OW] spelldump: learned / master by school:')
+        local ordered_tags = {'BLM','WHM','SMN','NIN','BRD','GEO'}
+        for _, tag in ipairs(ordered_tags) do
+            windower.add_to_chat(207, string.format(
+                '  %s: %d learned / %d master',
+                tag, #learned_by_tag[tag], master_by_tag[tag]))
+        end
+        -- Detail listing if a specific school was requested
+        if target and learned_by_tag[target] then
+            local arr = learned_by_tag[target]
+            table.sort(arr)
+            windower.add_to_chat(207, string.format(
+                '[OW] %s learned (%d):', target, #arr))
+            for _, nm in ipairs(arr) do
+                windower.add_to_chat(207, '    ' .. nm)
+            end
+        end
+        -- Also probe a known spell ID so we see what fields exist.
+        -- Fire = id 144. Print its raw record so we can confirm
+        -- field names match what the emitter reads.
+        local fire = res.spells[144]
+        if fire then
+            local fields = {}
+            for k, _ in pairs(fire) do
+                fields[#fields + 1] = k
+            end
+            table.sort(fields)
+            windower.add_to_chat(207, string.format(
+                '[OW] res.spells[144] (Fire) fields: %s',
+                table.concat(fields, ', ')))
+            windower.add_to_chat(207, string.format(
+                '  type=%s  en=%s  english=%s  name=%s',
+                tostring(fire.type),
+                tostring(fire.en),
+                tostring(fire.english),
+                tostring(fire.name)))
         end
     elseif command == 'setup' then
         -- //ow setup       - open the config overlay in the pygame UI
@@ -4735,13 +6597,13 @@ local PW_MARCH_BUFF_ID = 214
 --   id 231 = Marcato
 -- MUST be declared at top of file (before action handler at ~line 1400)
 -- because Lua locals are only visible from their declaration line forward.
-local PW_BUFF_SOUL_VOICE = 52
-local PW_BUFF_MARCATO    = 231
+PW_BUFF_SOUL_VOICE = 52
+PW_BUFF_MARCATO    = 231
 -- Crooked Cards (COR JA): multiplies next roll's value by 1.2.
 -- Applied AFTER PR+ gear and Job Bonus. Does NOT affect double-up.
 -- The buff sits on the COR until consumed by the next Phantom Roll cast.
 -- Hardcoded id from Windower/Resources buffs.lua: id 601
-local PW_BUFF_CROOKED_CARDS = 601
+PW_BUFF_CROOKED_CARDS = 601
 
 -- ── March song haste (BRD) ─────────────────────────────────────────────
 -- Marches: per-1024 potency, indexed by gear March+ level. Sourced from
@@ -6135,6 +7997,15 @@ local function handle_incoming_action(act)
     -- panel. pcall'd so a malformed packet can't kill the rest of the
     -- handler chain.
     pcall(_ow_dps_record_action, act)
+
+    -- Warp Ring detection hook — checks if THIS action is the player
+    -- using a Warp Ring (item id 28540 appearing in the packet) and
+    -- starts the cooldown timer if so. pcall'd for the same reason
+    -- as the DPS hook. The check is cheap (deep-walk numeric fields)
+    -- and bails immediately when the actor isn't the player.
+    if _G._ow_warp_ring_check then
+        pcall(_G._ow_warp_ring_check, act)
+    end
 
     -- Recent-action-name cache for the "?" text fix. pcall'd so a
     -- malformed packet can't disrupt the handler chain.
@@ -9069,6 +10940,12 @@ _OW_OUT_CHAT_CMDS = {
     ['l2']        = 27, ['linkshell2'] = 27, ['ls2'] = 27,
     ['sh']        = 3,  ['shout']      = 3,
     ['em']        = 9,  ['emote']      = 9,
+    ['u']         = 211, ['unity']     = 211,  -- Unity chat; outgoing echo
+                                               -- lands on text-mode 211 with
+                                               -- AT mangled to bare FD bytes,
+                                               -- so we resolve the typed AT
+                                               -- phrase here for emit.lua to
+                                               -- swap into the echo.
 }
 
 -- Substitution store: the outgoing-text handler records the resolved AT
@@ -10265,22 +12142,22 @@ local function _ow_buff_id_by_name(name)
     return b and b.id or nil
 end
 
-local PW_BUFF_BOLTERS    = _ow_buff_id_by_name("Bolter's Roll")
-local PW_BUFF_MAZURKA    = _ow_buff_id_by_name("Mazurka")
-local PW_BUFF_QUICKENING = _ow_buff_id_by_name("Quickening")
+PW_BUFF_BOLTERS    = _ow_buff_id_by_name("Bolter's Roll")
+PW_BUFF_MAZURKA    = _ow_buff_id_by_name("Mazurka")
+PW_BUFF_QUICKENING = _ow_buff_id_by_name("Quickening")
 -- "Bolt Storm" is the buff applied by both the COR ability and the GEO
 -- aura (Indi-/Geo-Bolt Storm), all sharing the same client-side buff id.
-local PW_BUFF_BOLT_STORM = _ow_buff_id_by_name("Bolt Storm")
-local PW_BUFF_WEIGHT     = _ow_buff_id_by_name("Weight")
-local PW_BUFF_BIND       = _ow_buff_id_by_name("Bind")
-local PW_BUFF_ENCUMBRANCE= _ow_buff_id_by_name("Encumbrance")
+PW_BUFF_BOLT_STORM = _ow_buff_id_by_name("Bolt Storm")
+PW_BUFF_WEIGHT     = _ow_buff_id_by_name("Weight")
+PW_BUFF_BIND       = _ow_buff_id_by_name("Bind")
+PW_BUFF_ENCUMBRANCE= _ow_buff_id_by_name("Encumbrance")
 -- Flurry I and II: ranged-attack delay reduction (effectively a snapshot
 -- bonus). Two distinct buff ids — Flurry I from RDM/Hastemaster, Flurry II
 -- from BLU spell or Geo. Both names resolve to "Flurry" in res.buffs which
 -- is unhelpful (id 265 for Flurry I, id 581 also named "Flurry" for II).
 -- Hardcoded since the name lookup would collide.
-local PW_BUFF_FLURRY_I  = 265
-local PW_BUFF_FLURRY_II = 581
+PW_BUFF_FLURRY_I  = 265
+PW_BUFF_FLURRY_II = 581
 -- (PW_BUFF_SOUL_VOICE / PW_BUFF_MARCATO / PW_BUFF_CROOKED_CARDS moved to
 --  top of file ~line 1220 since action handler references them — Lua
 --  locals are forward-only-visible.)
@@ -10752,8 +12629,33 @@ function ow_compute_stats()
                             pet_text  = nil
                         end
                         -- Parse all newline-delimited lines of the base block.
+                        -- For WEAPON slots (main/sub), Magic Accuracy and
+                        -- Magic Atk. Bonus are intentionally excluded here:
+                        -- GearInfo's compute already accumulates a weapon's
+                        -- gear magic acc / matkb, and OmniWatch copies those
+                        -- through after the gear scan (the 2026-05-18 patch,
+                        -- Gear_info['Magic Accuracy'] etc.). Parsing them from
+                        -- the weapon description HERE too double-counted them
+                        -- — e.g. Fudo Masamune alone showed Magic Accuracy
+                        -- +100 instead of +50. Non-weapon slots are
+                        -- unaffected (they keep using this description parse
+                        -- for magic acc as before). We parse each weapon line
+                        -- into a scratch table, drop the two magic keys, then
+                        -- merge the remainder into stats.
+                        local is_weapon_slot = (entry.slot_name == 'main'
+                                                or entry.slot_name == 'sub')
                         for line in base_text:gmatch('[^\r\n]+') do
-                            ow_parse_desc_line(stats, line)
+                            if is_weapon_slot then
+                                local scratch = {}
+                                ow_parse_desc_line(scratch, line)
+                                scratch['magic accuracy']     = nil
+                                scratch['magic attack bonus'] = nil
+                                for k, v in pairs(scratch) do
+                                    stats[k] = (stats[k] or 0) + v
+                                end
+                            else
+                                ow_parse_desc_line(stats, line)
+                            end
                         end
                         -- Parse pet block (if any) with the 'pet: ' prefix.
                         if pet_text and pet_text ~= '' then
@@ -11403,14 +13305,291 @@ function ow_compute_stats()
                         stats['regain'] = (stats['regain'] or 0)
                                         + Gear_info['Regain']
                     end
+                    -- OmniWatch patch (2026-05-27): gear-derived multi-hit
+                    -- and "extra" combat stats. Same gap as Magic Accuracy
+                    -- above — GearInfo accumulates these into its stat_table
+                    -- (e.g. Sailfi Belt +1's augment "Double Attack+5"
+                    -- lands in Gear_info['Double Attack']) but
+                    -- compute_player_stats only returns physical totals, so
+                    -- they never reached the panel. The roll/buff versions
+                    -- of these come through _BI_BUFF_STAMP from Buffs_inform
+                    -- (a DIFFERENT source — rolls/songs), so copying the
+                    -- GEAR values here does not double-count: gear + buff
+                    -- are distinct contributions that should sum. Store TP
+                    -- and Dual Wield are intentionally NOT here — they have
+                    -- their own dedicated gear paths and would double.
+                    -- Gear_info uses correct "Triple Attack" (its typo
+                    -- "Tripple" is only in the Buffs_inform reset, not the
+                    -- gear stat_table).
+                    local _GI_GEAR_EXTRA = {
+                        ['double attack']       = 'Double Attack',
+                        ['triple attack']       = 'Triple Attack',
+                        ['quadruple attack']    = 'Quadruple Attack',
+                        ['critical hit rate']   = 'Critical hit rate',
+                        ['critical hit damage'] = 'Critical hit damage',
+                        ['subtle blow']         = 'Subtle Blow',
+                        ['fast cast']           = 'Fast Cast',
+                    }
+                    for panel_key, gi_key in pairs(_GI_GEAR_EXTRA) do
+                        if type(Gear_info[gi_key]) == 'number'
+                           and Gear_info[gi_key] ~= 0 then
+                            stats[panel_key] = (stats[panel_key] or 0)
+                                             + Gear_info[gi_key]
+                        end
+                    end
                 end
 
-                -- Diagnostic: dump GI return vs Buffs_inform raw values
-                -- so we can see whether GI is folding Chaos's "Attack perc"
-                -- into att.main or not. If att.main is suspiciously
-                -- low while Buffs_inform["Attack perc"] is non-zero,
-                -- GI's compute isn't applying the perc multiplier
-                -- and we need to apply it ourselves.
+                -- ── Job/subjob innate traits ─────────────────────────────
+                -- Conventional job traits (Double Attack, Triple Attack,
+                -- Subtle Blow, Fast Cast, auto-Regen, auto-Refresh, Store
+                -- TP) are granted innately by main/subjob at fixed levels.
+                -- GearInfo computes GEAR stats only and the roll/buff paths
+                -- (Buffs_inform) cover rolls/songs — neither adds these
+                -- innate job traits, so the panel was undercounting them.
+                -- Add them here, ON TOP of gear + buff contributions in the
+                -- same stats[] cells (additive, no overwrite). Placed before
+                -- the downstream Store TP / haste consumers so trait values
+                -- are included in their totals.
+                --
+                -- DUAL WIELD is intentionally NOT here — OmniWatch's DW
+                -- system already accounts for NIN/DNC/etc. innate Dual
+                -- Wield. Adding it here would double-count.
+                --
+                -- Data: BG-wiki Job Traits. Each entry is {trait_tiers},
+                -- where a tier = {level, value}. We take the HIGHEST tier
+                -- whose level is met. Values: DA/TA/Crit/Fast Cast/Subtle
+                -- Blow are %; Regen/Refresh are flat HP/MP per tick; Store
+                -- TP is flat. VERIFY against your own jobs — this is a
+                -- fact-dense table and a wrong threshold silently mis-states
+                -- a stat. Self-documenting (job, trait, level, value) for
+                -- easy correction.
+                do
+                    local p = windower.ffxi.get_player()
+                    if p then
+                        -- panel cell key -> Gear_info-style is irrelevant
+                        -- here; we write directly to the lowercase panel
+                        -- keys used elsewhere in this function.
+                        -- trait key strings (panel cells):
+                        --   'double attack','triple attack','subtle blow',
+                        --   'fast cast','regen','refresh','store tp'
+                        -- Corrected against Cooper's in-game data (2026-05-27).
+                        -- Tiers are {level, value}; highest met tier wins.
+                        -- Job-point GIFT tiers (beyond the level-based ones)
+                        -- are NOT modeled — these stop at the natural level
+                        -- progression, so a fully-gifted job may have a bit
+                        -- more than shown. Values: DA/TA/Fast Cast/Subtle
+                        -- Blow are %; Regen/Refresh are flat per-tick; Store
+                        -- TP is flat.
+                        local JOB_TRAITS = {
+                            -- WAR: Double Attack (more after 99 from JP gifts)
+                            WAR = { ['double attack'] =
+                                {{25,10},{50,12},{75,14},{85,16},{99,18}} },
+                            -- THF: Triple Attack
+                            THF = { ['triple attack'] = {{55,5},{95,6}} },
+                            -- SAM Store TP is NOT here — it's already fully
+                            -- handled (job-level + JP-gift + merit) by the
+                            -- dedicated Store TP block in the delay/haste
+                            -- compute, which reads gear STP from
+                            -- stats['store tp'] and adds job/gift/merit on
+                            -- top into total_stp. Adding SAM STP here would
+                            -- double-count it (it'd land in stats['store tp']
+                            -- AND be added again as job_stp).
+                            -- RDM: Fast Cast (only job with the trait;
+                            -- more after from JP gifts). RDM Refresh is a
+                            -- SPELL, not a trait — not included.
+                            RDM = { ['fast cast'] =
+                                {{15,10},{35,15},{55,20},{76,25},{89,30}} },
+                            -- Auto-Refresh trait: SMN (1 @25, 2 @90), PLD (1 @35)
+                            SMN = { ['refresh'] = {{25,1},{90,2}} },
+                            PLD = { ['refresh'] = {{35,1}} },
+                            -- Auto-Regen trait: WHM (1 @25, 2 @76),
+                            -- RUN (1 @35, 2 @65, 3 @95)
+                            WHM = { ['regen'] = {{25,1},{76,2}} },
+                            RUN = { ['regen'] = {{35,1},{65,2},{95,3}} },
+                            -- Subtle Blow (DNC top tier / MNK & NIN beyond
+                            -- shown come from JP gifts — not modeled)
+                            NIN = { ['subtle blow'] =
+                                {{15,5},{30,10},{45,15},{60,20},{75,25},{91,27}} },
+                            MNK = { ['subtle blow'] =
+                                {{5,5},{25,10},{40,15},{65,20},{91,25}} },
+                            DNC = { ['subtle blow'] =
+                                {{25,5},{45,10},{65,15},{86,20}} },
+                        }
+                        local function tier_value(job, trait, level)
+                            local jt = JOB_TRAITS[job]
+                            if not jt or not jt[trait] then return 0 end
+                            local best = 0
+                            for _, pair in ipairs(jt[trait]) do
+                                if (level or 0) >= pair[1] then
+                                    best = pair[2]
+                                else
+                                    break
+                                end
+                            end
+                            return best
+                        end
+
+                        local main_job = p.main_job
+                        local sub_job  = p.sub_job
+                        local main_lvl = tonumber(p.main_job_level) or 0
+                        local sub_lvl  = tonumber(p.sub_job_level)  or 0
+                        -- Use the reported sub_job_level DIRECTLY. Windower
+                        -- already returns the effective subjob level with the
+                        -- correct cap applied — normally 49 (half of 99), but
+                        -- Master Levels raise the subjob cap (examine shows
+                        -- e.g. "main 99 / sub 55"), and a low main level caps
+                        -- it lower. Re-deriving the cap as floor(main/2)
+                        -- ourselves was WRONG: at 99 main it forced sub back
+                        -- to 49, undercutting an ML-raised sub of 55/59 and
+                        -- dropping its higher trait tiers. The game's reported
+                        -- value is authoritative for all three cases.
+                        local eff_sub  = sub_lvl
+
+                        local TRAIT_KEYS = {
+                            'double attack', 'triple attack', 'subtle blow',
+                            'fast cast', 'regen', 'refresh',
+                        }
+                        for _, trait in ipairs(TRAIT_KEYS) do
+                            local add = 0
+                            if main_job then
+                                add = add + tier_value(main_job, trait, main_lvl)
+                            end
+                            if sub_job then
+                                add = add + tier_value(sub_job, trait, eff_sub)
+                            end
+                            if add ~= 0 then
+                                stats[trait] = (stats[trait] or 0) + add
+                            end
+                        end
+                        if _ow_cast_debug then
+                            windower.add_to_chat(207, string.format(
+                                '[OW traits] %s%d/%s%d: DA=%s TA=%s SB=%s FC=%s',
+                                tostring(main_job), main_lvl,
+                                tostring(sub_job), sub_lvl,
+                                tostring(stats['double attack']),
+                                tostring(stats['triple attack']),
+                                tostring(stats['subtle blow']),
+                                tostring(stats['fast cast'])))
+                        end
+                    end
+                end
+
+                -- ── Job-point GIFT bonuses (scoped) ──────────────────────
+                -- Apply job-point gift bonuses for ONLY these four stats:
+                -- Fast Cast, Double Attack, Triple Attack, Subtle Blow.
+                -- Everything else a job's gifts grant (Accuracy, Attack,
+                -- Store TP, Dual Wield, Martial Arts, magic stats, etc.) is
+                -- already accounted for through other paths — applying the
+                -- full gift set here double-counted Accuracy/Attack. So this
+                -- is a strict ALLOW-list: gift bonuses for any cell not in
+                -- _GIFT_ALLOW are ignored. Gifts are main-job only. Added on
+                -- top of the level traits above (e.g. WAR DA 18 + DA gift).
+                do
+                    local p = windower.ffxi.get_player()
+                    local mjob = p and p.main_job
+                    if mjob and ow_Gifts and ow_Gifts[mjob]
+                       and ow_Gifts[mjob]['Gifts'] and p.job_points then
+                        local _GIFT_ALLOW = {
+                            ['fast cast']     = true,
+                            ['double attack'] = true,
+                            ['triple attack'] = true,
+                            ['subtle blow']   = true,
+                        }
+                        local jpd = p.job_points[mjob:lower()]
+                        local jp_spent = (jpd and tonumber(jpd.jp_spent)) or 0
+                        for at_jp, bonuses in pairs(ow_Gifts[mjob]['Gifts']) do
+                            if tonumber(at_jp) and tonumber(at_jp) <= jp_spent
+                               and type(bonuses) == 'table' then
+                                for bonus_name, val in pairs(bonuses) do
+                                    local cell = _PW_GIFT_STAT_MAP[bonus_name]
+                                    local v = tonumber(val)
+                                    if cell and _GIFT_ALLOW[cell]
+                                       and v and v ~= 0 then
+                                        stats[cell] = (stats[cell] or 0) + v
+                                    end
+                                end
+                            end
+                        end
+                        if _ow_cast_debug then
+                            windower.add_to_chat(207, string.format(
+                                '[OW gifts] %s @%dJP: DA=%s TA=%s FC=%s SB=%s',
+                                mjob, jp_spent,
+                                tostring(stats['double attack']),
+                                tostring(stats['triple attack']),
+                                tostring(stats['fast cast']),
+                                tostring(stats['subtle blow'])))
+                        end
+                    end
+                end
+
+                -- ── Fudo Masamune per-shadow Attack scaling ──────────────
+                -- Fudo Masamune (id 21917) grants "Attack+15 per Utsusemi
+                -- shadow". The description parser reads this as a flat
+                -- Attack+15 that always applies, even with zero shadows up.
+                -- Correct it to scale with the LIVE shadow count, read from
+                -- the same buff data the buff-timer panel uses (Copy Image
+                -- buff ids): 66 = 1 shadow, 444 = 2, 445 = 3, 446 = "4+".
+                -- (446 is capped at 4 — the buff packet can't distinguish a
+                -- rare 5th shadow from 4, so this slightly undercounts that
+                -- edge case; correct for the common 1-4 range.)
+                --
+                -- Approach: the gear scan already added a flat +15 (the
+                -- misread per-shadow line). We apply a DELTA of
+                -- (15 * shadow_count) - 15 so the net contribution becomes
+                -- exactly 15 * shadow_count:
+                --   0 shadows -> -15 (removes the wrong flat 15; net 0)
+                --   3 shadows -> +30 (net +45)
+                --   4+ shadows -> +45 (net +60)
+                -- Applied to both attack (main) and attack2 (off-hand),
+                -- matching how flat weapon Attack feeds both hands. Keyed by
+                -- item id so ONLY Fudo Masamune is affected; no other weapon
+                -- and no description text-matching involved.
+                do
+                    local FUDO_MASAMUNE_ID = 21917
+                    local PER_SHADOW_ATT  = 15
+                    -- Is Fudo Masamune in main or sub?
+                    local has_fudo = false
+                    for _, slot in ipairs({'main', 'sub'}) do
+                        local bag   = equipment[slot .. '_bag']
+                        local index = equipment[slot]
+                        if index and index ~= 0 and bag then
+                            local idata = windower.ffxi.get_items(bag, index)
+                            if idata and idata.id == FUDO_MASAMUNE_ID then
+                                has_fudo = true
+                                break
+                            end
+                        end
+                    end
+                    if has_fudo then
+                        -- Read live shadow count from the active Copy Image
+                        -- buff. Highest active id wins (the game steps the
+                        -- id down 446->445->444->66 as shadows are eaten).
+                        local shadow_count = 0
+                        local pl = windower.ffxi.get_player()
+                        if pl and pl.buffs then
+                            local has = {}
+                            for _, bid in ipairs(pl.buffs) do has[bid] = true end
+                            if     has[446] then shadow_count = 4
+                            elseif has[445] then shadow_count = 3
+                            elseif has[444] then shadow_count = 2
+                            elseif has[66]  then shadow_count = 1
+                            end
+                        end
+                        local delta = (PER_SHADOW_ATT * shadow_count)
+                                      - PER_SHADOW_ATT
+                        if delta ~= 0 then
+                            stats['attack']  = (stats['attack']  or 0) + delta
+                            stats['attack2'] = (stats['attack2'] or 0) + delta
+                        end
+                        if _ow_buff_debug then
+                            windower.add_to_chat(207, string.format(
+                                '[OW] Fudo Masamune: %d shadow(s) -> per-shadow Attack '
+                                .. '%d (delta %+d vs flat 15)',
+                                shadow_count, PER_SHADOW_ATT * shadow_count, delta))
+                        end
+                    end
+                end
+
                 if _ow_buff_debug then
                     windower.add_to_chat(207, string.format(
                         '[OW] GI return: att.main=%s att.sub=%s att.range=%s eva=%s def=%s',
@@ -11818,9 +13997,10 @@ function ow_compute_stats()
     --   1. If we WITNESSED the Protect cast on us (_ow_my_protect_tier set
     --      from the cast packet's spell id), use that exact tier.
     --   2. Otherwise estimate the tier from the highest Protect-casting
-    --      level we have — main or sub job that is WHM or RDM, with the
-    --      real subjob cap min(sub_lvl, floor(main_lvl/2)). This covers
-    --      Protect already up before the overlay saw the cast.
+    --      level we have — main or sub job that is WHM or RDM, using
+    --      windower's reported sub_job_level directly (already the
+    --      effective level, ML-aware). This covers Protect already up
+    --      before the overlay saw the cast.
     -- DEF-by-tier (user-specified): I/II=+50, III=+90, IV=+140, V=+220.
     do
         local p = windower.ffxi.get_player()
@@ -11863,8 +14043,10 @@ function ow_compute_stats()
                     end
                     local main_lvl = tonumber(p.main_job_level) or 0
                     local sub_lvl  = tonumber(p.sub_job_level)  or 0
-                    -- Subjob spell access caps at half the main level.
-                    local eff_sub  = math.min(sub_lvl, math.floor(main_lvl / 2))
+                    -- Use windower's reported sub_job_level directly — it's
+                    -- already the effective level (game applies the real cap,
+                    -- incl. Master Levels). Don't re-derive floor(main/2).
+                    local eff_sub  = sub_lvl
                     tier = math.max(
                         _protect_tier(p.main_job, main_lvl),
                         _protect_tier(p.sub_job,  eff_sub))
@@ -11928,7 +14110,9 @@ function ow_compute_stats()
                     end
                     local main_lvl = tonumber(p.main_job_level) or 0
                     local sub_lvl  = tonumber(p.sub_job_level)  or 0
-                    local eff_sub  = math.min(sub_lvl, math.floor(main_lvl / 2))
+                    -- Use windower's reported sub_job_level directly (see
+                    -- Protect above) — no floor(main/2) re-cap.
+                    local eff_sub  = sub_lvl
                     tier = math.max(
                         _shell_tier(p.main_job, main_lvl),
                         _shell_tier(p.sub_job,  eff_sub))
@@ -12226,9 +14410,274 @@ function ow_send_stats(stats)
                     -- Fold the rest of the per-set/per-spell stat
                     -- bonuses into the main stats dict. Skip 'dw trait'
                     -- (consumed separately above as blu_dw).
+                    --
+                    -- Acc/Att job-TRAITS are character-wide: BLU's
+                    -- Accuracy Bonus / Attack Bonus traits apply to EVERY
+                    -- weapon hand, not just the main hand (unlike a DREMA
+                    -- weapon augment, which is per-hand). So when the BLU
+                    -- trait contributes 'accuracy'/'attack', mirror it
+                    -- onto the off hand (accuracy2/attack2) and ranged
+                    -- too - same rule the food/Honor-March overlays use.
+                    -- Without this the offhand was missing the trait
+                    -- entirely (it only ever hit stats['accuracy']).
+                    -- The off-hand mirror is gated on an off-hand WEAPON
+                    -- actually being equipped. Do NOT use
+                    -- stats['accuracy2'] ~= nil as the signal: GearInfo
+                    -- returns Total_acc.sub = 0 (not nil) for an empty
+                    -- off hand, so accuracy2 is always non-nil here.
+                    -- Resolve the equipped sub item and require positive
+                    -- weapon damage (grips have no damage; shields are
+                    -- armor) - the same test used elsewhere for has_real_sub
+                    -- and the path-aug re-add. Ranged is gated likewise.
+                    local _blu_has_oh = false
+                    local _blu_has_rng = false
+                    do
+                        local _eq = windower.ffxi.get_items
+                                    and windower.ffxi.get_items('equipment')
+                        if _eq then
+                            if _eq.sub and _eq.sub ~= 0 and _eq.sub_bag then
+                                local _it = windower.ffxi.get_items(_eq.sub_bag, _eq.sub)
+                                local _m = _it and _it.id and res.items and res.items[_it.id]
+                                if _m and tonumber(_m.damage) and tonumber(_m.damage) > 0 then
+                                    _blu_has_oh = true
+                                end
+                            end
+                            if _eq.range and _eq.range ~= 0 and _eq.range_bag then
+                                local _it = windower.ffxi.get_items(_eq.range_bag, _eq.range)
+                                local _m = _it and _it.id and res.items and res.items[_it.id]
+                                if _m and tonumber(_m.damage) and tonumber(_m.damage) > 0 then
+                                    _blu_has_rng = true
+                                end
+                            end
+                        end
+                    end
+                    -- Subjob Accuracy Bonus value already folded into the
+                    -- base acc by GearInfo's get_player_acc_from_job (which
+                    -- returns max(sub_job_acc, main_job_acc)). BLU's spell
+                    -- Accuracy Bonus and the subjob's Accuracy Bonus are the
+                    -- SAME trait — they do NOT stack; the game takes the
+                    -- higher single source. GearInfo already put the SUBJOB
+                    -- value into the base (and for BLU its own main-job spell
+                    -- path is dead because the Blu_spells global it reads is
+                    -- never populated — OmniWatch computes the BLU spell
+                    -- trait here instead). So if we add the full BLU spell
+                    -- acc on top, we double-count the trait by exactly the
+                    -- subjob's value (e.g. +10 with /DNC). Add only the
+                    -- AMOUNT the BLU trait EXCEEDS the subjob bonus:
+                    -- max(0, blu_acc - sub_job_acc). Mirror the same RNG/
+                    -- DRG/DNC level table GearInfo uses for the subjob.
+                    local _sub_acc_bonus = 0
+                    do
+                        local _p = windower.ffxi.get_player()
+                        local _sj = _p and _p.sub_job and _p.sub_job:upper()
+                        local _slvl = _p and (_p.sub_job_level or 0) or 0
+                        if _sj == 'RNG' then
+                            if _slvl >= 30 then _sub_acc_bonus = 22
+                            elseif _slvl >= 10 then _sub_acc_bonus = 10 end
+                        elseif _sj == 'DRG' or _sj == 'DNC' then
+                            if _slvl >= 30 then _sub_acc_bonus = 10 end
+                        end
+                    end
+                    -- Subjob Attack Bonus value already in the base att (via
+                    -- GearInfo's get_player_att_from_job). Attack Bonus subs
+                    -- per bluGuide: WAR=8pts(=10 att), DRG=8pts(=10),
+                    -- DRK=16pts(=22). Tier values from the shared
+                    -- {8:10,16:22,...} table.
+                    local _sub_att_bonus = 0
+                    do
+                        local _p = windower.ffxi.get_player()
+                        local _sj = _p and _p.sub_job and _p.sub_job:upper()
+                        local _slvl = _p and (_p.sub_job_level or 0) or 0
+                        if _slvl >= 30 then
+                            if _sj == 'DRK' then _sub_att_bonus = 22
+                            elseif _sj == 'WAR' or _sj == 'DRG' then _sub_att_bonus = 10 end
+                        end
+                    end
+                    -- Subjob Evasion Bonus already in the base eva (via
+                    -- GearInfo's get_player_eva_from_job). Mirror its EXACT
+                    -- level breakpoints (they differ from acc/att): THF
+                    -- 10/30 -> 10/22, DNC 15/45 -> 10/22, PUP 20/40 ->
+                    -- 10/22. Without this, a BLU evasion set on /DNC etc.
+                    -- reads high by the subjob's value (the double-count you
+                    -- saw on evasion).
+                    local _sub_eva_bonus = 0
+                    do
+                        local _p = windower.ffxi.get_player()
+                        local _sj = _p and _p.sub_job and _p.sub_job:upper()
+                        local _slvl = _p and (_p.sub_job_level or 0) or 0
+                        if _sj == 'THF' then
+                            if _slvl >= 30 then _sub_eva_bonus = 22
+                            elseif _slvl >= 10 then _sub_eva_bonus = 10 end
+                        elseif _sj == 'DNC' then
+                            if _slvl >= 45 then _sub_eva_bonus = 22
+                            elseif _slvl >= 15 then _sub_eva_bonus = 10 end
+                        elseif _sj == 'PUP' then
+                            if _slvl >= 40 then _sub_eva_bonus = 22
+                            elseif _slvl >= 20 then _sub_eva_bonus = 10 end
+                        end
+                    end
+                    -- Subjob Defense Bonus already in the base def (via
+                    -- GearInfo's get_player_def_from_job): PLD 10/30 ->
+                    -- 10/22, WAR 10/45 -> 10/22.
+                    local _sub_def_bonus = 0
+                    do
+                        local _p = windower.ffxi.get_player()
+                        local _sj = _p and _p.sub_job and _p.sub_job:upper()
+                        local _slvl = _p and (_p.sub_job_level or 0) or 0
+                        if _sj == 'PLD' then
+                            if _slvl >= 30 then _sub_def_bonus = 22
+                            elseif _slvl >= 10 then _sub_def_bonus = 10 end
+                        elseif _sj == 'WAR' then
+                            if _slvl >= 45 then _sub_def_bonus = 22
+                            elseif _slvl >= 10 then _sub_def_bonus = 10 end
+                        end
+                    end
+                    if _ow_buff_debug then
+                        local _bp = {}
+                        for _bk, _bv in pairs(blu_stats) do
+                            _bp[#_bp+1] = tostring(_bk)..'='..tostring(_bv)
+                        end
+                        windower.add_to_chat(207, '[OW blu_stats] '
+                            .. table.concat(_bp, ' '))
+                    end
                     for k, v in pairs(blu_stats) do
                         if k ~= 'dw trait' then
+                            if k == 'accuracy' then
+                                -- max-not-sum vs the subjob Accuracy Bonus
+                                -- already in the base. Only the excess of
+                                -- the BLU spell trait over the subjob value
+                                -- is new accuracy.
+                                v = math.max(0, v - _sub_acc_bonus)
+                            elseif k == 'attack' then
+                                -- Same max-not-sum for Attack Bonus: a sub
+                                -- with Attack Bonus (WAR/DRG/DRK) already
+                                -- had its value folded into the base att by
+                                -- GearInfo's get_player_att_from_job, so add
+                                -- only the BLU trait's excess over it.
+                                v = math.max(0, v - _sub_att_bonus)
+                            elseif k == 'evasion' then
+                                -- Same max-not-sum for Evasion Bonus
+                                -- (THF/DNC/PUP sub) already in the base eva.
+                                v = math.max(0, v - _sub_eva_bonus)
+                            elseif k == 'defense' then
+                                -- Same max-not-sum for Defense Bonus
+                                -- (PLD/WAR sub) already in the base def.
+                                v = math.max(0, v - _sub_def_bonus)
+                            end
                             stats[k] = (stats[k] or 0) + v
+                            if k == 'accuracy' then
+                                if _blu_has_oh then
+                                    stats['accuracy2'] = (stats['accuracy2'] or 0) + v
+                                end
+                                if _blu_has_rng then
+                                    stats['ranged accuracy'] =
+                                        (stats['ranged accuracy'] or 0) + v
+                                end
+                            elseif k == 'attack' then
+                                if _blu_has_oh then
+                                    stats['attack2'] = (stats['attack2'] or 0) + v
+                                end
+                                if _blu_has_rng then
+                                    stats['ranged attack'] =
+                                        (stats['ranged attack'] or 0) + v
+                                end
+                            elseif k == 'dex' then
+                                -- BLU set spells carry primary stats (NM
+                                -- gives +6 DEX, AL +8, DD +1, etc). DEX
+                                -- converts to melee/ranged accuracy at
+                                -- ~0.75/DEX (post-2014 formula, the same
+                                -- rate GearInfo and the Unity-augment
+                                -- overlay use). The raw DEX was already
+                                -- folded into stats['dex'] above, but
+                                -- nothing was turning it into accuracy in
+                                -- this BLU path — so /checkparam read
+                                -- higher than the panel by exactly
+                                -- floor(spell_DEX * 0.75) (e.g. AL's 8 DEX
+                                -- = +6 acc, NM's 6 DEX = +4). Convert it
+                                -- here and mirror to the off hand / ranged
+                                -- under the same equipped-weapon gates as
+                                -- the trait, since DEX-acc applies to every
+                                -- hand. floor() matches the game's
+                                -- truncation.
+                                local _dex_acc = math.floor(v * 0.75)
+                                if _dex_acc ~= 0 then
+                                    stats['accuracy'] =
+                                        (stats['accuracy'] or 0) + _dex_acc
+                                    if _blu_has_oh then
+                                        stats['accuracy2'] =
+                                            (stats['accuracy2'] or 0) + _dex_acc
+                                    end
+                                    if _blu_has_rng then
+                                        stats['ranged accuracy'] =
+                                            (stats['ranged accuracy'] or 0) + _dex_acc
+                                    end
+                                end
+                            elseif k == 'str' then
+                                -- BLU set spells also carry STR (and other
+                                -- primaries). STR converts to ATTACK the
+                                -- same way DEX converts to accuracy — and
+                                -- by the same logic it was missing here:
+                                -- the raw STR folds into stats['str'] above
+                                -- (so the STR cell is right), but nothing
+                                -- turned it into attack, so attack read low
+                                -- by the spell STR. Mirror GearInfo's
+                                -- get_player_att rates (and the Unity-aug
+                                -- overlay): main attack = floor(STR * mul)
+                                -- where mul = 0.75 for Hand-to-Hand else
+                                -- 1.0; off hand = floor(STR * 0.5); ranged
+                                -- = floor(STR * 1.0). Off hand / ranged are
+                                -- gated on a real weapon being equipped, as
+                                -- with the trait and DEX-acc above.
+                                local _str_mul = 1.0
+                                local _msk = (Gear_info and Gear_info['main']
+                                              and Gear_info['main'].skill) or ''
+                                if _msk == '' or _msk == 'Hand-to-Hand' then
+                                    _str_mul = 0.75
+                                end
+                                local _str_main_att = math.floor(v * _str_mul)
+                                if _str_main_att ~= 0 then
+                                    stats['attack'] =
+                                        (stats['attack'] or 0) + _str_main_att
+                                end
+                                if _blu_has_oh then
+                                    local _oh = math.floor(v * 0.5)
+                                    if _oh ~= 0 then
+                                        stats['attack2'] =
+                                            (stats['attack2'] or 0) + _oh
+                                    end
+                                end
+                                if _blu_has_rng then
+                                    if v ~= 0 then
+                                        stats['ranged attack'] =
+                                            (stats['ranged attack'] or 0) + v
+                                    end
+                                end
+                            elseif k == 'vit' then
+                                -- BLU set spells also carry VIT. VIT
+                                -- converts to DEFENSE — and it was missing
+                                -- here for the same reason STR/DEX were:
+                                -- the raw VIT folds into stats['vit'] above
+                                -- (so the VIT cell is right), but nothing
+                                -- turned it into defense, so /WAR-sub
+                                -- defense read low by floor(spell_VIT*1.5).
+                                -- GearInfo's get_player_defence uses
+                                -- floor(3*VIT/2) = floor(VIT*1.5); the
+                                -- Unity-aug overlay uses the same rate.
+                                -- Because the spell VIT never reached
+                                -- GearInfo's base (lowercase 'vit' vs its
+                                -- uppercase 'VIT' lookup), this merge is the
+                                -- sole source — no double-count.
+                                local _vit_def = math.floor(v * 1.5)
+                                if _ow_buff_debug then
+                                    windower.add_to_chat(207, string.format(
+                                        '[OW vit-def] spell vit v=%s -> +%s def',
+                                        tostring(v), tostring(_vit_def)))
+                                end
+                                if _vit_def ~= 0 then
+                                    stats['defense'] =
+                                        (stats['defense'] or 0) + _vit_def
+                                end
+                            end
                         end
                     end
                 end
@@ -13285,6 +15734,25 @@ ow_safe_register('prerender', function()
         pcall(_ow_emit_inventory_snapshot)
     end
 
+    -- Currency request injection (tier-1 + tier-2). Internal throttle is
+    -- 5 minutes; this call is cheap when it returns early so it's safe to
+    -- run every prerender tick. First call after load sends the requests
+    -- immediately, populating the cache before the user even opens the
+    -- in-game currency menu.
+    if _G._ow_request_currency_update then
+        pcall(_G._ow_request_currency_update)
+    end
+    if _G._ow_request_points_update then
+        pcall(_G._ow_request_points_update)
+    end
+    -- Warp Ring recharge poll. Internal 5-second throttle keeps this
+    -- cheap to call every prerender; the bag iteration only runs at
+    -- the throttled cadence. Emits a WARPRING|... line over udp_inv
+    -- to update the equipment-panel header timer.
+    if _G._ow_warp_ring_poll then
+        pcall(_G._ow_warp_ring_poll)
+    end
+
     -- Send sim inventory snapshot when needed. Rate-limited to once per
     -- second so we don't spam UDP on rapid inventory changes (item use
     -- bursts after a fight, etc.). Only fires when sim is active —
@@ -13689,7 +16157,30 @@ ow_safe_register('prerender', function()
             local speed_now = (me_fast and me_fast.movement_speed) or 0
             local speed_changed = (_ow_last_speed_poll ~= speed_now)
             _ow_last_speed_poll = speed_now
-            if buffs_sig_fast ~= _ow_stats_last_buffsig or speed_changed then
+            -- BLU equipped set-spell change, polled at 10 Hz here so a
+            -- spell swap updates the panel within ~100ms and is never
+            -- missed between the slower 1 Hz ticks. Swapping a set spell
+            -- changes acc/att/DA/MAB/DEX-acc/etc. but isn't a gear or buff
+            -- change, so without this the change-detector never fires and
+            -- the panel shows the previous set's stats until some unrelated
+            -- event trips a recompute (the "same test, different numbers /
+            -- panel sometimes doesn't update" bug).
+            local blu_setsig_fast = ''
+            do
+                local _bset = ow_get_blu_set_spells()
+                if _bset then
+                    local _s = {}
+                    for _, sid in ipairs(_bset) do _s[#_s+1] = sid end
+                    table.sort(_s)
+                    blu_setsig_fast = table.concat(_s, ',')
+                end
+            end
+            local blu_set_changed = (blu_setsig_fast ~= _ow_stats_last_blusetsig)
+            if blu_set_changed then
+                _ow_stats_last_blusetsig = blu_setsig_fast
+            end
+            if buffs_sig_fast ~= _ow_stats_last_buffsig or speed_changed
+                    or blu_set_changed then
                 _ow_stats_last_buffsig = buffs_sig_fast
                 local ok_st, err_st = pcall(function()
                     local stats = ow_compute_stats()
@@ -14689,6 +17180,56 @@ ow_safe_register('prerender', function()
                         local it = res.items[_ow_food_item_id]
                         local food_name = it.en or it.name
                         if food_name then t.name = food_name end
+                    end
+                end
+            end
+
+            -- Distinct-naming for stacked same-bid songs. Two different
+            -- songs can share one buff_id (Advancing March + Victory March,
+            -- both bid 214) and occupy two timer slots. The reconcile names
+            -- every slot from the single pending_meta (the last cast), so
+            -- both would read e.g. "Victory March". _ow_buff_sources[bid]
+            -- holds the distinct songs (it's what the haste math reads), so
+            -- when a bid has 2+ active slots AND 2+ distinct named sources,
+            -- hand each slot a distinct source name. Timing is untouched —
+            -- this only rewrites t.name. Pairing of which name lands on
+            -- which slot is arbitrary, but stacked same-bid songs share a
+            -- duration (both marches = same base duration), so the bars are
+            -- interchangeable and the labels read correctly as a set.
+            do
+                -- Group active timer slots by buff_id.
+                local slots_by_bid = {}
+                for slot, t in pairs(_ow_buff_timers) do
+                    local b = t.buff_id
+                    slots_by_bid[b] = slots_by_bid[b] or {}
+                    slots_by_bid[b][#slots_by_bid[b] + 1] = slot
+                end
+                for bid, slotlist in pairs(slots_by_bid) do
+                    if #slotlist > 1 then
+                        local srcs = _ow_buff_sources[bid]
+                        if type(srcs) == 'table' then
+                            -- Collect distinct, named song sources, newest
+                            -- first (so the freshest casts get assigned).
+                            local named = {}
+                            for _, s in ipairs(srcs) do
+                                if s.src_name and s.src_name ~= '' then
+                                    named[#named + 1] = s
+                                end
+                            end
+                            if #named > 1 then
+                                table.sort(named, function(a, b)
+                                    return (tonumber(a.cast_time) or 0)
+                                         > (tonumber(b.cast_time) or 0)
+                                end)
+                                -- Sort slots for a stable assignment order.
+                                table.sort(slotlist)
+                                local n = math.min(#slotlist, #named)
+                                for i = 1, n do
+                                    local t = _ow_buff_timers[slotlist[i]]
+                                    if t then t.name = named[i].src_name end
+                                end
+                            end
+                        end
                     end
                 end
             end

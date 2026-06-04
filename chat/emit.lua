@@ -649,6 +649,17 @@ local DROPPED_CHAT_MODES = {
     [7]  = true,    -- /linkshell (mode 7) - placeholder
     [8]  = true,    -- /linkshell 2 (placeholder)
     [9]  = true,    -- /emote
+    [10] = true,    -- /shout (text-path duplicate). FFXI delivers
+                    --   /shout TWICE on the wire: once via the 0x017
+                    --   chat packet (handled by chat_packets.lua → chat
+                    --   shout → World) and again via incoming-text on
+                    --   mode 10 with no sender_name. The packet path is
+                    --   canonical (structured fields, correct sender
+                    --   color); the text duplicate was falling through
+                    --   to System and showing the same shout twice.
+                    --   Verified via chatdebug capture: Kwonsan and
+                    --   Gabimaru /shout lines all on text-mode 10 while
+                    --   their World copies came via the packet path.
     [11] = true,    -- /yell
     [12] = true,    -- /tell sent
     [13] = true,    -- /party (alt)
@@ -807,6 +818,28 @@ function M.emit_chat(mode, sender_name, text)
         [161] = true,
         [205] = true,
         [208] = true,
+        -- 212 — Unity Concord chat (text-path mode for /cm u). Carries
+        --       Unity NPC dialogue ("{Yoran-Oran} The Rhinostery...") AND
+        --       Unity member chat — including ONE-CHARACTER check-in
+        --       messages (a player typing just "." or "、" to ping the
+        --       group; confirmed via chatdebug: Vyihfe's body was a single
+        --       0x2E period). Those short messages are REAL and decode
+        --       fine, so there is deliberately NO length filter here — an
+        --       earlier attempt to drop short mode-212 lines as "status
+        --       pings" was wrong and suppressed legitimate check-ins.
+        --       Body may be Shift-JIS or {auto-translate}-wrapped; the
+        --       decode pipeline below handles both. Python maps mode 212
+        --       → chat_unity → Unity tab.
+        [212] = true,
+        -- 211 — your OWN outgoing Unity chat echoes here ("{Wormfood} ..."),
+        --       NOT on mode 33 (the 0x017 packet path doesn't carry your
+        --       own sends) and NOT on 212. Confirmed via chatdebug:
+        --       "[TXT] mode=211 text=[{Wormfood} ..]" after a /uc send.
+        --       Without this whitelist your Unity messages never display.
+        --       Routed to chat_unity (same as 212) by the Python
+        --       classifier; the name carries the 0x7F 0xFC wrapper so the
+        --       self-keep logic below treats it as your own line.
+        [211] = true,
     }
     if mode >= MAX_REAL_CHAT_MODE and not REAL_HIGH_MODES[mode] then
         -- Silently drop. Previously this printed a one-line preview of
@@ -817,6 +850,95 @@ function M.emit_chat(mode, sender_name, text)
         -- data/chat_packet_log.txt without touching chat.
         return
     end
+
+    -- Mode 212 (Unity, incoming-text path) carries TWO things:
+    --   * PC member chat — sender wrapped in the 0x7F 0xFC ... 0x7F 0xFB
+    --       name markers ("{<7F FC>Armistice<7F FB>} ..."). This path
+    --       MANGLES autotranslate (Windower delivers AT as FD FD <id>
+    --       with a lossy high-byte shift → renders as garbage). The SAME
+    --       member chat also arrives — cleanly, with resolved AT — on the
+    --       0x017 packet path (mode 33, chat_packets.lua), so we DROP the
+    --       mangled member-chat copy here and let mode 33 be canonical.
+    --   * NPC dialogue — plain ASCII braces, NO name-wrapper
+    --       ("{Yoran-Oran} The Rhinostery..."). NPC dialogue NEVER appears
+    --       on mode 33, so we KEEP it here.
+    -- Discriminator (from packet hex): a 0x7F 0xFC sequence in the raw
+    -- text means a wrapped PC name → member chat → drop. No wrapper →
+    -- NPC dialogue → keep. Checked on the RAW text before any marker
+    -- stripping below removes the wrapper bytes.
+    if mode == 212 or mode == 211 then
+        -- Your OWN outgoing Unity echo (mode 211) carries autotranslate as
+        -- bare FD bytes (Windower mangles the AT id on the echo), so an
+        -- AT-only send like "/u {Hello!}" arrives as "{Wormfood} \xFD\xFD"
+        -- and the body renders empty — only your name shows. The outgoing-
+        -- text hook (OmniWatch.lua) captured the INTACT typed phrase and
+        -- stored the resolved "{Phrase}" body keyed by mode 211. Swap the
+        -- mangled body for it here so your Unity message displays in full.
+        if mode == 211 and _G._ow_own_outgoing_suppress then
+            local sup = _G._ow_own_outgoing_suppress[211]
+            if sup and sup.resolved and (os.clock() - (sup.ts or 0)) < 1.0 then
+                _G._ow_own_outgoing_suppress[211] = nil
+                -- Preserve the "{Name} " sender prefix (literal braces +
+                -- trailing space) and replace everything after it with the
+                -- resolved phrase. If no recognizable prefix, replace whole.
+                local prefix = text:match('^(%b{}%s)')
+                if prefix then
+                    text = prefix .. sup.resolved
+                else
+                    text = sup.resolved
+                end
+            end
+        end
+        if text:find('\127\252', 1, true) then
+            -- Wrapped PC name → member-chat duplicate of the clean mode-33
+            -- packet. Drop it — UNLESS it's your OWN message (mode 211 is
+            -- ALWAYS your own outgoing Unity, and outgoing chat may also
+            -- echo on 212). If your own send doesn't also arrive cleanly
+            -- on mode 33 we'd suppress it entirely, so only drop when the
+            -- wrapped name is NOT the local player. Extract the name from
+            -- between the wrapper bytes (7F FC <name> 7F FB) and compare to
+            -- the player name; keep on match.
+            local _wname = text:match('\127\252(.-)\127\251')
+            local _player = windower.ffxi.get_player()
+            local _pname = _player and _player.name or nil
+            local _is_self = _wname and _pname and _wname == _pname
+            if not _is_self then
+                return   -- other player's mangled duplicate → drop
+            end
+            -- own message → fall through and emit (this is the copy that
+            -- shows YOUR Unity message in the panel).
+        end
+        -- else: plain-brace NPC dialogue → fall through and emit normally.
+    end
+
+    -- Bead-pouch / coffer item-use spam. In Escha/Reisenjima, players
+    -- repeatedly pop bead pouches and the broadcast "<Name> uses a bead
+    -- pouch. <Name> obtains N escha beads." floods System with one line
+    -- per pop for every nearby player (mode 127). It's another player's
+    -- item-use, not chat. Like the progression filter, keep only your
+    -- own (so you can still see your own bead/coffer results) and drop
+    -- everyone else's. Matches the pouch-use + bead/stone obtain phrasing
+    -- so it won't catch ordinary chat that happens to mention beads.
+    do
+        local is_pouch_spam =
+            (text:find(' uses a ', 1, true)
+             and (text:find(' pouch', 1, true)
+                  or text:find('obtains', 1, true)))
+            and (text:find('escha beads', 1, true)
+                 or text:find('escha stone', 1, true)
+                 or text:find('potpourri', 1, true)
+                 or text:find(' beads.', 1, true))
+        if is_pouch_spam then
+            local player = windower.ffxi.get_player()
+            local pname = player and player.name or nil
+            -- Keep only if the line is about us (our name leads it).
+            if not (pname and pname ~= ''
+                    and text:find(pname, 1, true) == 1) then
+                return
+            end
+        end
+    end
+
     -- Progression-message self-filter. FFXI broadcasts "<Name> earns a
     -- job point!", "<Name> gains N limit points", and exemplar/capacity
     -- gains for everyone in your area — so other players' gains flood the
@@ -902,7 +1024,38 @@ function M.emit_chat(mode, sender_name, text)
             _is_skillchain = true
         end
     end
-    if DROPPED_CHAT_MODES[mode] and not _is_skillchain then
+    -- Emote carve-out (mirrors the skillchain exception above). Mode 15
+    -- is OVERLOADED: it carries BOTH battle text ("X hits Y for N",
+    -- "X takes N points of damage", "X misses Y") AND social emotes
+    -- ("<Name> waves", "<Name> bows"). It's in DROPPED_CHAT_MODES to
+    -- suppress the battle-text duplicate (the 0x028 synth handles those),
+    -- but that also dropped the social emotes — which belong in World.
+    -- This carve-out passes a mode-15 line that is a SOCIAL EMOTE: it has
+    -- the player-name wrapper (\127\252 ... \127\251) AND lacks any battle
+    -- signature. Fail-closed: if there's no name wrapper we treat it as
+    -- battle text and let it drop (better to miss a weird emote than to
+    -- leak battle spam). Without this, emotes vanish from World entirely.
+    local _is_emote = false
+    if mode == 15 then
+        local _has_name_wrap = text:find('\127\252', 1, true) ~= nil
+        if _has_name_wrap then
+            local _l = text:lower()
+            local _looks_battle =
+                _l:find(' hits ', 1, true)   or _l:find(' takes ', 1, true)
+                or _l:find(' misses', 1, true) or _l:find(' evades', 1, true)
+                or _l:find(' resists', 1, true)
+                or _l:find('points of damage', 1, true)
+                or _l:find(' recovers ', 1, true)
+                or _l:find(' hp', 1, true)    or _l:find(' mp', 1, true)
+                or _l:find(' tp', 1, true)
+                or _l:find('\226\134\146', 1, true)  -- "→" damage arrow (UTF-8)
+            if not _looks_battle then
+                _is_emote = true
+            end
+        end
+    end
+    if DROPPED_CHAT_MODES[mode] and not _is_skillchain
+            and not _is_emote then
         local is_gearswap = false
         if text:sub(1, 10) == '[GearSwap]' or text:sub(1, 6) == '[CHAR]' then
             is_gearswap = true

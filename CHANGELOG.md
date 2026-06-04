@@ -1,6 +1,111 @@
 # Changelog
 
-All notable changes to OmniWatch will be documented in this file.
+All notable changes to OmniWatch are documented here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), with versions following [semver](https://semver.org/).
+
+## [1.6.1] — 2026-06-03
+
+A BLU stat-accuracy pass plus a few chat-color and quality-of-life fixes. The headline is a thorough reverse-engineering of the bluGuide trait model and a validation campaign against in-game `/checkparam` ground truth: the BLU stats panel now matches the game across the full set of trait categories and primary-stat conversions, with subjob trait contributions handled the way the game actually resolves them (highest single source, not a sum). Also: BLU spell primary stats (STR/DEX/VIT/AGI) now convert into their derived combat stats, several chat sender colors were corrected, and the companion bluGuide overlay can now be dragged around the screen.
+
+### Added
+
+- **BLU spell primary-stat conversions** — primary attributes carried by set spells now convert into the combat stats they feed, matching GearInfo's own rates (and previously missing entirely from the BLU path):
+  - **DEX → accuracy** at `floor(DEX × 0.75)` (mirrored to off-hand and ranged when those weapons are equipped)
+  - **STR → attack** at `floor(STR × mul)` where `mul` is 0.75 for Hand-to-Hand, 1.0 otherwise; off-hand `floor(STR × 0.5)`, ranged `floor(STR × 1.0)`
+  - **VIT → defense** at `floor(VIT × 1.5)` (the game's `floor(3·VIT/2)` rate)
+  - **AGI → ranged accuracy** at `floor(AGI × 0.75)` and **AGI → evasion** at `floor(AGI × 0.5)`
+  - The raw attributes continue to show in their own primary-stat cells; these conversions add the derived combat contribution on top, so e.g. a set spell with VIT now raises both the VIT cell and Defense. Magic accuracy from INT/MND/CHR is intentionally **not** converted — in-game it's the dStat (caster vs. target) mechanic, not a flat self-bonus, so a fixed rate would read wrong against `/checkparam`.
+- **Draggable bluGuide overlay** — the companion bluGuide spell-planner display now has a small "drag" handle; grab it to move the entire display (spell list, trait/buff/proc/damage columns, and menu buttons) together. Position persists across reloads. (Lives in bluGuide's `bluguide.lua`; the shared UI modules are untouched.)
+
+### Changed
+
+- **BLU subjob traits now resolve as max-not-sum** — for the four traits the gear/stat engine also derives from your subjob (Accuracy Bonus, Attack Bonus, Evasion Bonus, Defense Bonus), the subjob contribution and the BLU set-spell contribution are the **same trait** and the game takes the higher single source, not the sum. The panel now folds the subjob's value via `max(spell-pool, subjob)` for the tier and subtracts the subjob's already-counted value at merge time so it isn't double-counted. Subjob breakpoints mirror the engine's exact level tables (e.g. Evasion Bonus: THF 10/30→10/22, DNC 15/45→10/22, PUP 20/40→10/22; Defense Bonus: PLD 10/30→10/22, WAR 10/45→10/22).
+- **BLU trait model rewritten to match bluGuide** — subjob trait contributions are now expressed as **points** (e.g. /DNC = 8 Accuracy-Bonus points, /RNG = 16) and folded into the trait pool via `max(spell_points + gift, subjob_points)` before a single tier lookup, exactly as the bluGuide reference addon does. This replaces the earlier hardcoded per-trait subjob value with the principled points-based model, so it generalizes correctly across traits and subjobs.
+
+### Fixed
+
+- **BLU gift unlock gate** — a job-point gift could previously lift a trait to tier I from fewer than the 8 points the game requires to unlock it (e.g. a single 4-point Accuracy spell + 2 gifts wrongly read as +22 accuracy). Gifts now apply only once a trait is already unlocked by spell points alone (≥ first threshold), matching the BG-wiki hotfix behavior. Validated against isolated no-subjob captures: every single sub-8-point spell now reads 0.
+- **BLU evasion / defense double-count** — with an Evasion- or Defense-Bonus subjob (e.g. /DNC eva, /WAR def), the panel previously summed the subjob's bonus (already in the base) with the BLU trait, reading ~10–22 high. Now handled by the same max-not-sum subtraction as accuracy/attack.
+- **BLU set-spell change detection** — swapping set spells didn't always recompute the stats panel (the change-detector watched gear and buffs but not the equipped spell set), so the same test could show different results depending on timing. A set-spell signature check now runs on both the fast (10 Hz) and slow (1 Hz) poll paths, so a spell swap reliably triggers a fresh recompute.
+- **Assist channel sender color** — assist-channel messages now color the sender name teal to match the Assist tab, on both the packet path and the text path.
+- **Shout sender color** — shout sender names now render in a dark orange distinct from yell's orange-yellow, so the two channels are easy to tell apart at a glance.
+
+### Internal
+
+- **Lua chunk-local limit relief** — the main `OmniWatch.lua` chunk hit Lua 5.1's hard cap of 200 local variables. Twelve single-value buff-id constants were converted from top-level locals to globals (same names, same read-only use), bringing the count back to 187 with headroom. No behavior change.
+- **bluGuide model captured as reference** — the subjob points tables, tier values, and gift-exempt trait list were lifted from bluGuide's `res/traits.lua` and validated end-to-end against two full 21-combination `/checkparam` runs (no-subjob and /DNC), matching within ±1 (the residual is the DEX→accuracy `floor` rounding, a real game mechanic).
+
+
+## [1.6.0] — 2026-05-30
+
+A settings-menu rework plus a handful of new header features. The big behavioral change is a wholesale rework of the in-game settings dropdown: nearly every panel now exposes a single light-blue **CONFIGURE** button that opens a focused subdialog, instead of a long inline checkbox list. Same options, much shorter dropdown. Alongside the menu cleanup: a new OS clock + stopwatch/countdown in the header, an enchanted-ring cooldown tracker in the equipment panel (Warp / Dem / Holla / Mea / Echad / Trizek / Reraise / Endorsement / Emporox), an Events-modal banner row showing airship and ferry schedules, three new currencies in the header cycler, and a /say chat color fix.
+
+### Added
+
+- **Configure-button subdialogs** for Display, Header, Currency cycler, Inventory, Party Panel, Statistics, Recast Timer, Buff Timer, Chat Panel, Skillchain, Target Card, DPS Tracker, HotBar, and Equipment. Each one collapses 3–8 settings into a focused popup. Closing a subdialog automatically reopens the parent settings dropdown so multi-panel tweaks don't require re-clicking the gear icon every time.
+- **Header visibility toggles** — `show_time`, `show_weather`, `show_events`, `show_location`. Each one hides a whole logical block (clock + day + moon as a unit; weather; Events button; right-side zone/region/map). The header collapses cleanly when any of them is off — no phantom gaps where the hidden block used to live.
+- **Events modal banner row** — airship and ferry schedules now sit alongside the existing Records of Eminence / Domain Invasion banners. Each shows the next departure with a live countdown and auto-cycles through routes every 4 seconds. Schedule data is ported from the public-domain VanaTime library.
+- **Three new currencies** in the header cycler: **Beads** (Escha Beads), **Tokens** (Nyzul Tokens), **Ichor**. Display labels use single-word forms to match the existing convention; storage keys keep the full names (`escha_beads`, `nyzul_tokens`, `ichor`) for clarity in logs and at the wire. The Lua side emits all nine currencies in the `CURRENCY|…` UDP payload, with multiple `fields.lua` label aliases registered for the new ones to maximize compatibility across Windower installs.
+- **Display Configure modal** — window opacity, global UI scale (0.5×–3.0×), transparent background, and toggle nub visibility all consolidated into one dialog.
+- **Statistics Configure modal** with a small italic helper line under "Gear settings": _Define self or ally gear that affects buffs._
+- **Header OS clock** — local-time HH:MM (am/pm) clock anchored 18px left of the zone block. Renders in `font_day` (13pt bold) on the same baseline as Vana time and day name. Hidden via **Show OS clock** in the Header Configure modal.
+- **Header clock — show seconds toggle** — optional HH:MM:SS format for timing-sensitive activities.
+- **Header clock — time-zone selector** — pick from `Local / UTC / PST / MST / CST / EST / BRT / GMT / CET / EET / JST / KST / AEST`. "Local" uses your computer's clock (DST-aware); the named zones use their standard-time offset (no DST tracking — fine for JST/server-time coordination where DST isn't observed).
+- **Stopwatch + Countdown timer modal** — click the header clock to open. Stopwatch counts up in H:MM:SS.t with Start/Pause/Reset; Countdown has `[-1m][-10s][+10s][+1m]` duration adjusters and beeps + red-flashes when it hits 0 (Windows: `winsound.Beep`; elsewhere: terminal BEL). All math runs against `os.time()` so neither timer drifts with frame rate.
+- **Running-timer header takeover** — when the modal is closed but a timer is running, the header clock slot shows the running value instead of OS time: amber for stopwatch (`0:23:17`), red for countdown remaining (`4:53`). Click still reopens the modal. Countdown wins ties when both are running.
+- **Teleport-ring cooldown tracker** in the equipment-panel title bar. Cycles through enabled rings every N seconds (configurable 2–15s, default 5s) showing the ring name in green when ready, name + MM:SS or HH:MM:SS in red while counting down. Tracks nine enchanted-equipment rings:
+  - Warp Ring (28540, 10m), Dem Ring (26177, 10m), Holla Ring (26176, 10m), Mea Ring (26178, 10m)
+  - Echad Ring (27556, 2h — instant Adoulin warp), Trizek Ring (27557, 2h — instant Ru'Lude warp)
+  - Reraise Ring (26169, 20h — single-charge reraise)
+  - Endorsement Ring (28469, 2h — exp/cp bonus), Emporox's Ring (28470, 2h — sparks bonus)
+- **Equipment Configure modal** — equipment panel visibility + ring cooldown indicator + ring cycle interval + per-ring inclusion toggles (each ring can be independently enabled or disabled in the rotation).
+- **Build stamp on startup** — every launch prints `[OmniWatch] === BUILD <version> ===` to the log and writes the stamp to `omniwatch_build_stamp.txt` next to the exe. Quick way to confirm a PyInstaller rebuild picked up the latest source.
+- **Distinct button colors** for visual scanning:
+  - Light blue — CONFIGURE buttons (open a subdialog)
+  - Light purple — Open log folder (one-off action, useful for bug reports)
+  - Red — Exit OmniWatch (destructive / one-way)
+  - Amber — other actions (OPEN, RESET, EDIT, PICK)
+
+### Changed
+
+- **Settings dropdown layout** restructured: General now contains only the truly general toggles (full screen / always on top / display / setup mode); Misc holds Checklist and Simulation mode; an unnamed bottom section holds Open log folder and Exit OmniWatch. The Developer section has been removed.
+- **Hide display eye** ("Show toggle nub") now correctly toggles the nub's own visibility rather than the display state of the panels behind it.
+- **Section header convention** — section names beginning with an underscore now render an unnamed divider only (no label text). Empty underscore-prefixed sections render nothing at all. Normal-named sections still render a full header with placeholder text when empty.
+
+### Fixed
+
+- **Mog House moogle target card icon** — the family-icon fallback was nested inside the bestiary-database lookup, so any creature not in the bestiary (like Mog House moogles) skipped the fallback even when its icon file existed. Lookup is now ungated and will use `mobicons/<family>.png` whenever family info is set.
+- **Transparent-background toggle** had no visible effect — it wasn't routing through the canonical `set_setting()` path. Fixed in all modal row dispatchers.
+- **Backdrop dim** on Configure modals broke transparent-background's `LWA_COLORKEY` interaction, leaving a black square where transparency should have been. The modal renderer now skips backdrop fill when `transparent_background` is on.
+- **Sim Player in character switcher** — the simulation-mode addon writes its synthetic player to a config folder, which appeared in the live character-switcher dropdown alongside real characters. `list_known_characters()` now filters out any folder whose name is `sim player` / `simplayer` / `sim_player` / `sim` (case-insensitive).
+- **Day-of-week and moon phase** were not gated by `show_time` — toggling time off left them visible, which looked broken. They now share the `show_time` toggle since they're all Vana'diel-clock data.
+- **Currency labels** for the three new currencies overflowed the centered header band; shortened display labels to single words (Beads / Tokens / Ichor) to match the existing convention.
+- **/say chat body color** — say messages rendered in dim gray (200,200,200) because the body had no explicit color class and fell through to `default`. They now use a dedicated `body_say` class (240,240,240 / white) matching their sender-name color, so a player's say messages read as a coherent white line.
+- **Header clock vertical alignment** — initial implementation built an asymmetric click rect (`cy - clk_h/2` top + `+4` height padding) that dragged the rendered text 2px below the header baseline. Rect is now symmetric around `cy` with text positioned at `cy - clk_h//2` directly, so the clock lines up exactly with Vana time, day name, weather, etc.
+- **Header clock click no-op** — the click handler was placed inside `dispatch_inventory_dropdown_click`, which only runs when the inventory dropdown is open, so clicking the clock with inventory closed did nothing. Moved to the main click loop so it always fires.
+
+### Internal
+
+- **Generic Configure-subdialog factory** — Recast, Buff Timer, Chat, Skillchain, Target Card, DPS, HotBar, and Equipment share one `_draw_subdialog()` / `_dispatch_subdialog()` pair driven by a single `_SUBDIALOG_CONFIGS` dict. Adding a new section is now: one dict entry + one lambda in the action registry + one Configure button in the schema. No per-modal code.
+- **Shared row primitives** — `_draw_modal_row()` and `_dispatch_modal_row_action()` render and route bool / int / float / enum / action rows across all modals. Enum rows render as `[<] value [>]` with prev/next arrows.
+- **`set_setting()` is now the canonical save path** for all modal row dispatchers, replacing direct dict mutation and ensuring side-effect handlers fire consistently.
+- **Schema hidden-section convention** — settings that used to render inline are now marked `_Hidden` and accessed only through their Configure modal. This keeps the schema authoritative without polluting the dropdown.
+- **Ring detection by action-packet deep-walk** — earlier attempts to track Warp Ring cooldown via `extdata.decode()` and via `windower.res.items` name-lookups both failed on the live Windower install (the cooldown field wasn't surfaced by extdata for Enchanted Equipment, and the name lookup returned nil). The working approach is a deep-walk of every numeric field in player-actor action packets looking for the hardcoded ring ids — false-positive-resistant since ring ids (5-digit) are well outside the value range of typical damage/animation numbers. Action detection is hooked from inside `handle_incoming_action()` because the addon parses 0x028 packets directly rather than going through Windower's `'action'` event.
+- **Wire format** for ring cooldowns: `RINGS|warp=N;dem=N;holla=N;mea=N;echad=N;trizek=N;reraise=N;endorsement=N;emporox=N` — single line emitted at 1Hz, each value seconds remaining (0 = ready).
+
+
+## [1.5.3] - 2026-05-27
+
+### Added
+- **Stats panel: job/subjob innate traits** — Double Attack, Triple Attack, Subtle Blow, Fast Cast, auto-Regen, and auto-Refresh granted innately by your main and subjob are now added to the panel, on top of gear and buff contributions. The subjob uses the level the game reports directly (so Master-Level-raised subjobs are counted correctly, not capped at 49). Dual Wield is intentionally excluded here — it's already handled by the existing dual-wield path.
+- **Stats panel: job-point gift bonuses for Double Attack, Triple Attack, Fast Cast, and Subtle Blow** — these gift bonuses were present in the data but never applied to the panel; they now stack on top of the level traits. Scoped to just those four stats (Accuracy/Attack/Store TP/Dual Wield gifts continue to flow through their own existing paths to avoid double-counting).
+- **Stats panel: gear-derived Double Attack / Triple Attack / Quadruple Attack / Critical Hit Rate / Critical Hit Damage / Subtle Blow / Fast Cast** now reach the panel. GearInfo accumulated these from gear (e.g. a Unity augment's "Double Attack+5") but its compute only returned physical totals, so they never displayed; they're now copied through like the magic-accuracy values, summing correctly with roll/song contributions from a separate source.
+- **Fudo Masamune: per-shadow Attack scaling** — the katana's "Attack+15 per Utsusemi shadow" now scales with your live shadow count (read from the Copy Image buff the timer panel already tracks) instead of always adding a flat +15. Zero shadows adds nothing; it climbs to +60 at four shadows and falls as shadows are consumed. Capped at the buff's "4+" readout, so a rare 5th shadow shows as 4.
+
+### Fixed
+- **Relic weapon base Attack lost (e.g. Kikoku showing 10 of 60)** — a relic's Aftermath grants "Attack+10%", which the base-stat parser misread as a flat "Attack+10" and used to overwrite the weapon's real base "Attack+60", so only 10 showed. The parser now distinguishes a percentage-suffixed Attack/Accuracy (the Aftermath multiplier) from a flat value and ignores the percentage form for those flat stats, preserving the base Attack. Empyrean/aeonic/dynamis weapons were never affected (no "Attack+%" token); other percentage stats (Haste, PDT/MDT, crit, etc.) are untouched.
+- **Unity gear augment stats partly missing (e.g. Sailfi Belt +1's Double Attack)** — the augment block applied correctly (STR landed), but stats GearInfo doesn't return in its physical totals — Double Attack and the other multi-hit/extra stats — never flowed out to the panel. Covered by the gear copy-through above.
+- **Dual-march timer labels showing the same song twice** — two trusts casting different marches (Advancing + Victory, both buff id 214) near-simultaneously could label both timer slots with the same song name. Each active slot is now given a distinct song name from the recorded sources when a buff id has multiple active slots and multiple distinct songs. Only the displayed name is affected; timers continue to use the server-truth expiry, so accuracy is unchanged. (Marches share a duration, so which name pairs to which slot is immaterial.)
+- **Subjob level cap re-derivation** — several stat estimates (innate traits, Protect/Shell tier) re-derived the subjob cap as half the main level instead of trusting the level the game reports. At max level with Master Levels this undercut the real subjob level (e.g. forcing a level-55 sub back to 49 and dropping its higher trait tier). All now use the reported subjob level directly.
 
 
 ## [1.5.2] - 2026-05-25
