@@ -173,6 +173,23 @@ function M.drain(ring, udp_sock, on_drained)
     end
 
     -- Send each datagram with correct (index, total) in header.
+    -- Multibox: prefix every datagram with the sending character's name as
+    -- "@name@" so the Python overlay can lock chat to one character and
+    -- drop the other logged-in character's chat (matching how the main
+    -- addon tags its live-display streams). 'windower' is a global in the
+    -- Windower Lua environment; guarded so a nil player (briefly at login)
+    -- just yields an empty name, which the Python side treats as "accept".
+    -- '@' never appears in FFXI names or the tab-delimited wire format, so
+    -- the prefix is unambiguous and Python strips it before parsing.
+    local _mb_name = ''
+    do
+        local ok_p, p = pcall(function()
+            return windower and windower.ffxi and windower.ffxi.get_player()
+        end)
+        if ok_p and p and p.name then _mb_name = p.name end
+    end
+    local _mb_prefix = '@' .. _mb_name .. '@'
+
     local batch_total = #datagrams
     for idx, d in ipairs(datagrams) do
         local body = {}
@@ -181,7 +198,7 @@ function M.drain(ring, udp_sock, on_drained)
         end
         local hdr = string.format('CHAT_BATCH\t%d\t%d\t%d',
                                   total, idx, batch_total)
-        udp_sock:send(hdr .. '\n' .. table.concat(body, '\n'))
+        udp_sock:send(_mb_prefix .. hdr .. '\n' .. table.concat(body, '\n'))
     end
 
     return total

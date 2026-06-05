@@ -167,30 +167,26 @@ function find_all_values(item)
 		-- Check Unity gear for stat and value.
 		for k, v in pairs(Unity_rank) do
 			if item.id == k then
-				-- Unity rank stat scaling. Rank 1 = max stat, rank 11 = min
-				-- (per FFXIAH: "Adorned Helm +1 gets 5-15 attack, rank 1
-				-- gets 15, rank 11 gets 5"). There are 11 ranks but TEN
-				-- intervals between rank 1 and rank 11, so the span is
-				-- divided by 10 (not 11) to land exactly on both endpoints
-				-- and step evenly. fraction = (11 - rank) / 10, giving
-				-- 1.0 at rank 1 (full max) down to 0.0 at rank 11 (min).
-				--
-				-- Round-half via floor(x + 0.5) - Lua 5.1 has no round().
-				-- Safe here because Unity stat values are always >= 0
-				-- (floor(x+0.5) only mis-rounds negatives, which never
-				-- occur for these ranges).
-				--
-				-- The old formula divided the span by 11 and floored:
-				-- that lost a point at rank 1 on any span not divisible by
-				-- 11 (e.g. acc 8-23 gave 22 instead of 23, because
-				-- (15/11)*11 = 14.9999... floored to 14) AND never reached
-				-- the true min at rank 11. This corrects both.
-				local _ur   = settings.player.rank or 1
-				if _ur < 1  then _ur = 1  end
-				if _ur > 11 then _ur = 11 end
-				local _vmin = v['rank']['min']
-				local _vmax = v['rank']['max']
-				value = math.floor(_vmin + (_vmax - _vmin) * (11 - _ur) / 10 + 0.5)
+				-- OmniWatch patch (2026-06-04): Unity Ranking gear stats
+				-- scale as a fixed-step ramp over the TOP FIVE ranks, NOT a
+				-- linear interpolation across all 11. Empirically verified
+				-- against in-game /checkparam on two items:
+				--   5~15 stat at rank 5 -> 7    5~10 stat at rank 5 -> 6
+				-- Both fit: value = max - (rank-1) * (max-min)/5, floored
+				-- at min. So rank 1 = max, each rank below subtracts
+				-- (range/5), and ranks 6-11 all sit at min. The previous
+				-- formula divided the range over 11 ranks, which was far too
+				-- shallow (it gave 11 for a 5~15 stat at rank 5 instead of
+				-- the real 7 — an off-by-4 on every non-top Unity).
+				do
+					local _umin = v['rank']['min']
+					local _umax = v['rank']['max']
+					local _urank = settings.player.rank or 1
+					local _ustep = (_umax - _umin) / 5
+					value = math.floor(_umax - (_urank - 1) * _ustep + 0.5)
+					if value < _umin then value = _umin end
+					if value > _umax then value = _umax end
+				end
 				if edited_item[v['Unity Ranking']] then
 					-- edited_item[v['Unity Ranking']] = edited_item[v['Unity Ranking']] + v.rank[settings.rank]
 					edited_item[v['Unity Ranking']] = edited_item[v['Unity Ranking']] + value
@@ -1321,20 +1317,34 @@ function get_player_eva_from_job()
 	local player_has_sj = false
 	
 	if player.sub_job then
+		-- Full BG-wiki "Evasion Bonus" ladder by subjob level. The
+		-- original table stopped at tier II (+22) because it assumed a
+		-- subjob caps at level 49; with Master Levels the subjob cap is
+		-- higher (e.g. 55+), so a /THF sub at 50+ reaches tier III (+35)
+		-- and beyond. player.sub_job_level already reflects the raised cap.
+		--   THF: 10->10 30->22 50->35 70->48 76->60 88->72
+		--   DNC: 15->10 45->22 75->35 86->48
+		--   PUP: 25->10 40->22 60->35 76->48  (BG-wiki; tier I is 25)
+		local sjl = player.sub_job_level or 0
 		if player.sub_job:upper() == 'THF' then
-			if player.sub_job_level < 10  then sub_job_acc = 0
-			elseif player.sub_job_level < 30 and  player.sub_job_level > 9 then sub_job_acc = 10
-			elseif player.sub_job_level > 29 then sub_job_acc = 22
+			if     sjl >= 88 then sub_job_acc = 72
+			elseif sjl >= 76 then sub_job_acc = 60
+			elseif sjl >= 70 then sub_job_acc = 48
+			elseif sjl >= 50 then sub_job_acc = 35
+			elseif sjl >= 30 then sub_job_acc = 22
+			elseif sjl >= 10 then sub_job_acc = 10
 			end
 		elseif player.sub_job:upper() == 'DNC' then
-			if player.sub_job_level < 15  then sub_job_acc = 0
-			elseif player.sub_job_level < 45 and  player.sub_job_level > 14 then sub_job_acc = 10
-			elseif player.sub_job_level > 44 then sub_job_acc = 22
+			if     sjl >= 86 then sub_job_acc = 48
+			elseif sjl >= 75 then sub_job_acc = 35
+			elseif sjl >= 45 then sub_job_acc = 22
+			elseif sjl >= 15 then sub_job_acc = 10
 			end
 		elseif player.sub_job:upper() == 'PUP' then
-			if player.sub_job_level < 20  then sub_job_acc = 0
-			elseif player.sub_job_level < 40 and  player.sub_job_level > 19 then sub_job_acc = 10
-			elseif player.sub_job_level >39  then sub_job_acc = 22
+			if     sjl >= 76 then sub_job_acc = 48
+			elseif sjl >= 60 then sub_job_acc = 35
+			elseif sjl >= 40 then sub_job_acc = 22
+			elseif sjl >= 25 then sub_job_acc = 10
 			end
 		end
 	end

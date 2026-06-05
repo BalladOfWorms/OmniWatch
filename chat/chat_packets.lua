@@ -423,31 +423,29 @@ local function _handle_lsmes_packet(data)
         slot_num     = 1
     end
 
-    -- Pull the LS name from player info. Preferred source is the
-    -- slot matching the packet's flag bit (linkshell2 for LS2,
-    -- linkshell for LS1). When that slot is empty (common: the
-    -- server sends BOTH an LS1 and an LS2 MoTD on zone-in even when
-    -- only one pearl is equipped — the unequipped-slot field is
-    -- nil), fall back to whichever LS field IS populated. You can
-    -- only receive a MoTD for an LS you're equipped to, so the
-    -- populated field is the right name to show. If both fields
-    -- are empty (rare race during pearl swap / zoning), fall back
-    -- to a generic label so we at least produce something.
+    -- Pull the LS name from player info. The 0x0CC packet doesn't carry
+    -- the LS name, so we read it from the player's equipped pearl in the
+    -- slot the packet's flag bit indicates (linkshell2 for LS2, linkshell
+    -- for LS1). We deliberately do NOT cross-fall-back to the other slot:
+    -- an earlier version used `ls2 or ls1` for LS2 messages, which made an
+    -- LS2 MoTD display the LS1 name whenever player.linkshell2 read empty
+    -- for a moment (a timing race on zone-in / login, or mid pearl-swap) —
+    -- even though the message was correctly routed to LS2. Borrowing the
+    -- other LS's name is always wrong; if the matching slot is empty we
+    -- show a neutral, correctly-numbered label instead so the name is
+    -- never misattributed to the wrong linkshell.
     local ls_name
     local player = windower.ffxi.get_player()
     if player then
-        local ls1 = player.linkshell
-        local ls2 = player.linkshell2
-        if ls1 == '' then ls1 = nil end
-        if ls2 == '' then ls2 = nil end
-        if is_ls2 then
-            ls_name = ls2 or ls1
-        else
-            ls_name = ls1 or ls2
+        local slot_ls = is_ls2 and player.linkshell2 or player.linkshell
+        if slot_ls and slot_ls ~= '' then
+            ls_name = slot_ls
         end
     end
     if not ls_name or ls_name == '' then
-        ls_name = '(linkshell)'
+        -- Matching slot empty (race). Use a neutral label tagged with the
+        -- correct slot number rather than the other LS's name.
+        ls_name = is_ls2 and '(linkshell 2)' or '(linkshell)'
     end
 
     -- Header line: [N]< LS_name: Setter >
@@ -597,7 +595,21 @@ function M.process(id, data)
             _trace_log_line('       hex: ' .. table.concat(hex, ' '))
             _trace_log_line('       txt: ' .. table.concat(printable_chars))
         end
-        _handle_lsmes_packet(data)
+        -- OmniWatch (2026-06-04): do NOT emit our own MoTD line here.
+        -- The FFXI client already delivers the linkshell message-of-the-
+        -- day as native incoming text (mode 205 for LS1, mode 217 for
+        -- LS2 — confirmed via chatdebug), complete with the correct LS
+        -- name and the set-date. The Python side now colors those native
+        -- modes with the LS green and routes 217 to the LS2 tab, so the
+        -- native line is the single canonical MoTD. Our former 0x0CC emit
+        -- produced a SECOND copy whose LS name came from
+        -- player.linkshell2 — which proved unreliable (it showed the LS1
+        -- name on LS2 messages). Rather than depend on that field, we let
+        -- the native text stand and suppress our duplicate. The trace
+        -- above still fires when M.trace is on, so the packet remains
+        -- inspectable. _handle_lsmes_packet is retained (unused) in case a
+        -- future case needs a packet-sourced MoTD again.
+        -- _handle_lsmes_packet(data)   -- intentionally disabled (dup)
         return
     end
 

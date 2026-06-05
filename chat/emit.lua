@@ -817,6 +817,14 @@ function M.emit_chat(mode, sender_name, text)
         [151] = true,
         [161] = true,
         [205] = true,
+        -- 217 — LS2 message-of-the-day (the LS2 counterpart to mode 205
+        --        for LS1). Confirmed via chatdebug: "[2]< <LS2name>:
+        --        <setter> >" header + body line, e.g. "working on the next
+        --        gobbiebag items... (Jun. 3, ...)". Without this whitelist
+        --        the LS2 MoTD was silently dropped here while the LS1 MoTD
+        --        (205) passed — so LS1 showed and LS2 didn't. Python maps
+        --        mode 217 → chat_ls2 → LS2 tab and colors it LS green.
+        [217] = true,
         [208] = true,
         -- 212 — Unity Concord chat (text-path mode for /cm u). Carries
         --       Unity NPC dialogue ("{Yoran-Oran} The Rhinostery...") AND

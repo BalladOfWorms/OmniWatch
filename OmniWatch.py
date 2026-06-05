@@ -1875,7 +1875,6 @@ chat_composer_visible       = True
 CHAT_COMPOSER_CHANNELS = [
     ("say",    "say",    "/s "),
     ("tell",   "tell",   "/t "),       # needs a target prefix at send
-    ("reply",  "reply",  "/r "),
     ("party",  "party",  "/p "),       # party chat
     ("shout",  "shout",  "/sh "),
     ("yell",   "yell",   "/yell "),
@@ -2048,6 +2047,16 @@ CHAT_MODE_PALETTE = {
     123: (220, 140, 140),   # cannot use command
     127: (180, 180, 180),   # system / RoE / sparks
     131: (240, 220, 150),   # gain (limit points / gil)
+    # LS message-of-the-day lines arrive as native incoming text:
+    #   mode 205 = LS1 MoTD, mode 217 = LS2 MoTD (confirmed via chatdebug).
+    # Without a palette entry these fell to the default gray/white. Color
+    # BOTH the same LS green so the two linkshells' MoTDs look identical
+    # (per request) and read as linkshell content. The native text already
+    # carries the correct LS name + set-date, so this native line is the
+    # canonical MoTD — chat_packets.lua suppresses OmniWatch's own 0x0CC
+    # duplicate so only this one shows.
+    205: (144, 238, 144),   # LS1 message-of-the-day — LS green
+    217: (144, 238, 144),   # LS2 message-of-the-day — same green
 }
 
 # Synthetic-event colors for buff/debuff lines (from chat/buff_events.lua).
@@ -2238,14 +2247,16 @@ CHAT_MODE_SET_WORLD    = {1, 3, 11, 13}
 CHAT_MODE_SET_LS1      = {6, 205}              # LS1 chat (text mode 6),
                                                 #   LS message-of-the-day
                                                 #   on login (205, empirical)
-CHAT_MODE_SET_LS2      = set()                 # LS2 mode unconfirmed on
-                                                #   Asura — was wrongly set
-                                                #   to {7}, but the packet
-                                                #   log shows mode 7 is a
-                                                #   self-emote. Leave empty
-                                                #   until a real LS2 line is
-                                                #   captured; LS2 falls
-                                                #   through to System for now.
+CHAT_MODE_SET_LS2      = {217}                 # LS2 message-of-the-day
+                                                #   (mode 217, confirmed via
+                                                #   chatdebug: "[2]< <LS2>:
+                                                #   <setter> >" + body). Regular
+                                                #   LS2 chat still arrives on
+                                                #   its own mode and is tagged
+                                                #   kind=chat_ls2 by the lua
+                                                #   side; 217 is specifically
+                                                #   the MoTD. Was empty before
+                                                #   (LS2 MoTD fell to System).
 CHAT_MODE_SET_PARTY    = {5}                   # /party — chat only
 # Emotes — confirmed from Asura packet log:
 #   mode 7  = self-emote ("Wormfood shakes with laughter!")
@@ -5416,6 +5427,160 @@ SETTINGS_DIR = USER_DIR
 #   - logs/ crash-log dir: global.
 current_char_name = ""           # who's logged in right now (from PLAYER pkt)
 active_view_char  = ""           # whose configs we're viewing/editing
+
+# ── Multibox display lock ───────────────────────────────────────────
+# When 2+ FFXI clients each run their own OmniWatch addon, they all send
+# their live-display data to the same ports, and the overlay would flip
+# ("jitter") between characters. The Lua side now prefixes each live-
+# display payload with the sending character's name as "@name@". We lock
+# the display to ONE character and drop tagged packets from any other.
+#
+# The lock target is the character picked in the header dropdown
+# (active_view_char) when set, otherwise the logged-in character
+# (current_char_name). Until we know either, nothing is locked and all
+# packets pass (so a single fresh login shows immediately).
+#
+# _mb_gate(raw) returns (accept, stripped):
+#   - If the payload has no "@name@" prefix (older Lua, or an untagged
+#     stream), accept as-is — never breaks single-box or mixed versions.
+#   - If tagged and the name matches the lock target (or no target yet),
+#     accept and return the payload with the prefix stripped.
+#   - If tagged and the name is a DIFFERENT character, drop it.
+def _mb_lock_target():
+    return active_view_char or current_char_name or ""
+
+# Characters seen actively sending this session (from the "@name@" tag on
+# every packet). Folded into the chat-main picker so a logged-in character
+# is selectable even if it has no saved config folder yet. Not surfaced as
+# a separate concept — the picker just shows "characters that are around".
+_mb_seen_senders = set()
+
+
+# Diagnostic: when _MB_DEBUG is True, the gate logs (throttled) what lock
+# target it's using and which sender names it accepts vs drops, to the
+# session log. Flip via the on-screen path or set True here temporarily.
+_MB_DEBUG = False
+_mb_dbg_seen = {}        # sender -> {"accept": n, "drop": n}
+_mb_dbg_last_ts = 0.0
+
+def _mb_dbg_note(sender, accepted):
+    global _mb_dbg_last_ts
+    rec = _mb_dbg_seen.get(sender)
+    if rec is None:
+        rec = {"accept": 0, "drop": 0}
+        _mb_dbg_seen[sender] = rec
+    rec["accept" if accepted else "drop"] += 1
+    import time as _t
+    now = _t.time()
+    if now - _mb_dbg_last_ts >= 2.0:
+        _mb_dbg_last_ts = now
+        tgt = _mb_lock_target()
+        summary = ", ".join(
+            f"{(s or '<empty>')}:A{r['accept']}/D{r['drop']}"
+            for s, r in _mb_dbg_seen.items())
+        print(f"[OmniWatch][mb] lock_target={tgt!r} "
+              f"active_view_char={active_view_char!r} "
+              f"current_char_name={current_char_name!r} | {summary}")
+
+class _MBSkip(Exception):
+    """Raised inside a recv block to abandon processing a packet that
+    belongs to a non-locked character (multibox display lock). Caught
+    silently by each gated recv's handler."""
+    pass
+
+def _mb_clear_live_data():
+    """Blank the live per-character display state so that switching the
+    locked character (via the dropdown) refreshes the panels to the new
+    character immediately, instead of leaving the previous character's
+    data on screen until the new one's next packet arrives. The new
+    character is actively sending, so each cleared item repopulates within
+    a frame or two. Only touches LIVE display state — never UI layout,
+    config, or anything keyed to active_view_char's folder."""
+    global party_data, ally1_data, ally2_data
+    global equip_data, equip_rich, equip_counts
+    global target_info, target_sticky
+    global mob_statuses, recast_state, buff_state
+    global player_stats
+    party_data, ally1_data, ally2_data = [], [], []
+    equip_data = [0] * 16
+    equip_rich = {}
+    equip_counts = {}
+    target_info = None
+    target_sticky = None
+    mob_statuses = {}
+    recast_state = {}
+    buff_state = {}
+    # Stats panel: clear so it blanks immediately on switch and refills from
+    # the new character's next stats packet (now 2 Hz, so ≤0.5s). Read with
+    # .get(key, None), so an empty dict is safe.
+    player_stats = {}
+    # (Inventory/currency/points refresh on their next packet, which the
+    # actively-sending new character emits within a frame — no explicit
+    # clear needed, and their globals are schema dicts we must not blank.)
+def _mb_chat_lock_target():
+    """Lock target for the CHAT stream specifically. Chat is pinned to a
+    user-chosen character (Header settings → Chat main character) so chat
+    stays on that character even while you view another character's panels.
+    If the chosen main isn't set or isn't currently logged in, fall back to
+    the current logged-in character so chat always shows something real."""
+    main = (setting("chat_main_char") or "").strip()
+    live = _mb_known_chars()
+    if main and main in live:
+        return main
+    # Chosen main not present (or unset) → pin to the current character.
+    return current_char_name or _mb_lock_target()
+
+def _mb_known_chars():
+    """Characters offered as the chat-main: the header character dropdown
+    list (config-folder characters) UNION characters seen actively sending
+    this session, plus the current logged-in character. The union ensures a
+    logged-in character is always selectable even if it has no saved config
+    folder yet (which otherwise left it out of the dropdown-only list)."""
+    chars = set()
+    folder_chars = []
+    try:
+        folder_chars = list(list_known_characters())
+        chars.update(folder_chars)
+    except Exception:
+        pass
+    chars.update(_mb_seen_senders)
+    if current_char_name:
+        chars.add(current_char_name)
+    result = sorted(chars)
+    if _MB_DEBUG:
+        try:
+            print(f"[OmniWatch][mb] known_chars={result} "
+                  f"(folders={folder_chars}, seen={sorted(_mb_seen_senders)}, "
+                  f"current={current_char_name!r})")
+        except Exception:
+            pass
+    return result
+
+def _mb_gate(raw, for_chat=False):
+    if not raw or raw[0] != "@":
+        return True, raw            # untagged → pass through unchanged
+    end = raw.find("@", 1)
+    if end == -1:
+        return True, raw            # malformed prefix → don't risk dropping
+    sender = raw[1:end]
+    payload = raw[end + 1:]
+    if sender:
+        _mb_seen_senders.add(sender)
+    # Chat pins to the chosen main character; all other streams follow the
+    # selected/locked character.
+    target = _mb_chat_lock_target() if for_chat else _mb_lock_target()
+    # Accept when: no lock target yet, sender matches, or sender is empty
+    # (a brief transient before windower.ffxi.get_player() returns a name
+    # right after login — dropping those would blink the panels).
+    accepted = (not target or not sender or sender == target)
+    if _MB_DEBUG:
+        try:
+            _mb_dbg_note(sender, accepted)
+        except Exception:
+            pass
+    if accepted:
+        return True, payload
+    return False, payload           # different character → drop
 char_view_button_rect = None     # set by draw_header, read by click handler
 char_view_dropdown_open = False
 char_view_dropdown_rects = []
@@ -5616,7 +5781,20 @@ def _switch_active_view(name):
     streams (party, equip, stats, debuffs) are not affected — those
     are always for the logged-in character."""
     global active_view_char
+    _prev_view = active_view_char
     active_view_char = name or ""
+    # Multibox: when the locked character actually changes, clear the live
+    # display data so panels refresh to the new character immediately
+    # instead of showing the previous character's stale data until the new
+    # one's next packet arrives. The new character is actively sending, so
+    # everything repopulates within a frame or two. Only do this on a real
+    # change (not a no-op re-select) and only for the live per-character
+    # state, never for UI/config. Wrapped defensively.
+    if _prev_view != active_view_char:
+        try:
+            _mb_clear_live_data()
+        except Exception as _e:
+            print(f"[OmniWatch] live-data clear on switch: {_e!r}")
     _rebuild_path_constants()
     # Reload everything from the new chardir. Each loader is wrapped in
     # try/except so one bad file can't kill the switch. We special-case
@@ -7159,6 +7337,25 @@ SETTINGS_SCHEMA = [
                    "Range 2-10.",
     },
     {
+        # Chat main character (multibox): pins the chat panel to one
+        # character so chat stays on that character even while you view
+        # another character's panels. Options are filled dynamically from
+        # the header character dropdown list (see _setting_schema's special
+        # handling for this key). Empty/unset → chat follows the current
+        # logged-in character until you pick one.
+        "key":     "chat_main_char",
+        "label":   "Chat main character",
+        "kind":    "enum",
+        "options":       [""],
+        "option_labels": ["(no characters yet)"],
+        "default": "",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Multibox: keep the chat panel on this character no "
+                   "matter which character's panels you're viewing. The "
+                   "list shows the same characters as the header dropdown.",
+    },
+    {
         # Server picker — used by the Domain Invasion banner in the
         # Ongoing Events modal to filter the whereisdi.com response
         # down to the user's world. The whereisdi API stores entries
@@ -8243,6 +8440,14 @@ def _coerce_setting(schema, raw):
             return str(raw)
         if kind == "enum":
             options = schema.get("options", [])
+            # chat_main_char holds a character name whose validity depends
+            # on who's logged in *right now* (checked at use-time in
+            # _mb_chat_lock_target). Its option list is built dynamically
+            # and may not include a saved/away character at load time, so
+            # accept any non-empty string here rather than snapping it back
+            # to default on every reload.
+            if schema.get("key") == "chat_main_char":
+                return str(raw) if raw else schema.get("default", "")
             # Normalise int-from-json: enum option might be the int 300
             # but raw might be the string "300". Coerce raw to match.
             if options and isinstance(options[0], int):
@@ -8297,7 +8502,12 @@ def load_settings():
                 if not _persistable(schema):
                     continue
                 if key in raw:
-                    out[key] = _coerce_setting(schema, raw[key])
+                    # Use the dynamic schema for keys with runtime-filled
+                    # enum options (e.g. chat_main_char), so a saved
+                    # character name isn't coerced back to default against
+                    # the static placeholder options on every reload.
+                    _sch = _setting_schema(key) or schema
+                    out[key] = _coerce_setting(_sch, raw[key])
             # Preserve any persisted keys that aren't in the schema.
             # Some settings are stored directly via `settings[key] = ...`
             # rather than the schema (e.g. the hide-nub's x/y/size are
@@ -8479,6 +8689,14 @@ def set_setting(key, value):
     if not schema:
         print(f"[OmniWatch] set_setting: unknown key {key!r}")
         return None
+    # Use the DYNAMIC schema for keys whose enum options are filled in at
+    # runtime (e.g. chat_main_char's character list). The static
+    # SETTINGS_BY_KEY copy only has placeholder options, so coercing
+    # against it would reject every real value and snap back to default —
+    # which is exactly why the chat-main arrows appeared to do nothing.
+    dyn = _setting_schema(key)
+    if dyn is not None:
+        schema = dyn
     coerced = _coerce_setting(schema, value)
     settings[key] = coerced
     save_settings()
@@ -22835,9 +23053,23 @@ def dispatch_party_settings_click(mx, my):
 def _setting_schema(key):
     """Look up a setting's schema entry from SETTINGS_SCHEMA by key.
     Returns the dict or None. Used by the party modal to read enum
-    options + action mappings without duplicating that data inline."""
+    options + action mappings without duplicating that data inline.
+
+    Special case: 'chat_main_char' has DYNAMIC options — the same
+    characters shown in the header character dropdown (config-folder
+    characters + the current logged-in one). We return a shallow copy of
+    the schema with options/option_labels filled in live, so the picker
+    always reflects the known characters without persisting a stale list."""
     for entry in SETTINGS_SCHEMA:
         if entry.get("key") == key:
+            if key == "chat_main_char":
+                names = _mb_known_chars()
+                opts = list(names) if names else [""]
+                labels = list(names) if names else ["(no characters yet)"]
+                dyn = dict(entry)
+                dyn["options"] = opts
+                dyn["option_labels"] = labels
+                return dyn
             return entry
     return None
 
@@ -23417,6 +23649,7 @@ _HEADER_MODAL_ROWS = [
     ("show_location",        "Show location",           "bool"),
     ("show_clock_seconds",   "Show clock seconds",      "bool"),
     ("clock_timezone",       "OS clock time zone",      "enum"),
+    ("chat_main_char",       "Chat main character",     "enum"),
     ("ffxi_server",          "Server",                  "enum"),
     ("show_header_points",   "Show points tracker",     "bool"),
     ("header_points_focus",  "Points type",             "enum"),
@@ -35134,10 +35367,86 @@ def draw_help_tooltip(surface, mx, my, lines, screen_w, screen_h):
             cy += line_h // 2
 
 
+def _tt_normalize_line(s):
+    """Tidy a raw FFXI description line for display.
+
+    FFXI description text uses a few characters that render oddly in
+    Consolas or read awkwardly in a compact tooltip:
+      - the fullwidth/odd minus and en/em dashes → ASCII '-'
+      - the '~' range separator in Unity Ranking lines (e.g. "5~15") is
+        kept, but we collapse runs of whitespace so the line isn't ragged
+      - stray leading bullet/space noise trimmed
+    Keeps the content; only the glyphs/spacing change.
+    """
+    if not s:
+        return s
+    # Normalize assorted dash glyphs to a plain hyphen. Covers the
+    # unicode hyphen/dash block (U+2010-2015), the minus sign (U+2212),
+    # the fullwidth hyphen (U+FF0D) and the katakana prolonged-sound mark
+    # (U+30FC) that FFXI sometimes uses where a minus is meant.
+    for bad in ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014",
+                "\u2015", "\u2212", "\uff0d", "\u30fc"):
+        s = s.replace(bad, "-")
+    # Normalize the range separator to an ASCII tilde. FFXI writes stat
+    # ranges (e.g. Unity Ranking "Attack+10~15") with the wave dash
+    # (U+301C), fullwidth tilde (U+FF5E), or tilde operator (U+223C) —
+    # none of which Consolas can render, so they showed as a missing-glyph
+    # box between the two numbers. ASCII '~' displays cleanly.
+    for wave in ("\u301c", "\uff5e", "\u223c", "\u2053"):
+        s = s.replace(wave, "~")
+    # Collapse internal whitespace runs.
+    s = " ".join(s.split())
+    return s
+
+
+def _tt_wrap(font, text, max_w):
+    """Word-wrap `text` to fit `max_w` pixels in `font`. Returns list[str].
+
+    Falls back to hard-splitting a single word that's itself too long so a
+    pathological token can't blow out the width.
+    """
+    words = text.split(" ")
+    lines = []
+    cur = ""
+    for w in words:
+        trial = w if not cur else cur + " " + w
+        if font.size(trial)[0] <= max_w:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            # If the single word still exceeds max_w, hard-split it.
+            if font.size(w)[0] > max_w:
+                piece = ""
+                for ch in w:
+                    if font.size(piece + ch)[0] <= max_w:
+                        piece += ch
+                    else:
+                        if piece:
+                            lines.append(piece)
+                        piece = ch
+                cur = piece
+            else:
+                cur = w
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
 def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
-    """Draw a minimal tooltip at (mx, my) for the given item info dict.
-    Shows just the item name — keeps things clean since deeper stats aren't
-    reliably available locally.
+    """Draw a rich tooltip at (mx, my) for the given item info dict.
+
+    FFXIAH-style block: item name, parsed description stat lines, any
+    augments, then a footer with item level / level req / jobs. All body
+    text word-wraps to a fixed max width so the tooltip stays a tidy
+    column instead of stretching to the widest line; the jobs list wraps
+    across as many rows as needed. Falls back to a name-only tooltip when
+    the richer fields aren't present, so it's safe for any caller — the
+    live equipment panel and the saved-set panel share this one renderer.
+
+    info keys (all optional except name/item_id):
+        name, item_id, ilvl, level, jobs (csv string),
+        augments (list[str]), stat_lines (list[str])
     """
     if not info:
         return
@@ -35145,12 +35454,68 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     if not name:
         return
 
-    pad_x, pad_y = 8, 5
-    f_name = get_font("Consolas", 13, bold=True)
-    name_surf = f_name.render(name, True, (255, 240, 180))
+    pad_x, pad_y = 8, 6
+    line_gap = 2
+    # Hard cap on text column width so the tooltip is a tidy block. Stat
+    # lines and the job list wrap to this; the name can exceed it slightly
+    # (names are short) but is also wrapped to be safe.
+    MAX_TEXT_W = 240
 
-    total_w = name_surf.get_width()  + pad_x * 2
-    total_h = name_surf.get_height() + pad_y * 2
+    f_name = get_font("Consolas", 13, bold=True)
+    f_stat = get_font("Consolas", 12)
+    f_meta = get_font("Consolas", 11)
+
+    COL_NAME = (255, 240, 180)
+    COL_STAT = (215, 220, 230)
+    COL_AUG  = (150, 215, 255)   # augments stand out in light blue
+    COL_META = (165, 165, 180)   # ilvl / level / jobs footer, dimmer
+
+    # Body rows (name + stat lines + augments), each wrapped to MAX_TEXT_W.
+    rows = []
+    for wl in _tt_wrap(f_name, _tt_normalize_line(name), MAX_TEXT_W):
+        rows.append(f_name.render(wl, True, COL_NAME))
+
+    for sl in (info.get("stat_lines") or []):
+        sl = _tt_normalize_line(sl)
+        if not sl or sl == name:
+            continue
+        for wl in _tt_wrap(f_stat, sl, MAX_TEXT_W):
+            rows.append(f_stat.render(wl, True, COL_STAT))
+
+    for ag in (info.get("augments") or []):
+        ag = _tt_normalize_line(ag)
+        wrapped = _tt_wrap(f_stat, "\u2756 " + ag, MAX_TEXT_W)
+        for j, wl in enumerate(wrapped):
+            # Indent continuation lines so wrapped augments read clearly.
+            txt = wl if j == 0 else "   " + wl
+            rows.append(f_stat.render(txt, True, COL_AUG))
+
+    # Footer: ilvl / level on one row, jobs wrapped across rows.
+    meta_bits = []
+    ilvl = info.get("ilvl") or 0
+    lvl  = info.get("level") or 0
+    if ilvl:
+        meta_bits.append(f"i{ilvl}")
+    if lvl:
+        meta_bits.append(f"Lv{lvl}")
+    footer_rows = []
+    if meta_bits:
+        footer_rows.append(f_meta.render("  ".join(meta_bits), True, COL_META))
+    jobs = (info.get("jobs") or "").replace(",", " ").strip()
+    if jobs:
+        for wl in _tt_wrap(f_meta, jobs, MAX_TEXT_W):
+            footer_rows.append(f_meta.render(wl, True, COL_META))
+
+    all_rows = rows + footer_rows
+    if not all_rows:
+        return
+
+    content_w = max(r.get_width() for r in all_rows)
+    content_h = sum(r.get_height() for r in all_rows) + line_gap * (len(all_rows) - 1)
+    sep_h = 5 if footer_rows else 0
+
+    total_w = content_w + pad_x * 2
+    total_h = content_h + pad_y * 2 + sep_h
 
     # Position: bottom-right of cursor by default, flip if off-screen.
     tx = mx + 14
@@ -35160,14 +35525,24 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     if ty + total_h > screen_h:
         ty = max(0, screen_h - total_h - 2)
 
-    # Drop-shadow panel + border.
-    shadow = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
-    shadow.fill((0, 0, 0, 200))
-    surface.blit(shadow, (tx, ty))
+    panel = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
+    panel.fill((0, 0, 0, 215))
+    surface.blit(panel, (tx, ty))
     pygame.draw.rect(surface, (80, 80, 100),
                      (tx, ty, total_w, total_h), 1, border_radius=4)
 
-    surface.blit(name_surf, (tx + pad_x, ty + pad_y))
+    cy = ty + pad_y
+    for r in rows:
+        surface.blit(r, (tx + pad_x, cy))
+        cy += r.get_height() + line_gap
+    if footer_rows:
+        sep_y = cy + 1
+        pygame.draw.line(surface, (70, 70, 88),
+                         (tx + pad_x, sep_y), (tx + total_w - pad_x, sep_y))
+        cy += sep_h
+        for r in footer_rows:
+            surface.blit(r, (tx + pad_x, cy))
+            cy += r.get_height() + line_gap
 
 
 def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
@@ -35415,6 +35790,12 @@ while running:
         data, _ = sock.recvfrom(8192)
         raw      = data.decode()
 
+        # Multibox: drop party packets from a non-locked character so the
+        # display doesn't jitter between two logged-in characters.
+        _mb_ok, raw = _mb_gate(raw)
+        if not _mb_ok:
+            raise _MBSkip
+
         party_data = []
         ally1_data = []
         ally2_data = []
@@ -35508,6 +35889,8 @@ while running:
                 ally2_data.append(entry)
             else:
                 party_data.append(entry)
+    except _MBSkip:
+        pass   # packet from a non-locked character; ignore quietly
     except Exception as e:
         # Silent except was masking parse errors; surface them now.
         if "Resource temporarily unavailable" not in str(e) and "10035" not in str(e):
@@ -35525,7 +35908,12 @@ while running:
     try:
         while True:
             edata, _ = sock_equip.recvfrom(4096)
-            parts    = edata.decode().split("|")
+            # Multibox: skip equip packets from a non-locked character so
+            # the equipment panel doesn't flip between two logged-in chars.
+            _eq_ok, _eq_raw = _mb_gate(edata.decode())
+            if not _eq_ok:
+                continue
+            parts    = _eq_raw.split("|")
             new_equip = []
             for i in range(16):
                 if i < len(parts):
@@ -35546,6 +35934,9 @@ while running:
         while True:
             rdata, _ = sock_equip_rich.recvfrom(4096)
             raw = rdata.decode(errors="replace")
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
+                continue
             rparts = raw.split("|")
             if len(rparts) < 2:
                 continue
@@ -35579,6 +35970,13 @@ while running:
             except: lvl = 0
             augs  = [rparts[i] for i in range(7, min(11, len(rparts)))
                      if rparts[i]]
+            # Field 11 (new): parsed item-description stat lines for the
+            # rich tooltip, joined by ';;' on the Lua side. Split back into
+            # a list; empty/missing → []. Older Lua builds don't send this
+            # field, so guard on length (backward-compatible).
+            stat_lines = []
+            if len(rparts) > 11 and rparts[11]:
+                stat_lines = [s for s in rparts[11].split(";;") if s]
             equip_rich[slot_idx] = {
                 "item_id":  item_id,
                 "name":     name,
@@ -35587,6 +35985,7 @@ while running:
                 "category": cat,
                 "level":    lvl,
                 "augments": augs,
+                "stat_lines": stat_lines,
             }
     except Exception:
         pass
@@ -35598,6 +35997,9 @@ while running:
         while True:
             sdata, _ = sock_stats.recvfrom(65536)
             raw = sdata.decode(errors="replace")
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
+                continue
             if not raw.startswith("BEGIN"):
                 continue
             new_stats = {}
@@ -35675,6 +36077,9 @@ while running:
         while True:
             tdata, _ = sock_target.recvfrom(1024)
             raw = tdata.decode()
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
+                continue
             # Split main vs sub. '||' is used because neither field will
             # contain two consecutive pipes on its own.
             if "||" in raw:
@@ -35797,6 +36202,9 @@ while running:
         while True:
             zdata, _ = sock_zone.recvfrom(1024)
             raw = zdata.decode()
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
+                continue
             if raw == "":
                 continue
             parts = raw.split("|")
@@ -35903,6 +36311,13 @@ while running:
             gdata, _ = sock_gs.recvfrom(1024)
             raw = gdata.decode(errors="replace").strip()
             if not raw:
+                continue
+            # Multibox: the GIL display payload is tagged with the sender's
+            # name; strip it (and drop a non-locked character's GIL). Other
+            # gs payloads (SET/STATE/SETUP/LOCK) are untagged and pass
+            # through unchanged.
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
                 continue
             parts = raw.split("|", 1)
             if len(parts) < 2:
@@ -36201,6 +36616,9 @@ while running:
         while True:
             tdata, _ = sock_timers.recvfrom(8192)
             raw = tdata.decode(errors="replace")
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
+                continue
             if not raw:
                 continue
             lines = raw.split("\n")
@@ -36415,6 +36833,13 @@ while running:
             idata, _ = sock_inv.recvfrom(16384)
             raw = idata.decode(errors="replace").strip()
             if not raw:
+                continue
+            # Multibox: inventory/currency/points/etc. display packets are
+            # tagged with the sending character; drop a non-locked char's so
+            # the inventory panels don't jitter between two logged-in chars.
+            # SIM_INV packets are intentionally untagged and pass through.
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
                 continue
             if raw.startswith("INV_BAG|"):
                 # Format: INV_BAG|<bag_name>|<count>|<id>,<count>,<name>;...
@@ -37058,6 +37483,13 @@ while running:
             raw = cdata.decode("utf-8", errors="replace")
             if not raw:
                 continue
+            # Multibox: chat is pinned to the chosen "main" character (Header
+            # settings → Chat main character) so it stays on your main even
+            # while viewing another character's panels. Falls back to the
+            # selected character when no main is set.
+            _ok, raw = _mb_gate(raw, for_chat=True)
+            if not _ok:
+                continue
             _ingest_chat_packet(raw, "text")
     except BlockingIOError:
         pass
@@ -37086,6 +37518,9 @@ while running:
         while True:
             ddata, _ = sock_dps.recvfrom(16384)
             raw = ddata.decode(errors="replace")
+            _ok, raw = _mb_gate(raw)
+            if not _ok:
+                continue
             if not raw:
                 continue
             raw = raw.strip()

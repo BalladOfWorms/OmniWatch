@@ -27,7 +27,7 @@ OmniWatch puts the live state of your character and party in one place:
 - **Header strip** — Vana'diel game clock with element/moon phase, current zone + region, character switcher, settings gear
 - **Sim mode** — what-if calculator: change job, level, JP, ML, gear, food, BRD songs (marches/minuets/madrigals), and COR rolls (Chaos/Samurai/Tactician's with optional Crooked Cards + optimal job toggles) and see the resulting stats live without applying anything in-game
 
-Everything is draggable and resizable. Per-character configs save layout, settings, blacklists, aliases, and hotbar bindings to `%APPDATA%\OmniWatch\<charname>\`.
+Move the whole overlay by holding **Shift** and dragging; reposition and resize individual panels in setup mode (`//ow setup`). Per-character configs save layout, settings, blacklists, aliases, and hotbar bindings to `%APPDATA%\OmniWatch\<charname>\`.
 
 ## Requirements
 
@@ -143,7 +143,7 @@ The settings menu's "Edit ..." entries (e.g. "Edit buff blacklist") open the rig
 
 ## Panels
 
-Every panel is independently toggleable from the settings dropdown. Most are draggable and resizable; drag from anywhere on a panel to move, drag the bottom-right corner to resize.
+Every panel is independently toggleable from the settings dropdown. To move the **whole overlay**, **hold Shift and drag** anywhere on it (the window is borderless, so Shift is what tells it you mean to move rather than click through). To reposition or resize **individual panels**, enter setup mode (`//ow setup`) — then drag a panel to move it and drag its bottom-right corner to resize.
 
 ### Party panel
 

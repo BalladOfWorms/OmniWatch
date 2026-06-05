@@ -757,7 +757,7 @@ return {
         ["Sword skill"]=242, 
         ["en"]="Demersal Degen", 
         ["delay"]=224, 
-        ["Fast Cast"]=2, 
+        ["Fast Cast"]=1, 
         ["slots"]={
             [0]="Main", 
             [1]="Sub"
@@ -773,7 +773,7 @@ return {
             [19]="DNC"
         }, 
         ["id"]=20708, 
-        ["Unity Ranking Bonus Applied"]="Fast Cast + 2", 
+        ["Unity Ranking Bonus Applied"]="Fast Cast + 1", 
         ["damage"]=109
     }, 
     [28]={
@@ -854,9 +854,9 @@ return {
         ["Club skill"]=242, 
         ["item_level"]=119, 
         ["delay"]=334, 
-        ["DEX"]=8, 
+        ["DEX"]=6, 
         ["Accuracy"]=61, 
-        ["Unity Ranking Bonus Applied"]="DEX + 8", 
+        ["Unity Ranking Bonus Applied"]="DEX + 6", 
         ["slots"]={
             [0]="Main", 
             [1]="Sub"
@@ -2170,13 +2170,13 @@ return {
     [79]={
         ["discription"]="Accuracy+13 Attack+13 \"Magic Atk. Bonus\"+7 Unity ranking: STR+1～5", 
         ["category"]="Weapon", 
-        ["STR"]=14, 
+        ["STR"]=13, 
         ["en"]="Seeth. Bomblet +1", 
         ["Magic Atk. Bonus"]=7, 
         ["augments"]={
             [1]="Path: A"
         }, 
-        ["Unity Ranking Bonus Applied"]="STR + 3", 
+        ["Unity Ranking Bonus Applied"]="STR + 2", 
         ["jobs"]={
             [1]="WAR", 
             [6]="THF", 
@@ -2891,7 +2891,7 @@ return {
     }, 
     [105]={
         ["Evasion"]=27, 
-        ["AGI"]=13, 
+        ["AGI"]=11, 
         ["HP"]=45, 
         ["jobs"]={
             [1]="WAR", 
@@ -2920,7 +2920,7 @@ return {
         ["augments"]={
             [1]="Path: A"
         }, 
-        ["Unity Ranking Bonus Applied"]="AGI + 13", 
+        ["Unity Ranking Bonus Applied"]="AGI + 11", 
         ["slots"]={
             [0]="Main", 
             [1]="Sub"
@@ -2937,8 +2937,8 @@ return {
         ["category"]="Weapon", 
         ["en"]="Ghastly Tathlum +1", 
         ["skill"]="(N/A)", 
-        ["Unity Ranking Bonus Applied"]="INT + 4", 
-        ["INT"]=4, 
+        ["Unity Ranking Bonus Applied"]="INT + 3", 
+        ["INT"]=3, 
         ["slots"]={
             [3]="Ammo"
         }, 
@@ -4654,14 +4654,14 @@ return {
         ["discription"]="DEF:111 HP+38 STR+16 DEX+16 VIT+16 AGI+16 INT+16 MND+16 CHR+16 Accuracy+8 Evasion+36 Magic Evasion+53 \"Magic Def. Bonus\"+2 Haste+8% \"Double Attack\"+3% Physical Damage taken-3% Unity Ranking: HP+30～80", 
         ["id"]=25602, 
         ["en"]="Blistering Sallet +1", 
-        ["HP"]=98, 
+        ["HP"]=78, 
         ["augments"]={
             [1]="Path: A"
         }, 
         ["slots"]={
             [4]="Head"
         }, 
-        ["Unity Ranking Bonus Applied"]="HP + 60", 
+        ["Unity Ranking Bonus Applied"]="HP + 40", 
         ["STR"]=41, 
         ["DEF"]=111, 
         ["Accuracy"]=53, 
@@ -4678,7 +4678,7 @@ return {
         ["en"]="Imp. Wing Hairpin", 
         ["Evasion"]=69, 
         ["AGI"]=26, 
-        ["DEX"]=31, 
+        ["DEX"]=28, 
         ["jobs"]={
             [1]="WAR", 
             [2]="MNK", 
@@ -4703,7 +4703,7 @@ return {
             [21]="GEO", 
             [22]="RUN"
         }, 
-        ["Unity Ranking Bonus Applied"]="DEX + 5", 
+        ["Unity Ranking Bonus Applied"]="DEX + 2", 
         ["id"]=26709, 
         ["slots"]={
             [4]="Head"
@@ -5201,8 +5201,8 @@ return {
         ["discription"]="+20 +20 +20 +20 +20 +20 Occasionally absorbs magic damage taken Unity Ranking: Enmity+1～8", 
         ["category"]="Armor", 
         ["en"]="Warder's Charm +1", 
-        ["Unity Ranking Bonus Applied"]="Enmity + 5", 
-        ["Enmity"]=5, 
+        ["Unity Ranking Bonus Applied"]="Enmity + 2", 
+        ["Enmity"]=2, 
         ["slots"]={
             [9]="Neck"
         }, 
@@ -5484,9 +5484,9 @@ return {
         ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
         ["category"]="Armor", 
         ["en"]="Bathy Choker +1", 
-        ["Evasion"]=26, 
+        ["Evasion"]=22, 
         ["HP"]=35, 
-        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["Unity Ranking Bonus Applied"]="Evasion + 7", 
         ["slots"]={
             [9]="Neck"
         }, 
@@ -7275,7 +7275,7 @@ return {
         ["Store TP"]=10, 
         ["en"]="Agony Jerkin +1", 
         ["HP"]=59, 
-        ["Accuracy"]=13, 
+        ["Accuracy"]=11, 
         ["id"]=26943, 
         ["STR"]=24, 
         ["DEF"]=136, 
@@ -7283,7 +7283,7 @@ return {
         ["slots"]={
             [5]="Body"
         }, 
-        ["Unity Ranking Bonus Applied"]="Accuracy + 13", 
+        ["Unity Ranking Bonus Applied"]="Accuracy + 11", 
         ["CHR"]=23, 
         ["INT"]=23, 
         ["VIT"]=24, 
@@ -7486,12 +7486,12 @@ return {
         ["DEF"]=218, 
         ["MP"]=91, 
         ["en"]="Cohort Cloak +1", 
-        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 16", 
+        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 12", 
         ["CHR"]=48, 
         ["INT"]=56, 
         ["Magic Atk. Bonus"]=100, 
         ["category"]="Armor", 
-        ["Magic Accuracy"]=116
+        ["Magic Accuracy"]=112
     }, 
     [242]={
         ["Evasion"]=41, 
@@ -9494,10 +9494,10 @@ return {
         ["slots"]={
             [6]="Hands"
         }, 
-        ["Unity Ranking Bonus Applied"]="Accuracy + 13", 
+        ["Unity Ranking Bonus Applied"]="Accuracy + 11", 
         ["STR"]=10, 
         ["DEF"]=91, 
-        ["Accuracy"]=94, 
+        ["Accuracy"]=92, 
         ["INT"]=14, 
         ["category"]="Armor", 
         ["CHR"]=19, 
@@ -10911,10 +10911,10 @@ return {
             [1]="Path: A"
         }, 
         ["VIT"]=17, 
-        ["Unity Ranking Bonus Applied"]="Double ttack + 2", 
+        ["Unity Ranking Bonus Applied"]="Double ttack + 1", 
         ["STR"]=30, 
         ["DEF"]=124, 
-        ["Double ttack"]=2, 
+        ["Double ttack"]=1, 
         ["INT"]=33, 
         ["category"]="Armor", 
         ["CHR"]=16, 
@@ -11062,7 +11062,7 @@ return {
             [20]="SCH", 
             [21]="GEO"
         }, 
-        ["Refresh"]=2, 
+        ["Refresh"]=1, 
         ["discription"]="DEF:105 HP+43 MP+29 STR+25 VIT+12 AGI+17 INT+36 MND+26 CHR+19 Evasion+27 Magic Evasion+107 \"Magic Def. Bonus\"+6 Haste+5% Enmity-6 Avatar perpetuation cost-3 Unity Ranking: \"Refresh\"+1～2", 
         ["item_level"]=119, 
         ["AGI"]=17, 
@@ -11075,7 +11075,7 @@ return {
         ["VIT"]=12, 
         ["STR"]=25, 
         ["INT"]=36, 
-        ["Unity Ranking Bonus Applied"]="Refresh + 2", 
+        ["Unity Ranking Bonus Applied"]="Refresh + 1", 
         ["CHR"]=19, 
         ["en"]="Assid. Pants +1"
     }, 
@@ -11339,7 +11339,7 @@ return {
     }, 
     [343]={
         ["Evasion"]=55, 
-        ["Enmity"]=5, 
+        ["Enmity"]=4, 
         ["jobs"]={
             [3]="WHM"
         }, 
@@ -11361,7 +11361,7 @@ return {
         ["DEF"]=66, 
         ["MP"]=59, 
         ["AGI"]=33, 
-        ["Unity Ranking Bonus Applied"]="Enmity + 5", 
+        ["Unity Ranking Bonus Applied"]="Enmity + 4", 
         ["CHR"]=34, 
         ["INT"]=17, 
         ["category"]="Armor", 
@@ -11829,7 +11829,7 @@ return {
         ["DEX"]=11, 
         ["AGI"]=33, 
         ["MND"]=19, 
-        ["Fast Cast"]=6, 
+        ["Fast Cast"]=5, 
         ["discription"]="DEF:66 HP+13 MP+39 STR+10 DEX+11 VIT+10 AGI+33 INT+17 MND+19 CHR+34 Evasion+55 Magic Evasion+107 \"Magic Def. Bonus\"+5 Healing magic skill +11 Enhancing magic skill +11 Haste+3% \"Fast Cast\"+4% Unity Ranking: \"Fast Cast\"+1～3%", 
         ["id"]=28274, 
         ["item_level"]=119, 
@@ -11844,7 +11844,7 @@ return {
         ["slots"]={
             [8]="Feet"
         }, 
-        ["Unity Ranking Bonus Applied"]="Fast Cast + 2", 
+        ["Unity Ranking Bonus Applied"]="Fast Cast + 1", 
         ["CHR"]=34, 
         ["INT"]=17, 
         ["category"]="Armor", 
@@ -12114,7 +12114,7 @@ return {
         ["Magic Accuracy"]=7
     }, 
     [365]={
-        ["Evasion"]=89, 
+        ["Evasion"]=87, 
         ["MND"]=19, 
         ["slots"]={
             [8]="Feet"
@@ -12147,7 +12147,7 @@ return {
         ["VIT"]=10, 
         ["STR"]=10, 
         ["INT"]=17, 
-        ["Unity Ranking Bonus Applied"]="Evasion + 18", 
+        ["Unity Ranking Bonus Applied"]="Evasion + 16", 
         ["CHR"]=34, 
         ["en"]="Hippo. Socks +1"
     }, 
@@ -12734,7 +12734,7 @@ return {
         ["Attack"]=15
     }, 
     [381]={
-        ["Evasion"]=61, 
+        ["Evasion"]=58, 
         ["MND"]=19, 
         ["slots"]={
             [8]="Feet"
@@ -12756,7 +12756,7 @@ return {
         ["VIT"]=10, 
         ["STR"]=10, 
         ["INT"]=17, 
-        ["Unity Ranking Bonus Applied"]="Evasion + 6", 
+        ["Unity Ranking Bonus Applied"]="Evasion + 3", 
         ["CHR"]=34, 
         ["en"]="Jute Boots +1"
     }, 
@@ -13711,7 +13711,7 @@ return {
     }, 
     [412]={
         ["discription"]="DEF:8 Magic Damage+4 Converts 100 HP to MP Unity Ranking: Enmity-3～7", 
-        ["Enmity"]=5, 
+        ["Enmity"]=4, 
         ["category"]="Armor", 
         ["en"]="Mephitas's Ring", 
         ["jobs"]={
@@ -13744,10 +13744,10 @@ return {
             [14]="Right Ring"
         }, 
         ["id"]=27558, 
-        ["Unity Ranking Bonus Applied"]="Enmity + 5"
+        ["Unity Ranking Bonus Applied"]="Enmity + 4"
     }, 
     [413]={
-        ["Enmity"]=7, 
+        ["Enmity"]=6, 
         ["en"]="Apeile Ring", 
         ["id"]=27560, 
         ["slots"]={
@@ -13756,7 +13756,7 @@ return {
         }, 
         ["category"]="Armor", 
         ["discription"]="Unity Ranking: Enmity+5～9 Latent effect: \"Regen\"+3 \"Refresh\"+1", 
-        ["Unity Ranking Bonus Applied"]="Enmity + 7", 
+        ["Unity Ranking Bonus Applied"]="Enmity + 6", 
         ["jobs"]={
             [1]="WAR", 
             [7]="PLD"
@@ -13839,7 +13839,7 @@ return {
     [415]={
         ["discription"]="INT+6 MND+6 CHR+6 Converts 60 HP to MP Unity Ranking: Magic Accuracy+1～5", 
         ["category"]="Armor", 
-        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 3", 
+        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 2", 
         ["en"]="Metamor. Ring +1", 
         ["augments"]={
             [1]="Path: A"
@@ -13876,7 +13876,7 @@ return {
             [13]="Left Ring", 
             [14]="Right Ring"
         }, 
-        ["Magic Accuracy"]=13
+        ["Magic Accuracy"]=12
     }, 
     [416]={
         ["discription"]="Right ear: Singing skill +10 Enmity-7", 
@@ -14256,12 +14256,12 @@ return {
         ["augments"]={
             [1]="Path: A"
         }, 
-        ["Unity Ranking Bonus Applied"]="Accuracy + 8", 
+        ["Unity Ranking Bonus Applied"]="Accuracy + 6", 
         ["slots"]={
             [11]="Left Ear", 
             [12]="Right Ear"
         }, 
-        ["Accuracy"]=8, 
+        ["Accuracy"]=6, 
         ["jobs"]={
             [1]="WAR", 
             [2]="MNK", 
@@ -14310,8 +14310,8 @@ return {
         ["DEX"]=7, 
         ["en"]="Lugra Earring", 
         ["STR"]=7, 
-        ["Double Attack"]=2, 
-        ["Unity Ranking Bonus Applied"]="Double Attack + 2", 
+        ["Double Attack"]=1, 
+        ["Unity Ranking Bonus Applied"]="Double Attack + 1", 
         ["jobs"]={
             [1]="WAR", 
             [7]="PLD", 
@@ -14337,13 +14337,13 @@ return {
         ["category"]="Armor", 
         ["DEX"]=16, 
         ["en"]="Lugra Earring +1", 
-        ["Double Attack"]=2, 
+        ["Double Attack"]=1, 
         ["INT"]=16, 
         ["slots"]={
             [11]="Left Ear", 
             [12]="Right Ear"
         }, 
-        ["Unity Ranking Bonus Applied"]="Double Attack + 2", 
+        ["Unity Ranking Bonus Applied"]="Double Attack + 1", 
         ["jobs"]={
             [1]="WAR", 
             [7]="PLD", 
@@ -14360,7 +14360,7 @@ return {
         ["discription"]="MND+3 \"Cure\" potency +2% \"Cure\" spellcasting time -3% Unity Ranking: \"Cure\" potency +3～4%", 
         ["category"]="Armor", 
         ["en"]="Nourish. Earring", 
-        ["Unity Ranking Bonus Applied"]="Cure Potency + 4", 
+        ["Unity Ranking Bonus Applied"]="Cure Potency + 3", 
         ["MND"]=3, 
         ["slots"]={
             [11]="Left Ear", 
@@ -14371,7 +14371,7 @@ return {
             [7]="PLD"
         }, 
         ["id"]=28484, 
-        ["Cure Potency"]=4
+        ["Cure Potency"]=3
     }, 
     [432]={
         ["discription"]="CHR+5 Magic Accuracy+6 \"Fast Cast\"+2%", 
@@ -16457,14 +16457,14 @@ return {
         }, 
         ["category"]="Armor", 
         ["en"]="Kentarch Belt +1", 
-        ["Store TP"]=3, 
+        ["Store TP"]=2, 
         ["slots"]={
             [10]="Waist"
         }, 
         ["id"]=28413, 
         ["DEF"]=14, 
         ["Accuracy"]=14, 
-        ["Unity Ranking Bonus Applied"]="Store TP + 3"
+        ["Unity Ranking Bonus Applied"]="Store TP + 2"
     }, 
     [505]={
         ["discription"]="DEF:7 HP+25 MP+25 Same elemental magic as weather/day: Enhances bonus", 
@@ -16517,7 +16517,7 @@ return {
         ["category"]="Armor", 
         ["STR"]=15, 
         ["en"]="Sailfi Belt +1", 
-        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Unity Ranking Bonus Applied"]="Attack + 11", 
         ["Double Attack"]=5, 
         ["id"]=28428, 
         ["slots"]={
@@ -16544,7 +16544,7 @@ return {
             [1]="Path: A"
         }, 
         ["Haste"]=9, 
-        ["Attack"]=13
+        ["Attack"]=11
     }, 
     [508]={
         ["discription"]="DEF:13 Capacity point bonus: +25%", 
@@ -17137,26 +17137,38 @@ return {
         ["Attack"]=15
     }, 
     [528]={
-        ["discription"]="DMG:56 Delay:390 TP Bonus", 
-        ["en"]="Martial Staff", 
-        ["skill"]="Staff", 
-        ["delay"]=390, 
-        ["category"]="Weapon", 
+        ["discription"]="DEF:1", 
+        ["DEF"]=1, 
         ["slots"]={
-            [0]="Main"
+            [8]="Feet"
         }, 
+        ["en"]="Prishe's Boots", 
+        ["id"]=23894, 
+        ["category"]="Armor", 
         ["jobs"]={
+            [1]="WAR", 
             [2]="MNK", 
             [3]="WHM", 
             [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
             [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
             [14]="DRG", 
             [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
             [20]="SCH", 
-            [21]="GEO"
-        }, 
-        ["id"]=17593, 
-        ["damage"]=56
+            [21]="GEO", 
+            [22]="RUN"
+        }
     }, 
     [529]={
         ["discription"]="DEF:24 MND+7 \"Magic Atk. Bonus\"+7 Enmity-3 Blue magic recast delay -6%", 

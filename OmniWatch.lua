@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.6.1'
+_addon.version  = '1.6.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -956,6 +956,40 @@ local OW_BLU_TRAIT_TABLES = {
 -- BLU pool wins instead — never both summed. Keyed by the trait-table key
 -- used in OW_BLU_TRAIT_TABLES above. Subjobs not listed for a trait grant
 -- 0 points for it.
+-- Subjob Evasion Bonus tier ladder, keyed by the subjob that grants it.
+-- Values are the full BG-wiki "Evasion Bonus" Level-Obtained table, which
+-- is the authoritative source — it supersedes the older capped tables in
+-- both the vendored GearInfo and the (pre-Master-Level) bluGuide addon,
+-- which both stopped at tier II (+22) because they assumed a subjob caps
+-- at level 49. With Master Levels the subjob cap is now higher (e.g. 55+),
+-- so a /THF sub at 55 crosses the level-50 breakpoint into Evasion Bonus
+-- III (+35) — which neither legacy table accounted for. We read the
+-- game-reported sub_job_level (already reflecting the ML-raised cap) and
+-- walk this ladder. Both OmniWatch's max-not-sum subtraction AND the
+-- vendored GearInfo base eva use these same numbers so they can't drift.
+--   THF: 10->10, 30->22, 50->35, 70->48, 76->60, 88->72
+--   DNC: 15->10, 45->22, 75->35, 86->48
+--   PUP: 25->10, 40->22, 60->35, 76->48   (BG-wiki; note tier I is 25, not 20)
+local OW_BLU_EVA_SUB_LADDER = {
+    THF = { {88,72}, {76,60}, {70,48}, {50,35}, {30,22}, {10,10} },
+    DNC = { {86,48}, {75,35}, {45,22}, {15,10} },
+    PUP = { {76,48}, {60,35}, {40,22}, {25,10} },
+}
+
+-- Resolve the subjob Evasion Bonus value for a given subjob + level by
+-- walking the ladder high→low and returning the first tier the level
+-- meets. Returns 0 if the job grants no Evasion Bonus or the level is
+-- below tier I.
+local function ow_sub_eva_bonus(sub_job, sub_level)
+    if not sub_job then return 0 end
+    local ladder = OW_BLU_EVA_SUB_LADDER[sub_job:upper()]
+    if not ladder then return 0 end
+    for _, pair in ipairs(ladder) do
+        if (sub_level or 0) >= pair[1] then return pair[2] end
+    end
+    return 0
+end
+
 local OW_BLU_TRAIT_SUBS = {
     acc_bonus     = { DNC = 8,  DRG = 8,  RNG = 16 },
     attack_bonus  = { WAR = 8,  DRG = 8,  DRK = 16 },
@@ -2088,6 +2122,27 @@ do
     end
 end
 
+-- ── Multibox display lock (per-character stream tag) ────────────────
+-- When 2+ FFXI clients each run their own OmniWatch, all of them send
+-- their live-display data to these same fixed ports. The overlay would
+-- then flip ("jitter") between characters as packets interleave. To fix
+-- this WITHOUT per-character views, every live-display payload is tagged
+-- with the SENDING character's name as a "@name@" prefix. The Python
+-- overlay locks the display to one character (whoever is picked in the
+-- header dropdown / the logged-in char) and DROPS tagged packets from any
+-- other character. '@' never appears in FFXI character names or in the
+-- payload field delimiters (, ; |), so the prefix is unambiguous and the
+-- parser strips it cleanly. Single-box is unaffected: the name always
+-- matches the one locked character, so nothing is dropped.
+--
+-- A GLOBAL function (not a local) to stay clear of Lua 5.1's 200-local
+-- ceiling and to be reachable from every send site.
+function _OW_MB_TAG(payload)
+    local p = windower.ffxi.get_player()
+    local nm = (p and p.name) or ''
+    return '@' .. nm .. '@' .. payload
+end
+
 -- Party data  → port 5000
 local udp = socket.udp()
 udp:setpeername("127.0.0.1", 5000)
@@ -2326,7 +2381,7 @@ local function _ow_emit_inventory_snapshot()
         end
         local payload = string.format('INV_BAG|%s|%d|%s',
             bag_name, #entries, table.concat(entries, ';'))
-        pcall(function() udp_inv:send(payload) end)
+        pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
     end
 
     -- ── Porter Slip contents ─────────────────────────────────────────────
@@ -2417,7 +2472,7 @@ local function _ow_emit_inventory_snapshot()
                         'INV_SLIP|%d|%s|%d|%s',
                         slip_id, slip_name, #item_entries,
                         table.concat(item_entries, ';'))
-                    pcall(function() udp_inv:send(slip_payload) end)
+                    pcall(function() udp_inv:send(_OW_MB_TAG(slip_payload)) end)
                 end
             end
         end
@@ -2452,7 +2507,7 @@ local function _ow_emit_inventory_snapshot()
             tonumber(cur.escha_beads) or 0,
             tonumber(cur.nyzul_tokens) or 0,
             tonumber(cur.ichor) or 0)
-        udp_inv:send(payload)
+        udp_inv:send(_OW_MB_TAG(payload))
     end)
 
     pcall(function()
@@ -2487,7 +2542,7 @@ local function _ow_emit_inventory_snapshot()
             cp_tnl_val,
             tonumber(pts.exemplar) or 0,
             tonumber(pts.exemplar_tnl) or 0)
-        udp_inv:send(points_payload)
+        udp_inv:send(_OW_MB_TAG(points_payload))
     end)
 
     pcall(function()
@@ -2523,7 +2578,7 @@ local function _ow_emit_inventory_snapshot()
         end
         table.sort(owned)
         local trust_payload = 'TRUSTS|' .. table.concat(owned, '|')
-        udp_inv:send(trust_payload)
+        udp_inv:send(_OW_MB_TAG(trust_payload))
     end)
 
     pcall(function()
@@ -2577,7 +2632,7 @@ local function _ow_emit_inventory_snapshot()
         local blu_payload = 'BLU_SPELLS|' ..
             table.concat(learned, '|') .. '||' ..
             table.concat(master, '|')
-        udp_inv:send(blu_payload)
+        udp_inv:send(_OW_MB_TAG(blu_payload))
     end)
 
     pcall(function()
@@ -2625,7 +2680,7 @@ local function _ow_emit_inventory_snapshot()
         local mount_payload = 'MOUNTS|' ..
             table.concat(learned, '|') .. '||' ..
             table.concat(master, '|')
-        udp_inv:send(mount_payload)
+        udp_inv:send(_OW_MB_TAG(mount_payload))
     end)
 
     pcall(function()
@@ -2719,7 +2774,7 @@ local function _ow_emit_inventory_snapshot()
                 local payload = 'SPELLS_' .. tag .. '|' ..
                     table.concat(learned_arr, '|') .. '||' ..
                     table.concat(master_arr, '|')
-                udp_inv:send(payload)
+                udp_inv:send(_OW_MB_TAG(payload))
             end
         end
     end)
@@ -2813,7 +2868,7 @@ local function _ow_emit_inventory_snapshot()
                 local payload = 'WS_' .. tag .. '|' ..
                     table.concat(learned_arr, '|') .. '||' ..
                     table.concat(master_arr, '|')
-                udp_inv:send(payload)
+                udp_inv:send(_OW_MB_TAG(payload))
             end
         end
     end)
@@ -2838,11 +2893,11 @@ local function _ow_emit_inventory_snapshot()
                 [3] = "Jeuno",
             }
             local nm = names[p.nation] or ("Nation " .. tostring(p.nation))
-            udp_inv:send('NATION|' .. tostring(p.nation) .. '|' .. nm)
+            udp_inv:send(_OW_MB_TAG('NATION|' .. tostring(p.nation) .. '|' .. nm))
         end
     end)
 
-    pcall(function() udp_inv:send('INV_END|' .. tostring(os.time())) end)
+    pcall(function() udp_inv:send(_OW_MB_TAG('INV_END|' .. tostring(os.time()))) end)
     _ow_bag_inv_last_emit = os.clock()
 end
 
@@ -3359,7 +3414,7 @@ do
                 '%s=%d', ring.key, _compute_remaining(ring))
         end
         local payload = 'RINGS|' .. table.concat(parts, ';')
-        pcall(function() udp_inv:send(payload) end)
+        pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
     end
 
     -- Diagnostic.
@@ -4804,6 +4859,13 @@ ow_safe_register('addon command', function(command, ...)
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
         windower.add_to_chat(207, string.format('[OW] buff_debug = %s',
             tostring(_ow_buff_debug)))
+    elseif command == 'partydebug' then
+        -- Toggle the 0x0DD/0x0DF party-job trace: logs each parsed party/
+        -- char update's job fields so the capture can be verified against a
+        -- known party. Off by default; harmless when off.
+        _OW_PARTY_DEBUG = not _OW_PARTY_DEBUG
+        windower.add_to_chat(207, '[OmniWatch] partydebug '
+            .. (_OW_PARTY_DEBUG and 'ON' or 'OFF'))
     elseif command == 'warpringreset' then
         -- Manual clear of the Warp Ring cooldown. Useful for
         -- testing the python display without waiting an hour.
@@ -5988,7 +6050,7 @@ ow_safe_register('addon command', function(command, ...)
             windower.add_to_chat(207, '[OW] DPS panel toggle sent.')
         elseif sub == 'reset' then
             _ow_dps_reset()
-            udp_dps:send('DPS_EMPTY')
+            udp_dps:send(_OW_MB_TAG('DPS_EMPTY'))
             windower.add_to_chat(207,
                 '[OW] DPS rolling window cleared.')
         elseif sub == 'party' then
@@ -6135,6 +6197,13 @@ local last_zone_send   = 0
 local last_gil_send    = 0
 local last_gil_value   = -1  -- -1 = never sent
 local party_buffs      = {}    -- keyed by player id
+-- Party member jobs captured from the 0x0DD/0x0DF packets, keyed by member
+-- id: { mj=str, mjl=int, sj=str, sjl=int, ts=os.time }. GLOBAL (not a
+-- local) so the deep packet handler and the deep party encoder reach the
+-- same table regardless of scope depth in this large chunk, and so it
+-- doesn't add to the near-capped top-level local count.
+_OW_PARTY_JOBS = _OW_PARTY_JOBS or {}
+_OW_PARTY_DEBUG = _OW_PARTY_DEBUG or false   -- //ow partydebug toggles this
 local extracted_ids    = {}    -- id -> true; tracks which icons we've already extracted this session
 
 -- display_pos order from core.lua slotMapping (index 0-15 → slot_id)
@@ -7700,9 +7769,9 @@ local function _ow_dps_emit()
     end
 
     if #lines == 0 then
-        udp_dps:send('DPS_EMPTY')
+        udp_dps:send(_OW_MB_TAG('DPS_EMPTY'))
     else
-        udp_dps:send(table.concat(lines, '\n'))
+        udp_dps:send(_OW_MB_TAG(table.concat(lines, '\n')))
     end
 end
 
@@ -9144,6 +9213,63 @@ local function handle_incoming_action_message(arr)
         end
     end
 end
+
+-- ── Party member jobs (0x0DD / 0x0DF) ───────────────────────────────
+-- windower.ffxi.get_party() exposes party members' HP/MP/TP but NOT their
+-- jobs/levels, so the party panel showed blank jobs for everyone but you.
+-- Two incoming packets carry same-zone members' jobs:
+--   0x0DD = party member update (name + id + jobs/levels)
+--   0x0DF = char update (fires on JOB CHANGE, level up, zoning in, etc.)
+-- We capture both into the global _OW_PARTY_JOBS, keyed by member id; the
+-- party encoder reads that as the authoritative job source. Out-of-zone
+-- members aren't in either packet (a hard FFXI limit), but same-zone — the
+-- normal grouped case — works.
+--
+-- Uses the required `packets` library's packets.parse() (same API the base
+-- already uses for 0x061/0x028, and the same approach as xivparty) to read
+-- NAMED fields rather than guessing byte offsets. Job ids resolve via
+-- res.jobs. `//ow partydebug` logs what's parsed.
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x0DD and id ~= 0x0DF then return end
+    local ok, packet = pcall(packets.parse, 'incoming', data)
+    if not ok or not packet then return end
+
+    local mid = packet['ID']
+    if not mid or mid <= 0 then return end
+
+    local mjob_id = packet['Main job']
+    local mlvl    = packet['Main job level']
+    local sjob_id = packet['Sub job']
+    local slvl    = packet['Sub job level']
+
+    local function jname(jid)
+        if jid and res and res.jobs and res.jobs[jid] then
+            return res.jobs[jid].ens or '?'
+        end
+        return '?'
+    end
+
+    if _OW_PARTY_DEBUG then
+        windower.add_to_chat(207, string.format(
+            '[OW party] 0x%03X id=%u name=%s  mj=%s(%s) lv%s  sj=%s(%s) lv%s',
+            id, mid, tostring(packet['Name']),
+            jname(mjob_id), tostring(mjob_id), tostring(mlvl),
+            jname(sjob_id), tostring(sjob_id), tostring(slvl)))
+    end
+
+    -- Store only when the main job looks valid (id in range, nonzero level)
+    -- so a packet that doesn't actually carry job data can't blank out
+    -- previously-good values. Sub job may legitimately be none (0).
+    if mjob_id and mjob_id > 0 and mjob_id < 64 and mlvl and mlvl > 0 then
+        _OW_PARTY_JOBS[mid] = {
+            mj  = jname(mjob_id),
+            mjl = mlvl,
+            sj  = (sjob_id and sjob_id > 0 and sjob_id < 64) and jname(sjob_id) or '',
+            sjl = slvl or 0,
+            ts  = os.time(),
+        }
+    end
+end)
 
 ow_safe_register('incoming chunk', function(id, data)
     if id == 0x028 then
@@ -14494,27 +14620,19 @@ function ow_send_stats(stats)
                         end
                     end
                     -- Subjob Evasion Bonus already in the base eva (via
-                    -- GearInfo's get_player_eva_from_job). Mirror its EXACT
-                    -- level breakpoints (they differ from acc/att): THF
-                    -- 10/30 -> 10/22, DNC 15/45 -> 10/22, PUP 20/40 ->
-                    -- 10/22. Without this, a BLU evasion set on /DNC etc.
-                    -- reads high by the subjob's value (the double-count you
-                    -- saw on evasion).
+                    -- GearInfo's get_player_eva_from_job). Uses the full
+                    -- BG-wiki Evasion Bonus ladder via ow_sub_eva_bonus(),
+                    -- the SAME helper the vendored GearInfo base now uses,
+                    -- so the base value and this subtraction always agree.
+                    -- This is what lets a Master-Level /THF sub (level 50+)
+                    -- correctly reach Evasion Bonus III (+35) instead of the
+                    -- old level-49-capped +22.
                     local _sub_eva_bonus = 0
                     do
                         local _p = windower.ffxi.get_player()
-                        local _sj = _p and _p.sub_job and _p.sub_job:upper()
+                        local _sj = _p and _p.sub_job
                         local _slvl = _p and (_p.sub_job_level or 0) or 0
-                        if _sj == 'THF' then
-                            if _slvl >= 30 then _sub_eva_bonus = 22
-                            elseif _slvl >= 10 then _sub_eva_bonus = 10 end
-                        elseif _sj == 'DNC' then
-                            if _slvl >= 45 then _sub_eva_bonus = 22
-                            elseif _slvl >= 15 then _sub_eva_bonus = 10 end
-                        elseif _sj == 'PUP' then
-                            if _slvl >= 40 then _sub_eva_bonus = 22
-                            elseif _slvl >= 20 then _sub_eva_bonus = 10 end
-                        end
+                        _sub_eva_bonus = ow_sub_eva_bonus(_sj, _slvl)
                     end
                     -- Subjob Defense Bonus already in the base def (via
                     -- GearInfo's get_player_def_from_job): PLD 10/30 ->
@@ -14539,6 +14657,12 @@ function ow_send_stats(stats)
                         end
                         windower.add_to_chat(207, '[OW blu_stats] '
                             .. table.concat(_bp, ' '))
+                        windower.add_to_chat(207, string.format(
+                            '[OW eva-decomp] base_eva(pre-merge)=%s sub_eva_bonus=%s blu_eva=%s agi_in_blu=%s',
+                            tostring(stats['evasion']),
+                            tostring(_sub_eva_bonus),
+                            tostring(blu_stats['evasion']),
+                            tostring(blu_stats['agi'])))
                     end
                     for k, v in pairs(blu_stats) do
                         if k ~= 'dw trait' then
@@ -14676,6 +14800,33 @@ function ow_send_stats(stats)
                                 if _vit_def ~= 0 then
                                     stats['defense'] =
                                         (stats['defense'] or 0) + _vit_def
+                                end
+                            elseif k == 'agi' then
+                                -- BLU set spells also carry AGI. AGI feeds
+                                -- two stats, matching GearInfo's get_player_acc
+                                -- and get_player_evasion:
+                                --   ranged accuracy += floor(AGI * 0.75)
+                                --     (get_player_acc line: Total_acc.range/
+                                --      ammo use floor(AGI * 0.75)) — gated on
+                                --      a ranged weapon being equipped.
+                                --   evasion        += floor(AGI * 0.5)
+                                --     (get_player_evasion: floor(AGI/2)) —
+                                --      always applies, evasion isn't
+                                --      weapon-gated.
+                                -- Same key-mismatch reason it was missing:
+                                -- spell 'agi' lowercase never reached
+                                -- GearInfo's stat_table['AGI'].
+                                local _agi_eva = math.floor(v * 0.5)
+                                if _agi_eva ~= 0 then
+                                    stats['evasion'] =
+                                        (stats['evasion'] or 0) + _agi_eva
+                                end
+                                if _blu_has_rng then
+                                    local _agi_racc = math.floor(v * 0.75)
+                                    if _agi_racc ~= 0 then
+                                        stats['ranged accuracy'] =
+                                            (stats['ranged accuracy'] or 0) + _agi_racc
+                                    end
                                 end
                             end
                         end
@@ -15617,7 +15768,7 @@ function ow_send_stats(stats)
     else
         payload = 'BEGIN\n' .. header .. '\n' .. table.concat(lines, '\n')
     end
-    local ok_send, send_err = udp_stats:send(payload)
+    local ok_send, send_err = udp_stats:send(_OW_MB_TAG(payload))
     if _ow_cast_debug then
         windower.add_to_chat(207, string.format(
             '[OW] stats sent: %d stat-lines, payload=%dB, ok=%s%s',
@@ -15785,9 +15936,19 @@ ow_safe_register('prerender', function()
             -- reliably exposed by Windower for non-local-zone members and
             -- the alliance render strip skips them anyway.
             local function encode_member(member, group_id)
-                if not (member and member.mob and member.name) then return '' end
+                -- A party member only needs a NAME to be shown. Real party
+                -- members who are out of your zone (or not yet rendered)
+                -- have member.name but a NIL member.mob — Windower only
+                -- populates .mob for entities in render range. Trusts are
+                -- always beside you so they always have .mob, which is why
+                -- the old "require member.mob" guard silently worked for
+                -- trusts but dropped real out-of-zone party members. Show
+                -- them with whatever data is available; mob-derived fields
+                -- (buffs, id, index, pet) degrade to empty/0 when mob is nil.
+                if not (member and member.name) then return '' end
+                local m_id = (member.mob and member.mob.id) or member.id or 0
                 local buffs = {}
-                if group_id == 0 then
+                if group_id == 0 and member.mob then
                     if member.mob.id == player_id then
                         buffs = player.buffs or {}
                     else
@@ -15835,22 +15996,37 @@ ow_safe_register('prerender', function()
                 local tp  = member.tp  or 0
 
                 local mj, mjl, sj, sjl = '', 0, '', 0
-                if member.mob.id == player_id then
+                if m_id ~= 0 and m_id == player_id then
                     mj  = player.main_job       or ''
                     mjl = player.main_job_level or 0
                     sj  = player.sub_job        or ''
                     sjl = player.sub_job_level  or 0
                 else
-                    mj  = member.main_job       or member.mjob or ''
-                    mjl = member.main_job_level or member.mlvl or 0
-                    sj  = member.sub_job        or member.sjob or ''
-                    sjl = member.sub_job_level  or member.slvl or 0
+                    -- Other members: get_party() doesn't carry their jobs,
+                    -- so prefer jobs captured from the 0x0DD/0x0DF packets
+                    -- (_OW_PARTY_JOBS). Fully defensive so this can never
+                    -- throw and blank the whole party panel.
+                    local pj = nil
+                    if _OW_PARTY_JOBS and m_id and m_id ~= 0 then
+                        pj = _OW_PARTY_JOBS[m_id]
+                    end
+                    if pj then
+                        mj  = pj.mj  or ''
+                        mjl = pj.mjl or 0
+                        sj  = pj.sj  or ''
+                        sjl = pj.sjl or 0
+                    else
+                        mj  = member.main_job       or member.mjob or ''
+                        mjl = member.main_job_level or member.mlvl or 0
+                        sj  = member.sub_job        or member.sjob or ''
+                        sjl = member.sub_job_level  or member.slvl or 0
+                    end
                 end
                 if type(mj) == 'number' then mj = job_abbr(mj) end
                 if type(sj) == 'number' then sj = job_abbr(sj) end
 
                 local mob_idx = (member.mob and member.mob.index) or 0
-                local pid = (member.mob and member.mob.id) or 0
+                local pid = m_id
 
                 -- Pet: each party member's mob exposes .pet_index → the
                 -- mob array slot of their pet (0 = no pet). Resolve it
@@ -15902,7 +16078,7 @@ ow_safe_register('prerender', function()
             end
 
             if data ~= "" then
-                udp:send(data)
+                udp:send(_OW_MB_TAG(data))
             end
         end)
 
@@ -15965,8 +16141,8 @@ ow_safe_register('prerender', function()
                         last_ammo_count = cnt
                         -- COUNT|pos|item_id|count — lightweight extension
                         -- packet on the same 5007 socket.
-                        udp_equip_rich:send(string.format('COUNT|%d|%d|%d',
-                            pos, item_id, cnt))
+                        udp_equip_rich:send(_OW_MB_TAG(string.format('COUNT|%d|%d|%d',
+                            pos, item_id, cnt)))
                     end
                 end
 
@@ -15978,7 +16154,7 @@ ow_safe_register('prerender', function()
 
                     if item_id == 0 then
                         -- Empty slot: clear the tooltip cache on python side.
-                        udp_equip_rich:send(string.format('%d|0|||||||||', pos))
+                        udp_equip_rich:send(_OW_MB_TAG(string.format('%d|0|||||||||', pos)))
                     else
                         -- Wrap in its own pcall so one bad item doesn't
                         -- break rich sends for the other 15 slots.
@@ -16028,11 +16204,41 @@ ow_safe_register('prerender', function()
                             if name == '' then
                                 name = 'Item #' .. tostring(item_id)
                             end
-                            udp_equip_rich:send(string.format(
-                                '%d|%d|%s|%d|%s|%s|%d|%s|%s|%s|%s',
+                            -- Parsed stat lines from the item description, for
+                            -- the rich tooltip (FFXIAH-style stat block). The
+                            -- in-game description text carries the per-item
+                            -- stats (e.g. "DEF:30", "CHR+4", "Pet: Haste+3%")
+                            -- that res.items doesn't expose as fields. We read
+                            -- res.item_descriptions[id].english (same source
+                            -- GearInfo parses) and split it into individual
+                            -- lines, then join them with ';;' as ONE extra
+                            -- pipe-field so the variable-length stat block
+                            -- can't collide with the fixed fields above.
+                            -- '|' inside a line is escaped to '/' like the
+                            -- other fields. Empty when the item has no
+                            -- description. Backward-compatible: an older PY
+                            -- build simply ignores the trailing field.
+                            local desc_lines = {}
+                            local _dent = res.item_descriptions
+                                          and res.item_descriptions[item_id]
+                            local _dtext = _dent and (_dent.english or _dent.en)
+                            if _dtext and _dtext ~= '' then
+                                for line in _dtext:gmatch('[^\r\n]+') do
+                                    local trimmed = line:gsub('^%s+', '')
+                                                        :gsub('%s+$', '')
+                                    if trimmed ~= '' then
+                                        desc_lines[#desc_lines + 1] =
+                                            esc(trimmed):gsub(';;', ';')
+                                    end
+                                end
+                            end
+                            local stat_block = table.concat(desc_lines, ';;')
+                            udp_equip_rich:send(_OW_MB_TAG(string.format(
+                                '%d|%d|%s|%d|%s|%s|%d|%s|%s|%s|%s|%s',
                                 pos, item_id, esc(name), ilvl, esc(jobs),
                                 esc(cat), lvl,
-                                esc(augs[1]), esc(augs[2]), esc(augs[3]), esc(augs[4])))
+                                esc(augs[1]), esc(augs[2]), esc(augs[3]), esc(augs[4]),
+                                stat_block)))
                             if _ow_gs_debug then
                                 windower.add_to_chat(207, string.format(
                                     '[OW] rich slot=%d id=%d name=%s augs=%d',
@@ -16048,7 +16254,7 @@ ow_safe_register('prerender', function()
                 end
             end
 
-            udp_equip:send(table.concat(ids, '|'))
+            udp_equip:send(_OW_MB_TAG(table.concat(ids, '|')))
         end)
         if not ok_eq then
             local last_err_time = _omniwatch_last_eq_err_time or 0
@@ -16222,8 +16428,13 @@ ow_safe_register('prerender', function()
         end
     end
 
-    -- Character stats at 1 Hz, but only recompute if equipment changed.
-    if now - last_stats_send >= 1.0 then
+    -- Character stats at 2 Hz, but only recompute if equipment changed.
+    -- (Bumped from 1 Hz so the stats panel refreshes faster when the user
+    -- switches the live/locked character in a multibox setup — the new
+    -- character's stats arrive within ~0.5s instead of up to 1s. The
+    -- compute is cheap and short-circuits when nothing changed, so the
+    -- extra cadence is negligible.)
+    if now - last_stats_send >= 0.5 then
         last_stats_send = now
         -- Prune any buff source entries whose buff_id is no longer active.
         -- Has to happen before haste/speed compute so wore-off songs/spells
@@ -16391,7 +16602,7 @@ ow_safe_register('prerender', function()
             if gil ~= last_gil_value or hb then
                 last_gil_value = gil
                 _ow_last_gil_heartbeat = now
-                udp_gs:send('GIL|' .. tostring(gil))
+                udp_gs:send(_OW_MB_TAG('GIL|' .. tostring(gil)))
                 if _ow_gs_debug then
                     windower.add_to_chat(207, string.format(
                         '[OW] sent GIL=%d', gil))
@@ -16659,7 +16870,7 @@ ow_safe_register('prerender', function()
             local main_part = encode_mob(main_mob)
             local sub_part  = encode_mob(sub_mob)
             -- Always send, even if both are empty, so Python can fade.
-            udp_target:send(main_part .. '||' .. sub_part)
+            udp_target:send(_OW_MB_TAG(main_part .. '||' .. sub_part))
         end)
         if not ok_tg then
             local last_err_time = _omniwatch_last_tg_err_time or 0
@@ -16679,7 +16890,7 @@ ow_safe_register('prerender', function()
             local info = windower.ffxi.get_info()
             local me   = windower.ffxi.get_mob_by_target('me')
             if not info then
-                udp_zone:send('')
+                udp_zone:send(_OW_MB_TAG(''))
                 return
             end
 
@@ -16722,7 +16933,7 @@ ow_safe_register('prerender', function()
                 end
             end
 
-            udp_zone:send(
+            udp_zone:send(_OW_MB_TAG(
                 tostring(zone_id)        .. '|' ..
                 tostring(zone_name)      .. '|' ..
                 tostring(map_index)      .. '|' ..
@@ -16731,7 +16942,7 @@ ow_safe_register('prerender', function()
                 string.format('%.2f',  z)   .. '|' ..
                 tostring(weather_id)     .. '|' ..
                 tostring(pos_str)
-            )
+            ))
         end)
         if not ok_z then
             local last_err_time = _omniwatch_last_z_err_time or 0
@@ -16842,7 +17053,7 @@ ow_safe_register('prerender', function()
                     end
                 end
             end
-            udp_timers:send(table.concat(lines, '\n'))
+            udp_timers:send(_OW_MB_TAG(table.concat(lines, '\n')))
         end)
 
         -- Send buff timers in a separate packet (same socket).
@@ -17284,7 +17495,7 @@ ow_safe_register('prerender', function()
                     end
                 end
             end
-            udp_timers:send(table.concat(lines, '\n'))
+            udp_timers:send(_OW_MB_TAG(table.concat(lines, '\n')))
         end)
     end
 
