@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.6.2'
+_addon.version  = '1.6.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -1276,8 +1276,20 @@ local function ow_get_blu_set_spells()
     if not data then return nil end
     local raw = data.spells or data.spell_ids or {}
     local out = {}
-    for _, v in ipairs(raw) do
-        if type(v) == 'number' and v > 0 then
+    local seen = {}
+    -- IMPORTANT: walk with pairs(), NOT ipairs(). When a spell is unset
+    -- from the MIDDLE of the BLU set (e.g. via bluGuide), windower's
+    -- get_mjob_data().spells comes back as a SPARSE array with a nil/hole
+    -- where the removed spell was. ipairs() stops at the first nil, so it
+    -- silently dropped every spell AFTER the gap — collapsing a 15-spell
+    -- set down to just the spell that happened to sit before the hole (the
+    -- reported "1 equipped spell" bug, where removing Screwdriver left only
+    -- Hysteric Barrage). pairs() visits every key regardless of gaps, so
+    -- the full set is always collected. De-dupe defensively in case the
+    -- table carries the set under both an array part and named keys.
+    for k, v in pairs(raw) do
+        if type(v) == 'number' and v > 0 and not seen[v] then
+            seen[v] = true
             out[#out+1] = v
         end
     end
@@ -14635,15 +14647,19 @@ function ow_send_stats(stats)
                         _sub_eva_bonus = ow_sub_eva_bonus(_sj, _slvl)
                     end
                     -- Subjob Defense Bonus already in the base def (via
-                    -- GearInfo's get_player_def_from_job): PLD 10/30 ->
-                    -- 10/22, WAR 10/45 -> 10/22.
+                    -- GearInfo's get_player_def_from_job): PLD 10/30/50 ->
+                    -- 10/22/35, WAR 10/45 -> 10/22. The PLD 50+ -> 35 tier
+                    -- is only reachable on a Master-Level-raised subjob
+                    -- (normal sub caps at 49); kept in sync with GearInfo so
+                    -- the BLU spell-trait merge subtracts the right amount.
                     local _sub_def_bonus = 0
                     do
                         local _p = windower.ffxi.get_player()
                         local _sj = _p and _p.sub_job and _p.sub_job:upper()
                         local _slvl = _p and (_p.sub_job_level or 0) or 0
                         if _sj == 'PLD' then
-                            if _slvl >= 30 then _sub_def_bonus = 22
+                            if _slvl >= 50 then _sub_def_bonus = 35
+                            elseif _slvl >= 30 then _sub_def_bonus = 22
                             elseif _slvl >= 10 then _sub_def_bonus = 10 end
                         elseif _sj == 'WAR' then
                             if _slvl >= 45 then _sub_def_bonus = 22

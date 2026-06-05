@@ -1541,7 +1541,8 @@ function get_player_def_from_job()
 		if player.sub_job:upper() == 'PLD' then
 			if player.sub_job_level < 10  then sub_job_acc = 0
 			elseif player.sub_job_level < 30 and  player.sub_job_level > 9 then sub_job_acc = 10
-			elseif player.sub_job_level > 29 then sub_job_acc = 22
+			elseif player.sub_job_level < 50 and  player.sub_job_level > 29 then sub_job_acc = 22
+			elseif player.sub_job_level > 49 then sub_job_acc = 35
 			end
 		elseif player.sub_job:upper() == 'WAR' then
 			if player.sub_job_level < 10  then sub_job_acc = 0

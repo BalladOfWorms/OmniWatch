@@ -166,7 +166,7 @@ M = {
     ["Nat. Meditation"               ] = {id=700, level=99, acc_bonus=8, stats={dex=6}},
     ["Nectarous Deluge"              ] = {id=716, level=99, beast_killer=8, stats={mnd=8}},
     ["O. Counterstance"              ] = {id=696, level=98, counter=4, stats={agi=-2, dex=-2, str=3, vit=3}, vitals={hp=10}},
-    ["Occultation"                   ] = {id=679, level=88, evasion_bonus=4, stats={chr=-2, vit=2}},
+    ["Occultation"                   ] = {id=679, level=88, evasion_bonus=4, stats={chr=-2, vit=3}},
     ["Osmosis"                       ] = {id=672, level=84, mdb=4, stats={chr=-2, mnd=3}},
     ["Palling Salvo"                 ] = {id=724, level=99, tenacity=8, stats={agi=6, dex=6}},
     ["Paralyzing Triad"              ] = {id=704, level=99, sc_bonus=8, stats={dex=4, str=4}, vitals={hp=-10}},

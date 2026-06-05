@@ -16,7 +16,14 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.6.1-blu-stats (2026-06-03)"
+OMNIWATCH_BUILD_STAMP = "v1.6.3 (2026-06-05)"
+# Machine-comparable version (no 'v', no suffix) used by the update check
+# to compare against the latest GitHub release tag. Keep in sync with the
+# build stamp above and CHANGELOG.md on every release.
+OMNIWATCH_VERSION = "1.6.3"
+# GitHub repo the update check queries (Releases API). Update if renamed.
+OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
+OMNIWATCH_GITHUB_REPO  = "OmniWatch"
 print("=" * 70)
 print(f"  OmniWatch build: {OMNIWATCH_BUILD_STAMP}")
 print(f"  If this banner doesn't appear, the rebuild used a stale .py")
@@ -37,6 +44,110 @@ import base64
 import threading
 import html
 import xml.etree.ElementTree as ET
+
+# ---------------------------------------------------------------------------
+# Update check (GitHub Releases)
+# ---------------------------------------------------------------------------
+# On startup we ask GitHub for the latest published release and compare its
+# tag to OMNIWATCH_VERSION. If a newer one exists, an "Update available"
+# button appears at the bottom of the settings menu (between "Open log
+# folder" and "Exit") which opens the release page in the browser.
+#
+# Runs once per launch on a background thread (never blocks the overlay),
+# fails completely silently with no network / unreachable API / rate limit,
+# and never nags — it's a passive button the user can ignore.
+_update_available   = False      # True once a newer release is confirmed
+_update_latest_ver  = ""         # e.g. "1.6.3" (tag without the leading v)
+_update_html_url    = ""         # release page to open in the browser
+_update_check_done  = False      # guards against re-checking
+
+def _parse_version(s):
+    """Turn a version string into a tuple of ints (1, 6, 2) for
+    comparison. Finds the first dotted-number group ANYWHERE in the
+    string, so it works whether the tag is 'v1.6.2', '1.6.2',
+    'OmniWatch-v1.6.2', or '1.6.2-multibox'. Returns () on anything
+    unparseable so comparisons fail safe."""
+    if not s:
+        return ()
+    m = re.search(r'(\d+(?:\.\d+)*)', str(s))
+    if not m:
+        return ()
+    parts = []
+    for p in m.group(1).split("."):
+        try:
+            parts.append(int(p))
+        except (ValueError, TypeError):
+            break
+    return tuple(parts)
+
+def _update_check_worker():
+    """Background worker: query the GitHub Releases API for the latest
+    release and, if newer than OMNIWATCH_VERSION, flip the module globals
+    the settings menu reads. Silent on every failure path."""
+    global _update_available, _update_latest_ver, _update_html_url
+    global _update_check_done
+    try:
+        url = ("https://api.github.com/repos/"
+               f"{OMNIWATCH_GITHUB_OWNER}/{OMNIWATCH_GITHUB_REPO}"
+               "/releases/latest")
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"OmniWatch/{OMNIWATCH_VERSION}",
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        tag = (data.get("tag_name") or "").strip()
+        latest = _parse_version(tag)
+        current = _parse_version(OMNIWATCH_VERSION)
+        if latest and current and latest > current:
+            _update_latest_ver = tag[1:] if tag[:1] in ("v", "V") else tag
+            _update_html_url = (data.get("html_url")
+                                or f"https://github.com/{OMNIWATCH_GITHUB_OWNER}"
+                                   f"/{OMNIWATCH_GITHUB_REPO}/releases/latest")
+            _update_available = True
+            print(f"[OmniWatch] update available: {_update_latest_ver} "
+                  f"(running {OMNIWATCH_VERSION})")
+    except Exception:
+        # No network, rate limit, repo not found, JSON change — all silent.
+        pass
+    finally:
+        _update_check_done = True
+
+def _start_update_check():
+    """Kick off the one-shot update check on a daemon thread so it can
+    never delay startup or block shutdown."""
+    global _update_check_done, _update_available, _update_latest_ver
+    global _update_html_url
+    if _update_check_done:
+        return
+    # Test override: because the developer is always on the current
+    # version, the button would never show in normal use. Drop a file
+    # named 'ow_force_update.txt' next to the executable (or in the
+    # working dir) to FORCE the "Update available" button on — it points
+    # at the real releases page so the click can be verified too. Delete
+    # the file to return to normal. No rebuild needed.
+    try:
+        here = (os.path.dirname(os.path.abspath(__file__))
+                if "__file__" in globals() else ".")
+        for cand in (os.path.join(here, "ow_force_update.txt"),
+                     "ow_force_update.txt"):
+            if os.path.isfile(cand):
+                _update_available  = True
+                _update_latest_ver = "TEST"
+                _update_html_url   = (
+                    f"https://github.com/{OMNIWATCH_GITHUB_OWNER}/"
+                    f"{OMNIWATCH_GITHUB_REPO}/releases/latest")
+                _update_check_done = True
+                print("[OmniWatch] update button FORCED on via "
+                      "ow_force_update.txt (test override)")
+                return
+    except Exception:
+        pass
+    try:
+        t = threading.Thread(target=_update_check_worker, daemon=True)
+        t.start()
+    except Exception:
+        _update_check_done = True
 
 # ---------------------------------------------------------------------------
 # Crash logger
@@ -5459,7 +5570,7 @@ _mb_seen_senders = set()
 # Diagnostic: when _MB_DEBUG is True, the gate logs (throttled) what lock
 # target it's using and which sender names it accepts vs drops, to the
 # session log. Flip via the on-screen path or set True here temporarily.
-_MB_DEBUG = False
+_MB_DEBUG = True
 _mb_dbg_seen = {}        # sender -> {"accept": n, "drop": n}
 _mb_dbg_last_ts = 0.0
 
@@ -7191,6 +7302,22 @@ SETTINGS_SCHEMA = [
                    "send me the most recent session_*.log.",
     },
     {
+        # Update-available button. Only rendered when the startup update
+        # check found a newer GitHub release (the draw loop skips it
+        # otherwise via _update_available). Clicking opens the release
+        # page. Sits between "Open log folder" and "Exit".
+        "key":     "open_update",
+        "label":   "Update available",
+        "kind":    "button",
+        "button_text": "UPDATE",
+        "section": "_Bottom",
+        "applies": "python",
+        "action":  "open_update_page",
+        "help":    "A newer OmniWatch release is available on GitHub. "
+                   "Click to open the release page in your browser, "
+                   "then download and replace your OmniWatch files.",
+    },
+    {
         "key":      "setup_mode",
         "label":    "Setup mode",
         "kind":     "bool",
@@ -8502,12 +8629,15 @@ def load_settings():
                 if not _persistable(schema):
                     continue
                 if key in raw:
-                    # Use the dynamic schema for keys with runtime-filled
-                    # enum options (e.g. chat_main_char), so a saved
-                    # character name isn't coerced back to default against
-                    # the static placeholder options on every reload.
-                    _sch = _setting_schema(key) or schema
-                    out[key] = _coerce_setting(_sch, raw[key])
+                    # NOTE: use the STATIC schema here, not _setting_schema()
+                    # — load_settings runs at module-import time, before
+                    # _setting_schema is defined later in the file. Calling
+                    # it here raised NameError and made the WHOLE load fall
+                    # back to defaults (settings never persisted). The enum
+                    # coercion already special-cases chat_main_char to accept
+                    # any character name, so the dynamic schema isn't needed
+                    # for a correct load.
+                    out[key] = _coerce_setting(schema, raw[key])
             # Preserve any persisted keys that aren't in the schema.
             # Some settings are stored directly via `settings[key] = ...`
             # rather than the schema (e.g. the hide-nub's x/y/size are
@@ -8844,6 +8974,17 @@ def _open_crash_log_folder():
             print(f"[OmniWatch] could not create crash log dir: {e!r}")
             return
     _open_path(folder, "crash log folder")
+
+def _open_update_page():
+    """Open the latest-release page in the browser. Falls back to the
+    repo's releases page if the specific URL wasn't captured."""
+    url = _update_html_url or (
+        f"https://github.com/{OMNIWATCH_GITHUB_OWNER}/"
+        f"{OMNIWATCH_GITHUB_REPO}/releases/latest")
+    try:
+        webbrowser.open(url, new=2)
+    except Exception as e:
+        print(f"[OmniWatch] could not open update page: {e!r}")
 
 def _apply_always_on_top(enabled):
     """Pin (or unpin) the OmniWatch window above all other windows.
@@ -9690,6 +9831,7 @@ _SETTINGS_ACTIONS = {
     "open_dps_log_csv":        _open_dps_log_csv,
     "open_dps_log_json":       _open_dps_log_json,
     "open_crash_log_folder":   _open_crash_log_folder,
+    "open_update_page":        _open_update_page,
     "restart_overlay":         _restart_overlay,
     "toggle_setup_mode":       _toggle_setup_mode,
     "open_hotbar_editor":      _open_hotbar_editor,
@@ -19983,6 +20125,10 @@ def settings_menu_size():
     grouped = {sec: [] for sec in SETTINGS_SECTIONS}
     for s in SETTINGS_SCHEMA:
         sec = s.get("section")
+        # The "Update available" button only appears when the
+        # startup update check found a newer release.
+        if s.get("key") == "open_update" and not _update_available:
+            continue
         if sec in grouped:
             grouped[sec].append(s)
     height = pad
@@ -26723,6 +26869,10 @@ def draw_settings_menu(surface):
     grouped = {sec: [] for sec in SETTINGS_SECTIONS}
     for s in SETTINGS_SCHEMA:
         sec = s.get("section")
+        # The "Update available" button only appears when the
+        # startup update check found a newer release.
+        if s.get("key") == "open_update" and not _update_available:
+            continue
         if sec in grouped:
             grouped[sec].append(s)
 
@@ -26974,6 +27124,11 @@ def draw_settings_menu(surface):
                 elif btn_text == "EXIT":
                     btn_color = ((230, 110, 110) if is_btn_hover
                                   else (200, 80, 80))
+                elif btn_text == "UPDATE":
+                    # Green to read as a positive, available action —
+                    # distinct from the red EXIT directly below it.
+                    btn_color = ((120, 210, 130) if is_btn_hover
+                                  else (90, 180, 105))
                 elif schema.get("key") == "open_crash_log":
                     btn_color = ((195, 175, 225) if is_btn_hover
                                   else (170, 145, 205))
@@ -35741,6 +35896,11 @@ except Exception as _e:
 running = True
 clock   = pygame.time.Clock()
 
+# One-shot update check (GitHub Releases) on a background thread. Never
+# blocks startup; if a newer release exists, an "Update available" button
+# appears at the bottom of the settings menu.
+_start_update_check()
+
 # Job-change detection state for chat routing. We poll the player's
 # main_job once per second (cheap dict lookup) and reload the per-job
 # routing config when it changes. Job is sourced from _inv_for_sim,
@@ -38153,6 +38313,18 @@ while running:
     for slot_idx, m in enumerate(party_data if _show_party else []):
         nm = m["name"]
         akey = _anchor_key(slot_idx, nm)
+        if _MB_DEBUG:
+            import time as _t
+            _now = _t.time()
+            if _now - globals().get("_party_diag_last", 0) >= 2.0:
+                if slot_idx == 0:
+                    globals()["_party_diag_last"] = _now
+                    _names = [mm.get("name") for mm in party_data]
+                    print(f"[OmniWatch][party] order={_names} "
+                          f"current={current_char_name!r} "
+                          f"view={active_view_char!r}")
+                print(f"[OmniWatch][party]   slot {slot_idx}: {nm!r} -> "
+                      f"akey={akey!r} anchor={panel_anchors.get(akey)}")
         if nm not in panel_scales:
             panel_scales[nm] = panel_scales.get(akey, 1.0)
         sc = max(MIN_SCALE, min(MAX_SCALE, panel_scales[nm]))
@@ -39370,6 +39542,21 @@ while running:
     # "Cessance Earring" appearing inside the editor while the user is
     # picking an icon. Z-order applies to hover state same as clicks.
     _suppress_tooltip = False
+    # Suppress when the settings menu or any settings/config modal is open —
+    # those overlay the screen, and without this the equipment tooltip leaks
+    # through them when the cursor passes over where the equipment panel sits
+    # underneath (e.g. an item stat block appearing on top of the open
+    # settings menu). Z-order applies to hover state the same as clicks.
+    if (settings_menu_open
+            or currency_settings_modal_open
+            or party_settings_modal_open
+            or display_settings_modal_open
+            or header_settings_modal_open
+            or inventory_settings_modal_open
+            or statistics_settings_modal_open
+            or profile_name_modal_open
+            or clock_modal_open):
+        _suppress_tooltip = True
     if hotbar_edit_mode:
         _ed_anchor = globals().get("_hotbar_editor_anchor")
         if _ed_anchor is not None:
