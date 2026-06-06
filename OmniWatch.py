@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.6.3 (2026-06-05)"
+OMNIWATCH_BUILD_STAMP = "v1.6.4 (2026-06-05)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.6.3"
+OMNIWATCH_VERSION = "1.6.4"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -7665,6 +7665,16 @@ SETTINGS_SCHEMA = [
         "section": "_Hidden",
         "applies": "python",
         "help":    "Show the equipment viewer panel.",
+    },
+    {
+        "key":     "show_equip_tooltips",
+        "label":   "(internal) show equipment tooltips",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the rich item tooltip (stats, augments, "
+                   "jobs) when hovering an equipment slot.",
     },
     {
         "key":     "show_ring_cooldown",
@@ -24705,6 +24715,7 @@ _SUBDIALOG_CONFIGS = {
         "subtitle": "Equipment panel visibility and ring cooldown timer.",
         "rows": [
             ("show_equipment",     "Show equipment panel",  "bool"),
+            ("show_equip_tooltips", "Show tooltips",        "bool"),
             ("show_ring_cooldown", "Show ring cooldown",    "bool"),
             ("ring_cycle_seconds", "Ring cycle interval",   "int"),
             # Per-ring inclusion toggles. Order matches RING_CYCLE_ORDER
@@ -35616,9 +35627,11 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     # (names are short) but is also wrapped to be safe.
     MAX_TEXT_W = 240
 
-    f_name = get_font("Consolas", 13, bold=True)
-    f_stat = get_font("Consolas", 12)
-    f_meta = get_font("Consolas", 11)
+    # Sizes trimmed ~10% from the original 13/12/11 so the tooltip
+    # reads as a tighter, less obtrusive block over the game.
+    f_name = get_font("Consolas", 12, bold=True)
+    f_stat = get_font("Consolas", 11)
+    f_meta = get_font("Consolas", 10)
 
     COL_NAME = (255, 240, 180)
     COL_STAT = (215, 220, 230)
@@ -35639,7 +35652,10 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
 
     for ag in (info.get("augments") or []):
         ag = _tt_normalize_line(ag)
-        wrapped = _tt_wrap(f_stat, "\u2756 " + ag, MAX_TEXT_W)
+        # Augment bullet: U+25C6 (filled diamond). The previous marker
+        # (U+2756, a Dingbats-block glyph) isn't in Consolas, so it
+        # rendered as a missing-glyph box in front of every augment.
+        wrapped = _tt_wrap(f_stat, "\u25C6 " + ag, MAX_TEXT_W)
         for j, wl in enumerate(wrapped):
             # Indent continuation lines so wrapped augments read clearly.
             txt = wl if j == 0 else "   " + wl
@@ -36137,6 +36153,14 @@ while running:
             stat_lines = []
             if len(rparts) > 11 and rparts[11]:
                 stat_lines = [s for s in rparts[11].split(";;") if s]
+            # Field 12 (new): the FULL augment list joined by ';;'. The four
+            # fixed augment fields (7-10) cap at four lines, which truncates
+            # gear that resolves to more (e.g. a path expanding to 5-6 stat
+            # lines). When the Lua build sends field 12, prefer it as the
+            # authoritative augment list. Backward-compatible: older builds
+            # omit it, so we keep the 4-field list above.
+            if len(rparts) > 12 and rparts[12]:
+                augs = [s for s in rparts[12].split(";;") if s]
             equip_rich[slot_idx] = {
                 "item_id":  item_id,
                 "name":     name,
@@ -39595,9 +39619,10 @@ while running:
                     draw_help_tooltip(screen, mpos[0], mpos[1],
                                       _help_lines, WIDTH, HEIGHT)
                 else:
-                    _tt_info = equip_rich.get(_sidx)
-                    if _tt_info:
-                        draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info, WIDTH, HEIGHT)
+                    if setting("show_equip_tooltips"):
+                        _tt_info = equip_rich.get(_sidx)
+                        if _tt_info:
+                            draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info, WIDTH, HEIGHT)
                 break
 
     # ── Tooltip: if the cursor is over a mob ability name, show its data. ───

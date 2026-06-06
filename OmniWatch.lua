@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.6.3'
+_addon.version  = '1.6.4'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -16204,11 +16204,81 @@ ow_safe_register('prerender', function()
                                 end
                             end
                             -- Real augments from the equipped item instance.
+                            -- Read extdata FIRST (the reliable source the game
+                            -- uses for the inventory's own augment display —
+                            -- e.g. Ambuscade capes, augmented rings, Su-tier
+                            -- weapons carry their augments in extdata, where
+                            -- item_data.augments alone often comes back empty).
+                            -- Fall back to item_data.augments for items whose
+                            -- augments aren't packed in extdata. Display only —
+                            -- this feeds the four tooltip augment slots and does
+                            -- NOT touch stat computation.
                             local augs = {}
-                            if item_data and item_data.augments then
-                                for _, a in ipairs(item_data.augments) do
+                            local _aug_src
+                            if extdata and item_data and item_data.extdata then
+                                local ok_ext, ext = pcall(extdata.decode, item_data)
+                                if ok_ext and ext and ext.augments then
+                                    _aug_src = ext.augments
+                                end
+                            end
+                            if not _aug_src and item_data and item_data.augments then
+                                _aug_src = item_data.augments
+                            end
+                            if _aug_src then
+                                for _, a in ipairs(_aug_src) do
                                     if a and a ~= '' and a ~= 'none' then
-                                        augs[#augs + 1] = tostring(a)
+                                        local s = tostring(a)
+                                        -- Strip leading icon/control symbols that
+                                        -- extdata prefixes onto augment lines (a
+                                        -- non-ASCII marker glyph the game uses to
+                                        -- bullet each line). Drop any leading run
+                                        -- of non-alphanumeric/non-'+'/'-' bytes so
+                                        -- the line starts at the real stat name.
+                                        s = s:gsub('^[^%w%+%-]+', '')
+                                        s = s:gsub('^%s+', ''):gsub('%s+$', '')
+                                        -- Resolve opaque "Path: A/B/C" augments to
+                                        -- real stat lines (display only). When an
+                                        -- item only exposes its path via extdata,
+                                        -- the actual augment stats live in one of
+                                        -- three res tables; we check them in order:
+                                        --   (1) ow_path_augments[id][path] — path-
+                                        --       keyed data for REMA / Dynamis-D
+                                        --       weapons (DREMA_Augments.lua) plus
+                                        --       the inline Heishi/Unity entries.
+                                        --   (2) Unity_rank[id].augments — GearInfo's
+                                        --       Unity Concord gear (Unity_Gear.lua),
+                                        --       a flat list (not path-keyed). Same
+                                        --       data GearInfo applies to stats, so
+                                        --       the tooltip stays consistent.
+                                        --   (3) ow_unity_augments[id] — JSE necks
+                                        --       (Misc_augments.lua), flat list.
+                                        -- If none resolve, keep the raw "Path:"
+                                        -- string so the user at least sees the path.
+                                        local pkey = s:lower():match('^(path:%s*%a)')
+                                        local resolved
+                                        if pkey then
+                                            local nkey = pkey:gsub('%s+', ' ')
+                                            resolved = ow_path_augments[item_id]
+                                                       and ow_path_augments[item_id][nkey]
+                                            if not resolved and Unity_rank
+                                                    and Unity_rank[item_id]
+                                                    and type(Unity_rank[item_id].augments) == 'table' then
+                                                resolved = Unity_rank[item_id].augments
+                                            end
+                                            if not resolved
+                                                    and type(ow_unity_augments[item_id]) == 'table' then
+                                                resolved = ow_unity_augments[item_id]
+                                            end
+                                        end
+                                        if resolved then
+                                            for _, rs in ipairs(resolved) do
+                                                if rs and rs ~= '' then
+                                                    augs[#augs + 1] = tostring(rs)
+                                                end
+                                            end
+                                        elseif s ~= '' then
+                                            augs[#augs + 1] = s
+                                        end
                                     end
                                 end
                             end
@@ -16249,12 +16319,26 @@ ow_safe_register('prerender', function()
                                 end
                             end
                             local stat_block = table.concat(desc_lines, ';;')
+                            -- Field 12 (new): the FULL augment list joined by
+                            -- ';;', so items with more than four augment lines
+                            -- (e.g. some capes/weapons run 5-6) aren't truncated
+                            -- by the four fixed augment fields above. Each line
+                            -- has '|' escaped and any literal ';;' collapsed so
+                            -- it can't break the field split. The fixed fields
+                            -- 8-11 are kept for backward compatibility with older
+                            -- Python builds; a current build prefers field 12.
+                            local aug_full_lines = {}
+                            for _, a in ipairs(augs) do
+                                aug_full_lines[#aug_full_lines + 1] =
+                                    esc(a):gsub(';;', ';')
+                            end
+                            local aug_block = table.concat(aug_full_lines, ';;')
                             udp_equip_rich:send(_OW_MB_TAG(string.format(
-                                '%d|%d|%s|%d|%s|%s|%d|%s|%s|%s|%s|%s',
+                                '%d|%d|%s|%d|%s|%s|%d|%s|%s|%s|%s|%s|%s',
                                 pos, item_id, esc(name), ilvl, esc(jobs),
                                 esc(cat), lvl,
                                 esc(augs[1]), esc(augs[2]), esc(augs[3]), esc(augs[4]),
-                                stat_block)))
+                                stat_block, aug_block)))
                             if _ow_gs_debug then
                                 windower.add_to_chat(207, string.format(
                                     '[OW] rich slot=%d id=%d name=%s augs=%d',
@@ -16953,9 +17037,15 @@ ow_safe_register('prerender', function()
                 tostring(zone_id)        .. '|' ..
                 tostring(zone_name)      .. '|' ..
                 tostring(map_index)      .. '|' ..
-                string.format('%.2f',  x)   .. '|' ..
-                string.format('%.2f',  y)   .. '|' ..
-                string.format('%.2f',  z)   .. '|' ..
+                -- Send full coord precision (the mob struct carries far
+                -- more than 2 decimals). Python is the single authority on
+                -- DISPLAY precision and formats these down to whatever it
+                -- shows. Previously this sent %.2f, so a 3-decimal header
+                -- always padded a trailing 0 — the precision was already
+                -- gone before Python saw it.
+                string.format('%.6f',  x)   .. '|' ..
+                string.format('%.6f',  y)   .. '|' ..
+                string.format('%.6f',  z)   .. '|' ..
                 tostring(weather_id)     .. '|' ..
                 tostring(pos_str)
             ))

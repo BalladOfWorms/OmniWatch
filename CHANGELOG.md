@@ -2,6 +2,30 @@
 
 All notable changes to OmniWatch are documented here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), with versions following [semver](https://semver.org/).
 
+## [1.6.4] — 2026-06-05
+
+An equipment-tooltip polish pass plus a header coordinate-precision fix. The headline tooltip work: Unity Concord gear and JSE necks now resolve their hidden augments to real stat lines instead of bottoming out at "Path: A", the augment bullet that rendered as a missing-glyph box is fixed, the tooltip text is ~10% smaller, and the tooltip can now be toggled off. Separately, the header coordinates finally show a real third decimal — they'd been padding a zero because the addon only ever sent two.
+
+### Added
+
+- **"Show tooltips" toggle** — the Equipment Configure modal gained a **Show tooltips** switch (directly under "Show equipment panel") to turn the hover item tooltip on or off. Defaults on, profile-scoped like the other equipment toggles. The "icons missing" diagnostic badge still appears on hover regardless of the toggle.
+
+### Changed
+
+- **Equipment tooltip text ~10% smaller** — the rich item tooltip's name / stat / footer fonts dropped from 13/12/11 to 12/11/10pt so it reads as a tighter, less obtrusive block over the game. Only the equipment tooltip changed; the target-card ability tooltip and other hover popups are untouched.
+
+### Fixed
+
+- **Unity / JSE neck augments now resolve to real stats** — Unity Concord gear and JSE necks expose only an opaque "Path: A/B/C" string via extdata, so the tooltip had been showing just the path with no stats while Ambuscade capes and REMA weapons resolved fine. The augment resolver now falls through three sources in order — the path-keyed REMA / Dynamis-D table (`DREMA_Augments.lua`), GearInfo's Unity gear (`Unity_rank` / `Unity_Gear.lua`), and the JSE neck table (`Misc_augments.lua`) — and expands the path into the readable stat lines. These are the same tables the stats panel already computes from, so the tooltip and the panel now agree.
+- **Augment bullet rendered as a missing-glyph box** — each augment line (and the "Path: A" line) was prefixed with U+2756, a Dingbats-block glyph Consolas doesn't carry, so it showed as a tofu box in front of every augment. Swapped to U+25C6, a filled diamond Consolas renders, so augments now lead with a clean marker.
+- **Header coordinates always showed 0 in the third decimal** — the header coords were bumped to three decimals a while back, but the third digit was always 0. The addon was rounding coords to two decimals before sending them, so the precision was already gone before the overlay saw it. The addon now sends full coordinate precision and the overlay does the rounding, so the third decimal is real.
+
+### Internal
+
+- **Rich-tooltip augment wire field adopted** — the 5007 equipment-metadata packet has carried a full augment-block field (every augment line joined by `;;`) for a while, but the overlay was still reading only the four fixed augment fields, which truncates gear whose path resolves to five or six stat lines. The parser now prefers the full block when present, length-guarded so older builds still interoperate.
+- **Coordinate wire precision** — the 5003 zone packet now sends `%.6f` coords instead of `%.2f`. The overlay's `%.3f` display formatting is the single authority on display precision, so changing it later won't reintroduce the trailing-zero bug.
+
+
 ## [1.6.3] — 2026-06-05
 
 A BLU stat-accuracy bug-fix pass. The headline is a nasty set-spell bug: removing a spell from the middle of your BLU set caused OmniWatch to silently see only **one** spell, which zeroed out Dual Wield and dropped Defense/Evasion across the board. That's fixed, along with the BLU spell-trait Defense Bonus (which had regressed to contributing nothing) and Master-Level PLD subjob Defense Bonus reaching its correct tier.

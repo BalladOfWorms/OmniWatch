@@ -95,7 +95,7 @@ Click the gear icon at the top of the overlay. The dropdown groups settings by p
 - **Misc** — Checklist, Simulation mode
 - **Header** — **Header** [CONFIGURE] (show time / weather / events / location, **Show OS clock**, **Show clock seconds**, **Clock time zone**, server choice, points tracker focus), **Currency cycler** [CONFIGURE] (per-currency toggles + cycle interval), **Inventory** [CONFIGURE] (inventory button + gearswap folder), Reset zone timer
 - **Party Panel** — **Party Panel** [CONFIGURE] (show alliance, show pets, show buffs, show debuffs, compact icon grid, edit buff/debuff blacklists, edit buff aliases)
-- **Equipment** — **Equipment** [CONFIGURE] (show panel, show ring cooldown, ring cycle interval 2–15s, per-ring inclusion toggles for Warp / Dem / Holla / Mea / Echad / Trizek / Reraise / Endorsement / Emporox)
+- **Equipment** — **Equipment** [CONFIGURE] (show panel, show tooltips, show ring cooldown, ring cycle interval 2–15s, per-ring inclusion toggles for Warp / Dem / Holla / Mea / Echad / Trizek / Reraise / Endorsement / Emporox)
 - **Statistics** — **Statistics** [CONFIGURE] (show panel, gear settings wizard, edit stats layout)
 - **Recast Timer** — **Recast Timer** [CONFIGURE] (show, auto-hide, edit blacklist)
 - **Buff Timer** — **Buff Timer** [CONFIGURE] (show, auto-hide, edit blacklist)
@@ -199,7 +199,7 @@ All 16 gear slots displayed in canonical equipment-panel order. Per slot:
 
 - Extracted item icon (BMP, auto-extracted to `icons/equipment/<item_id>.bmp` on first equip via Windower's icon-extractor library)
 - Item name
-- Rich tooltip on hover: full item description, augments, set bonuses, augmented stats, level/job restrictions, item ID
+- Rich tooltip on hover: full item description, augments, set bonuses, augmented stats, level/job restrictions, item ID. Hidden-augment gear that only exposes a "Path: A/B/C" string in-game — Unity Concord pieces, JSE necks, and REMA / Dynamis-D weapons — has its path expanded to the real augment stat lines. Toggle the tooltip on or off with **Show tooltips** in the Equipment Configure modal.
 
 The viewer also shows:
 - **Set bonuses** active across your gear (e.g. 2/5 Hashishin set bonus active)
