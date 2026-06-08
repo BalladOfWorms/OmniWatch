@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.6.4 (2026-06-05)"
+OMNIWATCH_BUILD_STAMP = "v1.6.5 (2026-06-08)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.6.4"
+OMNIWATCH_VERSION = "1.6.5"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -425,6 +425,10 @@ if _SESSION_LOG_PATH:
     print(f"[OmniWatch] session log: {_SESSION_LOG_PATH}")
 
 WIDTH, HEIGHT = 980, 540
+# Smallest the windowed box may be dragged via its corner resize grip,
+# and the default opening size (used when no saved size exists).
+OW_MIN_W, OW_MIN_H = 480, 320
+OW_DEFAULT_W, OW_DEFAULT_H = WIDTH, HEIGHT
 
 # ---------------------------------------------------------------------------
 # Vana'diel time calculation
@@ -967,6 +971,16 @@ def _sim_save_import_root():
 # in v1.3.0+ the window is always borderless, so Shift+drag is the
 # only way to move it (no title bar to grab).
 _borderless_drag = None
+
+# Windowed-box resize. The window is borderless (no OS resize handles), so
+# resizing is done via an in-app corner grip at the bottom-right. While
+# dragging, _ow_window_resize holds {hwnd, win_x, win_y} (the window's
+# screen-coords at drag start, so the top-left stays pinned as the corner
+# follows the cursor). _windowed_size persists the chosen size in the
+# layout so the box reopens at the user's size.
+_ow_window_resize    = None
+_ow_window_grip_rect = None
+_windowed_size       = [WIDTH, HEIGHT]
 
 sim_state = {
     # Legacy fields (main_job/sub_job/merits/jp_spent/gifts) are kept in
@@ -5039,6 +5053,46 @@ recast_anchor   = None
 recast_pos      = None
 recast_scale    = 1.0
 
+# Cheat sheet WINDOW — a manual-JSON keybind/macro reference shown as a
+# large overlay window with independent width/height resize and vertical
+# scroll. Opened by a FLOATING, draggable [CS] button (not in the header).
+# Two stacked sections: a shared "GLOBAL KEYBINDS" sheet (top) and the
+# active profile's "JOB KEYBINDS" sheet (bottom). Content comes from JSON
+# files if present, else baked-in defaults (the reference-image keybinds).
+# Window pos/size, scroll, and the button's position persist in the layout.
+cheatsheet_window_open  = False   # toggled by the [CS] button / [X]
+cheatsheet_pos          = None    # [x, y] window top-left (absolute)
+cheatsheet_w            = None    # window width  (independent; resize "E"/"SE")
+cheatsheet_h            = None    # window height (independent; resize "S"/"SE")
+cheatsheet_scroll       = 0       # vertical content scroll offset (px)
+cheatsheet_button_pos   = None    # [x, y] of the floating [CS] button
+cheatsheet_button_rect  = None    # [CS] button hit rect (set during draw)
+cheatsheet_window_rect  = None    # full window rect (set during draw)
+cheatsheet_titlebar_rect = None   # drag handle (set during draw)
+cheatsheet_close_rect   = None    # [X] close button (set during draw)
+cheatsheet_resize_e_rect  = None  # right-edge grip   → width
+cheatsheet_resize_s_rect  = None  # bottom-edge grip  → height
+cheatsheet_resize_se_rect = None  # corner grip       → both
+_cs_drag                = None    # None | "move" | "resize_w" | "resize_h" | "resize_wh"
+_cs_drag_off            = (0, 0)  # move: cursor offset from window top-left
+_cs_resize_start        = (0, 0, 1, 1)  # resize: (start_mx, start_my, start_w, start_h)
+_cs_btn_drag            = None    # floating-button click-or-drag state
+_cs_btn_draw_pos        = None    # [x,y] where the button is actually drawn
+                                  # (clamped on-screen); drag grabs from here
+# Inline editor (edit the sheet directly inside the window).
+cheatsheet_edit_mode    = False   # toggled by the title-bar EDIT button
+_cs_work                = None    # mutable working copy while editing:
+                                  #   {"common": {"title","groups"}, "job": {...}}
+_cs_edit                = None    # active cell edit: {which,gi,ri,field,buf,cursor}
+_cs_edit_rects          = []      # [(rect, action_tuple)] built during edit draw
+_cs_ctx_menu            = None    # right-click delete menu: {x,y,kind,which,gi,ri,title}
+_cs_ctx_item_rects      = []      # [(rect, "del")] built during ctx-menu draw
+cheatsheet_edit_button_rect = None
+# Resizable floating [CS] button.
+cheatsheet_button_scale = 1.0     # independent button size multiplier
+cheatsheet_button_handle_rect = None  # corner resize handle (set during draw)
+_cs_btn_resize          = None    # {start_scale, anchor_x, anchor_y}
+
 buff_anchor     = None
 buff_pos        = None
 buff_scale      = 1.0
@@ -5214,12 +5268,12 @@ buff_scroll     = {}            # (name, "buff" | "debuff") -> int (starting lin
 
 # Cache of fonts by (name, size, bold) so we don't rebuild SysFont every frame.
 _font_cache = {}
-def get_font(name, size, bold=False):
+def get_font(name, size, bold=False, italic=False):
     size = max(6, int(size))
-    key  = (name, size, bold)
+    key  = (name, size, bold, italic)
     f    = _font_cache.get(key)
     if f is None:
-        f = pygame.font.SysFont(name, size, bold=bold)
+        f = pygame.font.SysFont(name, size, bold=bold, italic=italic)
         _font_cache[key] = f
     return f
 
@@ -5756,6 +5810,7 @@ def _rebuild_path_constants():
     global LAYOUT_FILE, BUFF_CFG, MOBS_FILE, ZONES_FILE, BUTTONS_FILE
     global SETTINGS_FILE, GEARSWAP_PATH_FILE, BUFF_TIMER_CFG, RECAST_TIMER_CFG
     global BUFF_STATE_SNAPSHOT, STATS_LAYOUT_FILE
+    global CHEATSHEET_COMMON_FILE, CHEATSHEET_JOB_FILE
     cd = _chardir(active_view_char)
     LAYOUT_FILE        = os.path.join(cd, "omniwatch_layout.json")
     BUFF_CFG           = os.path.join(cd, "omniwatch_buffs.json")
@@ -5766,6 +5821,11 @@ def _rebuild_path_constants():
     GEARSWAP_PATH_FILE = os.path.join(cd, "omniwatch_gearswap_path.json")
     BUFF_TIMER_CFG     = os.path.join(cd, "omniwatch_buff_timer.json")
     RECAST_TIMER_CFG   = os.path.join(cd, "omniwatch_recast.json")
+    # Cheat sheet sources. The Common sheet is per-character but shared
+    # across that character's profiles/jobs (the static top section). The
+    # job sheet is per-profile (set below, after the active profile name
+    # is loaded) so it switches with the profile.
+    CHEATSHEET_COMMON_FILE = os.path.join(cd, "omniwatch_cheatsheet_common.json")
     # Snapshot of currently-active buffs with absolute Unix timestamps.
     # Written periodically while buffs are active and read at startup to
     # restore timer state across Python reloads when the lua side hasn't
@@ -5782,6 +5842,7 @@ def _rebuild_path_constants():
     # uses these globals transparently — no other code needs to
     # know about profiles.
     _load_active_profile_name()
+    CHEATSHEET_JOB_FILE = _cheatsheet_path_for(active_profile_name)
     if active_profile_name and active_profile_name != "Default":
         LAYOUT_FILE   = _layout_path_for(active_profile_name)
         SETTINGS_FILE = _settings_path_for(active_profile_name)
@@ -5813,6 +5874,10 @@ BUFF_TIMER_CFG   = os.path.join(USER_DIR, "omniwatch_buff_timer.json")
 RECAST_TIMER_CFG = os.path.join(USER_DIR, "omniwatch_recast.json")
 BUFF_STATE_SNAPSHOT = os.path.join(USER_DIR, "omniwatch_buff_state.json")
 STATS_LAYOUT_FILE = os.path.join(USER_DIR, "omniwatch_stats_layout.json")
+# Cheat sheet sources (rebound per-char / per-profile once the PLAYER
+# packet fires). Common = shared top section; Job = per-profile bottom.
+CHEATSHEET_COMMON_FILE = os.path.join(USER_DIR, "omniwatch_cheatsheet_common.json")
+CHEATSHEET_JOB_FILE    = os.path.join(USER_DIR, "omniwatch_cheatsheet.json")
 # DPS encounter logs stay GLOBAL (not per-char). JSON: one record per
 # line, each a full encounter dict. CSV: one summary row per encounter.
 # Both append-only and character-agnostic for now.
@@ -7143,6 +7208,7 @@ SETTINGS_SECTIONS = [
     "Target Card",
     "DPS Tracker",
     "HotBar",
+    "Cheat Sheet",
     "_Bottom",         # unnamed: divider underline only, no label
 ]
 
@@ -8225,6 +8291,40 @@ SETTINGS_SCHEMA = [
                    "its label, kind, command, and icon.",
     },
 
+    # ── Cheat Sheet ─────────────────────────────────────────────────
+    {
+        "key":     "cheatsheet_settings",
+        "label":   "Cheat Sheet",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Cheat Sheet",
+        "applies": "python",
+        "action":  "open_cheatsheet_settings",
+        "help":    "Configure the cheat sheet: show/hide its floating "
+                   "button, and the content font size.",
+    },
+    {
+        "key":     "show_cheatsheet",
+        "label":   "(internal) show cheat sheet",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Master on/off for the cheat sheet. When off, the "
+                   "floating launcher button and the window are hidden.",
+    },
+    {
+        "key":     "cheatsheet_font_size",
+        "label":   "(internal) cheat sheet font size",
+        "kind":    "enum",
+        "options": ["small", "medium", "large"],
+        "option_labels": ["Small", "Medium", "Large"],
+        "default": "medium",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Text size of the cheat sheet content.",
+    },
+
     # ── Header ──────────────────────────────────────────────────────
     # (Section reorganized in v1.3.0. Was previously "Inventory" —
     # renamed to "Header" since these settings configure the top-bar
@@ -8363,6 +8463,34 @@ SETTINGS_SCHEMA = [
     # Driven from the Header configure modal. Each gates one header
     # element from rendering; default True preserves pre-existing
     # behavior on first launch.
+    {
+        "key":     "header_autohide",
+        "label":   "(internal) header auto-hide",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Auto-hide the header bar like the Windows taskbar: "
+                   "it stays hidden and the panels get the full window, "
+                   "and sliding the mouse to the bar's screen edge (top "
+                   "or bottom, per Header position) brings it back. "
+                   "Revealing it is also how you reach the settings gear, "
+                   "so nothing is permanently out of reach. Off = the bar "
+                   "is always visible and panels reserve space for it.",
+    },
+    {
+        "key":     "header_position",
+        "label":   "(internal) header position",
+        "kind":    "enum",
+        "options": ["top", "bottom"],
+        "option_labels": ["Top", "Bottom"],
+        "default": "top",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Anchor the header bar to the top or the bottom edge "
+                   "of the window. Panels' default positions and drag "
+                   "limits follow the header so they stay clear of it.",
+    },
     {
         "key":     "show_time",
         "label":   "(internal) show time",
@@ -8718,6 +8846,24 @@ def _eff(panel_scale):
         return float(panel_scale) * g
     except (TypeError, ValueError):
         return panel_scale
+
+def _menu_g():
+    """Clamped global UI scale for the 'chrome' that isn't a draggable
+    panel — the settings dropdown, the Configure modals, and the header.
+    Panels fold global_ui_scale in via _eff(panel_scale); chrome has no
+    per-panel scale of its own, so it reads the multiplier directly here
+    and applies it to its fonts and geometry. Same 0.5–3.0 clamp as
+    _eff so everything scales by one consistent factor. Falls back to
+    1.0 on any error."""
+    try:
+        g = float(setting("global_ui_scale") or 1.0)
+        if g < 0.5:
+            g = 0.5
+        elif g > 3.0:
+            g = 3.0
+        return g
+    except (TypeError, ValueError):
+        return 1.0
 
 def save_settings():
     """Write the current settings dict back to disk."""
@@ -9833,6 +9979,54 @@ def _toggle_fullscreen():
         print(f"[OmniWatch] full-screen toggle failed: {e!r}")
 
 
+def _reapply_window_flags():
+    """Re-apply the window flags that pygame.display.set_mode() clears
+    (always-on-top, opacity, transparent colorkey). Called after any
+    set_mode that recreates the surface — e.g. the windowed-box resize."""
+    try:
+        if setting("always_on_top"):
+            _apply_always_on_top(True)
+    except Exception:
+        pass
+    try:
+        op = int(setting("window_opacity"))
+    except (TypeError, ValueError):
+        op = 100
+    try:
+        if op != 100:
+            _apply_window_opacity(op)
+    except Exception:
+        pass
+    try:
+        if setting("transparent_background"):
+            _apply_transparent_background(True)
+    except Exception:
+        pass
+
+
+def draw_ow_resize_grip(surface):
+    """Draw the windowed-box resize grip in the bottom-right corner (only
+    while windowed — hidden in fullscreen or when the display is hidden).
+    Sets _ow_window_grip_rect for the click dispatcher."""
+    global _ow_window_grip_rect
+    _ow_window_grip_rect = None
+    if _fullscreen_saved_rect is not None or display_hidden:
+        return
+    g = max(12, round(15 * _menu_g()))
+    gx, gy = WIDTH, HEIGHT
+    _ow_window_grip_rect = pygame.Rect(gx - g, gy - g, g, g)
+    mx, my = pygame.mouse.get_pos()
+    hov = (_ow_window_grip_rect.collidepoint(mx, my)
+           or _ow_window_resize is not None)
+    if hov:
+        pygame.draw.rect(surface, (44, 44, 58), _ow_window_grip_rect)
+        pygame.draw.rect(surface, (90, 90, 115), _ow_window_grip_rect, 1)
+    col = (170, 170, 190) if hov else (90, 90, 110)
+    for off in (3, 7, 11, 15):
+        if off < g:
+            pygame.draw.line(surface, col, (gx - off, gy - 1), (gx - 1, gy - off))
+
+
 # point at the same opener — the file's _README explains the layout.
 _SETTINGS_ACTIONS = {
     "open_buff_blacklist":     _open_buff_config_in_editor,
@@ -9863,6 +10057,7 @@ _SETTINGS_ACTIONS = {
     "open_dps_settings":         lambda: _open_subdialog("dps"),
     "open_hotbar_settings":      lambda: _open_subdialog("hotbar"),
     "open_equipment_settings":   lambda: _open_subdialog("equipment"),
+    "open_cheatsheet_settings":  lambda: _open_subdialog("cheatsheet"),
     "pick_gearswap_folder":    _pick_gearswap_folder,
     "clear_gearswap_folder":   _clear_gearswap_folder,
     "reset_zone_timer":        _reset_zone_timer,
@@ -17848,6 +18043,19 @@ def _settings_path_for(profile):
                          f"omniwatch_settings_{safe}.json")
 
 
+def _cheatsheet_path_for(profile):
+    """Path to the per-profile cheat sheet JSON (the bottom, job-specific
+    section). Mirrors _layout_path_for: Default uses the base filename,
+    named profiles get a sanitized suffix — so the bottom section swaps
+    automatically when the active profile changes."""
+    if profile == "Default":
+        return os.path.join(_chardir(active_view_char),
+                             "omniwatch_cheatsheet.json")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "Profile"
+    return os.path.join(_chardir(active_view_char),
+                         f"omniwatch_cheatsheet_{safe}.json")
+
+
 def list_profiles():
     """Return a sorted list of profile names for the active character.
     Always includes 'Default' (which maps to the canonical config
@@ -18037,6 +18245,13 @@ def save_layout():
             "target_scale_st":  target_scale_st,
             "recast_anchor":   recast_anchor,
             "recast_scale":    recast_scale,
+            "cheatsheet_pos":    cheatsheet_pos,
+            "cheatsheet_w":      cheatsheet_w,
+            "cheatsheet_h":      cheatsheet_h,
+            "cheatsheet_scroll": cheatsheet_scroll,
+            "cheatsheet_button_pos": cheatsheet_button_pos,
+            "cheatsheet_button_scale": cheatsheet_button_scale,
+            "ow_window_size": list(_windowed_size),
             "buff_anchor":     buff_anchor,
             "buff_scale":      buff_scale,
             "dps_anchor":      dps_anchor,
@@ -18089,7 +18304,8 @@ def save_layout():
         with open(LAYOUT_FILE, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[OmniWatch] Saved layout ({len(panel_anchors)} panel anchors, "
-              f"equip_anchor={equip_anchor}, target_anchor={target_anchor}) "
+              f"equip_anchor={equip_anchor}, target_anchor={target_anchor}, "
+              f"cheatsheet_button_pos={cheatsheet_button_pos}) "
               f"to {LAYOUT_FILE}")
     except Exception as e:
         print(f"[OmniWatch] Could not save layout: {e}")
@@ -18100,6 +18316,8 @@ def load_layout():
     global target_anchor_st, target_scale_st
     global stats_anchor, stats_scale
     global recast_anchor, recast_scale
+    global cheatsheet_pos, cheatsheet_w, cheatsheet_h, cheatsheet_scroll
+    global cheatsheet_button_pos, cheatsheet_button_scale, _windowed_size
     global buff_anchor, buff_scale
     global dps_anchor, dps_scale, dps_panel_visible
     global skillchain_anchor, skillchain_scale, skillchain_panel_visible
@@ -18171,6 +18389,37 @@ def load_layout():
         if ra and len(ra) == 3:
             recast_anchor = [str(ra[0]), int(ra[1]), int(ra[2])]
         recast_scale = float(data.get("recast_scale", 1.0))
+
+        csp = data.get("cheatsheet_pos")
+        if isinstance(csp, list) and len(csp) == 2:
+            try:
+                cheatsheet_pos = [int(csp[0]), int(csp[1])]
+            except (TypeError, ValueError):
+                cheatsheet_pos = None
+        cw_ = data.get("cheatsheet_w")
+        ch_ = data.get("cheatsheet_h")
+        cheatsheet_w = int(cw_) if isinstance(cw_, (int, float)) else None
+        cheatsheet_h = int(ch_) if isinstance(ch_, (int, float)) else None
+        cs_sc = data.get("cheatsheet_scroll", 0)
+        cheatsheet_scroll = int(cs_sc) if isinstance(cs_sc, (int, float)) else 0
+        csb = data.get("cheatsheet_button_pos")
+        if isinstance(csb, list) and len(csb) == 2:
+            try:
+                cheatsheet_button_pos = [int(csb[0]), int(csb[1])]
+            except (TypeError, ValueError):
+                cheatsheet_button_pos = None
+        cbs = data.get("cheatsheet_button_scale", 1.0)
+        try:
+            cheatsheet_button_scale = max(0.5, min(5.0, float(cbs)))
+        except (TypeError, ValueError):
+            cheatsheet_button_scale = 1.0
+        ows = data.get("ow_window_size")
+        if isinstance(ows, list) and len(ows) == 2:
+            try:
+                _windowed_size = [max(OW_MIN_W, int(ows[0])),
+                                  max(OW_MIN_H, int(ows[1]))]
+            except (TypeError, ValueError):
+                _windowed_size = [OW_DEFAULT_W, OW_DEFAULT_H]
 
         ba = data.get("buff_anchor")
         if ba and len(ba) == 3:
@@ -18350,6 +18599,17 @@ _pre_select_active_view_char()
 # persist visibly across launches.
 settings = load_settings()
 load_layout()
+# Apply the saved windowed size (the window was created at the default
+# size above; resize it to the user's last windowed box if one is saved).
+try:
+    if (_windowed_size and len(_windowed_size) == 2
+            and (int(_windowed_size[0]) != WIDTH
+                 or int(_windowed_size[1]) != HEIGHT)):
+        WIDTH  = max(OW_MIN_W, int(_windowed_size[0]))
+        HEIGHT = max(OW_MIN_H, int(_windowed_size[1]))
+        screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
+except Exception as e:
+    print(f"[OmniWatch] apply saved window size failed: {e!r}")
 # Reload the buff config too. It first loaded at module import (against
 # the GLOBAL path, before the character was known), but the menu link
 # and all editing happen on the PER-CHARACTER file. Without this reload
@@ -18553,6 +18813,127 @@ SLOT_LABELS = [
 
 # ── Layout ───────────────────────────────────────────────────────────────────
 HEADER_H     = 36
+
+
+# ── Header geometry ──────────────────────────────────────────────────
+# Single source of truth for the header bar's position, drawn height,
+# and screen footprint, so the panels' layout origin and the header-
+# region hit guards stay consistent no matter where the bar sits.
+#
+# Two display modes (header_autohide):
+#   • always-visible — the bar draws every frame and the panels reserve
+#     space for it (layout_top/layout_bottom exclude the bar).
+#   • auto-hide — taskbar style: the bar is normally hidden and the
+#     panels get the full window; pushing the mouse to its screen edge
+#     reveals it, and it hides again when the cursor leaves. Here the bar
+#     OVERLAYS the panels (no reserved space), like the Windows taskbar
+#     over a maximized window. Revealing the bar is also how the settings
+#     gear is reached, so no separate hotkey is needed.
+#
+# header_h() is the *drawn* bar height (base 36 for now; the bar-resize
+# pass will switch it to round(HEADER_H * _menu_g()) once draw_header
+# scales its own contents). Reserved-space decisions live in
+# layout_top()/layout_bottom(), not header_h(), so auto-hide can show a
+# full-height bar while reserving zero layout space.
+
+# Thin strip at the very screen edge that reveals an auto-hidden header
+# when the cursor enters it. Once revealed the bar stays up while the
+# cursor is anywhere over it (see _update_header_reveal).
+_HEADER_REVEAL_TRIGGER = 3
+# Live reveal state for auto-hide mode, refreshed each frame from the
+# mouse position. Ignored when auto-hide is off.
+_header_revealed = False
+
+def header_at_top():
+    try:
+        return (setting("header_position") or "top") != "bottom"
+    except Exception:
+        return True
+
+def header_autohide_on():
+    try:
+        return bool(setting("header_autohide"))
+    except Exception:
+        return False
+
+def header_h():
+    """Drawn header bar height in px, scaled by the global UI factor so
+    the bar grows/shrinks in step with the panels. draw_header() scales
+    its own fonts and offsets by the same factor."""
+    return max(1, round(HEADER_H * _menu_g()))
+
+def header_y():
+    """Top edge of the bar: 0 at the top, HEIGHT - header_h() at the
+    bottom. Determined purely by header_position."""
+    return 0 if header_at_top() else HEIGHT - header_h()
+
+def header_rect():
+    """Screen rect the bar occupies at its edge. Used for reveal
+    detection and, when the bar is shown, the header-region click/wheel
+    guards."""
+    return pygame.Rect(0, header_y(), WIDTH, header_h())
+
+def header_shown():
+    """Whether the bar is currently drawn / interactive. Always true when
+    auto-hide is off; in auto-hide mode it tracks the reveal state."""
+    if not header_autohide_on():
+        return True
+    return _header_revealed
+
+def _update_header_reveal():
+    """Refresh the auto-hide reveal state from the current mouse position.
+    Called once per frame before the header is drawn. Taskbar-style
+    hysteresis: a thin edge strip triggers the reveal, then the bar stays
+    up while the cursor is anywhere over it (or while the settings
+    dropdown that hangs off the gear is open, so it can't vanish out from
+    under the menu)."""
+    global _header_revealed
+    if not header_autohide_on():
+        _header_revealed = False
+        return
+    if settings_menu_open:
+        _header_revealed = True
+        return
+    mx, my = pygame.mouse.get_pos()
+    if _header_revealed:
+        _header_revealed = header_rect().collidepoint(mx, my)
+    else:
+        if header_at_top():
+            trig = pygame.Rect(0, 0, WIDTH, _HEADER_REVEAL_TRIGGER)
+        else:
+            trig = pygame.Rect(0, HEIGHT - _HEADER_REVEAL_TRIGGER,
+                               WIDTH, _HEADER_REVEAL_TRIGGER)
+        if trig.collidepoint(mx, my):
+            _header_revealed = True
+
+def layout_top():
+    """Smallest y panel content should occupy. Reserves space for a
+    top-anchored bar only when it's always-visible; an auto-hidden bar
+    overlays instead, freeing the top edge for panels."""
+    if header_at_top() and not header_autohide_on():
+        return header_h()
+    return 0
+
+def layout_bottom():
+    """Largest y panel content should reach. Reserves space for a
+    bottom-anchored always-visible bar; otherwise the full window."""
+    if (not header_at_top()) and not header_autohide_on():
+        return HEIGHT - header_h()
+    return HEIGHT
+
+def _clear_header_click_rects():
+    """Null out the header's click targets. Called when the header is
+    hidden so a click where the gear / clock / inventory / events button
+    used to sit doesn't still register over whatever panel now occupies
+    that space. Each dispatch site already None-guards these."""
+    global settings_button_rect, char_view_button_rect
+    global header_clock_button_rect, inventory_button_rect
+    global events_button_rect
+    settings_button_rect = None
+    char_view_button_rect = None
+    header_clock_button_rect = None
+    inventory_button_rect = None
+    events_button_rect = None
 PANEL_X      = 20
 # Extra space reserved at the right end of the header (after the
 # coordinates) so the block doesn't sit flush to the edge and the
@@ -19297,7 +19678,7 @@ ACCENT_EQUIP    = (180, 160, 110)   # bronze — equipment
 ACCENT_TARGET   = (220, 180, 110)   # warm amber — target
 ACCENT_CHAT     = (140, 220, 180)   # mint — chat (communication/signal)
 ACCENT_SC       = (220, 130, 210)   # magenta — skillchain (resonance / flash)
-
+ACCENT_CHEATSHEET = (150, 175, 235) # cornflower — cheat sheet (reference)
 # Skillchain property → display color. Canonical FFXI element palette
 # via Ivaar's Skillchains addon (originally from Sammeh). Same colors
 # the player sees on element icons in the game UI, so muscle memory
@@ -19402,22 +19783,853 @@ def draw_resize_grip(surface, x, y):
                          (x - off,     y - 1),
                          (x - 1,       y - off))
 
+# ── Cheat sheet window ───────────────────────────────────────────────────
+# A keybind/macro reference shown as a large, draggable, resizable overlay
+# window toggled by the header [CS] button. Two stacked sections, each a
+# banner plus named sub-groups laid out into columns:
+#   • GLOBAL KEYBINDS — shared across every profile, CHEATSHEET_COMMON_FILE.
+#   • JOB KEYBINDS    — the active profile's own sheet, CHEATSHEET_JOB_FILE
+#                       (banner falls back to the profile name).
+# Content comes from JSON if the files exist, else the baked-in defaults
+# below (the keybinds from the reference image). JSON shape:
+#   {"title": "GLOBAL KEYBINDS",
+#    "groups": [ {"label": "ADD-ONS", "col": 0,
+#                 "rows": [ {"key": "HOME", "desc": "RELOAD GEARSWAP"} ]} ]}
+# A group's "col" places it in a column; the column count per section is
+# derived from the largest "col" used. Columns auto-size to their widest
+# key/description so nothing is truncated. The window resize grip scales
+# the content; position + scale persist in the layout file.
+CHEATSHEET_BASE_FONT = 12          # base px (scaled by _eff) for rows
+
+# Baked-in EXAMPLE/mock sheets shipped with the addon. New users see
+# these until they edit. A user's own edits are saved to their local
+# JSON files (omniwatch_cheatsheet_common.json + omniwatch_cheatsheet*
+# .json) which are NOT part of this file and override these defaults,
+# so personal sheets stay local and are never shipped.
+_CHEATSHEET_COMMON_DEFAULT = {
+    "title": "GLOBAL KEYBINDS",
+    "groups": [
+        {"label": "OFFENSE", "col": 0, "rows": [
+            {"key": "(F9)",  "desc": "CYCLE OFFENSE MODE"},
+            {"key": "(F10)", "desc": "CYCLE CASTING MODE"},
+            {"key": "(F11)", "desc": "CYCLE WEAPONSKILL MODE"},
+        ]},
+        {"label": "DEFENSE", "col": 0, "rows": [
+            {"key": "(F12)",      "desc": "CYCLE DEFENSE MODE"},
+            {"key": "CNTRL (F12)", "desc": "CYCLE PHYSICAL DEF"},
+            {"key": "ALT (F12)",  "desc": "CYCLE MAGIC DEF"},
+        ]},
+        {"label": "GENERAL", "col": 1, "rows": [
+            {"key": "CNTRL (M)", "desc": "MOUNT"},
+            {"key": "CNTRL (W)", "desc": "WARP"},
+            {"key": "(F1-F6)",   "desc": "/TARGET <P0-P5>"},
+        ]},
+    ],
+}
+_CHEATSHEET_JOB_DEFAULT = {
+    "title": "JOB KEYBINDS",
+    "groups": [
+        {"label": "UTILITY", "col": 0, "rows": [
+            {"key": "(NUMPAD.1)",     "desc": "CYCLE STANCE"},
+            {"key": "(NUMPAD.4)",     "desc": "CYCLE SKILLCHAIN MODE"},
+            {"key": "(LEFT / RIGHT)", "desc": "CYCLE MACROSETS"},
+        ]},
+    ],
+}
+
+# path -> (mtime, {"title","groups"}). Reloaded when mtime changes.
+_cheatsheet_cache = {}
+
+
+def _cheatsheet_extract_rows(raw):
+    rows = []
+    if isinstance(raw, list):
+        for r in raw:
+            if isinstance(r, dict) and (r.get("key") or r.get("desc")):
+                rows.append({"key": str(r.get("key", "")),
+                             "desc": str(r.get("desc", ""))})
+    return rows
+
+
+def _load_cheatsheet_file(path):
+    """Load + cache a cheat sheet JSON into {"title","groups"}. Only the
+    rich {title, groups:[{label,col,rows}]} form is honored — older flat
+    {entries:[...]} / bare-list files (placeholders from earlier builds)
+    are ignored so the caller falls back to the baked image defaults.
+    Returns empty groups if the file is absent or not in the rich form."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {"title": None, "groups": []}
+    cached = _cheatsheet_cache.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    result = {"title": None, "groups": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("groups"), list):
+            result["title"] = data.get("title")
+            for g in data["groups"]:
+                if not isinstance(g, dict):
+                    continue
+                rows = _cheatsheet_extract_rows(g.get("rows"))
+                if not (rows or g.get("label")):
+                    continue
+                try:
+                    col = int(g.get("col", 0) or 0)
+                except (TypeError, ValueError):
+                    col = 0
+                result["groups"].append({"label": str(g.get("label", "")),
+                                         "col": col, "rows": rows})
+    except Exception as e:
+        print(f"[OmniWatch] cheat sheet load {path}: {e!r}")
+    _cheatsheet_cache[path] = (mtime, result)
+    return result
+
+
+def _cheatsheet_sections():
+    """Return [(banner_title, groups, which)] top→bottom. While editing,
+    returns the live working copy; otherwise loads each section's file and
+    falls back to the baked defaults so the window always has content."""
+    if cheatsheet_edit_mode and _cs_work is not None:
+        return [
+            (_cs_work["common"].get("title") or "GLOBAL KEYBINDS",
+             _cs_work["common"]["groups"], "common"),
+            (_cs_work["job"].get("title") or (active_profile_name or "JOB KEYBINDS"),
+             _cs_work["job"]["groups"], "job"),
+        ]
+    common = _load_cheatsheet_file(CHEATSHEET_COMMON_FILE)
+    if not common["groups"]:
+        common = _CHEATSHEET_COMMON_DEFAULT
+    job = _load_cheatsheet_file(CHEATSHEET_JOB_FILE)
+    if not job["groups"]:
+        job = _CHEATSHEET_JOB_DEFAULT
+    job_title = job.get("title") or (active_profile_name or "JOB KEYBINDS")
+    return [
+        (common.get("title") or "GLOBAL KEYBINDS", common["groups"], "common"),
+        (job_title, job["groups"], "job"),
+    ]
+
+
+def _cheatsheet_path_for_which(which):
+    return CHEATSHEET_COMMON_FILE if which == "common" else CHEATSHEET_JOB_FILE
+
+
+def _cheatsheet_persist(which):
+    """Write the working copy for `which` to its JSON file and refresh the
+    load cache so non-edit reads reflect the change."""
+    if _cs_work is None:
+        return
+    sec = _cs_work[which]
+    path = _cheatsheet_path_for_which(which)
+    data = {
+        "title": sec.get("title") or
+                 ("GLOBAL KEYBINDS" if which == "common"
+                  else (active_profile_name or "JOB KEYBINDS")),
+        "groups": [
+            {"label": g.get("label", ""), "col": int(g.get("col", 0) or 0),
+             "rows": [{"key": r.get("key", ""), "desc": r.get("desc", "")}
+                      for r in g.get("rows", [])]}
+            for g in sec.get("groups", [])
+        ],
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        # Refresh cache so a later (non-edit) load returns this content.
+        try:
+            _cheatsheet_cache[path] = (os.path.getmtime(path),
+                                       {"title": data["title"],
+                                        "groups": data["groups"]})
+        except OSError:
+            _cheatsheet_cache.pop(path, None)
+    except Exception as e:
+        print(f"[OmniWatch] cheat sheet save {path}: {e!r}")
+
+
+def _cheatsheet_enter_edit():
+    """Snapshot the current sheets into a mutable working copy and turn on
+    edit mode. Defaults are materialized into the working copy so edits
+    have something concrete to modify."""
+    global cheatsheet_edit_mode, _cs_work, _cs_edit
+    work = {}
+    for title, groups, which in _cheatsheet_sections():
+        work[which] = {
+            "title": title,
+            "groups": [
+                {"label": g.get("label", ""), "col": int(g.get("col", 0) or 0),
+                 "rows": [{"key": r.get("key", ""), "desc": r.get("desc", "")}
+                          for r in g.get("rows", [])]}
+                for g in groups
+            ],
+        }
+    _cs_work = work
+    _cs_edit = None
+    cheatsheet_edit_mode = True
+
+
+def _cheatsheet_exit_edit():
+    """Commit any in-flight cell edit, persist both sheets, and leave edit
+    mode."""
+    global cheatsheet_edit_mode, _cs_work, _cs_edit, _cs_ctx_menu
+    _cheatsheet_commit_edit()
+    if _cs_work is not None:
+        _cheatsheet_persist("common")
+        _cheatsheet_persist("job")
+    _cs_work = None
+    _cs_edit = None
+    _cs_ctx_menu = None
+    cheatsheet_edit_mode = False
+
+
+def _cheatsheet_begin_cell(which, gi, ri, field):
+    """Open an inline edit on a specific cell. ri is None for the group
+    label. field ∈ {"key","desc","label"}."""
+    global _cs_edit
+    _cheatsheet_commit_edit()
+    if _cs_work is None:
+        return
+    grp = _cs_work[which]["groups"]
+    if gi >= len(grp):
+        return
+    if field == "label":
+        cur = grp[gi].get("label", "")
+    else:
+        rows = grp[gi].get("rows", [])
+        if ri is None or ri >= len(rows):
+            return
+        cur = rows[ri].get(field, "")
+    _cs_edit = {"which": which, "gi": gi, "ri": ri, "field": field,
+                "buf": cur, "cursor": len(cur)}
+
+
+def _cheatsheet_commit_edit():
+    """Write the active cell buffer back into the working copy + persist."""
+    global _cs_edit
+    if _cs_edit is None or _cs_work is None:
+        return
+    e = _cs_edit
+    grp = _cs_work[e["which"]]["groups"]
+    if e["gi"] < len(grp):
+        if e["field"] == "label":
+            grp[e["gi"]]["label"] = e["buf"]
+        else:
+            rows = grp[e["gi"]].get("rows", [])
+            if e["ri"] is not None and e["ri"] < len(rows):
+                rows[e["ri"]][e["field"]] = e["buf"]
+        _cheatsheet_persist(e["which"])
+    _cs_edit = None
+
+
+def _cheatsheet_add_row(which, gi):
+    """Append a blank row to a group and open its key for editing."""
+    if _cs_work is None:
+        return
+    _cheatsheet_commit_edit()
+    grp = _cs_work[which]["groups"]
+    if gi < len(grp):
+        grp[gi].setdefault("rows", []).append({"key": "", "desc": ""})
+        _cheatsheet_persist(which)
+        _cheatsheet_begin_cell(which, gi, len(grp[gi]["rows"]) - 1, "key")
+
+
+def _cheatsheet_del_row(which, gi, ri):
+    if _cs_work is None:
+        return
+    _cheatsheet_commit_edit()
+    grp = _cs_work[which]["groups"]
+    if gi < len(grp):
+        rows = grp[gi].get("rows", [])
+        if 0 <= ri < len(rows):
+            rows.pop(ri)
+            # Drop the group entirely if it has no rows and no label.
+            if not rows and not grp[gi].get("label"):
+                grp.pop(gi)
+            _cheatsheet_persist(which)
+
+
+def _cheatsheet_add_group(which, col):
+    """Append a new (empty-labelled) category in a column and edit its
+    label."""
+    if _cs_work is None:
+        return
+    _cheatsheet_commit_edit()
+    grp = _cs_work[which]["groups"]
+    grp.append({"label": "NEW", "col": int(col),
+                "rows": [{"key": "", "desc": ""}]})
+    _cheatsheet_persist(which)
+    _cheatsheet_begin_cell(which, len(grp) - 1, None, "label")
+
+
+def _cheatsheet_del_group(which, gi):
+    if _cs_work is None:
+        return
+    _cheatsheet_commit_edit()
+    grp = _cs_work[which]["groups"]
+    if 0 <= gi < len(grp):
+        grp.pop(gi)
+        _cheatsheet_persist(which)
+
+
+def _cheatsheet_section_columns(groups):
+    """Column count for a section = (largest 'col' used) + 1, clamped 1-6."""
+    if not groups:
+        return 1
+    try:
+        m = max(int(g.get("col", 0) or 0) for g in groups)
+    except (TypeError, ValueError):
+        m = 0
+    return max(1, min(6, m + 1))
+
+
+def scaled_cheatsheet_dims(scale):
+    s = _eff(scale)
+    base = {"small": 10, "medium": 12, "large": 15}.get(
+        setting("cheatsheet_font_size"), CHEATSHEET_BASE_FONT)
+    px = max(9, int(base * s))
+    f_row    = get_font("Consolas", px)
+    f_label  = get_font("Consolas", px, bold=True)
+    f_key    = get_font("Consolas", px)
+    f_desc   = get_font("Consolas", px, italic=True)
+    f_banner = get_font("Consolas", max(8, int((base - 1) * s)),
+                        bold=True)
+    f_title  = get_font("Consolas", max(9, int((base + 1) * s)),
+                        bold=True)
+    row_h = max(f_row.get_height(), f_desc.get_height()) + max(1, int(2 * s))
+    return {
+        "s":        s,
+        "pad":      max(5, int(10 * s)),
+        "gap":      max(4, int(8 * s)),
+        "col_gap":  max(8, int(24 * s)),
+        "group_gap": max(4, int(9 * s)),
+        "sec_gap":  max(6, int(14 * s)),
+        "banner_h": f_banner.get_height() + max(3, int(8 * s)),
+        "row_h":    row_h,
+        "f_row":    f_row, "f_label": f_label, "f_key": f_key,
+        "f_desc":   f_desc, "f_banner": f_banner, "f_title": f_title,
+    }
+
+
+def _cheatsheet_full_layout(scale):
+    """Measure all sections with SHARED column widths so the [ / key / desc
+    columns line up vertically across both GLOBAL and JOB. Returns
+    (dims, sections, shared). Each section carries its per-column group
+    buckets + heights; `shared` holds the common column x-offsets and the
+    label/key/desc widths used by every section."""
+    d = scaled_cheatsheet_dims(scale)
+    f_row = d["f_row"]; f_label = d["f_label"]
+    f_key = d["f_key"]; f_desc = d["f_desc"]
+    bracket_w = f_row.size("[")[0]
+    gap = d["gap"]; col_gap = d["col_gap"]
+
+    secs_raw = _cheatsheet_sections()
+    ncols = max((_cheatsheet_section_columns(g) for _, g, _ in secs_raw),
+                default=1)
+
+    # Pass 1: shared per-column widths = max across ALL sections.
+    label_w = [0] * ncols
+    key_w   = [0] * ncols
+    desc_w  = [0] * ncols
+    for _t, groups, _w in secs_raw:
+        for g in groups:
+            ci = max(0, min(ncols - 1, g.get("col", 0)))
+            if g.get("label"):
+                label_w[ci] = max(label_w[ci], f_label.size(g["label"])[0])
+            for r in g["rows"]:
+                key_w[ci]  = max(key_w[ci],  f_key.size(r["key"])[0])
+                desc_w[ci] = max(desc_w[ci], f_desc.size(r["desc"])[0])
+
+    col_w = []
+    for i in range(ncols):
+        w = (label_w[i] + (gap if label_w[i] else 0)
+             + bracket_w + gap + key_w[i]
+             + (gap + desc_w[i] if desc_w[i] else 0))
+        col_w.append(w)
+    col_x = [0] * ncols
+    acc = 0
+    for i in range(ncols):
+        col_x[i] = acc
+        acc += col_w[i] + col_gap
+
+    # Pass 2: bucket each section's groups into the shared columns. Each
+    # bucket entry is (orig_index, group) so the editor can target groups
+    # by their index in the section's groups list.
+    edit = cheatsheet_edit_mode
+    sections = []
+    for title, groups, which in secs_raw:
+        buckets = [[] for _ in range(ncols)]
+        for oi, g in enumerate(groups):
+            buckets[max(0, min(ncols - 1, g.get("col", 0)))].append((oi, g))
+        used = [i for i in range(ncols) if buckets[i]]
+        max_used = max(used) if used else 0
+        col_h = [0] * ncols
+        for i in used:
+            ch = 0
+            for gi, (oi, g) in enumerate(buckets[i]):
+                if gi > 0:
+                    ch += d["group_gap"]
+                ch += len(g["rows"]) * d["row_h"]
+            col_h[i] = ch
+        if edit:
+            # Reserve room for the per-group "+ row" lines and a per-column
+            # "+ category" line (empty columns get just the +category line),
+            # and span every column so a 2nd column can be started anywhere.
+            for i in range(ncols):
+                ng = len(buckets[i])
+                if ng:
+                    col_h[i] += ng * d["row_h"]              # one "+row" per group
+                    col_h[i] += d["group_gap"] + d["row_h"]  # the "+category" line
+                else:
+                    col_h[i] = d["row_h"]                    # "+category" only
+            max_used = ncols - 1
+        sec_w = (col_x[max_used] + col_w[max_used]) if (used or edit) else 0
+        sec_h = d["banner_h"] + (max(col_h) if (used or edit) else 0)
+        sections.append({"title": title, "which": which, "buckets": buckets,
+                         "col_h": col_h, "w": sec_w, "h": sec_h})
+
+    shared = {"col_w": col_w, "col_x": col_x, "label_w": label_w,
+              "key_w": key_w, "desc_w": desc_w, "bracket_w": bracket_w,
+              "ncols": ncols}
+    return d, sections, shared
+
+
+def _cheatsheet_content_size():
+    """(width, height) of the laid-out content at the current UI scale
+    (no window frame). Used to size the window on first open and to bound
+    the vertical scroll range."""
+    d, sections, _shared = _cheatsheet_full_layout(1.0)
+    if not sections:
+        return (int(200 * d["s"]), d["row_h"])
+    w = max(s["w"] for s in sections)
+    h = sum(s["h"] for s in sections) + d["sec_gap"] * (len(sections) - 1)
+    return (int(w), int(h))
+
+
+def _draw_cheatsheet_content(surface, x, y):
+    """Draw the banners + grouped rows starting at (x, y). No background —
+    the window frame provides that. Columns are shared across sections so
+    keys/descriptions line up; no leading dashes. In edit mode it also draws
+    the inline-edit affordances ("+ row" / "+ category" lines, the active
+    cell's cursor) and records click targets into _cs_edit_rects."""
+    global _cs_edit_rects
+    d, sections, shared = _cheatsheet_full_layout(1.0)
+    f_row = d["f_row"]; f_label = d["f_label"]
+    f_key = d["f_key"]; f_desc = d["f_desc"]; f_banner = d["f_banner"]
+    gap = d["gap"]
+    C_GLABEL  = (180, 188, 202)
+    C_BRACKET = (80, 85, 105)
+    C_KEY     = (212, 214, 224)
+    C_DESC    = (190, 174, 140)
+    C_BANNER  = (150, 175, 235)
+    C_ADD     = (110, 130, 110)
+    col_x = shared["col_x"]; label_w = shared["label_w"]
+    key_w = shared["key_w"]; desc_w = shared["desc_w"]; bracket_w = shared["bracket_w"]
+    edit = cheatsheet_edit_mode
+    minw = max(28, int(34 * d["s"]))
+    clip = surface.get_clip()   # content area; skip targets scrolled out of it
+    if edit:
+        _cs_edit_rects = []
+
+    def _rec(rect, action):
+        """Record a click target only if it's within the visible content
+        area, so rows scrolled behind the title bar aren't clickable."""
+        if clip is None or clip.colliderect(rect):
+            _cs_edit_rects.append((rect, action))
+
+    def _cell(field, gx, gy, w, which, gi, ri, text, font, color):
+        """Draw a cell's text (or the live edit buffer + cursor) and, in
+        edit mode, record its click rect."""
+        active = (edit and _cs_edit is not None
+                  and _cs_edit["which"] == which and _cs_edit["gi"] == gi
+                  and _cs_edit["ri"] == ri and _cs_edit["field"] == field)
+        if active:
+            buf = _cs_edit["buf"]
+            cur = _cs_edit["cursor"]
+            box = pygame.Rect(gx - 2, gy - 1, max(w, font.size(buf)[0]) + 6,
+                              d["row_h"])
+            pygame.draw.rect(surface, (40, 44, 60), box)
+            pygame.draw.rect(surface, ACCENT_CHEATSHEET, box, 1)
+            surface.blit(font.render(buf, True, color), (gx, gy))
+            cxp = gx + font.size(buf[:cur])[0]
+            pygame.draw.line(surface, (235, 235, 245),
+                             (cxp, gy + 1), (cxp, gy + font.get_height() - 1))
+        else:
+            if text:
+                surface.blit(font.render(text, True, color), (gx, gy))
+        if edit:
+            _rec(pygame.Rect(gx, gy, max(w, minw), d["row_h"]),
+                 ("cell", which, gi, ri, field))
+
+    cy = y
+    for si, sec in enumerate(sections):
+        if si > 0:
+            cy += d["sec_gap"]
+        which = sec["which"]
+        banner = f"----- {sec['title'].upper()} -----"
+        surface.blit(f_banner.render(banner, True, C_BANNER), (x, cy))
+        cy += d["banner_h"]
+        block_h = 0
+        for ci, gs in enumerate(sec["buckets"]):
+            base_x    = x + col_x[ci]
+            x_label   = base_x
+            x_bracket = base_x + label_w[ci] + (gap if label_w[ci] else 0)
+            x_key     = x_bracket + bracket_w + gap
+            x_desc    = x_key + key_w[ci] + gap
+            ry = cy
+            for within_i, (oi, g) in enumerate(gs):
+                if within_i > 0:
+                    ry += d["group_gap"]
+                for ri, r in enumerate(g["rows"]):
+                    if ri == 0:
+                        # Group label cell (editable in edit mode).
+                        if edit:
+                            _cell("label", x_label, ry, label_w[ci],
+                                  which, oi, None, g.get("label", ""),
+                                  f_label, C_GLABEL)
+                        elif g["label"]:
+                            surface.blit(f_label.render(g["label"], True,
+                                         C_GLABEL), (x_label, ry))
+                    surface.blit(f_row.render("[", True, C_BRACKET),
+                                 (x_bracket, ry))
+                    _cell("key", x_key, ry, key_w[ci], which, oi, ri,
+                          r["key"], f_key, C_KEY)
+                    _cell("desc", x_desc, ry, desc_w[ci], which, oi, ri,
+                          r["desc"], f_desc, C_DESC)
+                    ry += d["row_h"]
+                if edit:
+                    # "+ row" affordance under the group.
+                    surface.blit(f_row.render("+ row", True, C_ADD),
+                                 (x_key, ry))
+                    _rec(pygame.Rect(x_key, ry, max(key_w[ci], minw),
+                                     d["row_h"]), ("addrow", which, oi))
+                    ry += d["row_h"]
+            if edit:
+                # "+ category" affordance at the bottom of the column
+                # (also for an empty column → start a new column here).
+                if gs:
+                    ry += d["group_gap"]
+                surface.blit(f_label.render("+ category", True, C_ADD),
+                             (x_label, ry))
+                _rec(pygame.Rect(x_label, ry,
+                                 max(label_w[ci] + bracket_w + key_w[ci], minw * 3),
+                                 d["row_h"]), ("addcat", which, ci))
+            block_h = max(block_h, sec["col_h"][ci])
+        cy += block_h          # advance past this section's columns
+
+
+
+def _cheatsheet_toggle():
+    """Open/close the cheat sheet window (floating [CS] button / [X])."""
+    global cheatsheet_window_open
+    cheatsheet_window_open = not cheatsheet_window_open
+
+
+def _clear_cheatsheet_rects():
+    """Null the cheat sheet button + window hit rects (called when the
+    overlay is hidden so stale rects can't fire)."""
+    global cheatsheet_button_rect, cheatsheet_window_rect, cheatsheet_titlebar_rect
+    global cheatsheet_close_rect, cheatsheet_resize_e_rect
+    global cheatsheet_resize_s_rect, cheatsheet_resize_se_rect
+    global cheatsheet_edit_button_rect, cheatsheet_button_handle_rect
+    global _cs_edit_rects, _cs_ctx_item_rects, _cs_ctx_menu
+    cheatsheet_button_rect = None
+    cheatsheet_window_rect = None
+    cheatsheet_titlebar_rect = None
+    cheatsheet_close_rect = None
+    cheatsheet_resize_e_rect = None
+    cheatsheet_resize_s_rect = None
+    cheatsheet_resize_se_rect = None
+    cheatsheet_edit_button_rect = None
+    cheatsheet_button_handle_rect = None
+    _cs_edit_rects = []
+    _cs_ctx_item_rects = []
+    _cs_ctx_menu = None
+
+
+def draw_cheatsheet_button(surface):
+    """Draw the floating, draggable, resizable [CS] button. Click toggles
+    the window; dragging the body repositions it; dragging the corner
+    handle resizes it (all handled in the event loop). Sets
+    cheatsheet_button_rect + cheatsheet_button_handle_rect."""
+    global cheatsheet_button_pos, cheatsheet_button_rect
+    global cheatsheet_button_handle_rect, _cs_btn_draw_pos
+    cheatsheet_button_rect = None
+    cheatsheet_button_handle_rect = None
+    g = _menu_g() * max(0.5, min(5.0, cheatsheet_button_scale))
+    def _bs(v):
+        return max(1, round(v * g))
+    f = get_font("Consolas", _bs(13), bold=True)
+    l1 = f.render("Cheat", True, (220, 220, 230))
+    l2 = f.render("Sheet", True, (220, 220, 230))
+    pad = _bs(8)
+    padv = _bs(4)
+    lh = f.get_height()
+    bw = max(l1.get_width(), l2.get_width()) + pad * 2
+    bh = lh * 2 + padv * 2
+    sw, shh = surface.get_size()
+    if cheatsheet_button_pos is None:
+        cheatsheet_button_pos = [PANEL_X, layout_top() + 4]
+    # Clamp for DISPLAY only — keep the button on-screen and clickable, but
+    # never write the clamp back into cheatsheet_button_pos. OmniWatch opens
+    # in a small window before it's fullscreened; a position placed for the
+    # big window (e.g. below the hotbar) would otherwise get squashed to fit
+    # the small box on the first frame, the clamped value written back, and
+    # the real spot lost — which is what moved the button onto the hotbar
+    # after a reload. Preserving the stored value lets it reappear intact
+    # once the window grows. _cs_btn_draw_pos records where it's actually
+    # drawn so a drag grabs from the visible spot (no jump when clamped).
+    x = max(0, min(int(cheatsheet_button_pos[0]), max(0, sw - bw)))
+    y = max(0, min(int(cheatsheet_button_pos[1]), max(0, shh - bh)))
+    _cs_btn_draw_pos = [x, y]
+    cheatsheet_button_rect = pygame.Rect(x, y, bw, bh)
+    mx, my = pygame.mouse.get_pos()
+    hov = cheatsheet_button_rect.collidepoint(mx, my)
+    bg  = (62, 62, 78) if (hov or cheatsheet_window_open) else (44, 44, 54)
+    bdr = (180, 180, 200) if cheatsheet_window_open else (100, 100, 115)
+    pygame.draw.rect(surface, bg,  cheatsheet_button_rect, border_radius=4)
+    pygame.draw.rect(surface, bdr, cheatsheet_button_rect, 1, border_radius=4)
+    draw_accent_stripe(surface, x, y, bh, ACCENT_CHEATSHEET, w=max(2, _bs(2)))
+    surface.blit(l1, (x + (bw - l1.get_width()) // 2, y + padv))
+    surface.blit(l2, (x + (bw - l2.get_width()) // 2, y + padv + lh))
+    # Corner resize handle (bottom-right), shown on hover so it doesn't
+    # clutter the button at rest.
+    hsz = max(6, _bs(6))
+    cheatsheet_button_handle_rect = pygame.Rect(x + bw - hsz, y + bh - hsz,
+                                                hsz, hsz)
+    if hov or _cs_btn_resize is not None:
+        for off in (2, 5):
+            if off < hsz:
+                pygame.draw.line(surface, (200, 200, 215),
+                                 (x + bw - off, y + bh - 1),
+                                 (x + bw - 1, y + bh - off))
+
+
+def draw_cheatsheet_window(surface):
+    """Draw the cheat sheet overlay window when open: title bar with an [X]
+    close, the grouped content (clipped + vertically scrollable), and
+    independent right / bottom / corner resize grips. Sets the hit rects
+    used by the event loop and clamps the window on-screen."""
+    global cheatsheet_pos, cheatsheet_w, cheatsheet_h, cheatsheet_scroll
+    global cheatsheet_window_rect, cheatsheet_titlebar_rect, cheatsheet_close_rect
+    global cheatsheet_resize_e_rect, cheatsheet_resize_s_rect, cheatsheet_resize_se_rect
+    global cheatsheet_edit_button_rect
+    cheatsheet_window_rect = None
+    cheatsheet_titlebar_rect = None
+    cheatsheet_close_rect = None
+    cheatsheet_edit_button_rect = None
+    cheatsheet_resize_e_rect = None
+    cheatsheet_resize_s_rect = None
+    cheatsheet_resize_se_rect = None
+    if not cheatsheet_window_open:
+        return
+    d = scaled_cheatsheet_dims(1.0)
+    cw, ch = _cheatsheet_content_size()
+    margin = d["pad"]
+    title_h = d["f_title"].get_height() + max(6, int(9 * d["s"]))
+    sw, shh = surface.get_size()
+    eg = max(6, int(7 * d["s"]))                 # edge grip thickness
+    cg = max(12, int(RESIZE_GRIP * d["s"]))      # corner grip size
+    sbw = max(4, int(6 * d["s"]))                # scrollbar width
+
+    MINW = max(160, int(180 * d["s"]))
+    MINH = title_h + d["row_h"] + margin * 2 + cg
+    # First open (or unsaved): size to fit the content, clamped to screen.
+    if cheatsheet_w is None or cheatsheet_h is None:
+        cheatsheet_w = cw + margin * 2 + sbw + 2
+        cheatsheet_h = title_h + ch + margin * 2
+    cheatsheet_w = max(MINW, min(int(cheatsheet_w), sw))
+    cheatsheet_h = max(MINH, min(int(cheatsheet_h), shh))
+    win_w = cheatsheet_w
+    win_h = cheatsheet_h
+
+    if cheatsheet_pos is None:
+        cheatsheet_pos = [max(0, (sw - win_w) // 2), max(0, (shh - win_h) // 2)]
+    x = max(0, min(int(cheatsheet_pos[0]), max(0, sw - win_w)))
+    y = max(0, min(int(cheatsheet_pos[1]), max(0, shh - win_h)))
+    cheatsheet_pos[0], cheatsheet_pos[1] = x, y
+
+    pygame.draw.rect(surface, COL_PANEL,  (x, y, win_w, win_h), border_radius=5)
+    pygame.draw.rect(surface, COL_BORDER, (x, y, win_w, win_h), 1, border_radius=5)
+    draw_accent_stripe(surface, x, y, win_h, ACCENT_CHEATSHEET,
+                       w=max(2, int(3 * d["s"])))
+
+    # Title bar.
+    pygame.draw.rect(surface, COL_HEADER, (x, y, win_w, title_h),
+                     border_top_left_radius=5, border_top_right_radius=5)
+    pygame.draw.line(surface, COL_BORDER,
+                     (x, y + title_h - 1), (x + win_w, y + title_h - 1))
+    t = d["f_title"].render("CHEAT SHEET", True, (210, 214, 226))
+    surface.blit(t, (x + margin, y + (title_h - t.get_height()) // 2))
+
+    # Close [X].
+    close_sz = max(12, title_h - max(6, int(8 * d["s"])))
+    cx0 = x + win_w - close_sz - margin // 2
+    cy0 = y + (title_h - close_sz) // 2
+    cheatsheet_close_rect = pygame.Rect(cx0, cy0, close_sz, close_sz)
+    hov = cheatsheet_close_rect.collidepoint(pygame.mouse.get_pos())
+    pygame.draw.rect(surface, (120, 64, 64) if hov else (58, 50, 56),
+                     cheatsheet_close_rect, border_radius=3)
+    pygame.draw.rect(surface, (175, 125, 125), cheatsheet_close_rect, 1,
+                     border_radius=3)
+    xs = d["f_title"].render("X", True, (235, 215, 215))
+    surface.blit(xs, (cx0 + (close_sz - xs.get_width()) // 2,
+                      cy0 + (close_sz - xs.get_height()) // 2))
+
+    # EDIT toggle (left of [X]) — turns inline editing on/off.
+    et = d["f_title"].render("EDIT", True,
+                             (235, 225, 175) if cheatsheet_edit_mode
+                             else (200, 204, 216))
+    epad = max(4, int(6 * d["s"]))
+    ew = et.get_width() + epad * 2
+    ex0 = cx0 - ew - margin // 2
+    ey0 = cy0
+    cheatsheet_edit_button_rect = pygame.Rect(ex0, ey0, ew, close_sz)
+    ehov = cheatsheet_edit_button_rect.collidepoint(pygame.mouse.get_pos())
+    ebg = ((70, 84, 58) if cheatsheet_edit_mode
+           else ((58, 58, 72) if ehov else (44, 44, 54)))
+    pygame.draw.rect(surface, ebg, cheatsheet_edit_button_rect, border_radius=3)
+    pygame.draw.rect(surface,
+                     (160, 175, 120) if cheatsheet_edit_mode else (100, 100, 115),
+                     cheatsheet_edit_button_rect, 1, border_radius=3)
+    surface.blit(et, (ex0 + epad, ey0 + (close_sz - et.get_height()) // 2))
+
+    # Content area (clipped) + vertical scroll.
+    area_x = x + margin
+    area_y = y + title_h + margin
+    area_w = win_w - margin * 2 - sbw - 2
+    area_h = win_h - title_h - margin * 2
+    max_scroll = max(0, ch - area_h)
+    if cheatsheet_scroll > max_scroll:
+        cheatsheet_scroll = max_scroll
+    if cheatsheet_scroll < 0:
+        cheatsheet_scroll = 0
+    prev_clip = surface.get_clip()
+    surface.set_clip(pygame.Rect(area_x, area_y, max(1, area_w), max(1, area_h)))
+    _draw_cheatsheet_content(surface, area_x, area_y - cheatsheet_scroll)
+    surface.set_clip(prev_clip)
+
+    # Scrollbar (only when content overflows vertically).
+    if max_scroll > 0:
+        sb_x = x + win_w - sbw - 2
+        track = pygame.Rect(sb_x, area_y, sbw, area_h)
+        pygame.draw.rect(surface, (38, 38, 48), track, border_radius=2)
+        thumb_h = max(20, int(area_h * area_h / max(1, ch)))
+        thumb_y = area_y + int((area_h - thumb_h) * cheatsheet_scroll / max_scroll)
+        pygame.draw.rect(surface, (120, 120, 140),
+                         (sb_x, thumb_y, sbw, thumb_h), border_radius=2)
+
+    # ── Resize grips: right edge (width), bottom edge (height), corner ──
+    gx = x + win_w
+    gy = y + win_h
+    cheatsheet_resize_se_rect = pygame.Rect(gx - cg, gy - cg, cg, cg)
+    cheatsheet_resize_e_rect  = pygame.Rect(gx - eg, y + title_h, eg,
+                                            max(0, win_h - title_h - cg))
+    cheatsheet_resize_s_rect  = pygame.Rect(x + margin, gy - eg,
+                                            max(0, win_w - cg - margin), eg)
+    # Corner hatch.
+    pygame.draw.rect(surface, COL_SLOT_BG,  cheatsheet_resize_se_rect)
+    pygame.draw.rect(surface, COL_SLOT_BDR, cheatsheet_resize_se_rect, 1)
+    for off in (3, 7, 11, 15):
+        if off < cg:
+            pygame.draw.line(surface, COL_SLOT_TEXT,
+                             (gx - off, gy - 1), (gx - 1, gy - off))
+    # Edge hover hints (subtle), so the draggable borders are discoverable.
+    mxh, myh = pygame.mouse.get_pos()
+    if cheatsheet_resize_e_rect.collidepoint(mxh, myh):
+        pygame.draw.rect(surface, ACCENT_CHEATSHEET, cheatsheet_resize_e_rect)
+    if cheatsheet_resize_s_rect.collidepoint(mxh, myh):
+        pygame.draw.rect(surface, ACCENT_CHEATSHEET, cheatsheet_resize_s_rect)
+
+    # Hit rects. Title bar excludes the close button so a drag started on
+    # [X] doesn't move the window.
+    cheatsheet_titlebar_rect = pygame.Rect(x, y, win_w - close_sz - margin, title_h)
+    cheatsheet_window_rect = pygame.Rect(x, y, win_w, win_h)
+
+
+def draw_cheatsheet_ctx_menu(surface):
+    """Draw the right-click delete menu when one is open. A small popup at
+    the click point with the target shown and a single Delete action, so a
+    delete is always a deliberate two-step (right-click → click Delete).
+    Records the Delete item rect for the click dispatcher."""
+    global _cs_ctx_item_rects
+    _cs_ctx_item_rects = []
+    if _cs_ctx_menu is None or not cheatsheet_edit_mode:
+        return
+    m = _cs_ctx_menu
+    d = scaled_cheatsheet_dims(1.0)
+    f = d["f_row"]
+    pad = max(5, int(8 * d["s"]))
+    line_h = f.get_height() + max(2, int(4 * d["s"]))
+    head = ("Category: " if m["kind"] == "group" else "Row: ") + \
+           (m.get("title") or "")
+    if len(head) > 40:
+        head = head[:39] + "…"
+    item = "Delete category" if m["kind"] == "group" else "Delete row"
+    w = max(f.size(head)[0], f.size(item)[0]) + pad * 2
+    h = line_h * 2 + pad
+    sw, shh = surface.get_size()
+    mx0 = max(0, min(int(m["x"]), sw - w))
+    my0 = max(0, min(int(m["y"]), shh - h))
+    pygame.draw.rect(surface, (28, 28, 36), (mx0, my0, w, h), border_radius=4)
+    pygame.draw.rect(surface, COL_BORDER, (mx0, my0, w, h), 1, border_radius=4)
+    # Header (dim, non-clickable).
+    surface.blit(f.render(head, True, (150, 150, 168)),
+                 (mx0 + pad, my0 + pad // 2))
+    pygame.draw.line(surface, COL_BORDER,
+                     (mx0 + 2, my0 + line_h + pad // 2 - 1),
+                     (mx0 + w - 2, my0 + line_h + pad // 2 - 1))
+    # Delete item (hover highlight).
+    item_rect = pygame.Rect(mx0 + 2, my0 + line_h + pad // 2,
+                            w - 4, line_h)
+    hov = item_rect.collidepoint(pygame.mouse.get_pos())
+    if hov:
+        pygame.draw.rect(surface, (90, 48, 48), item_rect, border_radius=3)
+    surface.blit(f.render(item, True, (235, 170, 170)),
+                 (mx0 + pad, my0 + line_h + pad // 2
+                  + (line_h - f.get_height()) // 2))
+    _cs_ctx_item_rects = [(item_rect, "del")]
+
+
 def draw_header(surface, w):
-    """Draw the game-clock header bar across the top."""
+    """Draw the game-clock header bar. Honors header_position: hy0 is the
+    bar's top edge (0 at top, HEIGHT-HEADER_H at bottom). All vertical
+    positioning is relative to hy0 / cy, so the same code draws the bar
+    at either edge. Whether it draws at all (auto-hide reveal state) is
+    decided by the caller via header_shown()."""
     global settings_button_rect
     hours, minutes, day_name, moon_pct, moon_phase = get_vana_time()
 
+    # Top edge of the bar. Everything vertical below is anchored to this
+    # (or to cy, which is derived from it), so top vs bottom is a single
+    # offset rather than a per-element change.
+    hy0 = header_y()
+    g   = _menu_g()
+    hh  = header_h()
+    def _hs(v):
+        """Scale a base-design header measurement by the global UI factor."""
+        return max(1, round(v * g))
+    # Scaled fonts. Assigning these names here shadows the module-level
+    # globals for the rest of this function, so every render call below
+    # picks up the scaled size without per-call edits.
+    font_clock = pygame.font.SysFont("Consolas", _hs(15), bold=True)
+    font_day   = pygame.font.SysFont("Consolas", _hs(13), bold=True)
+    font_moon  = pygame.font.SysFont("Consolas", _hs(12))
+
     # Background
-    pygame.draw.rect(surface, COL_HEADER, (0, 0, w, HEADER_H))
-    pygame.draw.line(surface, COL_BORDER, (0, HEADER_H - 1), (w, HEADER_H - 1))
+    pygame.draw.rect(surface, COL_HEADER, (0, hy0, w, hh))
+    # Separator line on the edge that faces the panels: the bottom edge
+    # for a top-anchored header, the top edge for a bottom-anchored one.
+    _border_y = (hy0 + hh - 1) if header_at_top() else hy0
+    pygame.draw.line(surface, COL_BORDER, (0, _border_y), (w, _border_y))
 
     # ── Settings gear button (leftmost) ─────────────────────────────────────
     # Click to open/close the settings dropdown. Sized to roughly match
     # the clock height; uses a unicode gear glyph rendered in the day
     # font (bold, readable at small sizes).
-    gear_size = 22
-    gx = 6
-    gy = (HEADER_H - gear_size) // 2
+    gear_size = _hs(22)
+    gx = _hs(6)
+    gy = hy0 + (hh - gear_size) // 2
     settings_button_rect = pygame.Rect(gx, gy, gear_size, gear_size)
     # Hover / open feedback.
     mx, my = pygame.mouse.get_pos()
@@ -19433,9 +20645,9 @@ def draw_header(surface, w):
     # ourselves means it always renders the same size and is
     # obviously a menu affordance.
     bar_color = (220, 220, 230)
-    bar_w     = gear_size - 10
-    bar_h     = 2
-    bar_gap   = 4
+    bar_w     = gear_size - _hs(10)
+    bar_h     = _hs(2)
+    bar_gap   = _hs(4)
     bar_x     = gx + (gear_size - bar_w) // 2
     # Center the 3-bar stack vertically.
     stack_h   = bar_h * 3 + bar_gap * 2
@@ -19449,8 +20661,8 @@ def draw_header(surface, w):
     # Reserve room for the gear button before the rest of the header
     # starts. Use max(PANEL_X, gear-right) so the existing layout still
     # gets its left margin even if the gear is small.
-    cx = max(PANEL_X, gx + gear_size + 8)
-    cy = HEADER_H // 2
+    cx = max(PANEL_X, gx + gear_size + _hs(8))
+    cy = hy0 + hh // 2
 
     # ── Character display (plain text or dropdown depending on count) ─────
     # Single-character setup → just show the name as plain text (no pill,
@@ -19494,8 +20706,8 @@ def draw_header(surface, w):
             cv_caret = font_moon.render(" ▼", True, (180, 180, 200))
             if cv_caret.get_width() < 4:
                 cv_caret = font_moon.render(" v", True, (180, 180, 200))
-            cv_w = cv_label.get_width() + cv_caret.get_width() + 12
-            cv_h = 18
+            cv_w = cv_label.get_width() + cv_caret.get_width() + _hs(12)
+            cv_h = _hs(18)
             cv_x = cx
             cv_y = cy - cv_h // 2
             char_view_button_rect = pygame.Rect(cv_x, cv_y, cv_w, cv_h)
@@ -19511,11 +20723,11 @@ def draw_header(surface, w):
             pygame.draw.rect(surface, cv_bdr, char_view_button_rect, 1,
                              border_radius=3)
             surface.blit(cv_label,
-                (cv_x + 6, cv_y + (cv_h - cv_label.get_height()) // 2))
+                (cv_x + _hs(6), cv_y + (cv_h - cv_label.get_height()) // 2))
             surface.blit(cv_caret,
-                (cv_x + 6 + cv_label.get_width(),
+                (cv_x + _hs(6) + cv_label.get_width(),
                  cv_y + (cv_h - cv_caret.get_height()) // 2))
-            cx += cv_w + 8
+            cx += cv_w + _hs(8)
 
     # ── Time / Day / Moon ───────────────────────────────────────────────────
     # All three blocks are temporal info from get_vana_time(); they
@@ -19616,23 +20828,20 @@ def draw_header(surface, w):
         # — and the rest of the header — stays put regardless of content.
         widget_x0 = cx
         t_surf    = font_clock.render(time_text, True, time_color)
-        # Width to reserve for the time field. Measured once against the
-        # widest plausible string; cached so we don't re-measure each frame.
-        global _header_time_field_w
-        if _header_time_field_w is None:
-            _header_time_field_w = font_clock.render(
-                "12:48:59 pm", True, COL_CLOCK).get_width()
-        time_field_w = _header_time_field_w
-        # Gap between the time field and the VT/OS label (was 6 — widened
-        # to 12 so the label reads as its own element, not crowding the
-        # digits).
-        TIME_LABEL_GAP = 12
+        # Width to reserve for the time field, measured against the widest
+        # plausible string ("12:48:59 pm"). Measured fresh each frame so it
+        # tracks the scaled clock font — a cross-frame cache would lock to
+        # whatever scale it was first measured at.
+        time_field_w = font_clock.render(
+            "12:48:59 pm", True, COL_CLOCK).get_width()
+        # Gap between the time field and the VT/OS label.
+        TIME_LABEL_GAP = _hs(12)
         # Compute the label up front so we can size the click box.
         lbl_surf_pre = font_moon.render(show_label, True, COL_LABEL_DIM)
         widget_w = time_field_w + TIME_LABEL_GAP + lbl_surf_pre.get_width()
         time_click_rect = pygame.Rect(
-            widget_x0 - 4, cy - (t_surf.get_height() // 2) - 3,
-            widget_w + 8, t_surf.get_height() + 6)
+            widget_x0 - _hs(4), cy - (t_surf.get_height() // 2) - _hs(3),
+            widget_w + _hs(8), t_surf.get_height() + _hs(6))
         is_hover_time = time_click_rect.collidepoint(mx, my)
         if is_hover_time:
             pygame.draw.rect(surface, (40, 44, 56), time_click_rect,
@@ -19650,28 +20859,28 @@ def draw_header(surface, w):
 
         lbl_surf = font_moon.render(show_label, True, COL_LABEL_DIM)
         surface.blit(lbl_surf, (cx, cy - lbl_surf.get_height() // 2))
-        cx += lbl_surf.get_width() + 18
+        cx += lbl_surf.get_width() + _hs(18)
 
         header_clock_button_rect = time_click_rect
 
         # Divider.
-        pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
-        cx += 14
+        pygame.draw.line(surface, COL_DIVIDER, (cx, hy0 + _hs(6)), (cx, hy0 + hh - _hs(6)))
+        cx += _hs(14)
 
         # Day name.
         day_color = DAY_COLORS.get(day_name, COL_CLOCK)
         d_surf    = font_day.render(day_name, True, day_color)
         surface.blit(d_surf, (cx, cy - d_surf.get_height() // 2))
-        cx += d_surf.get_width() + 18
+        cx += d_surf.get_width() + _hs(18)
 
         # Divider.
-        pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
-        cx += 14
+        pygame.draw.line(surface, COL_DIVIDER, (cx, hy0 + _hs(6)), (cx, hy0 + hh - _hs(6)))
+        cx += _hs(14)
 
         # Moon phase + percent.
         moon_label = font_moon.render("Moon:", True, COL_LABEL_DIM)
         surface.blit(moon_label, (cx, cy - moon_label.get_height() // 2))
-        cx += moon_label.get_width() + 6
+        cx += moon_label.get_width() + _hs(6)
 
         moon_str  = f"{moon_phase}  {moon_pct}%"
         m_surf    = font_moon.render(moon_str, True, COL_MOON)
@@ -19691,12 +20900,12 @@ def draw_header(surface, w):
         w_name, w_color = None, None
     if w_name:
         # Divider before weather, matching the moon/day separator style.
-        cx += 14
-        pygame.draw.line(surface, COL_DIVIDER, (cx, 6), (cx, HEADER_H - 6))
-        cx += 14
+        cx += _hs(14)
+        pygame.draw.line(surface, COL_DIVIDER, (cx, hy0 + _hs(6)), (cx, hy0 + hh - _hs(6)))
+        cx += _hs(14)
         w_lab_surf = font_moon.render("Weather:", True, COL_LABEL_DIM)
         surface.blit(w_lab_surf, (cx, cy - w_lab_surf.get_height() // 2))
-        cx += w_lab_surf.get_width() + 6
+        cx += w_lab_surf.get_width() + _hs(6)
         w_val_surf = font_moon.render(w_name, True, w_color)
         surface.blit(w_val_surf, (cx, cy - w_val_surf.get_height() // 2))
         cx += w_val_surf.get_width()
@@ -19780,8 +20989,8 @@ def draw_header(surface, w):
     # measures the points widget; rendering happens after centering.
     pts_visible = bool(setting("show_header_points"))
     pts_max_w   = 0
-    pts_left_pad  = 18
-    pts_right_pad = 18
+    pts_left_pad  = _hs(18)
+    pts_right_pad = _hs(18)
     pts_entry    = None  # (num_surf, lbl_surf) for the focused type
     if pts_visible:
         pts_col = (220, 195, 90)
@@ -19887,8 +21096,8 @@ def draw_header(surface, w):
     # right content (zone-time). Earlier code centered only the currency
     # block, which left the band shifted left when points and inventory
     # are both present.
-    inv_gap     = 10
-    inv_btn_w   = 96    # matches the value used in the inventory-button render
+    inv_gap     = _hs(10)
+    inv_btn_w   = _hs(96)    # matches the value used in the inventory-button render
     inv_visible = bool(setting("show_inventory_button"))
 
     # Events button — always shown, sits at the leftmost edge of the
@@ -19899,8 +21108,8 @@ def draw_header(surface, w):
     # Gated on show_events — when off, the band collapses without it
     # and the points widget anchors the left edge instead.
     events_visible = bool(setting("show_events"))
-    events_btn_w   = 60
-    events_btn_gap = 10
+    events_btn_w   = _hs(60)
+    events_btn_gap = _hs(10)
     events_total_w = (events_btn_w + events_btn_gap) if events_visible else 0
 
     pts_total_w = (pts_left_pad + pts_max_w + pts_right_pad) if pts_visible else 0
@@ -19911,8 +21120,8 @@ def draw_header(surface, w):
     # left_block_end_x + 12 so we never overlap the weather block — if
     # the window's been resized to be very narrow, the band slides
     # right against the left content rather than under it.
-    avail_lo   = left_block_end_x + 12
-    avail_hi   = max(avail_lo, right_block_start_x - 12)
+    avail_lo   = left_block_end_x + _hs(12)
+    avail_hi   = max(avail_lo, right_block_start_x - _hs(12))
     ideal_band = (avail_lo + avail_hi - band_w) // 2
     band_x     = max(avail_lo, min(ideal_band,
                                    avail_hi - band_w))
@@ -19927,8 +21136,8 @@ def draw_header(surface, w):
     # click handler can't fire stale geometry.
     if events_visible:
         ev_btn_x = band_x
-        ev_btn_y = cy - 9
-        ev_btn_h = 18
+        ev_btn_h = _hs(18)
+        ev_btn_y = cy - ev_btn_h // 2
         ev_btn_rect = pygame.Rect(ev_btn_x, ev_btn_y, events_btn_w, ev_btn_h)
         is_hover_ev = ev_btn_rect.collidepoint(mx, my)
         ev_bg  = (62, 62, 78) if is_hover_ev else (44, 44, 54)
@@ -19982,10 +21191,10 @@ def draw_header(surface, w):
     # not the current entry. This is what stops the button from jittering
     # when the cycle advances to a shorter/longer entry.
     if setting("show_inventory_button"):
-        inv_btn_x = block_x + block_w + 10
-        inv_btn_y = cy - 9
-        # Width sized to fit "▼ Inventory" comfortably at Consolas 12pt.
-        inv_btn_w, inv_btn_h = 96, 18
+        inv_btn_x = block_x + block_w + _hs(10)
+        # Width sized to fit "▼ Inventory" comfortably at the header font.
+        inv_btn_w, inv_btn_h = _hs(96), _hs(18)
+        inv_btn_y = cy - inv_btn_h // 2
         inv_btn_rect = pygame.Rect(inv_btn_x, inv_btn_y,
                                    inv_btn_w, inv_btn_h)
         # Hover/open feedback.
@@ -19996,13 +21205,13 @@ def draw_header(surface, w):
         pygame.draw.rect(surface, bdr, inv_btn_rect, 1, border_radius=3)
         # Tiny down-caret + "Inventory" label.
         caret_color = (220, 220, 230)
-        cax = inv_btn_x + 6
-        cay = inv_btn_y + 6
+        cax = inv_btn_x + _hs(6)
+        cay = inv_btn_y + _hs(6)
         pygame.draw.polygon(surface, caret_color, [
-            (cax, cay), (cax + 6, cay), (cax + 3, cay + 4)])
+            (cax, cay), (cax + _hs(6), cay), (cax + _hs(3), cay + _hs(4))])
         bag_label = font_moon.render("Inventory", True, caret_color)
         surface.blit(bag_label,
-            (cax + 10, inv_btn_y + (inv_btn_h - bag_label.get_height()) // 2))
+            (cax + _hs(10), inv_btn_y + (inv_btn_h - bag_label.get_height()) // 2))
         inventory_button_rect = inv_btn_rect
 
     # ── OS clock (right-side) — REMOVED, merged into the left time ─────
@@ -20125,12 +21334,19 @@ def settings_menu_size():
     """Compute (w, h) of the menu based on the canonical section list
     and the schema's row count. Width is fixed; height grows with
     content. Empty sections still get a header + a small placeholder
-    row so the user sees the full organizational structure."""
-    width = 320
-    row_h = 24
-    sec_h = 22       # section header row
-    placeholder_h = 18    # "(no settings yet)" row for empty sections
-    pad   = 8
+    row so the user sees the full organizational structure.
+
+    All dimensions are multiplied by the global UI scale (_menu_g) so
+    the dropdown grows/shrinks with the same setting that scales the
+    panels. draw_settings_menu() applies the identical factor to the
+    same base constants, so the computed size and the rendered rows
+    stay in agreement."""
+    g = _menu_g()
+    width = round(320 * g)
+    row_h = round(24 * g)
+    sec_h = round(22 * g)       # section header row
+    placeholder_h = round(18 * g)  # "(no settings yet)" row for empty sections
+    pad   = round(8 * g)
     # Group entries by section so we know which sections are empty.
     grouped = {sec: [] for sec in SETTINGS_SECTIONS}
     for s in SETTINGS_SCHEMA:
@@ -22690,8 +23906,12 @@ def draw_currency_settings_modal(surface):
     if not currency_settings_modal_open:
         return
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
+    ctrl_h = _ms(22)
     sw, sh = surface.get_size()
-    mw = min(420, sw - 40)
+    mw = min(_ms(420), sw - 40)
     # Compute height from the actual currency-row count instead of
     # hardcoding 280px. With 6 currencies the old 280 had headroom;
     # with 9 the modal bled off the bottom of the screen (Tokens and
@@ -22701,17 +23921,17 @@ def draw_currency_settings_modal(surface):
     #   divider       ≈ 8
     #   rows          = 22 * len(CURRENCY_CYCLE_KEYS)
     #   close_block   ≈ 50
-    title_block_h = 50
-    interval_h    = 32
-    divider_h     = 8
-    row_h         = 22
-    close_block_h = 50
+    title_block_h = _ms(50)
+    interval_h    = _ms(32)
+    divider_h     = _ms(8)
+    row_h         = _ms(22)
+    close_block_h = _ms(50)
     rows_h = row_h * len(CURRENCY_CYCLE_KEYS)
     mh = (title_block_h + interval_h + divider_h + rows_h + close_block_h)
     # Floor at the original 280 so the modal can't look cramped on
     # the smallest installs (1-2 currencies enabled is still a 9-
     # row schema; future additions might also shrink the list).
-    mh = max(mh, 280)
+    mh = max(mh, _ms(280))
     # Ceiling at screen height − 40 so even on tiny windows the
     # modal stays bordered top + bottom.
     mh = min(mh, sh - 40)
@@ -22744,24 +23964,24 @@ def draw_currency_settings_modal(surface):
         (panel, {"action": "cur_panel_bg"}))
 
     # Fonts.
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
-    pad = 14
+    pad = _ms(14)
     cy_y = my + pad
 
     # Title.
     t_surf = title_font.render(
         "Currency Cycler", True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     # Subtitle/hint.
     sub_surf = small_font.render(
         "Pick which currencies appear in the header rotation.",
         True, (160, 160, 175))
     surface.blit(sub_surf, (mx + pad, cy_y))
-    cy_y += sub_surf.get_height() + 10
+    cy_y += sub_surf.get_height() + _ms(10)
 
     # Cycle interval spinner (− value + label).
     interval = setting("header_currency_cycle_seconds") or 5
@@ -22771,37 +23991,37 @@ def draw_currency_settings_modal(surface):
         interval = 5
     iv_label = label_font.render(
         "Cycle interval:", True, (220, 220, 230))
-    surface.blit(iv_label, (mx + pad, cy_y + 4))
+    surface.blit(iv_label, (mx + pad, cy_y + _ms(4)))
     iv_lbl_w = iv_label.get_width()
 
     # Minus button.
-    minus_rect = pygame.Rect(mx + pad + iv_lbl_w + 12, cy_y, 22, 22)
+    minus_rect = pygame.Rect(mx + pad + iv_lbl_w + _ms(12), cy_y, ctrl_h, ctrl_h)
     pygame.draw.rect(surface, (50, 50, 65), minus_rect, border_radius=3)
     pygame.draw.rect(surface, (110, 110, 130), minus_rect, 1,
                      border_radius=3)
     m_surf = label_font.render("−", True, (220, 220, 230))
     surface.blit(m_surf,
-        (minus_rect.x + (22 - m_surf.get_width()) // 2,
-         minus_rect.y + (22 - m_surf.get_height()) // 2))
+        (minus_rect.x + (ctrl_h - m_surf.get_width()) // 2,
+         minus_rect.y + (ctrl_h - m_surf.get_height()) // 2))
     currency_settings_modal_rects.append(
         (minus_rect, {"action": "cur_interval", "delta": -1}))
 
     # Value display.
     val_surf = label_font.render(
         f"{interval}s", True, (220, 195, 90))
-    val_x = minus_rect.right + 8
+    val_x = minus_rect.right + _ms(8)
     surface.blit(val_surf,
-        (val_x, cy_y + (22 - val_surf.get_height()) // 2))
+        (val_x, cy_y + (ctrl_h - val_surf.get_height()) // 2))
 
     # Plus button.
-    plus_rect = pygame.Rect(val_x + 40, cy_y, 22, 22)
+    plus_rect = pygame.Rect(val_x + _ms(40), cy_y, ctrl_h, ctrl_h)
     pygame.draw.rect(surface, (50, 50, 65), plus_rect, border_radius=3)
     pygame.draw.rect(surface, (110, 110, 130), plus_rect, 1,
                      border_radius=3)
     p_surf = label_font.render("+", True, (220, 220, 230))
     surface.blit(p_surf,
-        (plus_rect.x + (22 - p_surf.get_width()) // 2,
-         plus_rect.y + (22 - p_surf.get_height()) // 2))
+        (plus_rect.x + (ctrl_h - p_surf.get_width()) // 2,
+         plus_rect.y + (ctrl_h - p_surf.get_height()) // 2))
     currency_settings_modal_rects.append(
         (plus_rect, {"action": "cur_interval", "delta": 1}))
 
@@ -22809,29 +24029,29 @@ def draw_currency_settings_modal(surface):
     range_surf = small_font.render(
         " (2-10s)", True, (140, 145, 160))
     surface.blit(range_surf,
-        (plus_rect.right + 8,
-         cy_y + (22 - range_surf.get_height()) // 2))
+        (plus_rect.right + _ms(8),
+         cy_y + (ctrl_h - range_surf.get_height()) // 2))
 
-    cy_y += 32
+    cy_y += _ms(32)
 
     # Divider.
     pygame.draw.line(surface, (60, 60, 75),
                      (mx + pad, cy_y),
                      (mx + mw - pad, cy_y), 1)
-    cy_y += 8
+    cy_y += _ms(8)
 
     # Per-currency checkboxes.
     for key, name, setting_key in CURRENCY_CYCLE_KEYS:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, 22)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, ctrl_h)
         # Hover highlight.
         if row_rect.collidepoint(pygame.mouse.get_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect,
                              border_radius=2)
 
         # Checkbox.
-        cb_size = 14
-        cb_rect = pygame.Rect(mx + pad + 4,
-                              cy_y + (22 - cb_size) // 2,
+        cb_size = _ms(14)
+        cb_rect = pygame.Rect(mx + pad + _ms(4),
+                              cy_y + (ctrl_h - cb_size) // 2,
                               cb_size, cb_size)
         pygame.draw.rect(surface, (30, 30, 40), cb_rect,
                          border_radius=2)
@@ -22844,8 +24064,8 @@ def draw_currency_settings_modal(surface):
         # Label + current value preview.
         name_surf = label_font.render(name, True, (220, 220, 230))
         surface.blit(name_surf,
-            (cb_rect.right + 8,
-             cy_y + (22 - name_surf.get_height()) // 2))
+            (cb_rect.right + _ms(8),
+             cy_y + (ctrl_h - name_surf.get_height()) // 2))
         # Show the current value as a faint suffix so the user can
         # confirm at a glance that data is actually flowing.
         cur_val = currency_state.get(key, 0)
@@ -22853,16 +24073,16 @@ def draw_currency_settings_modal(surface):
         val_s = small_font.render(val_text, True, (140, 145, 160))
         surface.blit(val_s,
             (mx + mw - pad - val_s.get_width(),
-             cy_y + (22 - val_s.get_height()) // 2))
+             cy_y + (ctrl_h - val_s.get_height()) // 2))
 
         currency_settings_modal_rects.append(
             (row_rect, {"action": "cur_toggle",
                         "key": setting_key}))
-        cy_y += 22
+        cy_y += ctrl_h
 
     # Close button at bottom right.
-    cy_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, cy_y, 70, 24)
+    cy_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), cy_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -22976,16 +24196,19 @@ def draw_party_settings_modal(surface):
     if not party_settings_modal_open:
         return
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
     sw, sh = surface.get_size()
     # Generous width for label + control on the right.
-    mw = min(500, sw - 40)
+    mw = min(_ms(500), sw - 40)
     # Height grows with row count: title block + N*row_h + close
     # button + padding. row_h = 26 keeps things readable without
     # feeling sparse.
-    title_block_h = 50
-    row_h         = 26
-    close_block_h = 50
-    pad           = 14
+    title_block_h = _ms(50)
+    row_h         = _ms(26)
+    close_block_h = _ms(50)
+    pad           = _ms(14)
     mh = title_block_h + len(_PARTY_MODAL_ROWS) * row_h + close_block_h
     mh = min(mh, sh - 40)
     mx = (sw - mw) // 2
@@ -23012,25 +24235,25 @@ def draw_party_settings_modal(surface):
 
     # Fonts (match the currency modal's font choices for visual
     # consistency).
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
     cy_y = my + pad
 
     # Title + subtitle.
     t_surf = title_font.render("Party Panel", True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     sub_surf = small_font.render(
         "Show/hide rows and configure buff & debuff columns.",
         True, (160, 160, 175))
     surface.blit(sub_surf, (mx + pad, cy_y))
-    cy_y += sub_surf.get_height() + 10
+    cy_y += sub_surf.get_height() + _ms(10)
 
     # Rows.
     for setting_key, display_label, kind in _PARTY_MODAL_ROWS:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         # Hover highlight (mirrors currency modal).
         if row_rect.collidepoint(pygame.mouse.get_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect,
@@ -23038,8 +24261,8 @@ def draw_party_settings_modal(surface):
 
         if kind == "bool":
             # Checkbox-style toggle.
-            cb_size = 14
-            cb_rect = pygame.Rect(mx + pad + 4,
+            cb_size = _ms(14)
+            cb_rect = pygame.Rect(mx + pad + _ms(4),
                                   cy_y + (row_h - cb_size) // 2 - 1,
                                   cb_size, cb_size)
             pygame.draw.rect(surface, (30, 30, 40), cb_rect,
@@ -23053,7 +24276,7 @@ def draw_party_settings_modal(surface):
             name_surf = label_font.render(display_label, True,
                                            (220, 220, 230))
             surface.blit(name_surf,
-                (cb_rect.right + 8,
+                (cb_rect.right + _ms(8),
                  cy_y + (row_h - name_surf.get_height()) // 2 - 1))
             # Whole-row click toggles.
             party_settings_modal_rects.append(
@@ -23065,7 +24288,7 @@ def draw_party_settings_modal(surface):
             name_surf = label_font.render(display_label, True,
                                            (220, 220, 230))
             surface.blit(name_surf,
-                (mx + pad + 4,
+                (mx + pad + _ms(4),
                  cy_y + (row_h - name_surf.get_height()) // 2 - 1))
             # Current option pill on the right; click cycles forward.
             # Pull current value + the schema's option list to
@@ -23084,9 +24307,9 @@ def draw_party_settings_modal(surface):
             cur_label = option_labels[cur_idx]
             pill_text = f"{cur_label}"
             pill_surf = label_font.render(pill_text, True, (220, 195, 90))
-            pill_pad_x = 10
+            pill_pad_x = _ms(10)
             pill_w = pill_surf.get_width() + pill_pad_x * 2
-            pill_h = 20
+            pill_h = _ms(20)
             pill_rect = pygame.Rect(
                 mx + mw - pad - pill_w,
                 cy_y + (row_h - pill_h) // 2 - 1,
@@ -23108,13 +24331,13 @@ def draw_party_settings_modal(surface):
             name_surf = label_font.render(display_label, True,
                                            (220, 220, 230))
             surface.blit(name_surf,
-                (mx + pad + 4,
+                (mx + pad + _ms(4),
                  cy_y + (row_h - name_surf.get_height()) // 2 - 1))
             btn_text = "Open..."
             btn_surf = label_font.render(btn_text, True, (220, 220, 230))
-            btn_pad_x = 10
+            btn_pad_x = _ms(10)
             btn_w = btn_surf.get_width() + btn_pad_x * 2
-            btn_h = 20
+            btn_h = _ms(20)
             btn_rect = pygame.Rect(
                 mx + mw - pad - btn_w,
                 cy_y + (row_h - btn_h) // 2 - 1,
@@ -23137,8 +24360,8 @@ def draw_party_settings_modal(surface):
         cy_y += row_h
 
     # Close button at bottom right.
-    close_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    close_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), close_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -23274,12 +24497,16 @@ def draw_display_settings_modal(surface):
     if not display_settings_modal_open:
         return
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
+    ctrl_h = _ms(22)
     sw, sh = surface.get_size()
-    mw = min(520, sw - 40)
-    title_block_h = 50
-    row_h         = 28      # slightly taller than party (spinners need it)
-    close_block_h = 50
-    pad           = 14
+    mw = min(_ms(520), sw - 40)
+    title_block_h = _ms(50)
+    row_h         = _ms(28)      # slightly taller than party (spinners need it)
+    close_block_h = _ms(50)
+    pad           = _ms(14)
     mh = title_block_h + len(_DISPLAY_MODAL_ROWS) * row_h + close_block_h
     mh = min(mh, sh - 40)
     mx = (sw - mw) // 2
@@ -23302,24 +24529,24 @@ def draw_display_settings_modal(surface):
     display_settings_modal_rects.append(
         (panel, {"action": "disp_panel_bg"}))
 
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
     cy_y = my + pad
 
     # Title + subtitle.
     t_surf = title_font.render("Display", True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     sub_surf = small_font.render(
         "Window appearance and visibility controls.",
         True, (160, 160, 175))
     surface.blit(sub_surf, (mx + pad, cy_y))
-    cy_y += sub_surf.get_height() + 10
+    cy_y += sub_surf.get_height() + _ms(10)
 
     for setting_key, display_label, kind in _DISPLAY_MODAL_ROWS:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         if row_rect.collidepoint(pygame.mouse.get_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect,
                              border_radius=2)
@@ -23328,15 +24555,15 @@ def draw_display_settings_modal(surface):
         name_surf = label_font.render(display_label, True,
                                        (220, 220, 230))
         surface.blit(name_surf,
-            (mx + pad + 4,
+            (mx + pad + _ms(4),
              cy_y + (row_h - name_surf.get_height()) // 2 - 1))
 
         if kind == "bool":
             # Right-side checkbox (mirror Party modal but anchor to
             # the right so labels align with int/float rows above).
-            cb_size = 14
+            cb_size = _ms(14)
             cb_rect = pygame.Rect(
-                mx + mw - pad - cb_size - 4,
+                mx + mw - pad - cb_size - _ms(4),
                 cy_y + (row_h - cb_size) // 2 - 1,
                 cb_size, cb_size)
             pygame.draw.rect(surface, (30, 30, 40), cb_rect,
@@ -23361,23 +24588,23 @@ def draw_display_settings_modal(surface):
             except (TypeError, ValueError):
                 cur = float(schema.get("default", 0)) if kind == "float" else int(schema.get("default", 0))
             # Minus button.
-            spinner_y = cy_y + (row_h - 22) // 2 - 1
-            minus_w = 22
-            plus_w  = 22
+            spinner_y = cy_y + (row_h - ctrl_h) // 2 - 1
+            minus_w = _ms(22)
+            plus_w  = _ms(22)
             # Compute value pill width based on formatted text.
             if kind == "float":
                 val_text = f"{cur:.2f}"
             else:
                 val_text = f"{cur}"
             val_surf = label_font.render(val_text, True, (220, 195, 90))
-            val_pad_x = 10
-            val_w = max(val_surf.get_width() + val_pad_x * 2, 44)
-            gap = 4
+            val_pad_x = _ms(10)
+            val_w = max(val_surf.get_width() + val_pad_x * 2, _ms(44))
+            gap = _ms(4)
             total_spinner_w = minus_w + gap + val_w + gap + plus_w
-            right_edge = mx + mw - pad - 4
+            right_edge = mx + mw - pad - _ms(4)
             spinner_x  = right_edge - total_spinner_w
             # Render minus.
-            minus_rect = pygame.Rect(spinner_x, spinner_y, minus_w, 22)
+            minus_rect = pygame.Rect(spinner_x, spinner_y, minus_w, ctrl_h)
             pygame.draw.rect(surface, (50, 50, 65), minus_rect,
                              border_radius=3)
             pygame.draw.rect(surface, (110, 110, 130), minus_rect, 1,
@@ -23385,7 +24612,7 @@ def draw_display_settings_modal(surface):
             m_surf = label_font.render("−", True, (220, 220, 230))
             surface.blit(m_surf,
                 (minus_rect.x + (minus_w - m_surf.get_width()) // 2,
-                 minus_rect.y + (22 - m_surf.get_height()) // 2))
+                 minus_rect.y + (ctrl_h - m_surf.get_height()) // 2))
             display_settings_modal_rects.append(
                 (minus_rect, {"action": "disp_spinner",
                               "key": setting_key,
@@ -23393,17 +24620,17 @@ def draw_display_settings_modal(surface):
                               "delta": -1}))
             # Value pill.
             val_rect = pygame.Rect(minus_rect.right + gap, spinner_y,
-                                    val_w, 22)
+                                    val_w, ctrl_h)
             pygame.draw.rect(surface, (30, 30, 40), val_rect,
                              border_radius=3)
             pygame.draw.rect(surface, (110, 130, 170), val_rect, 1,
                              border_radius=3)
             surface.blit(val_surf,
                 (val_rect.x + (val_w - val_surf.get_width()) // 2,
-                 val_rect.y + (22 - val_surf.get_height()) // 2))
+                 val_rect.y + (ctrl_h - val_surf.get_height()) // 2))
             # Plus button.
             plus_rect = pygame.Rect(val_rect.right + gap, spinner_y,
-                                     plus_w, 22)
+                                     plus_w, ctrl_h)
             pygame.draw.rect(surface, (50, 50, 65), plus_rect,
                              border_radius=3)
             pygame.draw.rect(surface, (110, 110, 130), plus_rect, 1,
@@ -23411,7 +24638,7 @@ def draw_display_settings_modal(surface):
             p_surf = label_font.render("+", True, (220, 220, 230))
             surface.blit(p_surf,
                 (plus_rect.x + (plus_w - p_surf.get_width()) // 2,
-                 plus_rect.y + (22 - p_surf.get_height()) // 2))
+                 plus_rect.y + (ctrl_h - p_surf.get_height()) // 2))
             display_settings_modal_rects.append(
                 (plus_rect, {"action": "disp_spinner",
                              "key": setting_key,
@@ -23422,11 +24649,11 @@ def draw_display_settings_modal(surface):
             # Hide display button.
             btn_text = "Toggle"
             btn_surf = label_font.render(btn_text, True, (220, 220, 230))
-            btn_pad_x = 12
+            btn_pad_x = _ms(12)
             btn_w = btn_surf.get_width() + btn_pad_x * 2
-            btn_h = 22
+            btn_h = _ms(22)
             btn_rect = pygame.Rect(
-                mx + mw - pad - btn_w - 4,
+                mx + mw - pad - btn_w - _ms(4),
                 cy_y + (row_h - btn_h) // 2 - 1,
                 btn_w, btn_h)
             pygame.draw.rect(surface, (60, 70, 90), btn_rect,
@@ -23443,8 +24670,8 @@ def draw_display_settings_modal(surface):
         cy_y += row_h
 
     # Close button.
-    close_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    close_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), close_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -23547,6 +24774,10 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
     `_setting_schema(key)` so callers only need to specify the kind
     and the display label.
     """
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
+    ctrl_h = _ms(22)
     # Hover highlight.
     if row_rect.collidepoint(mouse_pos):
         pygame.draw.rect(surface, (40, 40, 52), row_rect,
@@ -23554,15 +24785,15 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
     # Label.
     name_surf = label_font.render(display_label, True, (220, 220, 230))
     surface.blit(name_surf,
-        (row_rect.x + 4,
+        (row_rect.x + _ms(4),
          row_rect.y + (row_rect.h - name_surf.get_height()) // 2))
 
     schema = _setting_schema(key) or {}
 
     if kind == "bool":
-        cb_size = 14
+        cb_size = _ms(14)
         cb_rect = pygame.Rect(
-            row_rect.right - 4 - cb_size,
+            row_rect.right - _ms(4) - cb_size,
             row_rect.y + (row_rect.h - cb_size) // 2,
             cb_size, cb_size)
         pygame.draw.rect(surface, (30, 30, 40), cb_rect,
@@ -23588,17 +24819,17 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
         else:
             val_text = f"{cur_val}"
         val_surf = label_font.render(val_text, True, (220, 195, 90))
-        val_pad_x = 10
-        val_w = max(val_surf.get_width() + val_pad_x * 2, 56)
-        minus_w = 22
-        plus_w  = 22
-        gap = 4
+        val_pad_x = _ms(10)
+        val_w = max(val_surf.get_width() + val_pad_x * 2, _ms(56))
+        minus_w = _ms(22)
+        plus_w  = _ms(22)
+        gap = _ms(4)
         total_w = minus_w + gap + val_w + gap + plus_w
-        right_edge = row_rect.right - 4
+        right_edge = row_rect.right - _ms(4)
         spinner_x = right_edge - total_w
-        spinner_y = row_rect.y + (row_rect.h - 22) // 2
+        spinner_y = row_rect.y + (row_rect.h - ctrl_h) // 2
         # Minus.
-        minus_rect = pygame.Rect(spinner_x, spinner_y, minus_w, 22)
+        minus_rect = pygame.Rect(spinner_x, spinner_y, minus_w, ctrl_h)
         pygame.draw.rect(surface, (50, 50, 65), minus_rect,
                          border_radius=3)
         pygame.draw.rect(surface, (110, 110, 130), minus_rect, 1,
@@ -23606,23 +24837,23 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
         m_surf = label_font.render("−", True, (220, 220, 230))
         surface.blit(m_surf,
             (minus_rect.x + (minus_w - m_surf.get_width()) // 2,
-             minus_rect.y + (22 - m_surf.get_height()) // 2))
+             minus_rect.y + (ctrl_h - m_surf.get_height()) // 2))
         click_rects.append((minus_rect,
             {"action": f"{action_prefix}_spinner", "key": key,
              "kind": kind, "delta": -1}))
         # Value pill.
         val_rect = pygame.Rect(minus_rect.right + gap, spinner_y,
-                                val_w, 22)
+                                val_w, ctrl_h)
         pygame.draw.rect(surface, (30, 30, 40), val_rect,
                          border_radius=3)
         pygame.draw.rect(surface, (110, 130, 170), val_rect, 1,
                          border_radius=3)
         surface.blit(val_surf,
             (val_rect.x + (val_w - val_surf.get_width()) // 2,
-             val_rect.y + (22 - val_surf.get_height()) // 2))
+             val_rect.y + (ctrl_h - val_surf.get_height()) // 2))
         # Plus.
         plus_rect = pygame.Rect(val_rect.right + gap, spinner_y,
-                                 plus_w, 22)
+                                 plus_w, ctrl_h)
         pygame.draw.rect(surface, (50, 50, 65), plus_rect,
                          border_radius=3)
         pygame.draw.rect(surface, (110, 110, 130), plus_rect, 1,
@@ -23630,7 +24861,7 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
         p_surf = label_font.render("+", True, (220, 220, 230))
         surface.blit(p_surf,
             (plus_rect.x + (plus_w - p_surf.get_width()) // 2,
-             plus_rect.y + (22 - p_surf.get_height()) // 2))
+             plus_rect.y + (ctrl_h - p_surf.get_height()) // 2))
         click_rects.append((plus_rect,
             {"action": f"{action_prefix}_spinner", "key": key,
              "kind": kind, "delta": 1}))
@@ -23648,14 +24879,14 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
         # symmetric to the spinner's − / + buttons (same dimensions
         # and styling) so enum rows visually align with int/float
         # rows above them.
-        arrow_w  = 22
-        gap      = 4
-        pill_h   = 22
+        arrow_w  = _ms(22)
+        gap      = _ms(4)
+        pill_h   = _ms(22)
         pill_surf = label_font.render(cur_label, True, (220, 195, 90))
-        pill_pad_x = 10
-        pill_w = max(pill_surf.get_width() + pill_pad_x * 2, 80)
+        pill_pad_x = _ms(10)
+        pill_w = max(pill_surf.get_width() + pill_pad_x * 2, _ms(80))
         total_w  = arrow_w + gap + pill_w + gap + arrow_w
-        right_edge = row_rect.right - 4
+        right_edge = row_rect.right - _ms(4)
         ctl_x = right_edge - total_w
         ctl_y = row_rect.y + (row_rect.h - pill_h) // 2
         # Left arrow (prev).
@@ -23700,11 +24931,11 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
         btn_text   = schema.get("button_text") or "Open..."
         action_key = schema.get("action", "")
         btn_surf = label_font.render(btn_text, True, (220, 220, 230))
-        btn_pad_x = 12
+        btn_pad_x = _ms(12)
         btn_w = btn_surf.get_width() + btn_pad_x * 2
-        btn_h = 22
+        btn_h = _ms(22)
         btn_rect = pygame.Rect(
-            row_rect.right - 4 - btn_w,
+            row_rect.right - _ms(4) - btn_w,
             row_rect.y + (row_rect.h - btn_h) // 2,
             btn_w, btn_h)
         pygame.draw.rect(surface, (60, 70, 90), btn_rect,
@@ -23796,6 +25027,8 @@ def _dispatch_modal_row_action(payload, action_prefix):
 # definitions.
 # ──────────────────────────────────────────────────────────────────────
 _HEADER_MODAL_ROWS = [
+    ("header_autohide",      "Auto-hide header",        "bool"),
+    ("header_position",      "Header position",         "enum"),
     ("show_time",            "Show time",               "bool"),
     ("clock_cycle_enabled",  "Cycle VT / OS time",      "bool"),
     ("clock_cycle_sec",      "VT/OS cycle seconds",     "int"),
@@ -23819,12 +25052,15 @@ def draw_header_settings_modal(surface):
     if not header_settings_modal_open:
         return
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
     sw, sh = surface.get_size()
-    mw = min(520, sw - 40)
-    title_block_h = 50
-    row_h = 28
-    close_block_h = 50
-    pad = 14
+    mw = min(_ms(520), sw - 40)
+    title_block_h = _ms(50)
+    row_h = _ms(28)
+    close_block_h = _ms(50)
+    pad = _ms(14)
     mh = title_block_h + len(_HEADER_MODAL_ROWS) * row_h + close_block_h
     mh = min(mh, sh - 40)
     mx = (sw - mw) // 2
@@ -23845,31 +25081,31 @@ def draw_header_settings_modal(surface):
     header_settings_modal_rects.append(
         (panel, {"action": "head_panel_bg"}))
 
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
     cy_y = my + pad
     t_surf = title_font.render("Header", True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     sub_surf = small_font.render(
         "Header items: zone timer, Vana'diel clock, server, points.",
         True, (160, 160, 175))
     surface.blit(sub_surf, (mx + pad, cy_y))
-    cy_y += sub_surf.get_height() + 10
+    cy_y += sub_surf.get_height() + _ms(10)
 
     mouse_pos = pygame.mouse.get_pos()
     for key, label, kind in _HEADER_MODAL_ROWS:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
                          mouse_pos, header_settings_modal_rects,
                          label_font, "head")
         cy_y += row_h
 
     # Close.
-    close_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    close_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), close_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -23921,12 +25157,15 @@ def draw_inventory_settings_modal(surface):
     if not inventory_settings_modal_open:
         return
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
     sw, sh = surface.get_size()
-    mw = min(520, sw - 40)
-    title_block_h = 50
-    row_h = 28
-    close_block_h = 50
-    pad = 14
+    mw = min(_ms(520), sw - 40)
+    title_block_h = _ms(50)
+    row_h = _ms(28)
+    close_block_h = _ms(50)
+    pad = _ms(14)
     mh = title_block_h + len(_INVENTORY_MODAL_ROWS) * row_h + close_block_h
     mh = min(mh, sh - 40)
     mx = (sw - mw) // 2
@@ -23945,23 +25184,23 @@ def draw_inventory_settings_modal(surface):
     inventory_settings_modal_rects.append(
         (panel, {"action": "inv_panel_bg"}))
 
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
     cy_y = my + pad
     t_surf = title_font.render("Inventory", True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     sub_surf = small_font.render(
         "Inventory dropdown visibility and GearSwap folder.",
         True, (160, 160, 175))
     surface.blit(sub_surf, (mx + pad, cy_y))
-    cy_y += sub_surf.get_height() + 10
+    cy_y += sub_surf.get_height() + _ms(10)
 
     mouse_pos = pygame.mouse.get_pos()
     for key, label, kind in _INVENTORY_MODAL_ROWS:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
                          mouse_pos, inventory_settings_modal_rects,
                          label_font, "inv")
@@ -23974,10 +25213,10 @@ def draw_inventory_settings_modal(surface):
         "Gear used in gearswap files will be marked in inventory.",
         True, (150, 155, 170))
     surface.blit(hint_surf,
-        (mx + pad, my + mh - pad - 24 - hint_surf.get_height() - 6))
+        (mx + pad, my + mh - pad - _ms(24) - hint_surf.get_height() - _ms(6)))
 
-    close_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    close_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), close_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -24046,13 +25285,16 @@ def draw_statistics_settings_modal(surface):
     if not statistics_settings_modal_open:
         return
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
     sw, sh = surface.get_size()
-    mw = min(520, sw - 40)
-    title_block_h = 50
-    row_h         = 28
-    helper_h      = 16     # extra height for an italic helper line
-    close_block_h = 50
-    pad           = 14
+    mw = min(_ms(520), sw - 40)
+    title_block_h = _ms(50)
+    row_h         = _ms(28)
+    helper_h      = _ms(16)     # extra height for an italic helper line
+    close_block_h = _ms(50)
+    pad           = _ms(14)
     # Tally height: each row is row_h, plus helper_h per row that has
     # a helper. Centralizing the math here keeps adding/removing
     # helpers a one-line change.
@@ -24079,23 +25321,23 @@ def draw_statistics_settings_modal(surface):
     statistics_settings_modal_rects.append(
         (panel, {"action": "stats_panel_bg"}))
 
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
     cy_y = my + pad
     t_surf = title_font.render("Statistics", True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     sub_surf = small_font.render(
         "Stats panel visibility, gear values, and layout editor.",
         True, (160, 160, 175))
     surface.blit(sub_surf, (mx + pad, cy_y))
-    cy_y += sub_surf.get_height() + 10
+    cy_y += sub_surf.get_height() + _ms(10)
 
     mouse_pos = pygame.mouse.get_pos()
     for key, label, kind in _STATISTICS_MODAL_ROWS:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
                          mouse_pos, statistics_settings_modal_rects,
                          label_font, "stats")
@@ -24107,11 +25349,11 @@ def draw_statistics_settings_modal(surface):
         if helper_text:
             h_surf = small_font.render(helper_text, True,
                                         (150, 155, 170))
-            surface.blit(h_surf, (mx + pad + 8, cy_y))
+            surface.blit(h_surf, (mx + pad + _ms(8), cy_y))
             cy_y += helper_h
 
-    close_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    close_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), close_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -24816,6 +26058,21 @@ _SUBDIALOG_CONFIGS = {
         ],
         "helpers": {},
     },
+    "cheatsheet": {
+        "title":    "Cheat Sheet",
+        "subtitle": "A movable, resizable keybind reference. Open it with "
+                    "the floating Cheat Sheet button; edit it in-window.",
+        "rows": [
+            ("show_cheatsheet",       "Show cheat sheet", "bool"),
+            ("cheatsheet_font_size",  "Font size",        "enum"),
+        ],
+        "helpers": {
+            "show_cheatsheet":
+                "Hides the floating button + window when off.",
+            "cheatsheet_font_size":
+                "Small / Medium / Large content text.",
+        },
+    },
 }
 
 # Per-subdialog UI state. Initialized once at module load. Each entry
@@ -24852,13 +26109,16 @@ def _draw_subdialog(surface, state_key):
     title   = cfg["title"]
     subtitle = cfg.get("subtitle", "")
 
+    g = _menu_g()
+    def _ms(v):
+        return max(1, round(v * g))
     sw, sh = surface.get_size()
-    mw = min(520, sw - 40)
-    title_block_h = 50
-    row_h         = 28
-    helper_h      = 16
-    close_block_h = 50
-    pad           = 14
+    mw = min(_ms(520), sw - 40)
+    title_block_h = _ms(50)
+    row_h         = _ms(28)
+    helper_h      = _ms(16)
+    close_block_h = _ms(50)
+    pad           = _ms(14)
     rows_total_h = sum(
         row_h + (helper_h if helpers.get(key) else 0)
         for key, _, _ in rows)
@@ -24882,24 +26142,24 @@ def _draw_subdialog(surface, state_key):
     state["rects"].append(
         (panel, {"action": f"{state_key}_panel_bg"}))
 
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+    title_font = pygame.font.SysFont("Consolas", _ms(14), bold=True)
+    label_font = pygame.font.SysFont("Consolas", _ms(12))
+    small_font = pygame.font.SysFont("Consolas", _ms(10), italic=True)
 
     cy_y = my + pad
     t_surf = title_font.render(title, True, (220, 200, 150))
     surface.blit(t_surf, (mx + pad, cy_y))
-    cy_y += t_surf.get_height() + 2
+    cy_y += t_surf.get_height() + _ms(2)
     if subtitle:
         sub_surf = small_font.render(subtitle, True, (160, 160, 175))
         surface.blit(sub_surf, (mx + pad, cy_y))
-        cy_y += sub_surf.get_height() + 10
+        cy_y += sub_surf.get_height() + _ms(10)
     else:
-        cy_y += 10
+        cy_y += _ms(10)
 
     mouse_pos = pygame.mouse.get_pos()
     for key, label, kind in rows:
-        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - 2)
+        row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
                          mouse_pos, state["rects"],
                          label_font, state_key)
@@ -24908,11 +26168,11 @@ def _draw_subdialog(surface, state_key):
         if helper_text:
             h_surf = small_font.render(helper_text, True,
                                         (150, 155, 170))
-            surface.blit(h_surf, (mx + pad + 8, cy_y))
+            surface.blit(h_surf, (mx + pad + _ms(8), cy_y))
             cy_y += helper_h
 
-    close_y = my + mh - pad - 24
-    close_rect = pygame.Rect(mx + mw - pad - 70, close_y, 70, 24)
+    close_y = my + mh - pad - _ms(24)
+    close_rect = pygame.Rect(mx + mw - pad - _ms(70), close_y, _ms(70), _ms(24))
     pygame.draw.rect(surface, (60, 70, 90), close_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), close_rect, 1,
                      border_radius=3)
@@ -26831,18 +28091,30 @@ def draw_settings_menu(surface):
     if not settings_menu_open:
         return
 
+    g = _menu_g()
     w, h_natural = settings_menu_size()
-    # Anchor: top-left below the gear button (gear is at x=6, y centered).
+    # Anchor x: just inside the left edge, under the gear.
     mx = 6
-    my = HEADER_H + 2
-    # Clamp to screen.
+    # The dropdown only opens via the gear, and the header is force-
+    # revealed while the menu is open, so the bar is always present at
+    # its edge here. Anchor to the bar itself (header_y()/header_h())
+    # rather than layout_top(), which reserves no space in auto-hide
+    # mode and would let the menu overlap the bar.
+    #   • top header    → open downward from just below the bar.
+    #   • bottom header  → gear is at the bottom, so open UPWARD: pin the
+    #     dropdown's bottom just above the bar and grow toward the top.
+    if not header_at_top():
+        bottom_edge = header_y() - 2
+        available_h = max(80, bottom_edge - 4)
+        h = min(h_natural, available_h)
+        my = bottom_edge - h
+    else:
+        my = header_h() + 2
+        available_h = max(80, HEIGHT - my - 4)
+        h = min(h_natural, available_h)
+    # Clamp x to screen (also covers the bottom-header branch above).
     if mx + w > WIDTH:
         mx = max(0, WIDTH - w)
-    # Vertical: cap the visible panel height to whatever fits between
-    # the anchor and the bottom of the window. If natural height is
-    # taller, we render with scrolling.
-    available_h = max(80, HEIGHT - my - 4)
-    h = min(h_natural, available_h)
     overflow = max(0, h_natural - h)
     # Clamp scroll to valid range. Clamping here (rather than in the
     # scroll handler) keeps things consistent if `overflow` shrinks
@@ -26859,14 +28131,27 @@ def draw_settings_menu(surface):
                      border_radius=4)
     settings_menu_panel_rect = pygame.Rect(mx, my, w, h)
 
-    pad   = 8
-    row_h = 24
-    sec_h = 22
-    placeholder_h = 18
-    label_font = font_label
-    title_font = pygame.font.SysFont("Consolas", 13, bold=True)
-    value_font = pygame.font.SysFont("Consolas", 12, bold=True)
-    placeholder_font = pygame.font.SysFont("Consolas", 11, italic=True)
+    pad   = round(8 * g)
+    row_h = round(24 * g)
+    sec_h = round(22 * g)
+    placeholder_h = round(18 * g)
+    label_font = pygame.font.SysFont("Consolas", max(1, round(12 * g)))
+    title_font = pygame.font.SysFont("Consolas", max(1, round(13 * g)), bold=True)
+    value_font = pygame.font.SysFont("Consolas", max(1, round(12 * g)), bold=True)
+    placeholder_font = pygame.font.SysFont("Consolas", max(1, round(11 * g)), italic=True)
+    # Inner control geometry, scaled once here so every row branch and
+    # the rects it stores share the same factor (clicks follow the
+    # drawn rects, so this also keeps hit-testing aligned).
+    inset       = round(4 * g)   # label inset / control right-inset
+    ctrl_h      = round(16 * g)  # pill / spinner / button height
+    spin_w      = round(18 * g)  # +/- and </> button width
+    spin_gap    = round(6 * g)   # gap between spinner value and buttons
+    pill_pad    = round(12 * g)  # horizontal padding inside ON/OFF pill
+    pill_min_w  = round(38 * g)  # minimum ON/OFF pill width
+    btn_pad     = round(14 * g)  # horizontal padding inside action button
+    btn_min_w   = round(46 * g)  # minimum action button width
+    radius_pill = max(2, round(8 * g))
+    ph_inset    = round(8 * g)   # placeholder text extra inset
 
     # Clip drawing to the panel interior so scrolled-off rows don't
     # bleed past the rounded border. Save/restore the previous clip so
@@ -26931,7 +28216,7 @@ def draw_settings_menu(surface):
             ph_surf = placeholder_font.render(
                 "(no settings yet)", True, (110, 110, 130))
             surface.blit(ph_surf,
-                         (mx + pad + 8,
+                         (mx + pad + ph_inset,
                           cy + (placeholder_h - ph_surf.get_height()) // 2))
             cy += placeholder_h
             continue
@@ -26948,7 +28233,7 @@ def draw_settings_menu(surface):
             lab_surf = label_font.render(schema["label"], True,
                                           (210, 210, 220))
             surface.blit(lab_surf,
-                         (row_rect.x + 4,
+                         (row_rect.x + inset,
                           row_rect.y + (row_h - lab_surf.get_height()) // 2))
 
             # Control on the right. Each control's hit rects are added
@@ -26957,7 +28242,7 @@ def draw_settings_menu(surface):
             # button-kind entries don't have values — those go straight
             # to the action-render branch below.
             kind = schema["kind"]
-            ctrl_x_right = row_rect.x + row_rect.width - 4
+            ctrl_x_right = row_rect.x + row_rect.width - inset
 
             if kind == "bool":
                 # If schema has a live_key, read from the live module
@@ -26973,15 +28258,15 @@ def draw_settings_menu(surface):
                 pill_text = "ON" if cur_val else "OFF"
                 pill_surf = value_font.render(pill_text, True,
                                               (40, 40, 50))
-                pill_w = max(38, pill_surf.get_width() + 12)
-                pill_h = 16
+                pill_w = max(pill_min_w, pill_surf.get_width() + pill_pad)
+                pill_h = ctrl_h
                 pill_rect = pygame.Rect(
                     ctrl_x_right - pill_w,
                     row_rect.y + (row_h - pill_h) // 2,
                     pill_w, pill_h)
                 pill_color = (140, 200, 140) if cur_val else (160, 100, 100)
                 pygame.draw.rect(surface, pill_color, pill_rect,
-                                 border_radius=8)
+                                 border_radius=radius_pill)
                 surface.blit(pill_surf,
                              (pill_rect.x + (pill_w - pill_surf.get_width()) // 2,
                               pill_rect.y + (pill_h - pill_surf.get_height()) // 2))
@@ -26997,14 +28282,14 @@ def draw_settings_menu(surface):
                             else str(cur_val))
                 val_surf = value_font.render(val_text, True,
                                              (220, 220, 230))
-                btn_w = 18
+                btn_w = spin_w
                 plus_rect = pygame.Rect(
                     ctrl_x_right - btn_w,
-                    row_rect.y + (row_h - 16) // 2, btn_w, 16)
-                val_rect_x = plus_rect.x - 6 - val_surf.get_width()
+                    row_rect.y + (row_h - ctrl_h) // 2, btn_w, ctrl_h)
+                val_rect_x = plus_rect.x - spin_gap - val_surf.get_width()
                 minus_rect = pygame.Rect(
-                    val_rect_x - 6 - btn_w,
-                    row_rect.y + (row_h - 16) // 2, btn_w, 16)
+                    val_rect_x - spin_gap - btn_w,
+                    row_rect.y + (row_h - ctrl_h) // 2, btn_w, ctrl_h)
                 pygame.draw.rect(surface, (60, 60, 75), minus_rect,
                                  border_radius=2)
                 pygame.draw.rect(surface, (60, 60, 75), plus_rect,
@@ -27048,14 +28333,14 @@ def draw_settings_menu(surface):
                     val_text = str(cur_val)
                 val_surf = value_font.render(val_text, True,
                                              (220, 220, 230))
-                btn_w = 18
+                btn_w = spin_w
                 next_rect = pygame.Rect(
                     ctrl_x_right - btn_w,
-                    row_rect.y + (row_h - 16) // 2, btn_w, 16)
-                val_rect_x = next_rect.x - 6 - val_surf.get_width()
+                    row_rect.y + (row_h - ctrl_h) // 2, btn_w, ctrl_h)
+                val_rect_x = next_rect.x - spin_gap - val_surf.get_width()
                 prev_rect = pygame.Rect(
-                    val_rect_x - 6 - btn_w,
-                    row_rect.y + (row_h - 16) // 2, btn_w, 16)
+                    val_rect_x - spin_gap - btn_w,
+                    row_rect.y + (row_h - ctrl_h) // 2, btn_w, ctrl_h)
                 pygame.draw.rect(surface, (60, 60, 75), prev_rect,
                                  border_radius=2)
                 pygame.draw.rect(surface, (60, 60, 75), next_rect,
@@ -27110,8 +28395,8 @@ def draw_settings_menu(surface):
                 # "Restart overlay" feels more like GO than OPEN).
                 btn_text = schema.get("button_text", "OPEN")
                 btn_surf = value_font.render(btn_text, True, (40, 40, 50))
-                btn_w = max(46, btn_surf.get_width() + 14)
-                btn_h = 16
+                btn_w = max(btn_min_w, btn_surf.get_width() + btn_pad)
+                btn_h = ctrl_h
                 btn_rect = pygame.Rect(
                     ctrl_x_right - btn_w,
                     row_rect.y + (row_h - btn_h) // 2,
@@ -27147,7 +28432,7 @@ def draw_settings_menu(surface):
                     btn_color = ((200, 180, 130) if is_btn_hover
                                   else (180, 160, 110))
                 pygame.draw.rect(surface, btn_color, btn_rect,
-                                 border_radius=8)
+                                 border_radius=radius_pill)
                 surface.blit(btn_surf,
                              (btn_rect.x + (btn_w - btn_surf.get_width()) // 2,
                               btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
@@ -27165,16 +28450,16 @@ def draw_settings_menu(surface):
     # so it sits on top of the rounded border instead of getting
     # clipped at the panel edge.
     if overflow > 0:
-        sb_w = 4
-        sb_x = mx + w - sb_w - 2
+        sb_w = max(2, round(4 * g))
+        sb_x = mx + w - sb_w - round(2 * g)
         # Track (full available height, dim).
-        track_y = my + 2
-        track_h = h - 4
+        track_y = my + round(2 * g)
+        track_h = h - round(4 * g)
         pygame.draw.rect(surface, (40, 40, 50),
                          (sb_x, track_y, sb_w, track_h),
                          border_radius=2)
         # Thumb size proportional to visible/natural ratio.
-        thumb_h = max(20, int(track_h * h / max(1, h_natural)))
+        thumb_h = max(round(20 * g), int(track_h * h / max(1, h_natural)))
         thumb_y = track_y + int((track_h - thumb_h)
                                 * settings_menu_scroll / overflow)
         pygame.draw.rect(surface, (130, 130, 150),
@@ -38328,7 +39613,7 @@ while running:
         if slot_idx == 0:
             return nm  # local player keeps name-based key
         return "p%d" % slot_idx
-    default_y = START_Y
+    default_y = layout_top() + 12
     # Hide entire main party panel when "show_party" setting is off.
     # We skip the iteration entirely rather than render and clip — saves
     # the work of resolving anchors, building panels, and drawing for
@@ -38417,7 +39702,7 @@ while running:
     if stats_anchor is None:
         # Default offset places it to the right of the equipment panel,
         # below the header so it doesn't overlap the clock.
-        stats_anchor = ["tl", PANEL_X + ew + 8, HEADER_H + 4]
+        stats_anchor = ["tl", PANEL_X + ew + 8, layout_top() + 4]
     if dragging_key != "__stats__":
         sx, sy = resolve_anchor(stats_anchor, sw, sh, WIDTH, HEIGHT)
         if stats_pos is None:
@@ -38453,7 +39738,7 @@ while running:
                                 has_cast=_tc_has_cast, ability_chars=_tc_achars,
                                 kind=_tc_kind, comments_chars=_tc_cchars)
     if target_anchor is None:
-        target_anchor = ["tr", PANEL_X, HEADER_H + PANEL_X]
+        target_anchor = ["tr", PANEL_X, layout_top() + PANEL_X]
     if dragging_key != "__target__":
         tx, ty = resolve_anchor(target_anchor, tcw, tch, WIDTH, HEIGHT)
         if target_pos is None:
@@ -38488,7 +39773,7 @@ while running:
                                        comments_chars=_tc_cchars_st)
     if target_anchor_st is None:
         # Directly below the main card's default position: add tch + a gap.
-        target_anchor_st = ["tr", PANEL_X, HEADER_H + PANEL_X + tch + 8]
+        target_anchor_st = ["tr", PANEL_X, layout_top() + PANEL_X + tch + 8]
     if dragging_key != "__target_st__":
         tx_st, ty_st = resolve_anchor(target_anchor_st, tcw_st, tch_st, WIDTH, HEIGHT)
         if target_pos_st is None:
@@ -38507,9 +39792,9 @@ while running:
         sc = panel_scales.get(nm, 1.0)
         pw = scaled_panel_dims(sc)["panel_w"]
         pos[0] = max(GRIP_VISIBLE - pw, min(pos[0], WIDTH  - GRIP_VISIBLE))
-        pos[1] = max(HEADER_H,          min(pos[1], HEIGHT - GRIP_VISIBLE))
+        pos[1] = max(layout_top(), min(pos[1], layout_bottom() - GRIP_VISIBLE))
     equip_pos[0] = max(GRIP_VISIBLE - ew, min(equip_pos[0], WIDTH  - GRIP_VISIBLE))
-    equip_pos[1] = max(HEADER_H,          min(equip_pos[1], HEIGHT - GRIP_VISIBLE))
+    equip_pos[1] = max(layout_top(), min(equip_pos[1], layout_bottom() - GRIP_VISIBLE))
 
     # Build a lookup so we can access member data by name in the draw loop.
     members_by_name = {m["name"]: m for m in party_data}
@@ -38876,7 +40161,7 @@ while running:
                 # Default anchor: alliance 1 stacks down right side, alliance 2
                 # stacks below alliance 1 (or just continues stacking).
                 if akey not in panel_anchors:
-                    default_y_ally = (HEADER_H + 12 +
+                    default_y_ally = (layout_top() + 12 +
                                       (rh_ally + 4) * slot_idx +
                                       (group_id - 1) * (rh_ally + 4) * 6)
                     panel_anchors[akey] = ["tr", PANEL_X, default_y_ally]
@@ -38991,7 +40276,7 @@ while running:
         # (Bottom-left was the previous default, but it caused the visible
         # top to "jump down" between setup mode and gameplay because the
         # entry count differs.)
-        recast_anchor = ["tl", PANEL_X, HEADER_H + 4]
+        recast_anchor = ["tl", PANEL_X, layout_top() + 4]
     if dragging_key != "__recast__":
         rcx, rcy = resolve_anchor(recast_anchor, rec_w, rec_h, WIDTH, HEIGHT)
         if recast_pos is None:
@@ -39092,7 +40377,7 @@ while running:
         # gives a reasonable y-offset assuming default recast position; if
         # the user moves the recast panel, the buff default will be wrong
         # but they can drag it in setup mode.
-        recast_default_bottom = HEADER_H + 4 + rec_h
+        recast_default_bottom = layout_top() + 4 + rec_h
         buff_anchor = ["tl", PANEL_X, recast_default_bottom + 8]
     if dragging_key != "__buff__":
         bfx, bfy = resolve_anchor(buff_anchor, bf_w, bf_h, WIDTH, HEIGHT)
@@ -39263,7 +40548,7 @@ while running:
             # the same reasons stats panel uses tl — the panel height
             # changes as suggestion count grows, so a bottom anchor
             # would shift the visible top around.
-            skillchain_anchor = ["tl", PANEL_X, HEADER_H + 240]
+            skillchain_anchor = ["tl", PANEL_X, layout_top() + 240]
         if dragging_key != "__skillchain__":
             sx, sy = resolve_anchor(skillchain_anchor, sc_w, sc_h, WIDTH, HEIGHT)
             if skillchain_pos is None:
@@ -39491,7 +40776,25 @@ while running:
     draw_hotbar_drag_overlay(screen)
 
     # ── Header (drawn last so it sits on top) ────────────────────────────────
-    draw_header(screen, WIDTH)
+    # In auto-hide mode the bar overlays the panels and only draws while
+    # revealed; otherwise it's always drawn. Refresh the reveal state from
+    # the mouse first so the decision uses this frame's cursor position.
+    _update_header_reveal()
+    if header_shown():
+        draw_header(screen, WIDTH)
+    else:
+        _clear_header_click_rects()
+
+    # ── Cheat sheet button + window (toggled by the floating [CS] button) ───
+    # The button floats on the overlay (draggable); the window draws above
+    # panels but below the settings dropdown / modals. Both are suppressed
+    # while the whole display is hidden.
+    if display_hidden or not setting("show_cheatsheet"):
+        _clear_cheatsheet_rects()
+    else:
+        draw_cheatsheet_window(screen)
+        draw_cheatsheet_button(screen)
+        draw_cheatsheet_ctx_menu(screen)
 
     # ── Settings dropdown (above everything when open) ──────────────────────
     draw_settings_menu(screen)
@@ -39708,6 +41011,10 @@ while running:
     # the 5-second deadline elapses.
     draw_achievement_banner(screen)
 
+    # Windowed-box resize grip (bottom-right corner). Drawn last so it's
+    # always grabbable; hidden while fullscreen or display-hidden.
+    draw_ow_resize_grip(screen)
+
     pygame.display.flip()
     clock.tick(60)
 
@@ -39782,6 +41089,18 @@ while running:
                         sim_window_scroll - event.y * 22)
                     continue
 
+            # Cheat sheet window — scroll its content when open and the
+            # cursor is over it. Sits below the settings dropdown /
+            # inventory in z-order, so defer to those when they're open.
+            # Upper-bound clamp happens in draw_cheatsheet_window.
+            if (cheatsheet_window_open
+                    and not settings_menu_open
+                    and not inventory_dropdown_open
+                    and cheatsheet_window_rect is not None
+                    and cheatsheet_window_rect.collidepoint(mx, my)):
+                cheatsheet_scroll = max(0, cheatsheet_scroll - event.y * 30)
+                continue
+
             # Settings menu takes priority — if open and cursor is over
             # the panel, scroll its content instead of party buff columns
             # or the inventory dropdown. Wheel-step is 24px (one row).
@@ -39789,8 +41108,10 @@ while running:
                     and settings_menu_panel_rect is not None
                     and settings_menu_panel_rect.collidepoint(mx, my)):
                 # event.y > 0 = wheel up = scroll content UP (show earlier rows).
+                # Step is one row (24px) scaled by the global UI factor so a
+                # click moves ~one row regardless of scale.
                 settings_menu_scroll = max(0,
-                    settings_menu_scroll - event.y * 24)
+                    settings_menu_scroll - event.y * round(24 * _menu_g()))
                 # Upper bound clamp happens during render against the
                 # current overflow value, so we don't need to clamp here.
                 continue
@@ -39838,7 +41159,7 @@ while running:
                     continue
 
             # Scroll the buff or debuff column the mouse is hovering over.
-            if my < HEADER_H:
+            if header_shown() and header_rect().collidepoint(mx, my):
                 continue
             for name in reversed(panel_order):
                 m = members_by_name.get(name)
@@ -39866,6 +41187,52 @@ while running:
                 break
 
         elif event.type == pygame.KEYDOWN:
+            # Cheat sheet delete menu: Escape dismisses it first.
+            if _cs_ctx_menu is not None and event.key == pygame.K_ESCAPE:
+                _cs_ctx_menu = None
+                continue
+            # Cheat sheet inline cell edit: highest-priority text input when
+            # a cell is focused. Enter/Tab commits, Esc cancels, Backspace/
+            # arrows are cursor-aware, printables insert at the caret.
+            if _cs_edit is not None:
+                if event.key == pygame.K_ESCAPE:
+                    _cs_edit = None
+                    continue
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                                 pygame.K_TAB):
+                    _cheatsheet_commit_edit()
+                    continue
+                if event.key == pygame.K_BACKSPACE:
+                    c = _cs_edit["cursor"]
+                    if c > 0:
+                        _cs_edit["buf"] = (_cs_edit["buf"][:c - 1]
+                                           + _cs_edit["buf"][c:])
+                        _cs_edit["cursor"] = c - 1
+                    continue
+                if event.key == pygame.K_DELETE:
+                    c = _cs_edit["cursor"]
+                    _cs_edit["buf"] = (_cs_edit["buf"][:c]
+                                       + _cs_edit["buf"][c + 1:])
+                    continue
+                if event.key == pygame.K_LEFT:
+                    _cs_edit["cursor"] = max(0, _cs_edit["cursor"] - 1)
+                    continue
+                if event.key == pygame.K_RIGHT:
+                    _cs_edit["cursor"] = min(len(_cs_edit["buf"]),
+                                             _cs_edit["cursor"] + 1)
+                    continue
+                if event.key == pygame.K_HOME:
+                    _cs_edit["cursor"] = 0
+                    continue
+                if event.key == pygame.K_END:
+                    _cs_edit["cursor"] = len(_cs_edit["buf"])
+                    continue
+                ch = event.unicode
+                if ch and ch.isprintable() and len(_cs_edit["buf"]) < 120:
+                    c = _cs_edit["cursor"]
+                    _cs_edit["buf"] = _cs_edit["buf"][:c] + ch + _cs_edit["buf"][c:]
+                    _cs_edit["cursor"] = c + 1
+                continue
             # Profile-name modal: highest priority text-input. When open,
             # eat every keypress (Esc cancels, Enter saves, printables
             # accumulate into the name buffer). Otherwise we'd risk
@@ -40190,6 +41557,32 @@ while running:
             if display_hidden and setting("show_hide_nub"):
                 continue
 
+            # ── Windowed-box resize grip (bottom-right corner) ──────
+            # Begin resizing the whole OmniWatch window. Captures the
+            # window's screen-coords so the top-left stays pinned while
+            # the corner follows the cursor. Only active while windowed.
+            if (_fullscreen_saved_rect is None
+                    and _ow_window_grip_rect is not None
+                    and _ow_window_grip_rect.collidepoint(mx, my)):
+                _grip_state = {"hwnd": 0, "win_x": 0, "win_y": 0}
+                if sys.platform == "win32":
+                    try:
+                        import ctypes
+                        from ctypes import wintypes
+                        info = pygame.display.get_wm_info()
+                        hwnd = info.get("window") or info.get("hwnd") or 0
+                        if hwnd:
+                            rect = wintypes.RECT()
+                            ctypes.windll.user32.GetWindowRect(
+                                wintypes.HWND(hwnd), ctypes.byref(rect))
+                            _grip_state = {"hwnd": hwnd,
+                                           "win_x": rect.left,
+                                           "win_y": rect.top}
+                    except Exception as e:
+                        print(f"[OmniWatch] window resize start: {e!r}")
+                _ow_window_resize = _grip_state
+                continue
+
 
             # a "drag-to-move". We record the starting mouse position
             # (in screen coords) and the starting window position;
@@ -40414,6 +41807,115 @@ while running:
                     settings_menu_scroll = 0
                 continue
 
+            # Cheat sheet delete menu (when open) takes priority: clicking
+            # the Delete item performs the delete; any other click just
+            # dismisses the menu. Either way the click is consumed.
+            if _cs_ctx_menu is not None:
+                for _rect, _act in _cs_ctx_item_rects:
+                    if _rect.collidepoint(mx, my):
+                        if _cs_ctx_menu["kind"] == "group":
+                            _cheatsheet_del_group(_cs_ctx_menu["which"],
+                                                  _cs_ctx_menu["gi"])
+                        else:
+                            _cheatsheet_del_row(_cs_ctx_menu["which"],
+                                                _cs_ctx_menu["gi"],
+                                                _cs_ctx_menu["ri"])
+                        break
+                _cs_ctx_menu = None
+                continue
+
+            # Floating [CS] button — corner handle resizes; body arms a
+            # click-or-drag (click toggles the window, drag repositions).
+            if (cheatsheet_button_handle_rect is not None
+                    and cheatsheet_button_handle_rect.collidepoint(mx, my)):
+                _cs_btn_resize = {"start_scale": cheatsheet_button_scale,
+                                  "anchor_x": mx, "anchor_y": my}
+                continue
+            if (cheatsheet_button_rect is not None
+                    and cheatsheet_button_rect.collidepoint(mx, my)
+                    and _cs_btn_draw_pos is not None):
+                # Grab relative to where the button is DRAWN (the clamped,
+                # on-screen position), not its stored value — they differ
+                # when the window is too small to fit the saved spot, and
+                # grabbing from the stored value would make the button jump
+                # on the first drag frame.
+                bx, by = _cs_btn_draw_pos
+                _cs_btn_drag = {
+                    "grab_dx": mx - bx,
+                    "grab_dy": my - by,
+                    "start_x": bx,
+                    "start_y": by,
+                    "moved":   False,
+                }
+                continue
+
+            # ── Cheat sheet window (high priority when open) ─────────────────
+            # Close [X] > EDIT toggle > corner/edge resize > inline cells >
+            # title-bar drag > body swallow. A click outside does NOT close
+            # it (toggle via [CS] or [X]).
+            if cheatsheet_window_open:
+                if (cheatsheet_close_rect is not None
+                        and cheatsheet_close_rect.collidepoint(mx, my)):
+                    if cheatsheet_edit_mode:
+                        _cheatsheet_exit_edit()
+                    cheatsheet_window_open = False
+                    continue
+                if (cheatsheet_edit_button_rect is not None
+                        and cheatsheet_edit_button_rect.collidepoint(mx, my)):
+                    if cheatsheet_edit_mode:
+                        _cheatsheet_exit_edit()
+                    else:
+                        _cheatsheet_enter_edit()
+                    continue
+                _cs_w0 = cheatsheet_w if cheatsheet_w is not None else 1
+                _cs_h0 = cheatsheet_h if cheatsheet_h is not None else 1
+                if (cheatsheet_resize_se_rect is not None
+                        and cheatsheet_resize_se_rect.collidepoint(mx, my)):
+                    _cs_drag = "resize_wh"
+                    _cs_resize_start = (mx, my, _cs_w0, _cs_h0)
+                    continue
+                if (cheatsheet_resize_e_rect is not None
+                        and cheatsheet_resize_e_rect.collidepoint(mx, my)):
+                    _cs_drag = "resize_w"
+                    _cs_resize_start = (mx, my, _cs_w0, _cs_h0)
+                    continue
+                if (cheatsheet_resize_s_rect is not None
+                        and cheatsheet_resize_s_rect.collidepoint(mx, my)):
+                    _cs_drag = "resize_h"
+                    _cs_resize_start = (mx, my, _cs_w0, _cs_h0)
+                    continue
+                # Inline-edit cell / affordance hit-test (edit mode only).
+                if cheatsheet_edit_mode:
+                    _cs_hit = None
+                    for _rect, _act in _cs_edit_rects:
+                        if _rect.collidepoint(mx, my):
+                            _cs_hit = _act
+                            break
+                    if _cs_hit is not None:
+                        _k = _cs_hit[0]
+                        if _k == "cell":
+                            _cheatsheet_begin_cell(_cs_hit[1], _cs_hit[2],
+                                                   _cs_hit[3], _cs_hit[4])
+                        elif _k == "addrow":
+                            _cheatsheet_add_row(_cs_hit[1], _cs_hit[2])
+                        elif _k == "addcat":
+                            _cheatsheet_add_group(_cs_hit[1], _cs_hit[2])
+                        continue
+                if (cheatsheet_titlebar_rect is not None
+                        and cheatsheet_titlebar_rect.collidepoint(mx, my)
+                        and cheatsheet_pos is not None):
+                    _cs_drag = "move"
+                    _cs_drag_off = (mx - cheatsheet_pos[0],
+                                    my - cheatsheet_pos[1])
+                    continue
+                if (cheatsheet_window_rect is not None
+                        and cheatsheet_window_rect.collidepoint(mx, my)):
+                    # Click on empty space inside the window — commit any
+                    # in-flight cell edit, then swallow.
+                    if cheatsheet_edit_mode:
+                        _cheatsheet_commit_edit()
+                    continue   # swallow clicks inside the window body
+
             # ── Sim window (highest priority when open) ──────────────────────
             # Resize grip > title bar > body controls. Resize first
             # because the grip overlaps the body region visually.
@@ -40494,6 +41996,7 @@ while running:
                 if inventory_dropdown_open:
                     inventory_active_bag = None
                 continue
+
             if inventory_dropdown_open:
                 # Modal editor: when the porter-slip nickname editor is
                 # open, eat ALL clicks inside the dropdown panel so the
@@ -40991,7 +42494,7 @@ while running:
 
             # Ignore other clicks in the header so the clock doesn't get
             # dragged. Allowed in setup mode for positioning near top.
-            if my < HEADER_H and not setup_mode:
+            if header_shown() and header_rect().collidepoint(mx, my) and not setup_mode:
                 continue
 
             hit = None
@@ -41227,6 +42730,42 @@ while running:
             if display_hidden and setting("show_hide_nub"):
                 continue
 
+            # Cheat sheet edit mode: right-click a cell opens a small delete
+            # menu (so nothing is removed by accident). Key/desc cell → "Delete
+            # row"; group label → "Delete category". The actual delete happens
+            # only when the menu's Delete item is clicked.
+            if cheatsheet_edit_mode and cheatsheet_window_open:
+                _cs_rhit = None
+                for _rect, _act in _cs_edit_rects:
+                    if _act[0] == "cell" and _rect.collidepoint(mx, my):
+                        _cs_rhit = _act
+                        break
+                if _cs_rhit is not None:
+                    _cheatsheet_commit_edit()
+                    _, _which, _gi, _ri, _field = _cs_rhit
+                    _title = ""
+                    if _cs_work is not None and _gi < len(_cs_work[_which]["groups"]):
+                        _grp = _cs_work[_which]["groups"][_gi]
+                        if _field == "label":
+                            _title = _grp.get("label", "")
+                        else:
+                            _rows = _grp.get("rows", [])
+                            if _ri is not None and _ri < len(_rows):
+                                _title = (_rows[_ri].get("key", "")
+                                          or _rows[_ri].get("desc", ""))
+                    _cs_ctx_menu = {
+                        "x": mx, "y": my,
+                        "kind": "group" if _field == "label" else "row",
+                        "which": _which, "gi": _gi, "ri": _ri, "title": _title,
+                    }
+                    continue
+                # Right-click elsewhere inside the window — close any menu and
+                # swallow so it doesn't leak to other handlers.
+                if (cheatsheet_window_rect is not None
+                        and cheatsheet_window_rect.collidepoint(mx, my)):
+                    _cs_ctx_menu = None
+                    continue
+
             # If a chat-name context menu is already open, right-click
             # routes through it (selecting an item or dismissing). This
             # mirrors the left-click flow but on button 3 — opening a
@@ -41355,6 +42894,37 @@ while running:
                     continue
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            # ── Windowed-box resize: end + persist size ────────────
+            if _ow_window_resize is not None:
+                _ow_window_resize = None
+                save_layout()
+                continue
+
+            # ── Cheat sheet window: end move/resize ────────────────
+            # Persist position + size so it reopens where it was left.
+            if _cs_drag is not None:
+                _cs_drag = None
+                save_layout()
+                continue
+
+            # ── Floating [CS] button: end resize ───────────────────
+            if _cs_btn_resize is not None:
+                _cs_btn_resize = None
+                save_layout()
+                continue
+
+            # ── Floating [CS] button: click vs drag ────────────────
+            # Unmoved = click → toggle the window. Moved = reposition →
+            # persist the new button location.
+            if _cs_btn_drag is not None:
+                moved = _cs_btn_drag["moved"]
+                _cs_btn_drag = None
+                if moved:
+                    save_layout()
+                else:
+                    _cheatsheet_toggle()
+                continue
+
             # ── Scrollbar drag release ─────────────────────────────
             # Clears any active scrollbar drag (checklist or chat).
             # Done first so a release outside the panel still ends
@@ -41766,6 +43336,43 @@ while running:
             sim_window_size[0] = nw
             sim_window_size[1] = nh
 
+        elif event.type == pygame.MOUSEMOTION and _ow_window_resize is not None:
+            # Resize the windowed box. The corner follows the cursor
+            # (window-relative pos), clamped to the minimum size. After
+            # set_mode recreates the surface we pin the top-left (Windows)
+            # so the box grows from its origin, and re-apply window flags.
+            mx, my = event.pos
+            new_w = max(OW_MIN_W, mx)
+            new_h = max(OW_MIN_H, my)
+            if new_w != WIDTH or new_h != HEIGHT:
+                WIDTH, HEIGHT = new_w, new_h
+                _windowed_size = [WIDTH, HEIGHT]
+                screen = pygame.display.set_mode((WIDTH, HEIGHT),
+                                                 pygame.NOFRAME)
+                if (sys.platform == "win32"
+                        and _ow_window_resize.get("hwnd")):
+                    try:
+                        import ctypes
+                        from ctypes import wintypes
+                        SetWindowPos = ctypes.windll.user32.SetWindowPos
+                        SetWindowPos.argtypes = [
+                            wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                            ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                            wintypes.UINT]
+                        SetWindowPos.restype = wintypes.BOOL
+                        SWP_NOSIZE     = 0x0001
+                        SWP_NOZORDER   = 0x0004
+                        SWP_NOACTIVATE = 0x0010
+                        SetWindowPos(
+                            wintypes.HWND(_ow_window_resize["hwnd"]),
+                            wintypes.HWND(0),
+                            _ow_window_resize["win_x"],
+                            _ow_window_resize["win_y"], 0, 0,
+                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+                    except Exception as e:
+                        print(f"[OmniWatch] window resize pin: {e!r}")
+                _reapply_window_flags()
+
         elif event.type == pygame.MOUSEMOTION and _borderless_drag is not None:
             # Move the borderless window with the mouse. We use SCREEN
             # coordinates (not the event.pos which is window-relative)
@@ -41807,6 +43414,50 @@ while running:
             mx, my = event.pos
             sim_window_pos[0] = mx - sim_window_drag[0]
             sim_window_pos[1] = my - sim_window_drag[1]
+
+        elif event.type == pygame.MOUSEMOTION and _cs_drag is not None:
+            # Cheat sheet window move / resize. Move preserves the grab
+            # offset (clamp happens in draw each frame). Width and height
+            # resize independently from the size captured at drag start.
+            mx, my = event.pos
+            if _cs_drag == "move" and cheatsheet_pos is not None:
+                cheatsheet_pos[0] = mx - _cs_drag_off[0]
+                cheatsheet_pos[1] = my - _cs_drag_off[1]
+            else:
+                start_mx, start_my, start_w, start_h = _cs_resize_start
+                if _cs_drag in ("resize_w", "resize_wh"):
+                    cheatsheet_w = max(120, start_w + (mx - start_mx))
+                if _cs_drag in ("resize_h", "resize_wh"):
+                    cheatsheet_h = max(80, start_h + (my - start_my))
+
+        elif event.type == pygame.MOUSEMOTION and _cs_btn_resize is not None:
+            # Resize the floating [CS] button. Scale tracks the diagonal
+            # drag from the corner; clamped to a sane range.
+            mx, my = event.pos
+            delta = ((mx - _cs_btn_resize["anchor_x"])
+                     + (my - _cs_btn_resize["anchor_y"])) / 2.0
+            cheatsheet_button_scale = max(
+                0.5, min(5.0, _cs_btn_resize["start_scale"] + delta / 60.0))
+
+        elif event.type == pygame.MOUSEMOTION and _cs_btn_drag is not None:
+            # Drag the floating [CS] button. Mark "moved" once past a small
+            # threshold so a tiny wobble still counts as a click on release.
+            mx, my = event.pos
+            if cheatsheet_button_pos is not None:
+                nx = mx - _cs_btn_drag["grab_dx"]
+                ny = my - _cs_btn_drag["grab_dy"]
+                # Measure displacement from where the drag STARTED, not from
+                # last frame's position (which we overwrite below). Comparing
+                # against the running value only ever sees the per-frame delta,
+                # so a slow drag never trips the threshold — "moved" stays
+                # False, the release toggles instead of saving, and the new
+                # spot is never persisted. Anchoring to start_x/start_y makes
+                # "moved" latch True once and stay True.
+                if (abs(nx - _cs_btn_drag["start_x"]) > 3
+                        or abs(ny - _cs_btn_drag["start_y"]) > 3):
+                    _cs_btn_drag["moved"] = True
+                cheatsheet_button_pos[0] = nx
+                cheatsheet_button_pos[1] = ny
 
         elif (event.type == pygame.MOUSEMOTION
               and _checklist_scroll_drag is not None):
@@ -41869,52 +43520,52 @@ while running:
                 pw, ph = drag_start_size
                 if dragging_key == "__equip__":
                     new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                    new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                    new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                     equip_pos[0], equip_pos[1] = new_x, new_y
                 elif dragging_key == "__stats__":
                     if stats_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         stats_pos[0], stats_pos[1] = new_x, new_y
                 elif dragging_key == "__target__":
                     if target_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         target_pos[0], target_pos[1] = new_x, new_y
                 elif dragging_key == "__target_st__":
                     if target_pos_st is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         target_pos_st[0], target_pos_st[1] = new_x, new_y
                 elif dragging_key == "__recast__":
                     if recast_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         recast_pos[0], recast_pos[1] = new_x, new_y
                 elif dragging_key == "__buff__":
                     if buff_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         buff_pos[0], buff_pos[1] = new_x, new_y
                 elif dragging_key == "__dps__":
                     if dps_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         dps_pos[0], dps_pos[1] = new_x, new_y
                 elif dragging_key == "__skillchain__":
                     if skillchain_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         skillchain_pos[0], skillchain_pos[1] = new_x, new_y
                 elif dragging_key == "__chat__":
                     if chat_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         chat_pos[0], chat_pos[1] = new_x, new_y
                 elif dragging_key == "__buttons__":
                     if buttons_pos is not None:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,         min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         buttons_pos[0], buttons_pos[1] = new_x, new_y
                 elif dragging_key.startswith("__buttons_") and dragging_key.endswith("__"):
                     # Multi-mode hotbar drag-motion.
@@ -41924,7 +43575,7 @@ while running:
                         _pi = None
                     if _pi is not None and _pi in buttons_panel_positions:
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,          min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         buttons_panel_positions[_pi][0] = new_x
                         buttons_panel_positions[_pi][1] = new_y
                 else:
@@ -41934,7 +43585,7 @@ while running:
                         scale = panel_scales.get(dragging_key, 1.0)
                         pw    = scaled_ally_dims(scale)["panel_w"]
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                        new_y = max(HEADER_H,          min(new_y, HEIGHT - GRIP_VISIBLE))
+                        new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         if dragging_key in panel_positions:
                             panel_positions[dragging_key][0] = new_x
                             panel_positions[dragging_key][1] = new_y
@@ -41945,7 +43596,7 @@ while running:
                             d     = scaled_panel_dims(scale)
                             pw    = d["panel_w"]
                             new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
-                            new_y = max(HEADER_H,          min(new_y, HEIGHT - GRIP_VISIBLE))
+                            new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                             panel_positions[dragging_key][0] = new_x
                             panel_positions[dragging_key][1] = new_y
 

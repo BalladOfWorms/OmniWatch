@@ -2,6 +2,31 @@
 
 All notable changes to OmniWatch are documented here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/), with versions following [semver](https://semver.org/).
 
+## [1.6.5] — 2026-06-08
+
+A cheat-sheet feature plus two window-handling fixes. The headline is a new **cheat sheet** — a movable, resizable keybind/macro reference you pop open from a floating button and edit in place. Alongside it, the main OmniWatch window can now be **resized while windowed** (previously the small box was fixed-size until you fullscreened it), and the cheat-sheet button finally keeps its position across reloads.
+
+### Added
+
+- **Cheat sheet overlay** — a keybind/macro reference shown as its own movable, resizable window, opened by a floating launcher button you can drag anywhere (and scale by its corner). Content is laid out as two stacked sections — **GLOBAL KEYBINDS** (shared across all of a character's profiles) and **JOB KEYBINDS** (per active profile) — each grouped into labeled, multi-column blocks. The window drags by its title bar, resizes independently in width and height via right-edge / bottom-edge / corner grips, and scrolls vertically when the content overflows. Column widths are measured across both sections so the JOB descriptions line up under the GLOBAL ones. Ships with an editable example sheet so it's populated out of the box.
+- **In-window cheat-sheet editor** — an **EDIT** toggle in the window's title bar turns the sheet into an editable grid: click any key or description to retype it, click a category label to rename it, add rows and categories with the inline "+ row" / "+ category" affordances, and right-click a row or category for a delete menu. Edits save automatically to per-character / per-profile JSON when you leave edit mode.
+- **Cheat Sheet settings section** — a new **Cheat Sheet** entry in the settings dropdown (under HotBar) with a **CONFIGURE** modal: **Show cheat sheet** (master on/off for the button and window) and **Font size** (Small / Medium / Large).
+- **Resizable windowed box** — the OmniWatch window opens windowed and has always had a Full-screen toggle; now the windowed box itself can be resized by dragging a grip in its bottom-right corner, and the chosen size persists so the overlay reopens at the size you left it. (The window is borderless, so this in-app grip stands in for the OS resize handles it doesn't have.)
+
+### Changed
+
+- **Baked-in cheat-sheet defaults are a neutral example** — the sheet that ships in the build is a generic GearSwap-mode example. Your own sheet lives in your per-character JSON files (`omniwatch_cheatsheet_common.json` and `omniwatch_cheatsheet[_<profile>].json`), which aren't part of the distributed build — so your personal keybinds stay local and override the example, and anyone who updates sees the clean example rather than your setup.
+
+### Fixed
+
+- **Cheat-sheet button forgot its position after a reload** — two separate causes. First, a slow drag of the button could stay under the move-detection threshold on every individual frame, so the release was treated as a click (toggling the window) rather than a move (saving the position); move-detection now measures total travel from where the drag began, so it latches once and saves. Second — and the one that bit hardest — because OmniWatch opens in the small windowed box before being fullscreened, a button placed for the larger window got clamped to fit the small box on the first frame and that clamped value was written back over the saved position, permanently moving the button (typically onto the hotbar). The on-screen clamp is now display-only: it keeps the button visible/clickable but never overwrites the stored position, so the button reappears where you put it once the window grows.
+
+### Internal
+
+- **Cheat-sheet data layer** — sheets load from JSON in a rich `{title, groups:[{label, col, rows:[{key, desc}]}]}` form, with the baked example as the fallback when no file is present; files are mtime-cached and reloaded live as they're edited.
+- **Windowed-size persistence** — the windowed dimensions are saved to the layout (`ow_window_size`) and re-applied at startup after the layout loads; the always-on-top / opacity / transparency window flags are re-applied after each in-app resize, since `set_mode` clears them.
+
+
 ## [1.6.4] — 2026-06-05
 
 An equipment-tooltip polish pass plus a header coordinate-precision fix. The headline tooltip work: Unity Concord gear and JSE necks now resolve their hidden augments to real stat lines instead of bottoming out at "Path: A", the augment bullet that rendered as a missing-glyph box is fixed, the tooltip text is ~10% smaller, and the tooltip can now be toggled off. Separately, the header coordinates finally show a real third decimal — they'd been padding a zero because the addon only ever sent two.
