@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.6.5 (2026-06-08)"
+OMNIWATCH_BUILD_STAMP = "v1.7.0 (2026-06-09)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.6.5"
+OMNIWATCH_VERSION = "1.7.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1548,6 +1548,40 @@ def _sim_send_import(filepath, setpath):
         print(f"[OmniWatch] sim_send_import failed: {e!r}")
 
 
+# ── Inventory item actions (right-click menu) ─────────────────────────────
+# Both reuse CMD_OUT_ADDR (port 5011). The Lua drain routes the INVACT
+# header to its inventory-action handler. We tag every action with the
+# character whose inventory the overlay is currently showing (the
+# multibox lock target) so the Lua side can refuse to act if THIS game
+# client isn't that character — a drop must never fire on the wrong box.
+# Wire forms:
+#   INVACT|drop|<char>|<item_id>       — drop the item now (destructive)
+#   INVACT|autodrop|<char>|<item_id>   — add to Treasury's Drop list
+def _inv_send_drop(item_id):
+    """Drop one stack of <item_id> from the locked character's live main
+    inventory. Lua resolves the slot at drop time, so a stale snapshot
+    can't cause it to drop the wrong slot."""
+    try:
+        target = _mb_lock_target() or ""
+        payload = f"INVACT|drop|{target}|{int(item_id)}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+    except Exception as e:
+        print(f"[OmniWatch] inv drop send failed: {e!r}")
+
+
+def _inv_send_autodrop(item_id):
+    """Ask Lua to add <item_id> to Treasury's per-character Drop list
+    (via `tr drop add <name>`). Treasury matches by name and will keep
+    auto-dropping the item; if its AutoDrop is on, it also drops any
+    copy already in inventory immediately."""
+    try:
+        target = _mb_lock_target() or ""
+        payload = f"INVACT|autodrop|{target}|{int(item_id)}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+    except Exception as e:
+        print(f"[OmniWatch] inv autodrop send failed: {e!r}")
+
+
 def _sim_format_equip_ref(ref):
     """Serialize a sim equipment ref for the SIM|equip wire format.
     Accepts:
@@ -1948,6 +1982,48 @@ _chat_tab_line_total = {}
 # switches to that tab.
 chat_tab_unread = {i: 0 for i in range(len(chat_tab_names))}
 
+# ── Focus words/phrases (ported from OmniChat) ───────────────────────
+# User-defined strings (edited in the Filters GUI's footer, persisted
+# under _meta.focus_phrases in the routing JSON). When a chat event's
+# text contains one (case-insensitive substring, any channel/tab), the
+# matched word itself gets a pulsing amber shade for FOCUS_PULSE_SECS,
+# then a steady faint shade so it stays findable when scrolling back.
+# Inactive tabs holding an unseen hit pulse their label until visited.
+_chat_focus_phrases_global = []   # lowercased, from global routing json
+_chat_focus_phrases_perjob = []   # lowercased, from per-job routing json
+_chat_tab_focus_pulse = {}        # tab_idx -> ts of newest unseen hit
+FOCUS_PULSE_SECS = 12.0
+CHAT_FOCUS_HL = (255, 184, 40)    # highlight tint
+
+
+def _chat_focus_phrases():
+    return _chat_focus_phrases_global + _chat_focus_phrases_perjob
+
+
+def _set_perjob_focus_phrases(lst):
+    global _chat_focus_phrases_perjob
+    _chat_focus_phrases_perjob = [
+        s.strip().lower() for s in (lst or [])
+        if isinstance(s, str) and s.strip()]
+
+
+def _chat_focus_check(ev):
+    """Stamp ev with focus_hit/focus_ts/focus_words when its text
+    contains any focus phrase. Called once at ingest."""
+    phrases = _chat_focus_phrases()
+    if not phrases:
+        return False
+    tl = (ev.get("text") or "").lower()
+    if not tl:
+        return False
+    hits = [p for p in phrases if p in tl]
+    if hits:
+        ev["focus_hit"] = True
+        ev["focus_ts"] = time.time()
+        ev["focus_words"] = hits
+        return True
+    return False
+
 # Per-frame click-target list for tab strip. (pygame.Rect, tab_idx).
 # Reset and rebuilt every render; mousedown checks against it.
 chat_tab_rects = []
@@ -2055,6 +2131,7 @@ _chat_composer_rect_channel   = None
 _chat_composer_rect_input     = None
 _chat_composer_rect_tell_to   = None
 _chat_composer_rect_send      = None
+_chat_composer_rect_at        = None  # { } auto-translate wrap button
 
 # Wrap cache: maps (event_id, panel_width) → list[str] of wrapped lines.
 # Invalidated implicitly when panel width changes (different cache key).
@@ -3653,6 +3730,14 @@ def load_chat_routing(path=None):
                     c for c in hidden if isinstance(c, str)}
             else:
                 _chat_channel_hidden = set()
+            global _chat_focus_phrases_global
+            fp = meta.get("focus_phrases")
+            if isinstance(fp, list):
+                _chat_focus_phrases_global = [
+                    s.strip().lower() for s in fp
+                    if isinstance(s, str) and s.strip()]
+            else:
+                _chat_focus_phrases_global = []
             bl = meta.get("blacklist")
             if isinstance(bl, list):
                 _chat_blacklist = {
@@ -3703,6 +3788,7 @@ def load_chat_routing_for_job(job):
             _chat_routing_perjob = {}
             print("[OmniWatch] Chat routing per-job overrides cleared "
                   "(no job known)")
+        _set_perjob_focus_phrases([])
         return
 
     path = _routing_path_for_job(job)
@@ -3714,6 +3800,7 @@ def load_chat_routing_for_job(job):
         # Drop 3 will add BattleMod XML import on first load for this job.
         if _chat_routing_perjob:
             _chat_routing_perjob = {}
+        _set_perjob_focus_phrases([])
         print(f"[OmniWatch] No per-job chat routing for {job} "
               f"(global config in effect)")
         return
@@ -3721,6 +3808,9 @@ def load_chat_routing_for_job(job):
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        _pj_meta = data.get("_meta") if isinstance(data, dict) else None
+        _pj_fp = (_pj_meta or {}).get("focus_phrases")
+        _set_perjob_focus_phrases(_pj_fp if isinstance(_pj_fp, list) else [])
         cleaned = _parse_routing_data(data, path)
         if cleaned is None:
             _chat_routing_perjob = {}
@@ -4198,6 +4288,19 @@ def _ingest_chat_packet(raw, stream_label):
             chat_recv_text += 1
         else:
             chat_recv_battle += 1
+
+        # Focus words/phrases: stamp the event (word-level pulsing
+        # shade in the renderer) and mark every non-active tab it
+        # routes to so the tab label pulses until visited.
+        if _chat_focus_check(ev):
+            for tab_idx, predicate in enumerate(chat_tab_filters):
+                if tab_idx == chat_active_tab:
+                    continue
+                try:
+                    if predicate(ev):
+                        _chat_tab_focus_pulse[tab_idx] = ev["focus_ts"]
+                except Exception:
+                    pass
 
         # Increment unread count on every tab the event matches, EXCEPT
         # the currently-active tab (you've effectively "read" it as it
@@ -4937,6 +5040,22 @@ inventory_show_slip_list = False
 #         "cursor": int, "cursor_blink": float} or None.
 inventory_slip_nickname_editor = None
 
+# Inventory item right-click context menu. Set by the right-click
+# handler when an item row (not a slip row) is right-clicked; consumed
+# by the left-click dispatcher and the menu renderer. Two actions:
+#   "drop"     — drop the item from the live main inventory right now
+#                (one-shot, destructive). Only offered when the row's
+#                bag is the main "inventory" (you can't drop from
+#                storage/wardrobe without moving the item first).
+#   "autodrop" — hand the item to the Treasury addon's per-character
+#                Drop list via `tr drop add <name>`, so Treasury keeps
+#                auto-dropping it (and drops the current copy now if
+#                Treasury's AutoDrop is on).
+# Shape: {"x": int, "y": int, "item_id": int, "item_name": str,
+#         "item_count": int, "bag": str} or None.
+inventory_item_ctx_menu  = None
+inventory_item_ctx_rects = []      # [(pygame.Rect, action_str)] per frame
+
 # dps_state: per-source bucket dicts, keyed by src tag ('me', 'pet',
 # '<party_member>'). Replaced wholesale on each batch.
 dps_state    = {}     # {src: {"window": int, "white": int, ...}}
@@ -5092,6 +5211,34 @@ cheatsheet_edit_button_rect = None
 cheatsheet_button_scale = 1.0     # independent button size multiplier
 cheatsheet_button_handle_rect = None  # corner resize handle (set during draw)
 _cs_btn_resize          = None    # {start_scale, anchor_x, anchor_y}
+
+# ── Warp button (Home Point / Survival Guide one-click travel) ─────────────
+# A small floating button (sibling of the [CS] button) that pulses when a
+# Home Point or Survival Guide is in range, and opens a one-click travel
+# menu when clicked. Proximity comes from lua's WARPNEAR| status; the warp
+# itself is sent back over the command rail and performed by superwarp.
+warp_button_pos     = None    # [x, y] of the floating Warp button
+warp_button_rect    = None    # hit rect (set during draw)
+warp_button_scale   = 1.0     # independent size multiplier (resize handle)
+warp_button_handle_rect = None  # corner resize handle (set during draw)
+_warp_btn_draw_pos  = None    # clamped on-screen draw pos (drag grabs here)
+_warp_btn_drag      = None    # click-or-drag state {grab_dx,..,moved}
+_warp_btn_resize    = None    # {start_scale, anchor_x, anchor_y}
+warp_menu_open      = False   # travel menu popover open?
+warp_menu_rects     = []      # [(rect, action_dict)] built during menu draw
+warp_menu_rect      = None    # full popover envelope (for tooltip suppress)
+warp_menu_scroll    = 0       # row offset for the windowed (max 12) list
+_warp_expanded      = set()   # set of expanded group path keys "net/lbl/lbl"
+# Confirm popover shown after clicking a destination (prevents an
+# accidental warp). Shape: {"label","command","net","zone","x","y"} or None.
+warp_confirm        = None
+warp_confirm_rects  = []      # [(rect, action_str)] built during confirm draw
+warp_confirm_rect   = None    # envelope (tooltip suppress)
+# Proximity status from lua. ts is the wall-clock of the last WARPNEAR; if
+# it goes stale (no update for a few seconds, e.g. zoning) we treat the
+# player as not-near so the button stops pulsing.
+warp_near           = {"hp": False, "sg": False, "ts": 0.0}
+warp_config         = None    # lazily loaded from WARP_FILE (see _warp_load_config)
 
 buff_anchor     = None
 buff_pos        = None
@@ -5878,6 +6025,11 @@ STATS_LAYOUT_FILE = os.path.join(USER_DIR, "omniwatch_stats_layout.json")
 # packet fires). Common = shared top section; Job = per-profile bottom.
 CHEATSHEET_COMMON_FILE = os.path.join(USER_DIR, "omniwatch_cheatsheet_common.json")
 CHEATSHEET_JOB_FILE    = os.path.join(USER_DIR, "omniwatch_cheatsheet.json")
+# Warp button destinations (Home Point / Survival Guide one-click travel).
+# Global (not per-char): destinations a character hasn't unlocked simply
+# fail gracefully inside superwarp, so a shared favorites list is fine.
+# Written with defaults on first load so it's discoverable + editable.
+WARP_FILE = os.path.join(USER_DIR, "omniwatch_warp.json")
 # DPS encounter logs stay GLOBAL (not per-char). JSON: one record per
 # line, each a full encounter dict. CSV: one summary row per encounter.
 # Both append-only and character-agnostic for now.
@@ -7208,7 +7360,6 @@ SETTINGS_SECTIONS = [
     "Target Card",
     "DPS Tracker",
     "HotBar",
-    "Cheat Sheet",
     "_Bottom",         # unnamed: divider underline only, no label
 ]
 
@@ -8291,17 +8442,52 @@ SETTINGS_SCHEMA = [
                    "its label, kind, command, and icon.",
     },
 
-    # ── Cheat Sheet ─────────────────────────────────────────────────
+    # ── Cheat Sheet (configure lives under Misc) ────────────────────
     {
         "key":     "cheatsheet_settings",
         "label":   "Cheat Sheet",
         "kind":    "button",
         "button_text": "CONFIGURE",
-        "section": "Cheat Sheet",
+        "section": "Misc",
         "applies": "python",
         "action":  "open_cheatsheet_settings",
         "help":    "Configure the cheat sheet: show/hide its floating "
                    "button, and the content font size.",
+    },
+    # ── Warp (configure lives under Misc) ───────────────────────────
+    {
+        "key":     "warp_settings",
+        "label":   "Warp",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_warp_settings",
+        "help":    "Configure the warp button: show/hide its floating "
+                   "button, and whether one-click travel warps all your "
+                   "characters (Send All) or just the active one. Edit "
+                   "destinations in omniwatch_warp.json.",
+    },
+    {
+        "key":     "show_warp",
+        "label":   "(internal) show warp button",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Master on/off for the warp button. When off, the "
+                   "floating button and its travel menu are hidden.",
+    },
+    {
+        "key":     "warp_use_sendall",
+        "label":   "(internal) warp uses send all",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "When on, one-click travel issues the warp to all "
+                   "participating characters (superwarp's 'all' / Send "
+                   "All) instead of just the active character.",
     },
     {
         "key":     "show_cheatsheet",
@@ -10058,6 +10244,7 @@ _SETTINGS_ACTIONS = {
     "open_hotbar_settings":      lambda: _open_subdialog("hotbar"),
     "open_equipment_settings":   lambda: _open_subdialog("equipment"),
     "open_cheatsheet_settings":  lambda: _open_subdialog("cheatsheet"),
+    "open_warp_settings":        lambda: _open_subdialog("warp"),
     "pick_gearswap_folder":    _pick_gearswap_folder,
     "clear_gearswap_folder":   _clear_gearswap_folder,
     "reset_zone_timer":        _reset_zone_timer,
@@ -18251,6 +18438,8 @@ def save_layout():
             "cheatsheet_scroll": cheatsheet_scroll,
             "cheatsheet_button_pos": cheatsheet_button_pos,
             "cheatsheet_button_scale": cheatsheet_button_scale,
+            "warp_button_pos": warp_button_pos,
+            "warp_button_scale": warp_button_scale,
             "ow_window_size": list(_windowed_size),
             "buff_anchor":     buff_anchor,
             "buff_scale":      buff_scale,
@@ -18318,6 +18507,7 @@ def load_layout():
     global recast_anchor, recast_scale
     global cheatsheet_pos, cheatsheet_w, cheatsheet_h, cheatsheet_scroll
     global cheatsheet_button_pos, cheatsheet_button_scale, _windowed_size
+    global warp_button_pos, warp_button_scale
     global buff_anchor, buff_scale
     global dps_anchor, dps_scale, dps_panel_visible
     global skillchain_anchor, skillchain_scale, skillchain_panel_visible
@@ -18413,6 +18603,17 @@ def load_layout():
             cheatsheet_button_scale = max(0.5, min(5.0, float(cbs)))
         except (TypeError, ValueError):
             cheatsheet_button_scale = 1.0
+        wbp = data.get("warp_button_pos")
+        if isinstance(wbp, list) and len(wbp) == 2:
+            try:
+                warp_button_pos = [int(wbp[0]), int(wbp[1])]
+            except (TypeError, ValueError):
+                warp_button_pos = None
+        wbs = data.get("warp_button_scale", 1.0)
+        try:
+            warp_button_scale = max(0.5, min(5.0, float(wbs)))
+        except (TypeError, ValueError):
+            warp_button_scale = 1.0
         ows = data.get("ow_window_size")
         if isinstance(ows, list) and len(ows) == 2:
             try:
@@ -19679,6 +19880,7 @@ ACCENT_TARGET   = (220, 180, 110)   # warm amber — target
 ACCENT_CHAT     = (140, 220, 180)   # mint — chat (communication/signal)
 ACCENT_SC       = (220, 130, 210)   # magenta — skillchain (resonance / flash)
 ACCENT_CHEATSHEET = (150, 175, 235) # cornflower — cheat sheet (reference)
+ACCENT_WARP       = (130, 225, 200) # teal-green — warp (travel / go)
 # Skillchain property → display color. Canonical FFXI element palette
 # via Ivaar's Skillchains addon (originally from Sammeh). Same colors
 # the player sees on element icons in the game UI, so muscle memory
@@ -20589,6 +20791,665 @@ def draw_cheatsheet_ctx_menu(surface):
                  (mx0 + pad, my0 + line_h + pad // 2
                   + (line_h - f.get_height()) // 2))
     _cs_ctx_item_rects = [(item_rect, "del")]
+
+
+# ── Warp button: config, proximity, send, and rendering ───────────────────
+# Default one-click travel destinations, written to WARP_FILE on first run
+# so the user can edit them. Destinations a character hasn't unlocked just
+# fail gracefully inside superwarp. The per-network "command" is the
+# superwarp invocation prefix (zone is appended), exposed in the JSON so it
+# can be changed without touching code if superwarp's short names differ.
+WARP_DEFAULT_CONFIG = {
+    "hp": {
+        "label": "Home Point",
+        "command": "sw hp",
+        "destinations": [
+            {"label": "San d'Oria", "children": [
+                {"label": "Southern", "zone": "Southern San d'Oria"},
+                {"label": "Northern", "zone": "Northern San d'Oria"},
+                {"label": "Port",     "zone": "Port San d'Oria"},
+            ]},
+            {"label": "Bastok", "children": [
+                {"label": "Markets", "zone": "Bastok Markets"},
+                {"label": "Mines",   "zone": "Bastok Mines"},
+                {"label": "Port",    "zone": "Port Bastok"},
+            ]},
+            {"label": "Windurst", "children": [
+                {"label": "Woods",  "zone": "Windurst Woods"},
+                {"label": "Waters", "zone": "Windurst Waters"},
+                {"label": "Walls",  "zone": "Windurst Walls"},
+                {"label": "Port",   "zone": "Port Windurst"},
+            ]},
+            {"label": "Jeuno", "children": [
+                {"label": "Port Jeuno",      "zone": "Port Jeuno"},
+                {"label": "Lower Jeuno",     "zone": "Lower Jeuno"},
+                {"label": "Upper Jeuno",     "zone": "Upper Jeuno"},
+                {"label": "Ru'Lude Gardens", "zone": "Ru'Lude Gardens"},
+            ]},
+            {"label": "Adoulin", "children": [
+                {"label": "Western", "zone": "Western Adoulin"},
+                {"label": "Eastern", "zone": "Eastern Adoulin"},
+            ]},
+            {"label": "Whitegate", "zone": "Aht Urhgan Whitegate"},
+            {"label": "Kazham",    "zone": "Kazham"},
+        ],
+    },
+    "sg": {
+        "label": "Survival Guide",
+        "command": "sw sg",
+        "destinations": [
+            {"label": "Ceizak",    "zone": "Ceizak Battlegrounds"},
+            {"label": "Yahse",     "zone": "Yahse Hunting Grounds"},
+            {"label": "Hennetiel", "zone": "Foret de Hennetiel"},
+            {"label": "Morimar",   "zone": "Morimar Basalt Fields"},
+        ],
+    },
+}
+
+# Networks, in menu order. Keys must match lua's WARPNEAR| fields.
+WARP_NETWORKS = ("hp", "sg")
+
+# Travel menu shows at most this many rows at once; the rest scroll.
+WARP_MENU_MAX_ROWS = 12
+
+
+def _warp_load_config():
+    """Lazy-load the warp destinations config. Reads WARP_FILE if present;
+    otherwise writes the defaults so the file exists for the user to edit.
+    Normalizes structure so the renderer can trust it. Cached in the
+    module global warp_config."""
+    global warp_config
+    if warp_config is not None:
+        return warp_config
+    cfg = None
+    try:
+        if os.path.exists(WARP_FILE):
+            with open(WARP_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                cfg = raw
+    except Exception as e:
+        print(f"[OmniWatch] warp config load failed: {e!r}")
+    wrote_default = False
+    if cfg is None:
+        cfg = json.loads(json.dumps(WARP_DEFAULT_CONFIG))   # deep copy
+        wrote_default = True
+    # Normalize each network to {label, command, destinations:[{label,zone}]}.
+    for net in WARP_NETWORKS:
+        n = cfg.get(net)
+        if not isinstance(n, dict):
+            n = {}
+            cfg[net] = n
+        n.setdefault("label",   WARP_DEFAULT_CONFIG[net]["label"])
+        n.setdefault("command", WARP_DEFAULT_CONFIG[net]["command"])
+        dests = n.get("destinations")
+        clean = []
+        if isinstance(dests, list):
+            for d in dests:
+                if not isinstance(d, dict):
+                    continue
+                kids = d.get("children")
+                if isinstance(kids, list) and kids:
+                    # Group entry: expands to a submenu of sub-areas.
+                    ck = []
+                    for c in kids:
+                        if isinstance(c, dict) and c.get("zone"):
+                            ck.append({
+                                "label": str(c.get("label") or c.get("zone")),
+                                "zone":  str(c.get("zone")),
+                            })
+                    if ck:
+                        clean.append({
+                            "label":    str(d.get("label") or "?"),
+                            "children": ck,
+                        })
+                elif d.get("zone"):
+                    # Direct entry: one-click warp.
+                    clean.append({
+                        "label": str(d.get("label") or d.get("zone")),
+                        "zone":  str(d.get("zone")),
+                    })
+        n["destinations"] = clean
+    if wrote_default:
+        try:
+            with open(WARP_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[OmniWatch] warp config write failed: {e!r}")
+    warp_config = cfg
+    return warp_config
+
+
+# Region grouping for the auto-built destination list. Zones in the same
+# region collapse into one expandable submenu (e.g. the Jeuno zones under
+# "Jeuno"); zones with several Home Points drill one level deeper into the
+# specific points (e.g. Lower Jeuno -> Entrance / Mog House). Order here is
+# the order region groups appear in the menu.
+WARP_REGION_ORDER = ["San d'Oria", "Bastok", "Windurst", "Jeuno", "Adoulin"]
+
+_SW_HP_LANDMARK = {
+    # (zone, homepoint number) -> landmark name, parsed from
+    # superwarp's map/homepoints.lua. Used to label specific Home
+    # Points (e.g. Lower Jeuno #1 = Entrance) and to target them via
+    # `sw hp <zone> <#>`. Static reference data; safe to regenerate.
+    ('Aht Urhgan Whitegate', '3'): 'Auction House', ('Aht Urhgan Whitegate', '4'): 'Mog House',
+    ('Bastok Markets', '1'): 'Entrance', ('Bastok Markets', '2'): 'Auction House', ('Bastok Markets', '3'): 'Mog House',
+    ('Bastok Mines', '1'): 'Auction House', ('Bastok Mines', '2'): 'Mog House',
+    ('Eastern Adoulin', '2'): 'Mog House',
+    ('Lower Jeuno', '1'): 'Entrance', ('Lower Jeuno', '2'): 'Mog House',
+    ('Norg', '1'): 'Entrance', ('Norg', '2'): 'Auction House',
+    ("Northern San d'Oria", '1'): 'Entrance', ("Northern San d'Oria", '3'): 'Mog House',
+    ('Port Bastok', '1'): 'Entrance', ('Port Bastok', '2'): 'Mog House',
+    ('Port Jeuno', '1'): 'Entrance', ('Port Jeuno', '2'): 'Mog House',
+    ("Port San d'Oria", '2'): 'Mog House', ("Port San d'Oria", '3'): 'Auction House',
+    ('Port Windurst', '2'): 'Entrance', ('Port Windurst', '3'): 'Mog House',
+    ('Rabao', '1'): 'Entrance',
+    ("Ru'Lude Gardens", '2'): 'Mog House', ("Ru'Lude Gardens", '3'): 'Auction House',
+    ("Southern San d'Oria", '1'): 'Entrance', ("Southern San d'Oria", '2'): 'Auction House', ("Southern San d'Oria", '3'): 'Mog House',
+    ('Upper Jeuno', '1'): 'Entrance', ('Upper Jeuno', '2'): 'Mog House', ('Upper Jeuno', '3'): 'Auction House',
+    ('Western Adoulin', '1'): 'Entrance', ('Western Adoulin', '2'): 'Mog House',
+    ('Windurst Walls', '2'): 'Mog House', ('Windurst Walls', '3'): 'Auction House',
+    ('Windurst Waters', '1'): 'Entrance', ('Windurst Waters', '2'): 'Mog House',
+    ('Windurst Woods', '2'): 'Entrance', ('Windurst Woods', '3'): 'Mog House', ('Windurst Woods', '4'): 'Auction House',
+}
+
+
+def _warp_region_for_zone(zone):
+    if "San d'Oria" in zone:
+        return "San d'Oria"
+    if "Bastok" in zone or zone == "Metalworks":
+        return "Bastok"
+    if "Windurst" in zone:
+        return "Windurst"
+    if "Jeuno" in zone or "Ru'Lude" in zone:
+        return "Jeuno"
+    if "Adoulin" in zone:
+        return "Adoulin"
+    return None
+
+
+# Destination nodes are recursive:
+#   leaf  = {"label": str, "zone": str, "sub": str|None}  -> one warp
+#   group = {"label": str, "children": [node, ...]}       -> expandable
+# "sub" is the Home Point number within a multi-HP zone (superwarp resolves
+# `sw hp <zone> <sub>`); None means the zone has a single point.
+
+
+def _warp_attuned_zones(cat_key, by_idx, strip_hash):
+    """De-duplicated list of zone names attuned for a checklist category
+    (auto u manual). Used for Survival Guides (one point per zone)."""
+    st = checklist_known.get(cat_key, {})
+    idxs = set(st.get("auto", set())) | set(st.get("manual", set()))
+    zones, seen = [], set()
+    for k in idxs:
+        try:
+            disp = by_idx.get(int(k))
+        except (TypeError, ValueError):
+            disp = None
+        if not disp:
+            continue
+        zone = disp.split(" #")[0] if strip_hash else disp
+        if zone not in seen:
+            seen.add(zone)
+            zones.append(zone)
+    return zones
+
+
+def _warp_region_wrap(zone_nodes):
+    """Wrap a list of (zone_name, node) into region groups. A region with a
+    single attuned zone promotes that zone's node directly (no 1-item
+    group); ungrouped zones list alphabetically after the region groups."""
+    regions, flat = {}, []
+    for zname, node in zone_nodes:
+        r = _warp_region_for_zone(zname)
+        if r:
+            regions.setdefault(r, []).append((zname, node))
+        else:
+            flat.append((zname, node))
+    entries = []
+    for r in WARP_REGION_ORDER:
+        zs = regions.get(r)
+        if not zs:
+            continue
+        zs.sort(key=lambda t: t[0])
+        if len(zs) == 1:
+            entries.append(zs[0][1])
+        else:
+            entries.append({"label": r, "children": [n for _, n in zs]})
+    for _, node in sorted(flat, key=lambda t: t[0]):
+        entries.append(node)
+    return entries
+
+
+def _warp_hp_zone_node(zone, nums):
+    """Build the node for one Home Point zone. `nums` is the sorted list of
+    attuned point numbers (strings) in that zone, or [] for a single-point
+    zone. Multiple attuned points -> a group that drills into each point
+    (labelled by its landmark, e.g. Entrance); a single attuned point ->
+    a leaf naming the landmark; no number -> a plain single-point leaf."""
+    if not nums:
+        return {"label": zone, "zone": zone, "sub": None}
+    if len(nums) == 1:
+        n = nums[0]
+        lm = _SW_HP_LANDMARK.get((zone, n))
+        tag = lm if lm else "#" + n
+        return {"label": "%s (%s)" % (zone, tag), "zone": zone, "sub": n}
+    pts = []
+    for n in nums:
+        lm = _SW_HP_LANDMARK.get((zone, n))
+        plabel = ("#%s %s" % (n, lm)) if lm else ("#%s" % n)
+        pts.append({"label": plabel, "zone": zone, "sub": n})
+    return {"label": zone, "children": pts}
+
+
+def _warp_destinations_for(net):
+    """Destination node tree for a network's menu. Primary source is the
+    player's attuned list from the checklist; if nothing is attuned yet,
+    fall back to the JSON config so the menu isn't empty before the first
+    Home Point / Survival Guide visit populates the checklist.
+
+    Home Points build three levels where applicable (region -> zone ->
+    specific point); Survival Guides build two (region -> zone), since each
+    guide zone has a single destination."""
+    if net == "hp":
+        st = checklist_known.get("homepoints", {})
+        idxs = set(st.get("auto", set())) | set(st.get("manual", set()))
+        byzone = {}
+        for k in idxs:
+            try:
+                disp = _HOMEPOINTS_BY_IDX.get(int(k))
+            except (TypeError, ValueError):
+                disp = None
+            if not disp:
+                continue
+            if " #" in disp:
+                zone, num = disp.rsplit(" #", 1)
+            else:
+                zone, num = disp, None
+            byzone.setdefault(zone, set()).add(num)
+        if byzone:
+            zone_nodes = []
+            for zone, nums in byzone.items():
+                realnums = sorted(n for n in nums if n is not None)
+                zone_nodes.append((zone, _warp_hp_zone_node(zone, realnums)))
+            return _warp_region_wrap(zone_nodes)
+    elif net == "sg":
+        zones = _warp_attuned_zones("survival_guides",
+                                    _SURVIVAL_GUIDES_BY_IDX, False)
+        if zones:
+            zone_nodes = [(z, {"label": z, "zone": z, "sub": None})
+                          for z in zones]
+            return _warp_region_wrap(zone_nodes)
+    cfg = _warp_load_config()
+    return cfg.get(net, {}).get("destinations", [])
+
+def _warp_is_near():
+    """Return (hp_near, sg_near). Treats the proximity status as not-near
+    once it goes stale (no WARPNEAR for >3s — e.g. after zoning), so the
+    button stops pulsing when the player walks away or changes zone."""
+    if (time.time() - warp_near.get("ts", 0.0)) > 3.0:
+        return (False, False)
+    return (bool(warp_near.get("hp")), bool(warp_near.get("sg")))
+
+
+def _warp_send(command):
+    """Send a superwarp command to lua, tagged with the locked character so
+    only that game client acts on it (multibox-safe). Wire form:
+    WARP|<char>|<command>."""
+    try:
+        target = _mb_lock_target() or ""
+        payload = f"WARP|{target}|{command}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+    except Exception as e:
+        print(f"[OmniWatch] warp send failed: {e!r}")
+
+
+def _warp_toggle_menu():
+    global warp_menu_open, warp_config, warp_confirm, warp_menu_scroll
+    warp_confirm = None
+    warp_menu_open = not warp_menu_open
+    if warp_menu_open:
+        warp_menu_scroll = 0
+        # Re-read the JSON on open so hand-edits to omniwatch_warp.json
+        # take effect without restarting the overlay.
+        warp_config = None
+        _warp_load_config()
+
+
+def _lerp_color(a, b, t):
+    t = max(0.0, min(1.0, t))
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def draw_warp_button(surface):
+    """Floating, draggable, resizable Warp button (sibling of the [CS]
+    button). Pulses when a Home Point or Survival Guide is in range (per
+    lua's WARPNEAR). Click toggles the travel menu; drag repositions;
+    drag the corner handle resizes; right-click opens Configure. Sets
+    warp_button_rect / warp_button_handle_rect / _warp_btn_draw_pos."""
+    global warp_button_pos, warp_button_rect, _warp_btn_draw_pos
+    global warp_button_handle_rect
+    warp_button_rect = None
+    warp_button_handle_rect = None
+    g = _menu_g() * max(0.5, min(5.0, warp_button_scale))
+    def _bs(v):
+        return max(1, round(v * g))
+    f = get_font("Consolas", _bs(13), bold=True)
+    label = f.render("Warp", True, (225, 225, 235))
+    pad  = _bs(8)
+    padv = _bs(4)
+    bw = label.get_width() + pad * 2
+    bh = label.get_height() + padv * 2
+    sw, shh = surface.get_size()
+    if warp_button_pos is None:
+        # Default: just below the cheat sheet button's default spot.
+        warp_button_pos = [PANEL_X, layout_top() + 4 + bh + 6]
+    # Clamp for display only (same rationale as the [CS] button).
+    x = max(0, min(int(warp_button_pos[0]), max(0, sw - bw)))
+    y = max(0, min(int(warp_button_pos[1]), max(0, shh - bh)))
+    _warp_btn_draw_pos = [x, y]
+    warp_button_rect = pygame.Rect(x, y, bw, bh)
+    mx, my = pygame.mouse.get_pos()
+    hov = warp_button_rect.collidepoint(mx, my)
+    hp_near, sg_near = _warp_is_near()
+    near = hp_near or sg_near
+
+    base_bg = (62, 62, 78) if (hov or warp_menu_open) else (44, 44, 54)
+    if near:
+        # Pulse 0..1 on a ~1.25s cycle; blend bg + border toward the accent.
+        pulse = (math.sin(time.time() * 5.0) + 1.0) * 0.5
+        bg  = _lerp_color(base_bg, ACCENT_WARP, 0.20 * pulse)
+        bdr = _lerp_color((70, 120, 108), ACCENT_WARP, pulse)
+        bdr_w = 2
+    else:
+        bg  = base_bg
+        bdr = (180, 180, 200) if warp_menu_open else (100, 100, 115)
+        bdr_w = 1
+    pygame.draw.rect(surface, bg, warp_button_rect, border_radius=4)
+    pygame.draw.rect(surface, bdr, warp_button_rect, bdr_w, border_radius=4)
+    draw_accent_stripe(surface, x, y, bh, ACCENT_WARP, w=max(2, _bs(2)))
+    surface.blit(label, (x + (bw - label.get_width()) // 2, y + padv))
+
+    # Corner resize handle (bottom-right), shown on hover like the [CS] one.
+    hsz = max(6, _bs(6))
+    warp_button_handle_rect = pygame.Rect(x + bw - hsz, y + bh - hsz, hsz, hsz)
+    if hov or _warp_btn_resize is not None:
+        for off in (2, 5):
+            if off < hsz:
+                pygame.draw.line(surface, (200, 200, 215),
+                                 (x + bw - off, y + bh - 1),
+                                 (x + bw - 1, y + bh - off))
+
+
+def draw_warp_menu(surface):
+    """Travel menu popover. One section per network (Home Point, Survival
+    Guide). When in range, a network's destinations are listed as a tree:
+    region -> zone -> (for multi-Home-Point zones) specific point, e.g.
+    Jeuno -> Lower Jeuno -> Entrance / Mog House. Groups expand/collapse on
+    click (multi-level). When out of range, the network shows only a greyed
+    header pinned at the bottom (it doesn't scroll away) so you know it's an
+    option once you're there. The scroll region is windowed to
+    WARP_MENU_MAX_ROWS rows (mouse wheel + right-edge scrollbar). Records
+    click targets in warp_menu_rects and the envelope in warp_menu_rect.
+    Clicking a destination opens the confirm popover (draw_warp_confirm).
+    """
+    global warp_menu_rects, warp_menu_rect, warp_menu_scroll
+    warp_menu_rects = []
+    warp_menu_rect = None
+    if not warp_menu_open:
+        return
+    cfg = _warp_load_config()
+    hp_near, sg_near = _warp_is_near()
+    near_map = {"hp": hp_near, "sg": sg_near}
+
+    title_font = get_font("Consolas", 12, bold=True)
+    row_font   = get_font("Consolas", 12)
+    foot_font  = get_font("Consolas", 10, italic=True)
+
+    pad     = 8
+    line_h  = row_font.get_height() + 6
+    hdr_h   = title_font.get_height() + 6
+    indent  = row_font.size("  ")[0]   # px per tree depth level
+
+    # Build the scroll region (in-range networks, flattened tree) + the
+    # pinned footer (out-of-range network headers). Row tuple kinds:
+    #   ("hdr",   net, netlabel)
+    #   ("empty", net)
+    #   ("grp",   net, depth, label, path, expanded)
+    #   ("leaf",  net, depth, label, zone, sub)
+    scroll_entries = []
+    pinned = []
+    width_cands = []
+
+    def _flatten(nodes, net, parent_path, depth):
+        for node in nodes:
+            if "children" in node:
+                path = parent_path + "/" + node["label"]
+                expanded = path in _warp_expanded
+                scroll_entries.append(
+                    ("grp", net, depth, node["label"], path, expanded))
+                width_cands.append("  " * (depth + 1) + "+ " + node["label"])
+                if expanded:
+                    _flatten(node["children"], net, path, depth + 1)
+            else:
+                scroll_entries.append(
+                    ("leaf", net, depth, node["label"],
+                     node.get("zone", ""), node.get("sub")))
+                width_cands.append("  " * (depth + 1) + "• " + node["label"])
+
+    for net in WARP_NETWORKS:
+        n = cfg.get(net, {})
+        netlabel = n.get("label", net)
+        near = near_map.get(net, False)
+        width_cands.append(netlabel + "    out of range")
+        if not near:
+            pinned.append(("hdr", net, netlabel))
+            continue
+        scroll_entries.append(("hdr", net, netlabel))
+        dests = _warp_destinations_for(net)
+        if not dests:
+            scroll_entries.append(("empty", net))
+            width_cands.append("   (none attuned yet)")
+            continue
+        _flatten(dests, net, net, 0)
+    foot = "right-click button for settings"
+    width_cands.append(foot)
+
+    # Window the scroll region to at most WARP_MENU_MAX_ROWS rows.
+    total = len(scroll_entries)
+    max_scroll = max(0, total - WARP_MENU_MAX_ROWS)
+    warp_menu_scroll = max(0, min(warp_menu_scroll, max_scroll))
+    visible = scroll_entries[warp_menu_scroll:
+                             warp_menu_scroll + WARP_MENU_MAX_ROWS]
+    overflow = max_scroll > 0
+    sb_w = 6 if overflow else 0
+
+    def _eh(e):
+        return hdr_h if e[0] == "hdr" else line_h
+    scroll_h = sum(_eh(e) for e in visible)
+    pinned_h = sum(hdr_h for _ in pinned)
+    sep_h    = 6 if (pinned and visible) else 0
+    foot_blk = foot_font.get_height() + 8
+
+    w = max(row_font.size(s)[0] for s in width_cands) + pad * 2 + sb_w
+    w = max(w, 180)
+    h = pad + scroll_h + sep_h + pinned_h + foot_blk + pad
+
+    sw, shh = surface.get_size()
+    ax = (_warp_btn_draw_pos[0] if _warp_btn_draw_pos else PANEL_X)
+    ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
+    bh = warp_button_rect.height if warp_button_rect else 24
+    my0 = ay + bh + 4
+    if my0 + h > shh:
+        my0 = ay - h - 4
+    mx0 = max(0, min(int(ax), sw - w))
+    my0 = max(0, min(int(my0), shh - h))
+    warp_menu_rect = pygame.Rect(mx0, my0, w, h)
+
+    pygame.draw.rect(surface, (28, 28, 36), (mx0, my0, w, h), border_radius=5)
+    pygame.draw.rect(surface, COL_BORDER, (mx0, my0, w, h), 1, border_radius=5)
+    draw_accent_stripe(surface, mx0, my0, h, ACCENT_WARP, w=2)
+
+    def _draw_hdr(e, cy, near):
+        netlabel = e[2]
+        col = (210, 210, 225) if near else (120, 120, 140)
+        surface.blit(title_font.render(netlabel, True, col),
+                     (mx0 + pad, cy + (hdr_h - title_font.get_height()) // 2))
+        status = "in range" if near else "out of range"
+        scol = ACCENT_WARP if near else (110, 110, 125)
+        ss = foot_font.render(status, True, scol)
+        surface.blit(ss, (mx0 + w - ss.get_width() - pad - sb_w,
+                          cy + (hdr_h - ss.get_height()) // 2))
+
+    mxp, myp = pygame.mouse.get_pos()
+    rw = w - 4 - sb_w
+    cy = my0 + pad
+    for e in visible:
+        kind = e[0]
+        net  = e[1]
+        if kind == "hdr":
+            _draw_hdr(e, cy, near_map.get(net, False))
+            cy += hdr_h
+        elif kind == "empty":
+            ph = foot_font.render("(none attuned yet — visit one)",
+                                  True, (110, 110, 125))
+            surface.blit(ph, (mx0 + pad + 12,
+                              cy + (line_h - ph.get_height()) // 2))
+            cy += line_h
+        elif kind == "grp":
+            depth, glabel, path, expanded = e[2], e[3], e[4], e[5]
+            tx = mx0 + pad + 4 + depth * indent
+            row_rect = pygame.Rect(mx0 + 2, cy, rw, line_h)
+            if row_rect.collidepoint(mxp, myp):
+                pygame.draw.rect(surface, (48, 56, 66), row_rect,
+                                 border_radius=3)
+            warp_menu_rects.append((row_rect, {"kind": "toggle",
+                                                "path": path}))
+            arrow = "-" if expanded else "+"
+            surface.blit(row_font.render("%s %s" % (arrow, glabel), True,
+                                         (215, 220, 230)),
+                         (tx, cy + (line_h - row_font.get_height()) // 2))
+            cy += line_h
+        else:  # leaf
+            depth, dlabel, dzone, dsub = e[2], e[3], e[4], e[5]
+            tx = mx0 + pad + 6 + depth * indent
+            row_rect = pygame.Rect(mx0 + 2, cy, rw, line_h)
+            if row_rect.collidepoint(mxp, myp):
+                pygame.draw.rect(surface, (52, 66, 62), row_rect,
+                                 border_radius=3)
+            warp_menu_rects.append((row_rect,
+                                    {"kind": "warp", "net": net,
+                                     "zone": dzone, "sub": dsub,
+                                     "label": dlabel}))
+            surface.blit(row_font.render("• " + dlabel, True,
+                                         (225, 230, 235)),
+                         (tx, cy + (line_h - row_font.get_height()) // 2))
+            cy += line_h
+
+    # Scrollbar indicator spans only the scroll region.
+    if overflow:
+        track_x = mx0 + w - sb_w + 1
+        track_y = my0 + pad
+        track_h = scroll_h
+        pygame.draw.rect(surface, (50, 50, 62),
+                         (track_x, track_y, sb_w - 3, track_h),
+                         border_radius=2)
+        frac_vis = len(visible) / float(total) if total else 1.0
+        thumb_h = max(12, int(track_h * frac_vis))
+        thumb_y = track_y + int((track_h - thumb_h)
+                                * (warp_menu_scroll / float(max_scroll)))
+        pygame.draw.rect(surface, ACCENT_WARP,
+                         (track_x, thumb_y, sb_w - 3, thumb_h),
+                         border_radius=2)
+
+    # Pinned out-of-range headers at the bottom (do not scroll).
+    if pinned:
+        if visible:
+            sep_y = cy + sep_h // 2
+            pygame.draw.line(surface, (60, 60, 74),
+                             (mx0 + pad, sep_y),
+                             (mx0 + w - pad - sb_w, sep_y))
+            cy += sep_h
+        for e in pinned:
+            _draw_hdr(e, cy, False)
+            cy += hdr_h
+
+    # Footer hint, always at the very bottom.
+    cy += 4
+    surface.blit(foot_font.render(foot, True, (120, 120, 138)),
+                 (mx0 + pad, cy))
+
+
+def draw_warp_confirm(surface):
+    """Confirmation popover shown after a destination is clicked. A small
+    box naming the destination with a [Warp] (accent) and [Cancel]
+    button, so a single stray click can't fire a warp. Records button
+    rects in warp_confirm_rects and the envelope in warp_confirm_rect."""
+    global warp_confirm_rects, warp_confirm_rect
+    warp_confirm_rects = []
+    warp_confirm_rect = None
+    if warp_confirm is None:
+        return
+    c = warp_confirm
+
+    title_font = get_font("Consolas", 12, bold=True)
+    btn_font   = get_font("Consolas", 12, bold=True)
+    sub_font   = get_font("Consolas", 10, italic=True)
+
+    pad = 10
+    sendall = bool(setting("warp_use_sendall"))
+    head = f"Warp to {c.get('label', c.get('zone', '?'))}?"
+    sub  = "all characters" if sendall else "active character"
+
+    bw_warp   = btn_font.size("Warp")[0] + 22
+    bw_cancel = btn_font.size("Cancel")[0] + 22
+    btn_h     = btn_font.get_height() + 10
+    content_w = max(title_font.size(head)[0],
+                    sub_font.size(sub)[0],
+                    bw_warp + bw_cancel + 8)
+    w = content_w + pad * 2
+    h = pad + title_font.get_height() + 4 + sub_font.get_height() + 10 \
+        + btn_h + pad
+
+    sw, shh = surface.get_size()
+    ax = (_warp_btn_draw_pos[0] if _warp_btn_draw_pos else PANEL_X)
+    ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
+    bh = warp_button_rect.height if warp_button_rect else 24
+    y0 = ay + bh + 4
+    if y0 + h > shh:
+        y0 = ay - h - 4
+    x0 = max(0, min(int(ax), sw - w))
+    y0 = max(0, min(int(y0), shh - h))
+    warp_confirm_rect = pygame.Rect(x0, y0, w, h)
+
+    pygame.draw.rect(surface, (30, 30, 40), (x0, y0, w, h), border_radius=6)
+    pygame.draw.rect(surface, ACCENT_WARP, (x0, y0, w, h), 1, border_radius=6)
+
+    surface.blit(title_font.render(head, True, (230, 232, 240)),
+                 (x0 + pad, y0 + pad))
+    surface.blit(sub_font.render(sub, True, (150, 165, 160)),
+                 (x0 + pad, y0 + pad + title_font.get_height() + 4))
+
+    by = y0 + h - pad - btn_h
+    mxp, myp = pygame.mouse.get_pos()
+    # Warp (accent) on the left, Cancel on the right.
+    warp_rect = pygame.Rect(x0 + pad, by, bw_warp, btn_h)
+    cancel_rect = pygame.Rect(x0 + pad + bw_warp + 8, by, bw_cancel, btn_h)
+    wbg = _lerp_color((40, 70, 62), ACCENT_WARP,
+                      0.5 if warp_rect.collidepoint(mxp, myp) else 0.25)
+    pygame.draw.rect(surface, wbg, warp_rect, border_radius=4)
+    pygame.draw.rect(surface, ACCENT_WARP, warp_rect, 1, border_radius=4)
+    _wt = btn_font.render("Warp", True, (20, 28, 26))
+    surface.blit(_wt, (warp_rect.centerx - _wt.get_width() // 2,
+                       warp_rect.centery - _wt.get_height() // 2))
+    cbg = (70, 70, 84) if cancel_rect.collidepoint(mxp, myp) else (52, 52, 64)
+    pygame.draw.rect(surface, cbg, cancel_rect, border_radius=4)
+    pygame.draw.rect(surface, (110, 110, 125), cancel_rect, 1, border_radius=4)
+    _ct = btn_font.render("Cancel", True, (220, 220, 230))
+    surface.blit(_ct, (cancel_rect.centerx - _ct.get_width() // 2,
+                       cancel_rect.centery - _ct.get_height() // 2))
+
+    warp_confirm_rects = [(warp_rect, "warp"), (cancel_rect, "cancel")]
 
 
 def draw_header(surface, w):
@@ -22381,6 +23242,13 @@ def draw_inventory_dropdown(surface):
                 inventory_dropdown_rects.append((row_rect, {
                     "kind": "open_item_url",
                     "url":  _bgwiki_item_url(nm),
+                    # Item identity for the right-click menu. bag_key is
+                    # this result's actual bag, so the menu can decide
+                    # whether a one-shot drop is possible (inventory only).
+                    "item_id":    it.get("id", 0),
+                    "item_name":  it.get("name", "") or nm,
+                    "item_count": cnt,
+                    "bag":        bag_key,
                 }))
                 cy += row_h
 
@@ -22568,6 +23436,11 @@ def draw_inventory_dropdown(surface):
         inventory_dropdown_rects.append((row_rect, {
             "kind": "open_item_url",
             "url":  _bgwiki_item_url(nm),
+            # Item identity for the right-click menu (drop / auto-drop).
+            "item_id":    it.get("id", 0),
+            "item_name":  it.get("name", "") or nm,
+            "item_count": cnt,
+            "bag":        bag_key,
         }))
         cy += row_h
 
@@ -22713,37 +23586,55 @@ def dispatch_inventory_dropdown_click(mx, my):
 def dispatch_inventory_dropdown_right_click(mx, my):
     """Right-click dispatcher for the inventory dropdown.
 
-    Currently handles only one case: right-clicking a porter slip row
-    in the bag-list view opens the nickname editor modal for that
-    slip. All other right-clicks (anywhere else in the panel, or
-    when the panel is closed) return False so the click can fall
-    through to other handlers.
+    Two cases:
+      * Right-clicking a porter slip row (bag-list view) opens the
+        nickname editor modal for that slip.
+      * Right-clicking an item row (bag-detail or search results)
+        opens the item context menu (drop / auto-drop).
+    All other right-clicks (anywhere else in the panel, or when the
+    panel is closed) return False so the click can fall through to
+    other handlers.
 
     Returns True if the right-click was consumed.
     """
     global inventory_slip_nickname_editor
+    global inventory_item_ctx_menu
     if not inventory_dropdown_open:
         return False
     for rect, action in inventory_dropdown_rects:
         if not rect.collidepoint(mx, my):
             continue
-        if action.get("kind") != "open_slip":
-            continue
-        # Open the editor pre-filled with the current nickname (or
-        # empty if none set). The default name is shown as the
-        # placeholder/hint in the modal.
-        slip_id = action["slip_id"]
-        default_name = action.get("default_name") or f"Slip #{slip_id}"
-        slip_nicks = _porter_slip_nicknames_for_player()
-        current_nick = slip_nicks.get(slip_id, "")
-        inventory_slip_nickname_editor = {
-            "slip_id":      slip_id,
-            "default_name": default_name,
-            "text":         current_nick,
-            "cursor":       len(current_nick),
-            "cursor_blink": time.time(),
-        }
-        return True
+        kind = action.get("kind")
+        if kind == "open_slip":
+            # Open the editor pre-filled with the current nickname (or
+            # empty if none set). The default name is shown as the
+            # placeholder/hint in the modal.
+            slip_id = action["slip_id"]
+            default_name = action.get("default_name") or f"Slip #{slip_id}"
+            slip_nicks = _porter_slip_nicknames_for_player()
+            current_nick = slip_nicks.get(slip_id, "")
+            inventory_slip_nickname_editor = {
+                "slip_id":      slip_id,
+                "default_name": default_name,
+                "text":         current_nick,
+                "cursor":       len(current_nick),
+                "cursor_blink": time.time(),
+            }
+            return True
+        if kind == "open_item_url" and action.get("item_id"):
+            # Open the drop / auto-drop context menu anchored at the
+            # click point. Snapshots the item identity so a later
+            # re-render of the dropdown rects can't change what the
+            # menu acts on.
+            inventory_item_ctx_menu = {
+                "x":          mx,
+                "y":          my,
+                "item_id":    action.get("item_id", 0),
+                "item_name":  action.get("item_name", "") or "?",
+                "item_count": action.get("item_count", 1),
+                "bag":        action.get("bag", ""),
+            }
+            return True
     return False
 
 
@@ -22821,6 +23712,83 @@ def draw_inventory_slip_nickname_editor(surface):
     i_surf = label_font.render(rendered, True, (230, 230, 240))
     surface.blit(i_surf, (box.x + 6,
                           box.y + (box.height - i_surf.get_height()) // 2))
+
+
+def draw_inventory_item_ctx_menu(surface):
+    """Render the inventory item right-click menu when one is open.
+
+    A small popup at the click point with the item name as a dim,
+    non-clickable header and one or two clickable actions below it.
+    Mirrors draw_cheatsheet_ctx_menu so a destructive drop is always a
+    deliberate two-step (right-click → click the action). Records each
+    action's rect in inventory_item_ctx_rects for the click dispatcher.
+
+    "Drop item" is only offered when the item is in the main inventory
+    bag — you can't drop from storage/wardrobe/etc. without moving the
+    item to inventory first. "Auto-drop (Treasury)" is always offered;
+    it adds to Treasury's per-character Drop list by name, which works
+    regardless of which bag the item is currently in.
+    """
+    global inventory_item_ctx_rects
+    inventory_item_ctx_rects = []
+    if inventory_item_ctx_menu is None or not inventory_dropdown_open:
+        return
+    m = inventory_item_ctx_menu
+
+    title_font = pygame.font.SysFont("Consolas", 11, bold=True)
+    item_font  = pygame.font.SysFont("Consolas", 11)
+
+    # Build the action list. Each entry: (action_str, label, color).
+    actions = []
+    if m.get("bag") == "inventory":
+        actions.append(("drop", "Drop item", (235, 170, 170)))
+    actions.append(("autodrop", "Auto-drop (Treasury)", (235, 205, 150)))
+
+    # Header: item name (+ count when >1), truncated to keep it tidy.
+    cnt = m.get("item_count", 1) or 1
+    head = m.get("item_name", "?") or "?"
+    if cnt > 1:
+        head = f"{head} x{cnt}"
+    if len(head) > 34:
+        head = head[:33] + "…"
+
+    pad    = 8
+    line_h = item_font.get_height() + 6
+    # Width fits the header and the widest action label.
+    w = title_font.size(head)[0]
+    for _a, lbl, _c in actions:
+        w = max(w, item_font.size(lbl)[0])
+    w += pad * 2
+    h = line_h * (len(actions) + 1) + pad
+
+    sw, shh = surface.get_size()
+    mx0 = max(0, min(int(m["x"]), sw - w))
+    my0 = max(0, min(int(m["y"]), shh - h))
+
+    pygame.draw.rect(surface, (28, 28, 36), (mx0, my0, w, h), border_radius=4)
+    pygame.draw.rect(surface, COL_BORDER, (mx0, my0, w, h), 1, border_radius=4)
+
+    # Header (dim, non-clickable).
+    surface.blit(title_font.render(head, True, (150, 150, 168)),
+                 (mx0 + pad, my0 + pad // 2))
+    sep_y = my0 + line_h + pad // 2 - 1
+    pygame.draw.line(surface, COL_BORDER,
+                     (mx0 + 2, sep_y), (mx0 + w - 2, sep_y))
+
+    # Action rows.
+    row_y = my0 + line_h + pad // 2
+    mxp, myp = pygame.mouse.get_pos()
+    for action_str, label, color in actions:
+        item_rect = pygame.Rect(mx0 + 2, row_y, w - 4, line_h)
+        if item_rect.collidepoint(mxp, myp):
+            # Drop hovers red-ish (destructive), auto-drop neutral.
+            hov_bg = (90, 48, 48) if action_str == "drop" else (52, 52, 66)
+            pygame.draw.rect(surface, hov_bg, item_rect, border_radius=3)
+        surface.blit(item_font.render(label, True, color),
+                     (mx0 + pad,
+                      row_y + (line_h - item_font.get_height()) // 2))
+        inventory_item_ctx_rects.append((item_rect, action_str))
+        row_y += line_h
 
 
 # ── Simulation window ───────────────────────────────────────────────────────
@@ -26071,6 +27039,23 @@ _SUBDIALOG_CONFIGS = {
                 "Hides the floating button + window when off.",
             "cheatsheet_font_size":
                 "Small / Medium / Large content text.",
+        },
+    },
+    "warp": {
+        "title":    "Warp",
+        "subtitle": "A movable, resizable one-click travel button that "
+                    "pulses near a Home Point or Survival Guide. Edit "
+                    "destinations in omniwatch_warp.json.",
+        "rows": [
+            ("show_warp",        "Show warp button",            "bool"),
+            ("warp_use_sendall", "Warp all characters (Send All)", "bool"),
+        ],
+        "helpers": {
+            "show_warp":
+                "Hides the floating button + travel menu when off.",
+            "warp_use_sendall":
+                "Sends the warp to every participating character "
+                "(superwarp 'all') instead of just the active one.",
         },
     },
 }
@@ -30528,6 +31513,7 @@ def _draw_chat_composer(surface, x, y, w, body_font, meta_font, cjk_font):
     global _chat_composer_rect_arrow_l, _chat_composer_rect_arrow_r
     global _chat_composer_rect_channel, _chat_composer_rect_input
     global _chat_composer_rect_tell_to, _chat_composer_rect_send
+    global _chat_composer_rect_at
     global chat_composer_last_blink
 
     h = _chat_composer_height()
@@ -30591,6 +31577,31 @@ def _draw_chat_composer(surface, x, y, w, body_font, meta_font, cjk_font):
                  (arr_r.x + (arr_r.w - ar_surf.get_width()) // 2,
                   arr_r.y + (arr_r.h - ar_surf.get_height()) // 2))
     cx += arrow_w + 4
+
+    # ── { } auto-translate button (ported from OmniChat) ─────────
+    # Wraps the composer text for auto-translate sending (see the
+    # click handler): with text present, the whole message becomes
+    # {message} (click again to unwrap); empty, it inserts {} and
+    # parks the cursor inside so you type the phrase directly. The
+    # lua side converts {phrase} into the real in-game auto-translate
+    # token on send.
+    global _chat_composer_rect_at
+    at_label = "{ }"
+    at_w = body_font.size(at_label)[0] + 12
+    at_rect = pygame.Rect(cx, y + 3, at_w, h - 6)
+    _chat_composer_rect_at = at_rect
+    _at_hov = at_rect.collidepoint(pygame.mouse.get_pos())
+    at_bg = pygame.Surface((at_rect.w, at_rect.h), pygame.SRCALPHA)
+    at_bg.fill((70, 85, 110, 235) if _at_hov else (46, 54, 68, 225))
+    surface.blit(at_bg, at_rect.topleft)
+    pygame.draw.rect(surface, CHAT_COMPOSER_FIELD_BDR, at_rect, 1)
+    at_surf = body_font.render(at_label, True,
+                               (240, 240, 245) if _at_hov
+                               else (185, 195, 210))
+    surface.blit(at_surf,
+                 (at_rect.x + (at_rect.w - at_surf.get_width()) // 2,
+                  at_rect.y + (at_rect.h - at_surf.get_height()) // 2))
+    cx += at_w + 4
 
     # ── Send button (right-aligned, reserved width) ────────────
     send_label = "send"
@@ -31371,6 +32382,16 @@ def draw_chat_panel(surface, x, y, locked=False):
                              (tab_x, tab_y + tab_h - 1),
                              (tab_x + tab_w - 1, tab_y + tab_h - 1), 2)
         fg = theme["active"] if active else theme["inactive"]
+        # Focus-phrase tab pulse: an inactive tab holding an unseen
+        # focus hit blinks its label toward the highlight amber until
+        # the user visits it (visit clears the marker).
+        if active:
+            _chat_tab_focus_pulse.pop(tab_idx, None)
+        elif tab_idx in _chat_tab_focus_pulse:
+            _pt = math.sin(time.time() * 5.0) * 0.5 + 0.5   # 0..1
+            fg = tuple(
+                int(fg[i] + (CHAT_FOCUS_HL[i] - fg[i]) * (0.35 + 0.65 * _pt))
+                for i in range(3))
         name_surf = tab_font.render(full, True, fg)
         surface.blit(name_surf,
                      (tab_x + tab_pad_x,
@@ -31573,6 +32594,27 @@ def draw_chat_panel(surface, x, y, locked=False):
                 "ts":     ts_str if is_top_of_event else "",
                 "spans":  ln if is_segmented else None,
             }
+            if ev.get("focus_hit"):
+                seg["focus_ts"] = ev.get("focus_ts") or ev.get("ts") or 0
+                # Character ranges of each matched word within THIS
+                # physical line (a phrase split across a wrap boundary
+                # simply doesn't highlight). Plain text is the
+                # span-concat for segmented lines, the line otherwise.
+                _fp = (ln if not is_segmented
+                       else "".join(t for t, _ in ln))
+                _fl = _fp.lower()
+                _ranges = []
+                for _w in (ev.get("focus_words") or []):
+                    _i = 0
+                    while True:
+                        _i = _fl.find(_w, _i)
+                        if _i < 0:
+                            break
+                        _ranges.append((_i, _i + len(_w)))
+                        _i += len(_w)
+                if _ranges:
+                    seg["focus_plain"]  = _fp
+                    seg["focus_ranges"] = _ranges
             # Mark the first-physical-line of a splittable event with
             # the sender region info so the renderer can do two-color
             # blit. We compute the sender pixel-width here (once per
@@ -31621,10 +32663,39 @@ def draw_chat_panel(surface, x, y, locked=False):
 
     # Render bottom-up. window[0] goes at bottom, window[-1] at top.
     bottom_y = content_y + content_h - line_h
+    _focus_now_t = time.time()
     for offset, seg in enumerate(window):
         ly = bottom_y - offset * line_h
         if ly < content_y:
             break
+        # Focus-word highlight: a pulsing amber shade behind JUST the
+        # matched word(s). Word pixel positions come from measuring
+        # the text before/inside each match with the same body font
+        # the line renders in. Pulses (sine on alpha) for
+        # FOCUS_PULSE_SECS after the hit, then settles to a steady
+        # faint shade so older hits stay findable.
+        _fts = seg.get("focus_ts")
+        _frs = seg.get("focus_ranges")
+        if _fts and _frs:
+            _age = _focus_now_t - _fts
+            if _age < FOCUS_PULSE_SECS:
+                _fa = int(95 + 70 * math.sin(_age * 6.0))
+            else:
+                _fa = 48
+            _fa = max(0, min(255, _fa))
+            _fp = seg.get("focus_plain") or ""
+            for _a, _b in _frs:
+                try:
+                    _pre_w  = body_font.size(_fp[:_a])[0]
+                    _word_w = body_font.size(_fp[_a:_b])[0]
+                except Exception:
+                    continue
+                _wx = text_x + _pre_w - 2
+                _ww = _word_w + 4
+                _patch = pygame.Surface((max(1, _ww), line_h),
+                                        pygame.SRCALPHA)
+                _patch.fill(CHAT_FOCUS_HL[:3] + (_fa,))
+                surface.blit(_patch, (_wx, ly))
         if seg["ts"]:
             ts_surf = meta_font.render(seg["ts"], True, CHAT_TIMESTAMP_COLOR)
             surface.blit(ts_surf,
@@ -37209,6 +38280,7 @@ _start_update_check()
 # known yet; the routing system falls back to global config.
 _last_job_check_ts  = 0.0
 _last_seen_main_job = None
+_rt_mtimes = {}     # routing-file mtime watcher state (live GUI saves)
 JOB_CHECK_INTERVAL  = 1.0    # seconds; cheap enough to do often
 
 while running:
@@ -37245,6 +38317,34 @@ while running:
                 load_chat_routing_for_job(cur_job)
             except Exception as _e:
                 print(f"[OmniWatch] Job-change routing reload failed: {_e}")
+
+        # Routing-config live reload (ported from OmniChat): compare
+        # mtimes of the global + current per-job routing JSONs and
+        # reload a tier when the Filters GUI (or anything else)
+        # rewrites it — so GUI saves apply without restarting
+        # OmniWatch. Runs at this same 1 Hz throttle; two stat calls.
+        try:
+            for _rt_job in (None, _last_seen_main_job or None):
+                _rt_path = _routing_path_for_job(_rt_job)
+                if not _rt_path or not os.path.exists(_rt_path):
+                    continue
+                _rt_m = os.path.getmtime(_rt_path)
+                _rt_key = ("_rt_mtime", _rt_job)
+                _rt_prev = _rt_mtimes.get(_rt_key)
+                if _rt_prev is None:
+                    _rt_mtimes[_rt_key] = _rt_m
+                elif _rt_m != _rt_prev:
+                    _rt_mtimes[_rt_key] = _rt_m
+                    if _rt_job is None:
+                        load_chat_routing()
+                        print("[OmniWatch] routing config reloaded "
+                              "(file changed)")
+                    else:
+                        load_chat_routing_for_job(_rt_job)
+                        print(f"[OmniWatch] per-job routing reloaded "
+                              f"({_rt_job}; file changed)")
+        except Exception as _rt_e:
+            print(f"[OmniWatch] routing watch error: {_rt_e!r}")
 
     # ── Receive UDP data ─────────────────────────────────────────────────────
     try:
@@ -38391,6 +39491,27 @@ while running:
                         except (ValueError, TypeError):
                             pass
                 ring_state_last_update = time.time()
+            elif raw.startswith("WARPNEAR|"):
+                # Format: WARPNEAR|hp=<0|1>;sg=<0|1>
+                # Proximity to a Home Point / Survival Guide, emitted by
+                # lua at ~2Hz. Drives the Warp button's pulse. Stamped with
+                # the receive time so a stale status (zoning) stops the
+                # pulse via _warp_is_near's freshness check.
+                body = raw[len("WARPNEAR|"):]
+                _hp_near = _sg_near = False
+                for ent in body.split(";"):
+                    if "=" not in ent:
+                        continue
+                    k, v = ent.split("=", 1)
+                    k = k.strip()
+                    on = v.strip() in ("1", "true", "True")
+                    if k == "hp":
+                        _hp_near = on
+                    elif k == "sg":
+                        _sg_near = on
+                warp_near["hp"] = _hp_near
+                warp_near["sg"] = _sg_near
+                warp_near["ts"] = time.time()
             elif raw.startswith("CURRENCY|"):
                 # Format: CURRENCY|gil=N;sparks=N;accolades=N;gallimaufry=N;
                 #                  temenos=N;apollyon=N;escha_beads=N;
@@ -40796,6 +41917,21 @@ while running:
         draw_cheatsheet_button(screen)
         draw_cheatsheet_ctx_menu(screen)
 
+    # ── Warp button + travel menu (floating, pulses when in range) ──────────
+    # Floats on the overlay (draggable/resizable); the menu draws above
+    # panels. Suppressed when the display is hidden or the setting is off.
+    if display_hidden or not setting("show_warp"):
+        warp_button_rect = None
+        warp_button_handle_rect = None
+        warp_menu_rects = []
+        warp_menu_rect = None
+        warp_confirm_rects = []
+        warp_confirm_rect = None
+    else:
+        draw_warp_button(screen)
+        draw_warp_menu(screen)
+        draw_warp_confirm(screen)
+
     # ── Settings dropdown (above everything when open) ──────────────────────
     draw_settings_menu(screen)
 
@@ -40803,6 +41939,8 @@ while running:
     draw_inventory_dropdown(screen)
     # ── Slip nickname editor (modal — on top of the dropdown when open) ─────
     draw_inventory_slip_nickname_editor(screen)
+    # ── Item right-click menu (drop / auto-drop — on top of the dropdown) ───
+    draw_inventory_item_ctx_menu(screen)
 
     # ── Character-view dropdown (small; right of gear button) ───────────────
     draw_char_view_dropdown(screen)
@@ -40884,6 +42022,24 @@ while running:
             or profile_name_modal_open
             or clock_modal_open):
         _suppress_tooltip = True
+    # Any generic Configure subdialog (equipment / cheatsheet / warp / etc.)
+    # overlays the screen the same way — suppress the equipment tooltip so
+    # item stat blocks don't leak through them.
+    if not _suppress_tooltip:
+        for _sst in _subdialog_states.values():
+            if _sst.get("open"):
+                _suppress_tooltip = True
+                break
+    # Floating buttons / popovers draw over the equipment panel; without
+    # this the rich item tooltip paints through them while the cursor is on
+    # the button or its menu. Covers the Warp button + travel menu and the
+    # Cheat Sheet button + window.
+    if not _suppress_tooltip:
+        for _frect in (warp_button_rect, warp_menu_rect, warp_confirm_rect,
+                       cheatsheet_button_rect, cheatsheet_window_rect):
+            if _frect is not None and _frect.collidepoint(mpos):
+                _suppress_tooltip = True
+                break
     if hotbar_edit_mode:
         _ed_anchor = globals().get("_hotbar_editor_anchor")
         if _ed_anchor is not None:
@@ -41071,6 +42227,18 @@ while running:
                         and _campaigns_modal_rect.collidepoint(mx, my)):
                     campaigns_scroll = max(0,
                         campaigns_scroll - event.y * 30)
+                continue
+
+            # Warp travel menu — top-level popover. Scroll its windowed
+            # row list (one row per wheel click). Defer to the settings /
+            # inventory / sim overlays when those are open (they draw on
+            # top). Upper bound clamp happens in draw_warp_menu.
+            if (warp_menu_open and warp_menu_rect is not None
+                    and not settings_menu_open
+                    and not inventory_dropdown_open
+                    and not sim_window_open
+                    and warp_menu_rect.collidepoint(mx, my)):
+                warp_menu_scroll = max(0, warp_menu_scroll - event.y)
                 continue
 
             # Sim window first — when open, its scrollbar takes priority
@@ -41494,6 +42662,16 @@ while running:
                 if settings_menu_open:
                     settings_menu_open = False
                     continue
+                if warp_confirm is not None:
+                    warp_confirm = None
+                    continue
+                if warp_menu_open:
+                    warp_menu_open = False
+                    continue
+                if inventory_item_ctx_menu is not None:
+                    # Esc closes just the menu, leaving the dropdown open.
+                    inventory_item_ctx_menu = None
+                    continue
                 if inventory_dropdown_open:
                     inventory_dropdown_open = False
                     inventory_active_bag = None
@@ -41824,6 +43002,93 @@ while running:
                 _cs_ctx_menu = None
                 continue
 
+            # Warp confirm popover (when open) takes top priority:
+            # [Warp] sends, [Cancel] / any other click dismisses.
+            if warp_confirm is not None:
+                _picked = None
+                for _rect, _act in warp_confirm_rects:
+                    if _rect.collidepoint(mx, my):
+                        _picked = _act
+                        break
+                if _picked == "warp":
+                    _cmd = warp_confirm.get("command")
+                    if _cmd:
+                        _warp_send(_cmd)
+                warp_confirm = None
+                continue
+
+            # Warp travel menu (when open) takes priority: clicking a
+            # destination opens a confirm; clicking a group header
+            # expands/collapses it (menu stays open); any other click
+            # dismisses the menu.
+            if warp_menu_open:
+                _wcfg = _warp_load_config()
+                _consumed_toggle = False
+                for _rect, _act in warp_menu_rects:
+                    if _rect.collidepoint(mx, my):
+                        if _act.get("kind") == "toggle":
+                            _pk = _act.get("path")
+                            if _pk in _warp_expanded:
+                                _warp_expanded.discard(_pk)
+                            else:
+                                _warp_expanded.add(_pk)
+                            _consumed_toggle = True
+                        elif _act.get("kind") == "warp":
+                            _net = _act.get("net")
+                            _zone = _act.get("zone", "")
+                            _sub = _act.get("sub")
+                            _lbl = _act.get("label", _zone)
+                            _ncfg = _wcfg.get(_net, {}) if _wcfg else {}
+                            _cmd_prefix = _ncfg.get(
+                                "command",
+                                WARP_DEFAULT_CONFIG.get(_net, {}).get(
+                                    "command", ""))
+                            if _cmd_prefix and _zone:
+                                _allk = "all " if setting(
+                                    "warp_use_sendall") else ""
+                                _subk = (" " + str(_sub)) if _sub else ""
+                                # Confirm label: avoid repeating the zone
+                                # when the leaf label already contains it.
+                                _dest = (_lbl if _lbl.startswith(_zone)
+                                         else ("%s %s" % (_zone, _lbl)))
+                                # Open the confirm; the warp only fires
+                                # when the user clicks [Warp] there.
+                                warp_confirm = {
+                                    "net":     _net,
+                                    "zone":    _zone,
+                                    "label":   _dest,
+                                    "command": ("%s %s%s%s" %
+                                                (_cmd_prefix, _allk,
+                                                 _zone, _subk)),
+                                }
+                                warp_menu_open = False
+                        break
+                if _consumed_toggle:
+                    # Keep the menu open so the user can drill into points.
+                    continue
+                warp_menu_open = False
+                continue
+
+            # Floating Warp button — corner handle resizes; body arms a
+            # click-or-drag (click toggles the travel menu, drag moves).
+            if (warp_button_handle_rect is not None
+                    and warp_button_handle_rect.collidepoint(mx, my)):
+                _warp_btn_resize = {"start_scale": warp_button_scale,
+                                    "anchor_x": mx, "anchor_y": my}
+                continue
+            if (warp_button_rect is not None
+                    and warp_button_rect.collidepoint(mx, my)
+                    and _warp_btn_draw_pos is not None):
+                bx, by = _warp_btn_draw_pos
+                _warp_btn_drag = {
+                    "grab_dx": mx - bx,
+                    "grab_dy": my - by,
+                    "start_x": bx,
+                    "start_y": by,
+                    "moved":   False,
+                }
+                continue
+
             # Floating [CS] button — corner handle resizes; body arms a
             # click-or-drag (click toggles the window, drag repositions).
             if (cheatsheet_button_handle_rect is not None
@@ -41995,9 +43260,30 @@ while running:
                 # user always lands on the same entry point.
                 if inventory_dropdown_open:
                     inventory_active_bag = None
+                # Any open item menu is tied to the dropdown being open;
+                # drop it on every toggle so it can't reappear on reopen.
+                inventory_item_ctx_menu = None
                 continue
 
             if inventory_dropdown_open:
+                # Item right-click menu (when open) takes priority: a
+                # click on an action runs it; any other click just
+                # dismisses the menu. Either way the click is consumed,
+                # mirroring the cheat-sheet delete menu. The menu is
+                # drawn above the dropdown, so it must resolve first.
+                if inventory_item_ctx_menu is not None:
+                    for _rect, _act in inventory_item_ctx_rects:
+                        if _rect.collidepoint(mx, my):
+                            if _act == "drop":
+                                _inv_send_drop(
+                                    inventory_item_ctx_menu["item_id"])
+                            elif _act == "autodrop":
+                                _inv_send_autodrop(
+                                    inventory_item_ctx_menu["item_id"])
+                            break
+                    inventory_item_ctx_menu = None
+                    continue
+
                 # Modal editor: when the porter-slip nickname editor is
                 # open, eat ALL clicks inside the dropdown panel so the
                 # user can't accidentally switch slips / scroll / etc.
@@ -42028,6 +43314,7 @@ while running:
                         inventory_active_slip = None
                         inventory_show_slip_list = False
                         inventory_slip_nickname_editor = None
+                        inventory_item_ctx_menu = None
                         continue
                 # Click inside envelope but not a control — swallow.
                 continue
@@ -42435,6 +43722,28 @@ while running:
             # Chat composer click handlers — channel selector, send,
             # focus the input fields. Also functional UI, bypasses lock.
             if chat_panel_visible and chat_composer_visible:
+                # { } auto-translate button: wrap the message for AT
+                # sending. With text: the whole message becomes
+                # {message} (click again to unwrap). Empty: insert {}
+                # with the cursor parked inside so you type the phrase
+                # directly. Focuses the input either way so typing
+                # continues without another click.
+                if _chat_composer_rect_at is not None \
+                        and _chat_composer_rect_at.collidepoint(mx, my):
+                    _t = chat_composer_text
+                    if not _t:
+                        chat_composer_text = "{}"
+                        chat_composer_cursor = 1
+                    elif _t.startswith("{") and _t.endswith("}") \
+                            and len(_t) >= 2:
+                        chat_composer_text = _t[1:-1]
+                        chat_composer_cursor = len(chat_composer_text)
+                    else:
+                        chat_composer_text = "{" + _t + "}"
+                        chat_composer_cursor = len(chat_composer_text)
+                    chat_composer_focused = True
+                    chat_composer_tell_to_focused = False
+                    continue
                 # Right arrow / channel-name click → next channel.
                 # Left arrow → previous channel.
                 if (_chat_composer_rect_arrow_r is not None
@@ -42730,6 +44039,14 @@ while running:
             if display_hidden and setting("show_hide_nub"):
                 continue
 
+            # Right-click the Warp button → open its Configure subdialog
+            # (show button + Send All toggle). Convenience alongside the
+            # Settings → Warp → Configure entry.
+            if (setting("show_warp") and warp_button_rect is not None
+                    and warp_button_rect.collidepoint(mx, my)):
+                _open_subdialog("warp")
+                continue
+
             # Cheat sheet edit mode: right-click a cell opens a small delete
             # menu (so nothing is removed by accident). Key/desc cell → "Delete
             # row"; group label → "Delete category". The actual delete happens
@@ -42923,6 +44240,24 @@ while running:
                     save_layout()
                 else:
                     _cheatsheet_toggle()
+                continue
+
+            # ── Floating Warp button: end resize ───────────────────
+            if _warp_btn_resize is not None:
+                _warp_btn_resize = None
+                save_layout()
+                continue
+
+            # ── Floating Warp button: click vs drag ────────────────
+            # Unmoved = click → toggle the travel menu. Moved = reposition
+            # → persist the new button location.
+            if _warp_btn_drag is not None:
+                moved = _warp_btn_drag["moved"]
+                _warp_btn_drag = None
+                if moved:
+                    save_layout()
+                else:
+                    _warp_toggle_menu()
                 continue
 
             # ── Scrollbar drag release ─────────────────────────────
@@ -43439,6 +44774,15 @@ while running:
             cheatsheet_button_scale = max(
                 0.5, min(5.0, _cs_btn_resize["start_scale"] + delta / 60.0))
 
+        elif event.type == pygame.MOUSEMOTION and _warp_btn_resize is not None:
+            # Resize the floating Warp button (same diagonal-drag scaling
+            # as the [CS] button).
+            mx, my = event.pos
+            delta = ((mx - _warp_btn_resize["anchor_x"])
+                     + (my - _warp_btn_resize["anchor_y"])) / 2.0
+            warp_button_scale = max(
+                0.5, min(5.0, _warp_btn_resize["start_scale"] + delta / 60.0))
+
         elif event.type == pygame.MOUSEMOTION and _cs_btn_drag is not None:
             # Drag the floating [CS] button. Mark "moved" once past a small
             # threshold so a tiny wobble still counts as a click on release.
@@ -43458,6 +44802,19 @@ while running:
                     _cs_btn_drag["moved"] = True
                 cheatsheet_button_pos[0] = nx
                 cheatsheet_button_pos[1] = ny
+
+        elif event.type == pygame.MOUSEMOTION and _warp_btn_drag is not None:
+            # Drag the floating Warp button (same click-vs-drag logic as the
+            # [CS] button: a tiny wobble still counts as a click on release).
+            mx, my = event.pos
+            if warp_button_pos is not None:
+                nx = mx - _warp_btn_drag["grab_dx"]
+                ny = my - _warp_btn_drag["grab_dy"]
+                if (abs(nx - _warp_btn_drag["start_x"]) > 3
+                        or abs(ny - _warp_btn_drag["start_y"]) > 3):
+                    _warp_btn_drag["moved"] = True
+                warp_button_pos[0] = nx
+                warp_button_pos[1] = ny
 
         elif (event.type == pygame.MOUSEMOTION
               and _checklist_scroll_drag is not None):

@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.6.4'
+_addon.version  = '1.7.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -3464,6 +3464,66 @@ do
     end
 end
 
+-- ── Warp proximity scanner (Home Point / Survival Guide) ───────────────────
+-- Drives the python overlay's floating Warp button. Scans nearby entities
+-- for a Home Point or Survival Guide NPC within superwarp's usable range
+-- (6 yalms, matching superwarp's own find_npc threshold) and emits a tiny
+-- status line so the button can pulse when travel is possible:
+--
+--   WARPNEAR|hp=<0|1>;sg=<0|1>
+--
+-- Self-throttled (~2 Hz) so it's cheap to call every prerender. MB-tagged
+-- so multiboxers only see the locked character's proximity. The actual
+-- warp is performed by superwarp via a WARP|... command the overlay sends
+-- back (handled in the inbound drain), not here — this is detection only.
+do
+    local _WARP_NEAR_POLL_SEC = 0.5
+    local _WARP_NEAR_RANGE_SQ = 6 * 6     -- 6 yalms, squared (2D)
+    local _warp_near_last     = 0
+    -- Lowercased name prefixes that identify each network's NPC. Home
+    -- Point NPCs are "Home Point #N"; Survival Guides are "Survival Guide".
+    local _WARP_NEEDLES = {
+        hp = 'home point',
+        sg = 'survival guide',
+    }
+
+    _G._ow_warp_near_poll = function()
+        local now = os.clock()
+        if (now - _warp_near_last) < _WARP_NEAR_POLL_SEC then return end
+        _warp_near_last = now
+        if not udp_inv then return end
+        if not (windower.ffxi and windower.ffxi.get_mob_array) then return end
+
+        local me = windower.ffxi.get_mob_by_target
+                   and windower.ffxi.get_mob_by_target('me')
+        local near_hp, near_sg = false, false
+        if me and me.x and me.y then
+            for _, v in pairs(windower.ffxi.get_mob_array()) do
+                if type(v) == 'table' and v.valid_target and v.name
+                        and v.x and v.y then
+                    local dx, dy = v.x - me.x, v.y - me.y
+                    if (dx * dx + dy * dy) <= _WARP_NEAR_RANGE_SQ then
+                        local lname = v.name:lower()
+                        if not near_hp
+                                and lname:find(_WARP_NEEDLES.hp, 1, true) then
+                            near_hp = true
+                        end
+                        if not near_sg
+                                and lname:find(_WARP_NEEDLES.sg, 1, true) then
+                            near_sg = true
+                        end
+                        if near_hp and near_sg then break end
+                    end
+                end
+            end
+        end
+
+        local payload = string.format('WARPNEAR|hp=%d;sg=%d',
+            near_hp and 1 or 0, near_sg and 1 or 0)
+        pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+    end
+end
+
 -- ── Home Point attunement listener ────────────────────────────────────────
 -- Sniffs the incoming Home Point NPC menu packets and decodes the
 -- attunement bitfield so the python checklist can mark visited HPs.
@@ -4197,9 +4257,140 @@ do
     end
 end
 
+-- ── Inventory actions (overlay right-click menu) ───────────────────────────
+-- Backing helpers for the INVACT messages the pygame overlay sends when
+-- the user right-clicks an inventory item. Defined before the drain so
+-- they're in scope as upvalues.
+
+-- Drop the entire stack of <item_id> from the player's MAIN inventory
+-- (bag 0). Resolves the slot from live data at call time (so a stale
+-- overlay snapshot can't make us drop the wrong slot) and drops the
+-- whole count in the first matching, droppable slot. No-op with a chat
+-- notice if the item isn't in inventory (e.g. it's in storage/wardrobe,
+-- which can't be dropped without moving it first). Destructive — only
+-- reached via the deliberate right-click → "Drop item" click.
+local function _ow_inv_drop_item_by_id(item_id)
+    if not (windower.ffxi and windower.ffxi.get_items
+            and windower.ffxi.drop_item) then return end
+    local inv = windower.ffxi.get_items(0)   -- bag 0 = Inventory
+    if type(inv) ~= 'table' then return end
+    local maxslot = tonumber(inv.max) or 80
+    for slot = 1, maxslot do
+        local it = inv[slot]
+        if type(it) == 'table' and it.id == item_id
+                and (it.status == 0 or it.status == nil) then
+            local cnt = tonumber(it.count) or 1
+            windower.ffxi.drop_item(slot, cnt)
+            local nm = (res and res.items and res.items[item_id]
+                        and (res.items[item_id].name
+                             or res.items[item_id].english
+                             or res.items[item_id].en))
+                       or ('#' .. tostring(item_id))
+            windower.add_to_chat(207, '[OmniWatch] Dropped ' .. tostring(nm)
+                .. (cnt > 1 and (' x' .. cnt) or ''))
+            return
+        end
+    end
+    windower.add_to_chat(123,
+        '[OmniWatch] Drop: that item is not in your main inventory.')
+end
+
+-- Add <item_id> to the Treasury addon's per-character Drop list by
+-- running its console command with the item's canonical name. Treasury
+-- matches by name (wildcard), so we pass the exact resource name. If
+-- Treasury's AutoDrop is enabled (the user's normal setup), Treasury
+-- also drops any matching items already in inventory immediately. This
+-- is the "auto-drop" action: persistent, not a one-shot.
+local function _ow_inv_autodrop_by_id(item_id)
+    local nm
+    if res and res.items and res.items[item_id] then
+        nm = res.items[item_id].name
+             or res.items[item_id].english
+             or res.items[item_id].en
+    end
+    if not nm or nm == '' then
+        windower.add_to_chat(123,
+            '[OmniWatch] Auto-drop: unknown item id ' .. tostring(item_id))
+        return
+    end
+    -- Treasury console command (addon command, NOT a game slash command,
+    -- so no leading '/'): 'tr drop add <name>'. Treasury resolves the
+    -- name to item ids and saves it to this character's Drop list.
+    windower.send_command('tr drop add ' .. nm)
+    windower.add_to_chat(207, '[OmniWatch] Auto-drop -> Treasury: ' .. nm)
+end
+
 -- Drain helper: pulls all queued packets off udp_cmd_in and routes each
 -- to the appropriate handler. Called from the prerender loop. Wrapped
 -- in a single pcall so a malformed packet can't kill the addon.
+-- ── Auto-translate ENCODING for composer/hotbar sends (from OmniChat) ──
+-- Lets the composer write {Yes, please.}-style phrases; before the text
+-- reaches the game we swap each {…} whose contents match an
+-- auto-translate phrase (case-insensitive, English or Japanese) for the
+-- real 6-byte token the game uses:
+--   FD 02 02 <id_hi> <id_lo> FD        (id = res.auto_translates key)
+-- This is the exact inverse of the incoming decode, so what you see in
+-- the chat panel is what you can type. Unmatched {…} text is left
+-- literally as typed (harmless). The name→id map is built lazily on
+-- first use (~600 entries, one-time).
+--
+-- Stored as GLOBALS (not file-locals): the main chunk of OmniWatch.lua
+-- is at Lua 5.1's 200-local limit, so new top-level locals are not an
+-- option (same constraint that puts _ow_slips on _G).
+_ow_at_name_to_id = nil
+
+function _ow_build_at_index()
+    _ow_at_name_to_id = {}
+    if not (res and res.auto_translates) then return end
+    for id, entry in pairs(res.auto_translates) do
+        if type(entry) == 'table' then
+            if type(entry.en) == 'string' and entry.en ~= '' then
+                _ow_at_name_to_id[entry.en:lower()] = id
+            end
+            if type(entry.ja) == 'string' and entry.ja ~= '' then
+                _ow_at_name_to_id[entry.ja:lower()] = id
+            end
+        end
+    end
+end
+
+function _ow_encode_at(text)
+    -- Returns (encoded_text, n_replaced).
+    if not text or not text:find('{', 1, true) then return text, 0 end
+    if _ow_at_name_to_id == nil then
+        pcall(_ow_build_at_index)
+        _ow_at_name_to_id = _ow_at_name_to_id or {}
+    end
+    local n_hit = 0
+    local out = text:gsub('{(.-)}', function(name)
+        local id = _ow_at_name_to_id[(name or ''):lower()]
+        if not id then
+            return '{' .. name .. '}'        -- not a phrase: keep literal
+        end
+        n_hit = n_hit + 1
+        return string.char(0xFD, 0x02, 0x02,
+                           math.floor(id / 256) % 256, id % 256, 0xFD)
+    end)
+    return out, n_hit
+end
+
+-- Dispatch a console command, converting {auto-translate} phrases in
+-- 'input …' payloads. Resolved phrases go via windower.chat.input()
+-- (typed-chat injection passes raw FD bytes through; send_command's
+-- parser is not byte-safe for them). Plain commands keep the original
+-- send_command path byte-for-byte.
+function _ow_dispatch_console(cmd)
+    local payload = cmd:match('^input%s+(.+)$')
+    if payload and payload:find('{', 1, true) then
+        local encoded, n_hit = _ow_encode_at(payload)
+        if n_hit > 0 and windower.chat and windower.chat.input then
+            windower.chat.input(encoded)
+            return
+        end
+    end
+    windower.send_command(cmd)
+end
+
 local function _ow_drain_inbound()
     if not udp_cmd_in then return end
     local guard = 64    -- max packets per drain (defensive)
@@ -4426,6 +4617,81 @@ local function _ow_drain_inbound()
                 -- back so the modal renders with up-to-date values.
                 _ow_cfgwiz_open()
             end
+        elseif head == 'INVACT' then
+            -- Inventory action from the overlay's item right-click menu.
+            -- Wire forms:
+            --   INVACT|drop|<char>|<item_id>      → one-shot drop now
+            --   INVACT|autodrop|<char>|<item_id>  → add to Treasury list
+            -- <char> is the character whose inventory the overlay was
+            -- showing (its multibox lock target). Because only one game
+            -- client owns this socket, we act ONLY if THIS client is
+            -- that character — otherwise a drop could fire on the wrong
+            -- box. An empty <char> (single-box / no lock yet) always acts.
+            local a1 = rest:find('|', 1, true)
+            if a1 then
+                local action = rest:sub(1, a1 - 1)
+                local tail   = rest:sub(a1 + 1)
+                local a2     = tail:find('|', 1, true)
+                local who    = a2 and tail:sub(1, a2 - 1) or ''
+                local id_str = a2 and tail:sub(a2 + 1) or ''
+                local item_id = tonumber(id_str)
+                local me      = windower.ffxi.get_player
+                                and windower.ffxi.get_player()
+                local myname  = me and me.name or ''
+                if who ~= '' and myname ~= '' and who ~= myname then
+                    -- Meant for a different character on this machine.
+                    -- Silently ignore so the wrong box never drops.
+                    if _ow_cast_debug then
+                        windower.add_to_chat(207,
+                            '[OW] INVACT ignored (for ' .. who
+                            .. ', I am ' .. myname .. ')')
+                    end
+                elseif item_id then
+                    if action == 'drop' then
+                        local ok, err = pcall(_ow_inv_drop_item_by_id, item_id)
+                        if not ok then
+                            windower.add_to_chat(123,
+                                '[OmniWatch] drop error: ' .. tostring(err))
+                        end
+                    elseif action == 'autodrop' then
+                        local ok, err = pcall(_ow_inv_autodrop_by_id, item_id)
+                        if not ok then
+                            windower.add_to_chat(123,
+                                '[OmniWatch] autodrop error: ' .. tostring(err))
+                        end
+                    end
+                end
+            end
+        elseif head == 'WARP' then
+            -- One-click travel from the overlay's Warp button.
+            -- Wire form: WARP|<char>|<raw superwarp command>
+            -- e.g. WARP|Wormfood|sw hp Southern San d'Oria
+            -- <char> is the character whose proximity the overlay was
+            -- showing (multibox lock target). Like INVACT, we only act
+            -- if THIS client is that character, so a warp can't fire on
+            -- the wrong box. Empty <char> (single-box) always acts. The
+            -- command body may itself contain spaces (zone names), so we
+            -- split off only the first field as <char>.
+            local w1 = rest:find('|', 1, true)
+            if w1 then
+                local who = rest:sub(1, w1 - 1)
+                local cmd = rest:sub(w1 + 1)
+                local me  = windower.ffxi.get_player
+                            and windower.ffxi.get_player()
+                local myname = me and me.name or ''
+                if who ~= '' and myname ~= '' and who ~= myname then
+                    if _ow_cast_debug then
+                        windower.add_to_chat(207,
+                            '[OW] WARP ignored (for ' .. who
+                            .. ', I am ' .. myname .. ')')
+                    end
+                elseif cmd and cmd ~= '' then
+                    if _ow_cast_debug then
+                        windower.add_to_chat(207, '[OW] WARP run: ' .. cmd)
+                    end
+                    windower.send_command(cmd)
+                end
+            end
         elseif head == 'CMD' then
             -- Hotbar buttons of kind="windower" send their command
             -- through here. Python strips the leading '/' before
@@ -4439,7 +4705,7 @@ local function _ow_drain_inbound()
                     windower.add_to_chat(207,
                         '[OW] CMD recv: ' .. tostring(rest))
                 end
-                windower.send_command(rest)
+                _ow_dispatch_console(rest)
             end
         else
             -- Unrecognised header. Fall through to legacy bare-command
@@ -4452,7 +4718,7 @@ local function _ow_drain_inbound()
                     windower.add_to_chat(207,
                         '[OW] bare cmd recv: ' .. tostring(data))
                 end
-                windower.send_command(data)
+                _ow_dispatch_console(data)
             end
         end
     end
@@ -15918,6 +16184,13 @@ ow_safe_register('prerender', function()
     -- to update the equipment-panel header timer.
     if _G._ow_warp_ring_poll then
         pcall(_G._ow_warp_ring_poll)
+    end
+
+    -- Warp proximity scan. Internal ~2 Hz throttle; emits WARPNEAR|... so
+    -- the python overlay's Warp button can pulse when a Home Point or
+    -- Survival Guide is in range.
+    if _G._ow_warp_near_poll then
+        pcall(_G._ow_warp_near_poll)
     end
 
     -- Send sim inventory snapshot when needed. Rate-limited to once per

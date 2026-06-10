@@ -687,6 +687,13 @@ local DROPPED_CHAT_MODES = {
                     --   text. Duplicates 0x028 synth and was leaking into
                     --   System / mis-rendering cures as damage in Battle.
                     --   (Remove this entry to show cure/recovery text.)
+    [90] = true,    -- plain item-use completion ("Wormfood uses a warp
+                    --   ring.", "...uses a dimensional ring (Dem)."), i.e.
+                    --   utility/teleport ring (and similar) item use with
+                    --   no damage/recovery/buff. Dup of 0x028 synth
+                    --   (battle_events "uses" kind); was leaking into the
+                    --   System tab. (Remove this entry to show item-use
+                    --   text.)
     [111] = true,   -- trust/player ability-use + buff-gain text
                     --   ("Monberaux uses Mix: Guard Drink.Monberaux gains
                     --   the effect of Protect", "...status parameters are

@@ -262,8 +262,25 @@ def _load_channel_filters(path):
     return hidden, blacklist
 
 
+def _load_focus_phrases(path):
+    """Read _meta.focus_phrases from the routing JSON. Safe when the
+    file or section is missing."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        meta = data.get("_meta") if isinstance(data, dict) else None
+        fp = (meta or {}).get("focus_phrases")
+        if isinstance(fp, list):
+            return [s.strip() for s in fp
+                    if isinstance(s, str) and s.strip()]
+    except Exception:
+        pass
+    return []
+
+
 def save_config(path, data, custom_labels=None,
-                channel_hidden=None, blacklist=None):
+                channel_hidden=None, blacklist=None,
+                focus_phrases=None):
     meta = {
         "version": 2,
         "comment": "Edited by omniwatch_routing_gui.exe. Cells: "
@@ -289,6 +306,11 @@ def save_config(path, data, custom_labels=None,
         ch = sorted(c for c in channel_hidden if isinstance(c, str))
         if ch:
             meta["channel_hidden"] = ch
+    if focus_phrases:
+        fp = [s.strip() for s in focus_phrases
+              if isinstance(s, str) and s.strip()]
+        if fp:
+            meta["focus_phrases"] = fp
     if blacklist:
         bl = sorted(s.strip() for s in blacklist
                     if isinstance(s, str) and s.strip())
@@ -473,7 +495,7 @@ SUBSECTION_H = 24
 PAD          = 8
 INDENT       = 16
 HEADER_H     = 130
-FOOTER_H     = 116
+FOOTER_H     = 144
 SCROLL_STEP  = 32
 
 TAB_CHIP_COLORS = {
@@ -609,6 +631,19 @@ class App:
         # Blacklist add-input state.
         self.blacklist_focused = False
         self.blacklist_buffer = ""
+        # Focus words/phrases (word-pulse highlight in the overlay).
+        # Same chip-row editor pattern as the blacklist, one row below.
+        self.focus_phrases = _load_focus_phrases(self.path)
+        self.focus_focused = False
+        self.focus_buffer = ""
+        self.focus_rects = {}          # phrase → remove-button rect
+        self.focus_input_rect = None
+        self._focus_hscroll = 0
+        self._focus_arrow_left_rect = None
+        self._focus_arrow_right_rect = None
+        self._focus_row_rect = None
+        self._focus_content_w = 0
+        self._focus_visible_w = 1
         self.blacklist_rects = {}      # name → remove-button rect
         self.blacklist_input_rect = None
         # Horizontal scroll state for the blacklist chip row. The row
@@ -680,14 +715,18 @@ class App:
         self.model = RoutingModel(load_config(self.path))
         self.custom_labels = _load_custom_labels(self.path)
         self.channel_hidden, self.blacklist = _load_channel_filters(self.path)
+        self.focus_phrases = _load_focus_phrases(self.path)
+        self.focus_focused = False
+        self.focus_buffer = ""
         self.blacklist_focused = False
         self.blacklist_buffer = ""
         self.editing_tab = None
         self.editing_buffer = ""
         self.dirty = False
         self.scroll = 0
-        # Reset blacklist hscroll on job switch — different file, fresh view.
+        # Reset chip hscrolls on job switch — different file, fresh view.
         self._blacklist_hscroll = 0
+        self._focus_hscroll = 0
         self.status = f"Now editing: {self.path.name}"
 
     # ── Drawing ──────────────────────────────────────────────────────
@@ -991,11 +1030,119 @@ class App:
             if r_active:
                 self._blacklist_arrow_right_rect = r_rect
 
-        # ── Row 3: status line ──────────────────────────────────────
-        row3_y = rect.y + 62
+        # ── Row 3: focus words/phrases ──────────────────────────────
+        # Same chip-row editor as the blacklist, one row down. Phrases
+        # added here pulse-highlight the matched word in any chat line
+        # containing them (case-insensitive, any channel) in OmniWatch.
+        f_y = rect.y + 62
+        draw_text(self.screen, self.font_small, "Focus:",
+                  (PAD * 2, f_y + 6), COLOR_TEXT_DIM)
+        f_inp = pygame.Rect(PAD * 2 + 62, f_y, 150, 22)
+        self.focus_input_rect = f_inp
+        f_ed = self.focus_focused
+        pygame.draw.rect(self.screen, COLOR_HOVER if f_ed else COLOR_PANEL,
+                         f_inp, border_radius=4)
+        pygame.draw.rect(self.screen,
+                         COLOR_ACCENT if f_ed else COLOR_BORDER,
+                         f_inp, width=1, border_radius=4)
+        f_shown = self.focus_buffer if f_ed else ""
+        f_ph = "" if (f_ed or self.focus_buffer) else "add word/phrase…"
+        if f_ph:
+            draw_text(self.screen, self.font_small, f_ph,
+                      (f_inp.x + 6, f_inp.y + 5), COLOR_TEXT_DIM)
+        else:
+            draw_text(self.screen, self.font_small,
+                      f_shown + ("_" if f_ed else ""),
+                      (f_inp.x + 6, f_inp.y + 5),
+                      COLOR_TEXT_BRIGHT if f_ed else COLOR_TEXT)
+        f_add = pygame.Rect(f_inp.right + 6, f_y, 38, 22)
+        draw_button(self.screen, self.font_small, "Add", f_add,
+                    hovered=f_add.collidepoint(mouse),
+                    bg=COLOR_OK, bg_hov=COLOR_OK_HOV)
+        self.button_rects["focus_add"] = f_add
+
+        # Chips with horizontal scroll (mirrors the blacklist row, but
+        # amber-tinted so the two rows read as different features).
+        self.focus_rects.clear()
+        f_area_left  = f_add.right + 10
+        f_area_right = WINDOW_W - PAD * 2
+        f_arrow_w = 16
+        f_widths = [self.font_small.get_rect(p).width + 30
+                    for p in self.focus_phrases]
+        f_total = sum(f_widths) + 6 * max(0, len(f_widths) - 1)
+        f_overflow = f_total > (f_area_right - f_area_left)
+        if f_overflow:
+            f_x0 = f_area_left + f_arrow_w + 4
+            f_x1 = f_area_right - f_arrow_w - 4
+        else:
+            f_x0, f_x1 = f_area_left, f_area_right
+        f_vis = max(1, f_x1 - f_x0)
+        f_max_scroll = max(0, f_total - f_vis)
+        self._focus_hscroll = max(0, min(self._focus_hscroll,
+                                         f_max_scroll))
+        self._focus_content_w = f_total
+        self._focus_visible_w = f_vis
+        self._focus_row_rect = pygame.Rect(
+            f_area_left, f_y, f_area_right - f_area_left, 22)
+
+        prev_clip = self.screen.get_clip()
+        self.screen.set_clip(pygame.Rect(f_x0, f_y - 1, f_x1 - f_x0, 24))
+        fcx = f_x0 - self._focus_hscroll
+        for i, phrase in enumerate(self.focus_phrases):
+            cw = f_widths[i]
+            if (fcx + cw > f_x0) and (fcx < f_x1):
+                chip = pygame.Rect(fcx, f_y, cw, 22)
+                pygame.draw.rect(self.screen, (72, 58, 28), chip,
+                                 border_radius=4)
+                pygame.draw.rect(self.screen, COLOR_BORDER, chip,
+                                 width=1, border_radius=4)
+                draw_text(self.screen, self.font_small, phrase,
+                          (chip.x + 6, chip.y + 5), (240, 205, 130))
+                xr = pygame.Rect(chip.right - 16, chip.y + 2, 14, 18)
+                if xr.x >= f_x0 and xr.right <= f_x1:
+                    xhov = xr.collidepoint(mouse)
+                    draw_text(self.screen, self.font_small, "×",
+                              (xr.x + 3, xr.y + 3),
+                              (255, 200, 120) if xhov else (210, 170, 100))
+                    self.focus_rects[phrase] = xr
+                else:
+                    draw_text(self.screen, self.font_small, "×",
+                              (xr.x + 3, xr.y + 3), (210, 170, 100))
+            fcx += cw + 6
+        self.screen.set_clip(prev_clip)
+
+        self._focus_arrow_left_rect = None
+        self._focus_arrow_right_rect = None
+        if f_overflow:
+            f_mid = f_y + 11
+            l_act = self._focus_hscroll > 0
+            l_r = pygame.Rect(f_area_left, f_y, f_arrow_w, 22)
+            pygame.draw.rect(self.screen, COLOR_PANEL, l_r, border_radius=3)
+            _lx = l_r.centerx
+            pygame.draw.polygon(
+                self.screen,
+                COLOR_TEXT_BRIGHT if l_act else (90, 95, 105),
+                [(_lx + 3, f_mid - 5), (_lx + 3, f_mid + 5),
+                 (_lx - 4, f_mid)])
+            if l_act:
+                self._focus_arrow_left_rect = l_r
+            r_act = self._focus_hscroll < f_max_scroll
+            r_r = pygame.Rect(f_area_right - f_arrow_w, f_y, f_arrow_w, 22)
+            pygame.draw.rect(self.screen, COLOR_PANEL, r_r, border_radius=3)
+            _rx = r_r.centerx
+            pygame.draw.polygon(
+                self.screen,
+                COLOR_TEXT_BRIGHT if r_act else (90, 95, 105),
+                [(_rx - 3, f_mid - 5), (_rx - 3, f_mid + 5),
+                 (_rx + 4, f_mid)])
+            if r_act:
+                self._focus_arrow_right_rect = r_r
+
+        # ── Row 4: status line ──────────────────────────────────────
+        row3_y = rect.y + 90
         msg = self.status or (
-            "Channels: click to show/hide. Blacklist: hide all messages "
-            "from a sender. Reload OmniWatch to apply."
+            "Channels: click to show/hide. Blacklist: hide a sender. "
+            "Focus: pulse a word/phrase in chat. Saves apply live."
         )
         draw_text(self.screen, self.font_small, msg,
                   (PAD * 2, row3_y + 4),
@@ -1175,6 +1322,19 @@ class App:
         self.editing_tab = None
         self.editing_buffer = ""
 
+    def _commit_focus_add(self):
+        """Add the typed phrase to the focus list. Case-insensitive
+        dedupe; keeps user casing for display."""
+        phrase = self.focus_buffer.strip()
+        self.focus_buffer = ""
+        if not phrase:
+            return
+        existing = {p.lower() for p in self.focus_phrases}
+        if phrase.lower() not in existing:
+            self.focus_phrases.append(phrase)
+            self.dirty = True
+        self.focus_focused = True
+
     def _commit_blacklist_add(self):
         """Add the typed name to the blacklist. No-op on empty or
         duplicate (case-insensitive). Keeps focus + clears buffer so
@@ -1218,10 +1378,17 @@ class App:
                 self.blacklist_focused = False
                 return
 
+        # Footer: focus-phrase input focus.
+        if self.focus_input_rect and \
+                self.focus_input_rect.collidepoint(pos):
+            self.focus_focused = True
+            self.blacklist_focused = False
+            return
         # Footer: blacklist input focus.
         if self.blacklist_input_rect and \
                 self.blacklist_input_rect.collidepoint(pos):
             self.blacklist_focused = True
+            self.focus_focused = False
             return
 
         # Footer: blacklist scroll arrows. Step size is one "chip's
@@ -1245,6 +1412,26 @@ class App:
                                           self._blacklist_hscroll + _step)
             return
 
+        # Footer: focus-phrase scroll arrows.
+        if self._focus_arrow_left_rect is not None \
+                and self._focus_arrow_left_rect.collidepoint(pos):
+            self._focus_hscroll = max(0, self._focus_hscroll - _step)
+            return
+        if self._focus_arrow_right_rect is not None \
+                and self._focus_arrow_right_rect.collidepoint(pos):
+            _fmax = max(0, self._focus_content_w - self._focus_visible_w)
+            self._focus_hscroll = min(_fmax, self._focus_hscroll + _step)
+            return
+
+        # Footer: focus-phrase chip removal.
+        for phrase, xr in self.focus_rects.items():
+            if xr.collidepoint(pos):
+                if phrase in self.focus_phrases:
+                    self.focus_phrases.remove(phrase)
+                    self.dirty = True
+                self.focus_focused = False
+                return
+
         # Footer: blacklist chip removal.
         for name, xr in self.blacklist_rects.items():
             if xr.collidepoint(pos):
@@ -1254,6 +1441,11 @@ class App:
                 self.blacklist_focused = False
                 return
 
+        # Clicking elsewhere unfocuses the focus-phrase input.
+        if self.focus_focused and not (
+                self.button_rects.get("focus_add")
+                and self.button_rects["focus_add"].collidepoint(pos)):
+            self.focus_focused = False
         # Clicking elsewhere unfocuses the blacklist input.
         if self.blacklist_focused and not (
                 self.button_rects.get("blacklist_add")
@@ -1272,6 +1464,8 @@ class App:
                     self.open_job_dropdown(rect)
                 elif name == "blacklist_add":
                     self._commit_blacklist_add()
+                elif name == "focus_add":
+                    self._commit_focus_add()
                 return
 
         if pos[1] >= HEADER_H and pos[1] < WINDOW_H - FOOTER_H:
@@ -1303,6 +1497,12 @@ class App:
         # earlier names (scroll left); wheel-down reveals later names.
         # Falls through to vertical scroll when the cursor is anywhere
         # other than the chip row.
+        if self._focus_row_rect is not None \
+                and self._focus_row_rect.collidepoint(pygame.mouse.get_pos()):
+            _fmax = max(0, self._focus_content_w - self._focus_visible_w)
+            self._focus_hscroll = max(
+                0, min(_fmax, self._focus_hscroll - delta * 24))
+            return
         if self._blacklist_row_rect is not None \
                 and self._blacklist_row_rect.collidepoint(
                     pygame.mouse.get_pos()):
@@ -1356,9 +1556,11 @@ class App:
             save_config(self.path, dict(self.model.data),
                         custom_labels=self.custom_labels,
                         channel_hidden=self.channel_hidden,
-                        blacklist=self.blacklist)
+                        blacklist=self.blacklist,
+                        focus_phrases=self.focus_phrases)
             self.dirty = False
-            self.status = f"Saved {self.path.name}. Reload OmniWatch to apply."
+            self.status = (f"Saved {self.path.name}. OmniWatch picks it "
+                           f"up live (within ~1s).")
         except Exception as e:
             self.status = f"Save failed: {e}"
 
@@ -1366,6 +1568,10 @@ class App:
         self.model = RoutingModel(load_config(self.path))
         self.custom_labels = _load_custom_labels(self.path)
         self.channel_hidden, self.blacklist = _load_channel_filters(self.path)
+        self.focus_phrases = _load_focus_phrases(self.path)
+        self.focus_focused = False
+        self.focus_buffer = ""
+        self._focus_hscroll = 0
         self.blacklist_focused = False
         self.blacklist_buffer = ""
         self.editing_tab = None
@@ -1387,6 +1593,9 @@ class App:
         # Clean slate also clears channel filters + blacklist.
         self.channel_hidden = set()
         self.blacklist = []
+        self.focus_phrases = []
+        self.focus_focused = False
+        self.focus_buffer = ""
         self.blacklist_focused = False
         self.blacklist_buffer = ""
         self.editing_tab = None
@@ -1400,10 +1609,11 @@ class App:
             save_config(self.path, dict(self.model.data),
                         custom_labels=self.custom_labels,
                         channel_hidden=self.channel_hidden,
-                        blacklist=self.blacklist)
+                        blacklist=self.blacklist,
+                        focus_phrases=self.focus_phrases)
             self.dirty = False
             self.status = (f"Reset {self.path.name} to defaults. "
-                           f"Reload OmniWatch to apply.")
+                           f"OmniWatch picks it up live.")
         except Exception as e:
             self.dirty = True
             self.status = f"Reset failed to save: {e}"
@@ -1447,6 +1657,23 @@ class App:
                             if ch and 32 <= ord(ch[0]) < 127 \
                                     and len(self.editing_buffer) < 20:
                                 self.editing_buffer += ch
+                    elif self.focus_focused:
+                        # Focus-phrase add-input is active. Phrases can
+                        # be longer than names — cap at 48.
+                        if ev.key == pygame.K_ESCAPE:
+                            self.focus_focused = False
+                            self.focus_buffer = ""
+                        elif ev.key == pygame.K_RETURN \
+                                or ev.key == pygame.K_KP_ENTER:
+                            self._commit_focus_add()
+                        elif ev.key == pygame.K_BACKSPACE:
+                            if self.focus_buffer:
+                                self.focus_buffer = self.focus_buffer[:-1]
+                        else:
+                            ch = ev.unicode
+                            if ch and 32 <= ord(ch[0]) < 127 \
+                                    and len(self.focus_buffer) < 48:
+                                self.focus_buffer += ch
                     elif self.blacklist_focused:
                         # Blacklist add-input is active.
                         if ev.key == pygame.K_ESCAPE:

@@ -126,6 +126,7 @@ Inside you'll find:
 %APPDATA%\OmniWatch\
 ├── omniwatch_dps_log.jsonl       # global DPS encounter log
 ├── omniwatch_dps_log.csv         # global DPS summary
+├── omniwatch_warp.json           # warp button destinations (fallback/editable)
 ├── logs\                         # crash logs
 └── <charname>\                   # one folder per character
     ├── omniwatch_layout.json     # panel positions & scales
@@ -300,12 +301,15 @@ Each tab tracks its own unread count and shows a red badge in the tab header whe
 - Channel picker: **say / tell / reply / shout / yell / ls1 / ls2** — click the channel label or use the `<` / `>` arrows to cycle
 - **Tell target** field appears next to the channel when "tell" is selected
 - Click the body to focus, type, **Enter** to send, **Esc** to cancel. Sends go through Windower as if you'd typed them in the game's chat field
+- **Auto-translate**: wrap a phrase in curly braces — `Need help? {Yes, please.}` — and it sends as the real in-game auto-translate token (JP players see it in Japanese). The **{ }** button next to the channel picker does the wrapping: with text typed it wraps the whole message (click again to unwrap); empty, it inserts `{}` with the cursor inside so you just type the phrase. Matching is case-insensitive, English or Japanese names; non-phrases in braces send literally. Incoming auto-translate renders as `{phrase}`, so you can copy anything you see straight into the composer
 
 **Routing config** (the **Filters ⚙** button in the panel header):
 Opens `omniwatch_routing_gui.exe` — a standalone editor for the routing rules that decide which combat events appear on which tab. Rules are stored per-job, with a global fallback and baked-in defaults. Each event type (melee hits, weapon skills, magic, buffs, debuffs, etc.) can be:
 - **Default** — emit to the canonical tab (e.g. melee → Battle)
 - **Hidden** — don't show in the chat panel at all
 - **Routed** — emit to one or more tabs of your choice, including the two custom tabs
+
+The GUI footer also holds the **channel show/hide pills**, the **sender blacklist**, and a **Focus:** row — add words or phrases there and any chat line containing one gets the matched word pulse-highlighted in amber (any channel, any tab) for ~12 seconds, then a steady faint shade; inactive tabs holding an unseen hit blink their label until visited. Saves from the GUI apply **live** — OmniWatch watches the routing files and reloads within about a second, no restart needed
 
 Routing JSON lives in `%APPDATA%\OmniWatch\<charname>\`:
 - `omniwatch_chat_routing.json` — global config (fallback)
@@ -380,6 +384,24 @@ Click the inventory button in the header for a searchable view of every bag:
 - Mog safe / safe 2 / locker / storage
 
 Items are grouped by bag and searchable by name. **GearSwap reference detection**: if you've pointed OmniWatch at your GearSwap folder (settings → Inventory → Gearswap folder → PICK), items referenced in any of your gearswap `.lua` files get a ✓ icon — so you can tell at a glance which items in your inventory are actually being equipped by your sets.
+
+**Right-click actions** (requires the [Treasury](https://github.com/from20020516/Treasury) addon for auto-drop): right-click any item row for a context menu —
+- **Drop item** — drops the item now (main Inventory bag only; storage/wardrobe items can't be dropped)
+- **Auto-drop (Treasury)** — runs `tr drop add <name>`: the item joins Treasury's auto-drop list, and with Treasury's AutoDrop on, the copy in your bag drops immediately and every future copy keeps dropping
+
+Both actions are multibox-guarded: they're tagged with the displayed character and only that client acts, so you can't drop from the wrong box. Esc or clicking elsewhere closes the menu.
+
+### Warp button
+
+One-click Home Point / Survival Guide travel, fired through the [superwarp](https://github.com/lorand-ffxi/superwarp) addon (install it alongside OmniWatch). A small floating button — drag it anywhere, resize it by the corner handle, both persist — **pulses teal whenever a Home Point or Survival Guide crystal is within superwarp's 6-yalm interaction range**.
+
+Click it for the travel menu:
+- Grouped by network (**Home Point** / **Survival Guide**), with destinations built from your **checklist attunement data** — you only see what you've unlocked, organized by region. No attunement data? It falls back to `omniwatch_warp.json` (written with editable defaults on first run; any zone superwarp accepts works).
+- Multi-zone cities expand into sub-menus (Jeuno → Port / Lower / Upper / Ru'Lude Gardens).
+- The list windows to 12 rows with mouse-wheel scrolling; out-of-range networks pin to the bottom as greyed headers so they stay visible as future options.
+- Every pick confirms first — **"Warp to X?"** with Warp / Cancel — then fires `sw hp <zone>` / `sw sg <zone>`.
+
+**Configure** (Settings → Misc, or right-click the button): **Show warp button** (master on/off — recoverable from Settings even while hidden) and **Warp all characters (Send All)**, which prepends superwarp's `all` so every multiboxed client travels together. Without Send All, the warp is multibox-guarded to the displayed character only.
 
 ### Header strip
 
