@@ -1,7 +1,20 @@
 # Changelog
 
+## [1.7.2] — 2026-06-12
 
-## Chat panel — Keep game focus + Type anywhere (2026-06-12)
+### Hotbar — editor page desync, edit form z-order (2026-06-12)
+
+Fixed the bug where clicking a hotbar slot to edit (or drag-moving a button) acted on a button from a different page: the layout-file restore at startup wrote the panel's saved page directly into hotbar_panel_pages[0], so the panel DISPLAYED the restored page while the editor, drag-swap, and save paths still read page 1 via the un-synced buttons_config. The fix is a self-healing invariant in the panel draw: panel 0's displayed page is the single source of truth, and the legacy globals are re-synced to it every frame — covering the startup restore, the stale-page clamp, and any future direct write. This also cures most of the "moving buttons doesn't work right" complaints, since drags were silently swapping page-1 entries while a different page was on screen, and makes the form's existing COPY/PASTE buttons (copy a slot's contents into a clipboard, paste them into another slot's draft, Save to commit) paste into the page actually being viewed.
+
+The slot edit form now draws after the settings menu and every modal, so it is always on top — previously, panels and modals rendered later in the frame could cover it.
+
+The form also gained a **DELETE** button (danger-styled, right-aligned away from Paste): one click empties the selected slot and saves immediately — no Save step needed. The slot stays selected with a blank draft so a replacement can be typed straight in; COPY first if you want an undo path.
+
+The hotbar also grew: **13 columns × 2 rows (26 buttons per page, up from 20) and 12 pages (up from 10)**. Existing button configs migrate automatically on first load — saved buttons keep their slots, and the new slots and pages start empty.
+
+## [1.7.1] — 2026-06-10
+
+### Chat panel — Keep game focus + Type anywhere (2026-06-12)
 
 The chat panel gained the two input-flow features from OmniChat, both as toggles under Settings ▸ Chat Panel ▸ Configure (default off):
 
@@ -11,11 +24,10 @@ The chat panel gained the two input-flow features from OmniChat, both as toggles
 
 Hook-driven capture deliberately never takes SDL/OS focus (activating the overlay would pull foreground off FFXI and cancel the session); the focus-edge watcher excludes it for the same reason.
 
-## BLU Spellsets editor — trait values in TRAIT TOTALS (2026-06-12)
+### BLU Spellsets editor — trait values in TRAIT TOTALS (2026-06-12)
 
 Each active trait in the editor's TRAIT TOTALS panel now shows its resolved stat value on an indented grey sub-line — e.g. Dual Wield (+gift) Tier VI · 48p over “+40”, Attack Bonus (sub) Tier I · 8p over “+10”. The values come from the per-tier arrays Lua ships in the BLU_TIERS payload (which now carries each trait's stat key and value ladder alongside the thresholds), resolved through the same gift/subjob-pool model as the tier labels. String-tier traits with no numeric value (Killers, Gilfinder) and locked progress rows show no sub-line, and the panel's overflow (“+N more…”) accounts for the extra line height. A “Show live” stat-panel preview was built first (Lua-computed via a BLU_PREVIEW round-trip so it matched the live engine exactly) but didn't work out in practice and was removed in favor of this inline display; all of its machinery — the toggle, the preview packet tagging, the Lua set-override and command handler — is gone. Also fixed the Dual Wield trait ladder, which capped at tier V (35%): BLU reaches tier VI through Job Point gifts, so the ladder now includes the 48-point / 40% sixth tier (confirmed in-game and per BG-wiki). Reaching 40% requires 32+ Dual Wield spell points plus both gifts.
 
-## [1.7.1] — 2026-06-10
 
 Chat upgrades ported from the OmniChat side project, plus an NPC dialog pad. Headlines: **focus words** (define words or phrases in the Filters GUI and the matched word itself pulse-highlights in amber, any channel, any tab, with inactive tabs blinking their label until visited), **Filters GUI saves applying live** (no more reloading OmniWatch after editing routing) and a **continue arrow** on the last chat line whenever your character is sitting in an NPC dialog.
 

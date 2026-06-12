@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.7.0 (2026-06-09)"
+OMNIWATCH_BUILD_STAMP = "v1.7.2 (2026-06-12)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.7.1"
+OMNIWATCH_VERSION = "1.7.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -7195,23 +7195,25 @@ def _empty_button():
     return {"label": "", "icon": "", "kind": "none", "command": ""}
 
 def _empty_page(name="Page"):
-    return {"name": name, "buttons": [_empty_button() for _ in range(20)]}
+    return {"name": name, "buttons": [_empty_button() for _ in range(HOTBAR_SLOTS_PER_PAGE)]}
 
 # Total number of hotbar pages. Pages beyond what a user has configured
 # show as empty slots until they're populated. Set conservatively; can
 # be increased later without breaking existing configs.
-HOTBAR_PAGE_COUNT = 10
+HOTBAR_PAGE_COUNT = 12
+HOTBAR_SLOTS_PER_PAGE = 26   # 13 cols x 2 rows (was 10x2=20; old saves
+                             # auto-pad to 26 in load_buttons_config)
 
 # Active page state. Initialized in load_buttons_config() once pages have
 # been resolved. The render/click code reads buttons_config which always
 # points at the CURRENT page's buttons list (a live reference, so edits
 # propagate back to hotbar_pages[hotbar_current_page]["buttons"]).
-hotbar_pages        = []   # list of {name, buttons[20]}
+hotbar_pages        = []   # list of {name, buttons[HOTBAR_SLOTS_PER_PAGE]}
 hotbar_current_page = 0    # 0..HOTBAR_PAGE_COUNT-1
 
 def load_buttons_config():
     """Load (or write the default) buttons config. Returns the active
-    page's button list (20 entries). Also sets hotbar_pages and
+    page's button list (HOTBAR_SLOTS_PER_PAGE entries). Also sets hotbar_pages and
     hotbar_current_page module globals.
 
     Supports both the legacy single-page format (`{"buttons": [...]}`)
@@ -7239,15 +7241,17 @@ def load_buttons_config():
 
     pages = []
     if isinstance(raw, dict) and isinstance(raw.get("pages"), list):
-        # New paged format. Each entry is {name, buttons:[20]}.
+        # New paged format. Each entry is {name, buttons:[N]};
+        # shorter lists (e.g. the old 20-slot format) pad with empties.
         for p in raw["pages"]:
             if not isinstance(p, dict):
                 continue
             entries = p.get("buttons", [])
             if not isinstance(entries, list):
                 entries = []
-            normalized = [_normalize_button_entry(e) for e in entries[:20]]
-            while len(normalized) < 20:
+            normalized = [_normalize_button_entry(e)
+                          for e in entries[:HOTBAR_SLOTS_PER_PAGE]]
+            while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
                 normalized.append(_empty_button())
             pages.append({
                 "name": str(p.get("name", "") or "Page"),
@@ -7257,8 +7261,9 @@ def load_buttons_config():
         # Legacy single-page format. Migrate: page 1 carries the existing
         # buttons; pages 2..N are empty.
         entries = raw.get("buttons", [])
-        normalized = [_normalize_button_entry(e) for e in entries[:20]]
-        while len(normalized) < 20:
+        normalized = [_normalize_button_entry(e)
+                      for e in entries[:HOTBAR_SLOTS_PER_PAGE]]
+        while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
             normalized.append(_empty_button())
         pages.append({"name": "Page 1", "buttons": normalized})
         print("[OmniWatch] Migrated legacy single-page buttons config "
@@ -7284,7 +7289,7 @@ def save_buttons_config():
     try:
         envelope = {
             "_README": [
-                "OmniWatch hotbar config (paged, 10x2 = 20 buttons per page).",
+                "OmniWatch hotbar config (paged, 13x2 = 26 buttons per page).",
                 "",
                 "Top-level shape:",
                 "  pages: list of {name, buttons[20]} dicts",
@@ -34258,7 +34263,7 @@ def draw_chat_panel(surface, x, y, locked=False):
 # 6 wide × 2 tall grid of user-configurable buttons. Each button runs the
 # command in buttons_config[idx] when clicked. Layout: BTN_W per button,
 # BTN_H per row, BTN_GAP between, BTN_PAD on the outer edge.
-BTN_COLS    = 10
+BTN_COLS    = 13
 BTN_ROWS    = 2
 BTN_W       = 56
 BTN_H       = 36
@@ -34314,6 +34319,18 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     if eff_page_idx < 0 or eff_page_idx >= n_pages_local:
         eff_page_idx = 0
         hotbar_panel_pages[panel_idx] = 0
+    # Self-healing page sync (panel 0 only): the page this panel
+    # DISPLAYS is the single source of truth, so keep the legacy
+    # globals (hotbar_current_page + buttons_config) pointed at it.
+    # Without this, any path that writes hotbar_panel_pages[0] without
+    # going through _hotbar_panel_set_page — the layout-file restore at
+    # startup was the live case, and the stale-page clamp above is
+    # another — left the EDITOR and drag-swap reading page 1 while the
+    # panel displayed the restored page ("clicked slot edits a button
+    # from another page"). Render happens before click handling every
+    # frame, so this invariant guarantees the two can never disagree.
+    if panel_idx == 0 and eff_page_idx != hotbar_current_page:
+        _hotbar_set_page(eff_page_idx)
 
     # Per-panel rects collection. Panel 0 uses the legacy buttons_rects
     # (consumed by all the existing click-handler loops without changes);
@@ -34346,7 +34363,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
 
     # ── Header row: page name (left) + page arrows + page indicator (right) ──
     # The page name is editable via the hotbar editor (treated as a 21st
-    # field after the 20 button slots — see hotbar_edit_slot conventions).
+    # field after the button slots — see hotbar_edit_slot conventions).
     # Arrows wrap (left from page 0 → last page).
     #
     # Per-panel scoping: in multi-hotbar mode each panel has its own current
@@ -34491,7 +34508,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
 
 
 # ── Hotbar editor ────────────────────────────────────────────────────────
-# In-app editor for the 20 hotbar slots. Triggered by Settings → HotBar
+# In-app editor for the hotbar slots. Triggered by Settings → HotBar
 # → "Edit hotbar" which sets hotbar_edit_mode = True. While editing, the
 # normal hotbar still renders (slot clicks SELECT for editing instead of
 # running commands), and an inline form panel appears below the hotbar
@@ -34967,6 +34984,21 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
         # clipboard is empty. Cleaner than a conditional rect that
         # disappears, which would cause hover layout to jitter.
         hotbar_editor_rects.append((paste_rect, {"kind": "paste_slot"}))
+        # Delete: empties the SAVED slot immediately (no Save needed) —
+        # the one-click way to remove a button. Danger-styled and set
+        # apart from Paste so it isn't fat-fingered. COPY first if you
+        # want an undo path (copy → delete → paste elsewhere).
+        # Right-aligned at the form edge when there's room (keeps the
+        # destructive action visually apart from Paste); falls back to
+        # inline placement on very narrow/low-scale hotbars.
+        del_rect = pygame.Rect(max(paste_rect.right + 12,
+                                   form_rect.right - pad - cp_w),
+                               save_rect.y, cp_w, save_h)
+        pygame.draw.rect(surface, (190, 80, 80), del_rect, border_radius=8)
+        dls = btn_font.render("DELETE", True, (50, 20, 20))
+        surface.blit(dls, (del_rect.x + (cp_w - dls.get_width()) // 2,
+                           del_rect.y + (save_h - dls.get_height()) // 2))
+        hotbar_editor_rects.append((del_rect, {"kind": "delete_slot"}))
 
     total_h = form_h + 4
 
@@ -35193,6 +35225,25 @@ def dispatch_hotbar_editor_click(mx, my):
                 hotbar_icon_picker_open = False
                 print(f"[OmniWatch] hotbar paste -> draft: "
                       f"{_hotbar_clipboard.get('label') or '(no label)'!r}")
+        elif kind == "delete_slot":
+            # Empty the slot NOW: clears the saved entry and persists,
+            # then resets the draft to the empty entry so the form
+            # immediately reflects it. The slot stays selected so the
+            # user can type a new button straight in. No-op in
+            # page-name mode or with no valid slot.
+            if (isinstance(hotbar_edit_slot, int)
+                    and 0 <= hotbar_edit_slot < len(buttons_config)):
+                _empty = {"label": "", "icon": "",
+                          "kind": "none", "command": ""}
+                buttons_config[hotbar_edit_slot] = \
+                    _normalize_button_entry(dict(_empty))
+                save_buttons_config()
+                hotbar_edit_draft = dict(
+                    buttons_config[hotbar_edit_slot])
+                hotbar_focused_field = None
+                hotbar_icon_picker_open = False
+                print(f"[OmniWatch] hotbar slot "
+                      f"{hotbar_edit_slot + 1} deleted (emptied)")
         return True
     return False
 
@@ -43694,25 +43745,6 @@ while running:
         # Fade complete OR suppressed. Drop the sticky.
         target_sticky_st = None
 
-    # ── Hotbar editor (drawn after all panels so it sits ON TOP of them) ────
-    # The editor anchor was stashed when the buttons panel rendered. If
-    # the buttons panel is hidden, we don't have an anchor and the
-    # editor is silently skipped. The form renders BELOW the header
-    # and settings dropdown so those overlays still take precedence.
-    try:
-        _anchor = _hotbar_editor_anchor
-    except NameError:
-        _anchor = None
-    if _anchor is not None:
-        draw_hotbar_editor(screen, _anchor[0], _anchor[1],
-                           _anchor[2], _anchor[3])
-
-    # Drag overlay (source slot dim + ghost button at cursor +
-    # drop-target highlight). Only renders when a drag is in progress
-    # and actively past the threshold; pre-threshold the button is
-    # still in its normal slot and looks normal.
-    draw_hotbar_drag_overlay(screen)
-
     # ── Header (drawn last so it sits on top) ────────────────────────────────
     # In auto-hide mode the bar overlays the panels and only draws while
     # revealed; otherwise it's always drawn. Refresh the reveal state from
@@ -43811,6 +43843,24 @@ while running:
 
     # ── Campaigns modal (PlayOnline events feed, opened from button) ────────
     draw_campaigns_modal(screen)
+    # ── Hotbar editor (drawn after the settings menu and every modal so
+    # the form is ALWAYS on top — previously panels/modals drawn later in
+    # the frame covered it). The editor anchor was stashed when the
+    # buttons panel rendered; if the buttons panel is hidden there's no
+    # anchor and the editor is silently skipped.
+    try:
+        _anchor = _hotbar_editor_anchor
+    except NameError:
+        _anchor = None
+    if _anchor is not None:
+        draw_hotbar_editor(screen, _anchor[0], _anchor[1],
+                           _anchor[2], _anchor[3])
+
+    # Drag overlay (source slot dim + ghost button at cursor +
+    # drop-target highlight) — also above the modals so the carried
+    # ghost is never hidden mid-drag.
+    draw_hotbar_drag_overlay(screen)
+
 
     # ── Achievement check (throttled to 1Hz; no-op once unlocked) ─────────
     _achievement_periodic_check()
