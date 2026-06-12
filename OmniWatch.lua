@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.7.0'
+_addon.version  = '1.7.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -919,7 +919,7 @@ local OW_BLU_TRAIT_TABLES = {
     defense_bonus     = {points={  8,  16,  24,  32,  40,  48}, pct={ 10,  22,  35,  48,  60,  72}, stat='defense', gift=true , label='Defense Bonus'},
     da                = {points={  8}, pct={  7}, stat='double attack', gift=false, label='Double Attack'},
     triple_attack     = {points={  8}, pct={  5}, stat='triple attack', gift=false, label='Triple Attack'},
-    dw                = {points={  8,  16,  24,  32,  40}, pct={ 10,  15,  25,  30,  35}, stat='dw trait', gift=true , label='Dual Wield'},
+    dw                = {points={  8,  16,  24,  32,  40,  48}, pct={ 10,  15,  25,  30,  35,  40}, stat='dw trait', gift=true , label='Dual Wield'},
     evasion_bonus     = {points={  8,  16,  24,  32,  40}, pct={ 10,  22,  35,  48,  60}, stat='evasion', gift=true , label='Evasion Bonus'},
     fast_cast         = {points={  8,  16,  24,  32,  40}, pct={  5,  10,  15,  20,  25}, stat='fast cast', gift=true , label='Fast Cast'},
     gilfinder         = {points={  8,  16}, pct={  0,   0}, stat='gilfinder', gift=false, label='Gilfinder/TH'},
@@ -999,8 +999,14 @@ local OW_BLU_TRAIT_SUBS = {
     conserve_mp   = { SCH = 8,  BLM = 16, GEO = 24 },
     counter       = { MNK = 8 },
     defense_bonus = { WAR = 8,  PLD = 16 },
-    da            = { WAR = 8,  THF = 16 },
-    triple_attack = { WAR = 8,  THF = 16 },
+    -- NOTE (2026-06-11): these two lines were previously identical
+    -- (copy-paste error), wrongly granting /WAR a Triple Attack tier
+    -- and /THF a Double Attack tier in both the live trait engine and
+    -- the BLU Spellsets editor preview. WAR sub grants Double Attack
+    -- only; THF sub grants Triple Attack only (at master-level-raised
+    -- sub levels; value is bluGuide's at-cap encoding).
+    da            = { WAR = 8 },
+    triple_attack = { THF = 16 },
     dw            = { NIN = 24, DNC = 16 },
     evasion_bonus = { THF = 16, DNC = 16, PUP = 8 },
     fast_cast     = { RDM = 24 },
@@ -1106,6 +1112,24 @@ local function ow_resolve_blu_set(spell_ids, jp_summary)
                 -- Any other non-number value silently ignored —
                 -- protects against future schema additions.
             end
+        end
+    end
+
+    -- Step 1.5: Double/Triple Attack combined family (bg-wiki: one
+    -- spell pool; 8 family points = Double Attack, 16 = Triple Attack,
+    -- and Triple Attack REPLACES the spell Double Attack. A subjob's
+    -- Double Attack is a separate source that coexists with spell
+    -- Triple Attack — the sub max-pool merge below re-adds it.)
+    -- Summed across both keys so the data file may attribute family
+    -- spells to either; gift-exempt (both tables carry gift=false).
+    do
+        local fam = (trait_pts.da or 0) + (trait_pts.triple_attack or 0)
+        if fam >= 16 then
+            trait_pts.triple_attack = fam
+            trait_pts.da = nil
+        elseif fam >= 8 then
+            trait_pts.da = fam
+            trait_pts.triple_attack = nil
         end
     end
 
@@ -2648,6 +2672,111 @@ local function _ow_emit_inventory_snapshot()
     end)
 
     pcall(function()
+        -- ── Currently equipped BLU set (names) ──────────────────────
+        -- Consumed by the overlay's BLU Spellsets panel to highlight
+        -- which saved set (if any) matches the live loadout. Only
+        -- meaningful on BLU main (the panel's equip path requires it);
+        -- otherwise the body is empty and the overlay clears its copy.
+        -- Format: BLU_CURRENT|<name1>|<name2>|... (names never contain
+        -- pipes).
+        local names = {}
+        local p = windower.ffxi.get_player()
+        if p and p.main_job == 'BLU' then
+            local ids = ow_get_blu_set_spells() or {}
+            for _, sid in pairs(ids) do
+                local sp = res.spells[sid]
+                local nm = sp and (sp.english or sp.en)
+                if nm then names[#names + 1] = nm end
+            end
+        end
+        table.sort(names)
+        udp_inv:send(_OW_MB_TAG('BLU_CURRENT|' .. table.concat(names, '|')))
+    end)
+
+    pcall(function()
+        -- ── BLU spell→trait catalog + trait tier ladders ─────────────
+        -- Consumed by the BLU Spellsets editor so it can group spells
+        -- under trait sections and show live trait totals/tiers for
+        -- the ticked selection. Two payloads:
+        --   BLU_TIERS|<trait_key>=<Label>=<t1,t2,...>=<gift>=<stat>=<v1,v2,...>|...
+        --   BLU_TRAITS|<Spell Name>=<set cost>=<key:pts[,key:pts]>|...
+        -- Spell/trait names never contain '|' '=' or ','. Sourced from
+        -- the same tables the live trait engine uses (OW_BLU_SPELLS +
+        -- OW_BLU_TRAIT_TABLES), so the editor's math matches the game.
+        -- The trailing <stat>=<values> fields let the Python "show live"
+        -- preview map a resolved tier to its actual stat value (e.g. DW
+        -- tier III -> 25) without duplicating the pct tables — lua stays
+        -- the single source of truth for the numbers.
+        if type(OW_BLU_TRAIT_TABLES) == 'table' then
+            local tp = {}
+            for key, t in pairs(OW_BLU_TRAIT_TABLES) do
+                if type(t) == 'table' and t.label
+                        and type(t.points) == 'table' then
+                    local stat_key = t.stat or ''
+                    local vals = ''
+                    if type(t.pct) == 'table' then
+                        vals = table.concat(t.pct, ',')
+                    end
+                    tp[#tp + 1] = key .. '=' .. t.label .. '='
+                        .. table.concat(t.points, ',') .. '='
+                        .. (t.gift and '1' or '0') .. '='
+                        .. stat_key .. '=' .. vals
+                end
+            end
+            table.sort(tp)
+            udp_inv:send(_OW_MB_TAG('BLU_TIERS|' .. table.concat(tp, '|')))
+        end
+        if type(OW_BLU_SPELLS) == 'table' then
+            -- Set-point cost comes from Windower's res.spells
+            -- (blu_points); build an id→cost map once per emit.
+            local cost_by_id = {}
+            for _, sp in pairs(res.spells) do
+                if sp and sp.type == 'BlueMagic' and sp.id then
+                    cost_by_id[sp.id] = sp.blu_points or 0
+                end
+            end
+            local parts = {}
+            for name, entry in pairs(OW_BLU_SPELLS) do
+                if type(entry) == 'table' then
+                    local tps = {}
+                    for k, v in pairs(entry) do
+                        if type(v) == 'number'
+                                and k ~= 'id' and k ~= 'level' then
+                            tps[#tps + 1] = k .. ':' .. v
+                        end
+                    end
+                    local cost = entry.id and cost_by_id[entry.id] or 0
+                    parts[#parts + 1] = name .. '=' .. cost .. '='
+                        .. table.concat(tps, ',')
+                end
+            end
+            table.sort(parts)
+            udp_inv:send(_OW_MB_TAG('BLU_TRAITS|' .. table.concat(parts, '|')))
+        end
+        -- Live per-character bonus context: JP gift count (each gift =
+        -- +8 points to gift-eligible traits, only once the trait is
+        -- unlocked by spell points alone) and the current subjob's
+        -- per-trait point pools (game takes max(spell pool, sub pool)).
+        -- Format: BLU_BONUS|gifts=<n>|<key>:<pts>|...
+        do
+            local p2 = windower.ffxi.get_player()
+            local prof = ow_get_blu_jp_summary()
+            local bparts = { 'gifts=' .. tostring(prof.gifts or 0) }
+            local sj = p2 and p2.sub_job and p2.sub_job:upper()
+            local slvl = p2 and (p2.sub_job_level or 0) or 0
+            if sj and slvl >= 30 and type(OW_BLU_TRAIT_SUBS) == 'table' then
+                for cat, subtbl in pairs(OW_BLU_TRAIT_SUBS) do
+                    local sp2 = subtbl[sj]
+                    if sp2 and sp2 > 0 then
+                        bparts[#bparts + 1] = cat .. ':' .. sp2
+                    end
+                end
+            end
+            udp_inv:send(_OW_MB_TAG('BLU_BONUS|' .. table.concat(bparts, '|')))
+        end
+    end)
+
+    pcall(function()
         -- ── Mount ownership snapshot ─────────────────────────────────
         -- Mirrors the BLU snapshot: two pipe-separated sections holding
         -- the learned set and the master list. Mounts come back from
@@ -3310,7 +3439,7 @@ end
 --
 -- ID NOTES
 -- --------
--- Warp Ring's id (28540) was confirmed via Cooper testing. The
+-- Warp Ring's id (28540) was confirmed via in-game testing. The
 -- other three I've set to my best-guess sequential ids; if any
 -- ring doesn't trigger the timer on first use, enable debug
 -- (//ow warpring) and use the ring — the debug line will print
@@ -3319,7 +3448,7 @@ end
 do
     local POLL_SEC = 1
 
-    -- Per-ring config table. Item IDs confirmed by Cooper:
+    -- Per-ring config table. Item IDs confirmed in-game by BalladOfWorms:
     --   Warp Ring         28540  600s    (10 min)
     --   Dem Ring          26177  600s    (10 min)
     --   Holla Ring        26176  600s    (10 min)
@@ -3480,11 +3609,28 @@ do
     local _WARP_NEAR_POLL_SEC = 0.5
     local _WARP_NEAR_RANGE_SQ = 6 * 6     -- 6 yalms, squared (2D)
     local _warp_near_last     = 0
-    -- Lowercased name prefixes that identify each network's NPC. Home
-    -- Point NPCs are "Home Point #N"; Survival Guides are "Survival Guide".
+    -- One entry per superwarp network, in WARPNEAR field order (must
+    -- match the python overlay's WARP_NETWORKS). `any` lists lowercased
+    -- substrings of the network's NPC names; `exclude` vetoes a match
+    -- (Waypoint vs Proto-Waypoint, whose name CONTAINS 'waypoint').
+    -- Person-named NPCs (abyssea town teleporters, Unity concierges)
+    -- are guarded by the NPC-only spawn_type filter in the loop, so a
+    -- nearby PLAYER named e.g. 'Vincent' can't light a network.
     local _WARP_NEEDLES = {
-        hp = 'home point',
-        sg = 'survival guide',
+        { key = 'hp',  any = { 'home point' } },
+        { key = 'sg',  any = { 'survival guide' } },
+        { key = 'wp',  any = { 'waypoint' }, exclude = 'proto-waypoint' },
+        { key = 'ab',  any = { 'veridical conflux', 'cavernous maw',
+                               'ernst', 'ivan', 'willis', 'horst',
+                               'kierron', 'vincent' } },
+        { key = 'ew',  any = { 'eschan portal', 'ethereal ingress',
+                               'undulating confluence',
+                               'dimensional portal' } },
+        { key = 'po',  any = { 'runic portal' } },
+        { key = 'pwp', any = { 'proto-waypoint' } },
+        { key = 'un',  any = { 'igsli', 'urbiolaine', 'teldro-kesdrodo',
+                               'yonolala', 'nunaarl bthtrogg' } },
+        { key = 'vw',  any = { 'atmacite refiner' } },
     }
 
     _G._ow_warp_near_poll = function()
@@ -3496,30 +3642,44 @@ do
 
         local me = windower.ffxi.get_mob_by_target
                    and windower.ffxi.get_mob_by_target('me')
-        local near_hp, near_sg = false, false
+        local near = {}
+        local remaining = #_WARP_NEEDLES
         if me and me.x and me.y then
             for _, v in pairs(windower.ffxi.get_mob_array()) do
                 if type(v) == 'table' and v.valid_target and v.name
-                        and v.x and v.y then
+                        and v.x and v.y
+                        -- NPC-only: spawn_type 2 = NPC. Players (13)
+                        -- and monsters (16) never count, so a player
+                        -- named after a teleporter NPC can't match.
+                        and (v.spawn_type == nil or v.spawn_type == 2) then
                     local dx, dy = v.x - me.x, v.y - me.y
                     if (dx * dx + dy * dy) <= _WARP_NEAR_RANGE_SQ then
                         local lname = v.name:lower()
-                        if not near_hp
-                                and lname:find(_WARP_NEEDLES.hp, 1, true) then
-                            near_hp = true
+                        for _, spec in ipairs(_WARP_NEEDLES) do
+                            if not near[spec.key]
+                                    and not (spec.exclude and lname:find(
+                                        spec.exclude, 1, true)) then
+                                for _, needle in ipairs(spec.any) do
+                                    if lname:find(needle, 1, true) then
+                                        near[spec.key] = true
+                                        remaining = remaining - 1
+                                        break
+                                    end
+                                end
+                            end
                         end
-                        if not near_sg
-                                and lname:find(_WARP_NEEDLES.sg, 1, true) then
-                            near_sg = true
-                        end
-                        if near_hp and near_sg then break end
+                        if remaining <= 0 then break end
                     end
                 end
             end
         end
 
-        local payload = string.format('WARPNEAR|hp=%d;sg=%d',
-            near_hp and 1 or 0, near_sg and 1 or 0)
+        local parts = {}
+        for _, spec in ipairs(_WARP_NEEDLES) do
+            parts[#parts + 1] = spec.key .. '='
+                .. (near[spec.key] and 1 or 0)
+        end
+        local payload = 'WARPNEAR|' .. table.concat(parts, ';')
         pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
     end
 end
@@ -4229,6 +4389,147 @@ function _ow_mark_inv_dirty()
     _ow_inv_id_to_loc  = nil
 end
 
+-- ── BLU Spellsets engine ───────────────────────────────────────────────────
+-- Equips a named Blue Magic loadout sent by the overlay's BLU Spellsets
+-- panel (BLUSETS|equip rail message below). Preserve-traits algorithm,
+-- modeled on the AzureSets addon: first remove equipped spells that are
+-- not in the target set (one per step), then fill empty slots with the
+-- missing target spells (one per step), with a delay between steps —
+-- the client rejects rapid-fire BLU set changes. Each step re-reads the
+-- live set, so external changes mid-run are tolerated.
+--
+-- Globals, not locals: the main chunk is at Lua 5.1's 200-local limit.
+_ow_blusets_active = nil   -- { want={id=true}, name=str, tried={id=true} }
+
+function _ow_blusets_step()
+    local st = _ow_blusets_active
+    if not st then return end
+    local p = windower.ffxi.get_player()
+    if not p or p.main_job ~= 'BLU' then
+        windower.add_to_chat(123,
+            '[OmniWatch] BLU spellset change aborted - main job is no longer BLU.')
+        _ow_blusets_active = nil
+        return
+    end
+    local data = windower.ffxi.get_mjob_data and windower.ffxi.get_mjob_data()
+    local raw = (data and data.spells) or {}
+    -- Remove phase: clear one equipped spell that isn't in the target
+    -- set. pairs(), not ipairs() — the set table goes sparse the moment
+    -- a middle slot is removed (same gap bug as the trait reader).
+    for slot, sid in pairs(raw) do
+        local n_slot = tonumber(slot)
+        if n_slot and type(sid) == 'number' and sid ~= 0 and sid ~= 512
+                and not st.want[sid] then
+            windower.ffxi.remove_blue_magic_spell(n_slot)
+            coroutine.schedule(_ow_blusets_step, 0.7)
+            return
+        end
+    end
+    -- Add phase: one missing target spell into the first empty slot.
+    local have = {}
+    for _, sid in pairs(raw) do
+        if type(sid) == 'number' then have[sid] = true end
+    end
+    local empty
+    for i = 1, 20 do
+        local v = raw[i]
+        if v == nil or v == 0 or v == 512 then
+            empty = i
+            break
+        end
+    end
+    if empty then
+        for sid in pairs(st.want) do
+            if not have[sid] and not st.tried[sid] then
+                -- One attempt per spell: if the client rejects the set
+                -- (unlearned, level too low), skip rather than retry
+                -- forever; it's reported as skipped at the end.
+                st.tried[sid] = true
+                windower.ffxi.set_blue_magic_spell(sid, empty)
+                coroutine.schedule(_ow_blusets_step, 0.7)
+                return
+            end
+        end
+    end
+    -- Nothing left to remove or add — done. Report anything attempted
+    -- that still isn't equipped.
+    local missing = {}
+    for sid in pairs(st.want) do
+        if not have[sid] then
+            local sp = res.spells[sid]
+            missing[#missing + 1] = (sp and (sp.english or sp.en))
+                                    or ('#' .. tostring(sid))
+        end
+    end
+    if #missing > 0 then
+        windower.add_to_chat(123, '[OmniWatch] Spellset "' .. st.name
+            .. '" set with ' .. #missing .. ' spell(s) skipped: '
+            .. table.concat(missing, ', '))
+    else
+        windower.add_to_chat(207, '[OmniWatch] Spellset "' .. st.name
+            .. '" equipped.')
+    end
+    _ow_blusets_active = nil
+end
+
+function _ow_blusets_start(setname, names_str)
+    if _ow_blusets_active then
+        windower.add_to_chat(123,
+            '[OmniWatch] A BLU spellset change is already running ("'
+            .. _ow_blusets_active.name .. '").')
+        return
+    end
+    local p = windower.ffxi.get_player()
+    if not p or p.main_job ~= 'BLU' then
+        windower.add_to_chat(123,
+            '[OmniWatch] Cannot equip a spellset - main job is not BLU.')
+        return
+    end
+    -- Resolve names → spell ids via res.spells (BlueMagic only). Saved
+    -- sets store names rather than ids so they survive resource-file
+    -- renumbering and stay human-readable in the JSON.
+    local by_name = {}
+    for _, sp in pairs(res.spells) do
+        if sp and sp.type == 'BlueMagic' then
+            local nm = sp.english or sp.en
+            if nm then by_name[nm:lower()] = sp.id end
+        end
+    end
+    local want, unknown, count = {}, {}, 0
+    for nm in (tostring(names_str) .. ';'):gmatch('([^;]*);') do
+        nm = nm:match('^%s*(.-)%s*$')
+        if nm ~= '' then
+            local sid = by_name[nm:lower()]
+            if sid then
+                if not want[sid] then count = count + 1 end
+                want[sid] = true
+            else
+                unknown[#unknown + 1] = nm
+            end
+        end
+    end
+    if #unknown > 0 then
+        windower.add_to_chat(123,
+            '[OmniWatch] Unknown spell name(s) skipped: '
+            .. table.concat(unknown, ', '))
+    end
+    if count == 0 then
+        windower.add_to_chat(123, '[OmniWatch] Spellset "'
+            .. tostring(setname) .. '" resolved to no spells - nothing to do.')
+        return
+    end
+    if count > 20 then
+        windower.add_to_chat(123, '[OmniWatch] Spellset "'
+            .. tostring(setname) .. '" has ' .. count
+            .. ' spells (max 20). Trim it first.')
+        return
+    end
+    windower.add_to_chat(207, '[OmniWatch] Equipping BLU spellset "'
+        .. tostring(setname) .. '" (' .. count .. ' spells)...')
+    _ow_blusets_active = { want = want, name = tostring(setname), tried = {} }
+    _ow_blusets_step()
+end
+
 -- ── Inbound command socket (port 5011) ─────────────────────────────────────
 -- Listens for python→lua messages. Drained on every prerender by
 -- _ow_drain_inbound(). Three message families share this socket, all
@@ -4323,72 +4624,29 @@ end
 -- Drain helper: pulls all queued packets off udp_cmd_in and routes each
 -- to the appropriate handler. Called from the prerender loop. Wrapped
 -- in a single pcall so a malformed packet can't kill the addon.
--- ── Auto-translate ENCODING for composer/hotbar sends (from OmniChat) ──
--- Lets the composer write {Yes, please.}-style phrases; before the text
--- reaches the game we swap each {…} whose contents match an
--- auto-translate phrase (case-insensitive, English or Japanese) for the
--- real 6-byte token the game uses:
---   FD 02 02 <id_hi> <id_lo> FD        (id = res.auto_translates key)
--- This is the exact inverse of the incoming decode, so what you see in
--- the chat panel is what you can type. Unmatched {…} text is left
--- literally as typed (harmless). The name→id map is built lazily on
--- first use (~600 entries, one-time).
---
--- Stored as GLOBALS (not file-locals): the main chunk of OmniWatch.lua
--- is at Lua 5.1's 200-local limit, so new top-level locals are not an
--- option (same constraint that puts _ow_slips on _G).
-_ow_at_name_to_id = nil
+-- ── NPC dialog "continue" arrow support ────────────────────────────────
+-- FFXI marks NPC dialog / cutscenes with player status 4 (Event).
+-- Polled ~2 Hz from prerender and reported as 'CSSTATE\t1|0'
+-- (MB-tagged) over the chat stream; the overlay shows a pulsing
+-- continue arrow at the end of the last chat line while the pinned
+-- character is in this state. Globals: 200-local limit.
+_ow_cs_last_sent = nil
+_ow_cs_next_poll = 0
+_ow_cs_next_refresh = 0
 
-function _ow_build_at_index()
-    _ow_at_name_to_id = {}
-    if not (res and res.auto_translates) then return end
-    for id, entry in pairs(res.auto_translates) do
-        if type(entry) == 'table' then
-            if type(entry.en) == 'string' and entry.en ~= '' then
-                _ow_at_name_to_id[entry.en:lower()] = id
-            end
-            if type(entry.ja) == 'string' and entry.ja ~= '' then
-                _ow_at_name_to_id[entry.ja:lower()] = id
-            end
-        end
+function _ow_poll_cs_state()
+    local now = os.clock()
+    if now < _ow_cs_next_poll then return end
+    _ow_cs_next_poll = now + 0.5
+    local p = windower.ffxi.get_player()
+    local on = p ~= nil and p.status == 4
+    if on ~= _ow_cs_last_sent or now >= _ow_cs_next_refresh then
+        _ow_cs_last_sent = on
+        _ow_cs_next_refresh = now + 2.0
+        pcall(function()
+            udp_chat:send(_OW_MB_TAG('CSSTATE\t' .. (on and '1' or '0')))
+        end)
     end
-end
-
-function _ow_encode_at(text)
-    -- Returns (encoded_text, n_replaced).
-    if not text or not text:find('{', 1, true) then return text, 0 end
-    if _ow_at_name_to_id == nil then
-        pcall(_ow_build_at_index)
-        _ow_at_name_to_id = _ow_at_name_to_id or {}
-    end
-    local n_hit = 0
-    local out = text:gsub('{(.-)}', function(name)
-        local id = _ow_at_name_to_id[(name or ''):lower()]
-        if not id then
-            return '{' .. name .. '}'        -- not a phrase: keep literal
-        end
-        n_hit = n_hit + 1
-        return string.char(0xFD, 0x02, 0x02,
-                           math.floor(id / 256) % 256, id % 256, 0xFD)
-    end)
-    return out, n_hit
-end
-
--- Dispatch a console command, converting {auto-translate} phrases in
--- 'input …' payloads. Resolved phrases go via windower.chat.input()
--- (typed-chat injection passes raw FD bytes through; send_command's
--- parser is not byte-safe for them). Plain commands keep the original
--- send_command path byte-for-byte.
-function _ow_dispatch_console(cmd)
-    local payload = cmd:match('^input%s+(.+)$')
-    if payload and payload:find('{', 1, true) then
-        local encoded, n_hit = _ow_encode_at(payload)
-        if n_hit > 0 and windower.chat and windower.chat.input then
-            windower.chat.input(encoded)
-            return
-        end
-    end
-    windower.send_command(cmd)
 end
 
 local function _ow_drain_inbound()
@@ -4662,6 +4920,46 @@ local function _ow_drain_inbound()
                     end
                 end
             end
+        elseif head == 'BLUSETS' then
+            -- BLU Spellsets panel actions. Wire forms:
+            --   BLUSETS|equip|<char>|<set name>|<Spell;Spell;...>
+            --   BLUSETS|stop|<char>
+            -- <char> guard mirrors INVACT: only act if THIS client is
+            -- that character (empty <char> always acts) — a spellset
+            -- change must never fire on the wrong box.
+            local b1 = rest:find('|', 1, true)
+            if b1 then
+                local action = rest:sub(1, b1 - 1)
+                local tail   = rest:sub(b1 + 1)
+                local b2     = tail:find('|', 1, true)
+                local who    = b2 and tail:sub(1, b2 - 1) or tail
+                local rest2  = b2 and tail:sub(b2 + 1) or ''
+                local me     = windower.ffxi.get_player
+                               and windower.ffxi.get_player()
+                local myname = me and me.name or ''
+                if who ~= '' and myname ~= '' and who ~= myname then
+                    if _ow_cast_debug then
+                        windower.add_to_chat(207,
+                            '[OW] BLUSETS ignored (for ' .. who
+                            .. ', I am ' .. myname .. ')')
+                    end
+                elseif action == 'equip' then
+                    local b3 = rest2:find('|', 1, true)
+                    local setname = b3 and rest2:sub(1, b3 - 1) or '?'
+                    local names   = b3 and rest2:sub(b3 + 1) or ''
+                    local ok, err = pcall(_ow_blusets_start, setname, names)
+                    if not ok then
+                        windower.add_to_chat(123,
+                            '[OmniWatch] blusets error: ' .. tostring(err))
+                    end
+                elseif action == 'stop' then
+                    if _ow_blusets_active then
+                        _ow_blusets_active = nil
+                        windower.add_to_chat(207,
+                            '[OmniWatch] BLU spellset change stopped.')
+                    end
+                end
+            end
         elseif head == 'WARP' then
             -- One-click travel from the overlay's Warp button.
             -- Wire form: WARP|<char>|<raw superwarp command>
@@ -4705,7 +5003,7 @@ local function _ow_drain_inbound()
                     windower.add_to_chat(207,
                         '[OW] CMD recv: ' .. tostring(rest))
                 end
-                _ow_dispatch_console(rest)
+                windower.send_command(rest)
             end
         else
             -- Unrecognised header. Fall through to legacy bare-command
@@ -4718,7 +5016,7 @@ local function _ow_drain_inbound()
                     windower.add_to_chat(207,
                         '[OW] bare cmd recv: ' .. tostring(data))
                 end
-                _ow_dispatch_console(data)
+                windower.send_command(data)
             end
         end
     end
@@ -5339,6 +5637,280 @@ ow_safe_register('addon command', function(command, ...)
         windower.add_to_chat(207, string.format(
             '[OW] buffts_debug = %s. Cast a buff and watch for [OW buffts] '
             .. 'lines.', tostring(_ow_buffts_debug)))
+    elseif command == 'augstats' then
+        -- Per-item native-augment parse audit. For every equipped item
+        -- where the native client translation answers, print each line
+        -- alongside the stats ow_parse_desc_line extracted from it —
+        -- a line showing '{}' is a parser gap (its stats are silently
+        -- dropped from the live computation). Mirrors to the python
+        -- session log like augprobe.
+        local items = windower.ffxi.get_items()
+        local equip = items and items.equipment
+        if not equip then
+            windower.add_to_chat(167, '[OW] augstats: no equipment data.')
+            return
+        end
+        local function emit(line)
+            print('[OW augstats] ' .. line)
+            pcall(function()
+                udp_inv:send(_OW_MB_TAG('AUGPROBE|' .. line))
+            end)
+            windower.add_to_chat(207, '[OW] ' .. line)
+        end
+        local audited = 0
+        for slot_name, idx in pairs(equip) do
+            if type(idx) == 'number' and idx > 0
+                    and not slot_name:match('_bag$') then
+                local bag = equip[slot_name .. '_bag']
+                local bag_id = type(bag) == 'number' and bag or 0
+                local bag_items = windower.ffxi.get_items(bag_id)
+                local item = bag_items and bag_items[idx]
+                if item and item.id and item.id > 0 and item.extdata
+                        and _ow_native_item_augments then
+                    local okn, nlines = pcall(_ow_native_item_augments,
+                                              item.id, item.extdata)
+                    if okn and type(nlines) == 'table' then
+                        audited = audited + 1
+                        local res_item = res.items and res.items[item.id]
+                        local iname = res_item
+                            and (res_item.en or res_item.name)
+                            or ('item ' .. item.id)
+                        emit(('%s [%s]'):format(iname, slot_name))
+                        for li = 1, #nlines do
+                            local scratch = {}
+                            if li > 1 and ow_parse_desc_line then
+                                pcall(ow_parse_desc_line, scratch,
+                                      nlines[li])
+                            end
+                            local parts = {}
+                            for k, v in pairs(scratch) do
+                                parts[#parts + 1] = k .. '=' .. tostring(v)
+                            end
+                            table.sort(parts)
+                            emit(('  %s%s -> {%s}'):format(
+                                li == 1 and '(hdr) ' or '',
+                                nlines[li], table.concat(parts, ', ')))
+                        end
+                        -- extdata visibility + the stats-overlay verdict
+                        local gi_visible = false
+                        if extdata then
+                            local oke, extd = pcall(extdata.decode, item)
+                            if oke and extd
+                                    and type(extd.augments) == 'table' then
+                                for _, a in ipairs(extd.augments) do
+                                    local s = tostring(a or '')
+                                    s = s:gsub('^[^%w%+%-]+', '')
+                                    s = s:gsub('^%s+', '')
+                                    if s ~= '' and s:lower() ~= 'none'
+                                            and not s:lower():match(
+                                                '^path:') then
+                                        gi_visible = true
+                                        emit('  [extdata] ' .. s)
+                                    end
+                                end
+                            end
+                        end
+                        local verdict
+                        if Unity_rank and Unity_rank[item.id] then
+                            verdict = 'GearInfo (Unity_rank)'
+                        elseif ow_path_augments
+                                and ow_path_augments[item.id] then
+                            verdict = 'DREMA path table'
+                        elseif gi_visible then
+                            verdict = 'GearInfo (extdata augments)'
+                        else
+                            verdict = 'native overlay'
+                        end
+                        emit('  stats source: ' .. verdict)
+                        -- Tripwire: an item present in BOTH the DREMA
+                        -- path table and Misc_augments would be fed by
+                        -- two sources if the overlay exclusion ever
+                        -- regresses. Surface dual membership loudly.
+                        if ow_path_augments and ow_path_augments[item.id]
+                                and ow_unity_augments
+                                and ow_unity_augments[item.id] then
+                            emit('  NOTE: also in Misc_augments.lua — '
+                                .. 'DREMA wins; Misc entry is ignored '
+                                .. '(consider removing it)')
+                        end
+                        -- For DREMA items the stats come from the path
+                        -- table's strings, not the native lines above —
+                        -- so audit THOSE through the parser too. A line
+                        -- showing '{}' here is stats silently lost.
+                        if verdict == 'DREMA path table' then
+                            local paths = ow_path_augments[item.id]
+                            local pkeys = {}
+                            for pk in pairs(paths) do
+                                pkeys[#pkeys + 1] = pk
+                            end
+                            table.sort(pkeys)
+                            for _, pk in ipairs(pkeys) do
+                                for _, dline in ipairs(paths[pk]) do
+                                    local scratch = {}
+                                    pcall(ow_parse_desc_line, scratch,
+                                          dline)
+                                    local parts = {}
+                                    for k, v in pairs(scratch) do
+                                        parts[#parts + 1] =
+                                            k .. '=' .. tostring(v)
+                                    end
+                                    table.sort(parts)
+                                    emit(('  [DREMA %s] %s -> {%s}')
+                                        :format(pk, dline,
+                                            table.concat(parts, ', ')))
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- Per-weapon-slot path-aug delta summary: the acc/att we re-add
+        -- after GearInfo's overwrite, by slot. Compare these against the
+        -- /checkparam Primary/Auxiliary surplus to see exactly which slot
+        -- is double-counted or missed. _ow_path_aug_stats is populated by
+        -- the most recent stats compute (ow_send_stats), so run a stats
+        -- refresh (open the panel / //ow stats) just before this if the
+        -- numbers look stale.
+        if _ow_path_aug_stats and _ow_path_aug_stats._by_slot then
+            emit('-- path-aug re-add deltas by slot (acc/att) --')
+            for _, sn in ipairs({'main','sub','range','ammo'}) do
+                local sd = _ow_path_aug_stats._by_slot[sn]
+                if sd and (sd['accuracy'] or sd['attack']
+                           or sd['ranged accuracy'] or sd['ranged attack']) then
+                    emit(('  %-5s acc=%s att=%s racc=%s ratt=%s'):format(
+                        sn,
+                        tostring(sd['accuracy'] or 0),
+                        tostring(sd['attack'] or 0),
+                        tostring(sd['ranged accuracy'] or 0),
+                        tostring(sd['ranged attack'] or 0)))
+                end
+            end
+        end
+        emit(('augstats: %d rank item(s) audited. Lines ending in {} '
+              .. 'are parser gaps.'):format(audited))
+    elseif command == 'augprobe' then
+        -- Probe windower.ffxi.get_item_augments (new native function,
+        -- per FFXIAH thread 58991, 2026-06): signature and coverage are
+        -- undocumented, so try the plausible call shapes against every
+        -- equipped item and dump whatever answers. Output goes to chat
+        -- AND the Windower console (print) so deep tables are
+        -- copy-pasteable. Safe to run anywhere; everything is pcall'd.
+        local fn = windower.ffxi
+                   and rawget(windower.ffxi, 'get_item_augments')
+                   or (windower.ffxi and windower.ffxi.get_item_augments)
+        if type(fn) ~= 'function' then
+            windower.add_to_chat(167,
+                '[OW] augprobe: windower.ffxi.get_item_augments is not '
+                .. 'present in this Windower build.')
+            return
+        end
+        windower.add_to_chat(207, '[OW] augprobe: function exists. '
+            .. 'Probing equipped items...')
+        local function dump(v, depth, lines)
+            depth = depth or 0
+            if depth > 4 then return end
+            local pad = string.rep('  ', depth)
+            if type(v) ~= 'table' then
+                lines[#lines + 1] = pad .. tostring(v)
+                return
+            end
+            for k, vv in pairs(v) do
+                if type(vv) == 'table' then
+                    lines[#lines + 1] = pad .. tostring(k) .. ':'
+                    dump(vv, depth + 1, lines)
+                else
+                    lines[#lines + 1] = pad .. tostring(k) .. ' = '
+                        .. tostring(vv)
+                end
+            end
+        end
+        local items = windower.ffxi.get_items()
+        local equip = items and items.equipment
+        if not equip then
+            windower.add_to_chat(167, '[OW] augprobe: no equipment data.')
+            return
+        end
+        local probed = 0
+        for slot_name, idx in pairs(equip) do
+            local bag_key = slot_name .. '_bag'
+            local bag = equip[bag_key]
+            if type(idx) == 'number' and idx > 0
+                    and not slot_name:match('_bag$') then
+                local bag_id = type(bag) == 'number' and bag or 0
+                local bag_items = windower.ffxi.get_items(bag_id)
+                local item = bag_items and bag_items[idx]
+                if item and item.id and item.id > 0 then
+                    local res_item = res.items and res.items[item.id]
+                    local iname = res_item
+                        and (res_item.en or res_item.name)
+                        or ('item ' .. item.id)
+                    -- Try the plausible signatures in order; report
+                    -- which one answered.
+                    local attempts = {
+                        { desc = '(bag, index)',
+                          call = function() return fn(bag_id, idx) end },
+                        { desc = '(item table)',
+                          call = function() return fn(item) end },
+                        { desc = '(extdata string)',
+                          call = function() return fn(item.extdata) end },
+                        { desc = '(id, extdata)',
+                          call = function()
+                              return fn(item.id, item.extdata) end },
+                    }
+                    for _, att in ipairs(attempts) do
+                        local ok, ret = pcall(att.call)
+                        if ok and ret ~= nil then
+                            probed = probed + 1
+                            windower.add_to_chat(207, string.format(
+                                '[OW] augprobe %s [%s/%d] sig%s -> %s',
+                                iname, tostring(bag_id), idx, att.desc,
+                                type(ret)))
+                            local lines = {}
+                            dump(ret, 0, lines)
+                            print('[OW augprobe] ' .. iname
+                                  .. ' sig' .. att.desc)
+                            -- Mirror to the python session log too
+                            -- (AUGPROBE| lines are printed verbatim
+                            -- there), so a log upload carries the
+                            -- full dump even if the Windower console
+                            -- wasn't captured.
+                            pcall(function()
+                                udp_inv:send(_OW_MB_TAG(
+                                    'AUGPROBE|' .. iname .. ' sig'
+                                    .. att.desc))
+                            end)
+                            for _, l in ipairs(lines) do
+                                print('  ' .. l)
+                                pcall(function()
+                                    udp_inv:send(_OW_MB_TAG(
+                                        'AUGPROBE|  ' .. l))
+                                end)
+                            end
+                            for li = 1, math.min(#lines, 6) do
+                                windower.add_to_chat(207,
+                                    '    ' .. lines[li])
+                            end
+                            if #lines > 6 then
+                                windower.add_to_chat(207, string.format(
+                                    '    ...(%d more lines in console)',
+                                    #lines - 6))
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        if probed == 0 then
+            windower.add_to_chat(167, '[OW] augprobe: function present '
+                .. 'but no signature returned data for any equipped '
+                .. 'item. Full attempt log is in the console.')
+        else
+            windower.add_to_chat(207, string.format(
+                '[OW] augprobe: done — %d item(s) answered. Full dumps '
+                .. 'in the Windower console.', probed))
+        end
     elseif command == 'dumpstats' then
         -- Dump the full computed stats dict to chat. Useful for
         -- verifying which stats a gear swap actually contributes.
@@ -11855,6 +12427,18 @@ local ow_integrate = {
     ['ratt'] = 'ranged attack',
     ['ratk'] = 'ranged attack',
     ['racc'] = 'ranged accuracy',
+    ['rng acc'] = 'ranged accuracy',
+    ['rng atk'] = 'ranged attack',
+    -- unspaced forms: 'Rng.Acc.+15' has no spaces, so the period strip
+    -- yields 'rngacc' (the spaced aliases above only cover 'Rng. Acc.').
+    -- Found via Armageddon's DREMA path augments parsing to dead keys
+    -- (2026-06-12: exactly its Rng.Acc+15 / Rng.Atk+20 missing).
+    ['rngacc'] = 'ranged accuracy',
+    ['rngatk'] = 'ranged attack',
+    ['magacc'] = 'magic accuracy',
+    ['magdmg'] = 'magic damage',
+    ['mageva'] = 'magic evasion',
+    ['mag atk bns'] = 'magic attack bonus',
     ['indicolure spell duration'] = 'indicolure effect duration',
     ['indi eff dur'] = 'indicolure effect duration',
     ['mag eva'] = 'magic evasion',
@@ -11989,6 +12573,178 @@ do
             '[OmniWatch] Misc_augments.lua not loaded (%s) -- JSE neck augments inactive.',
             tostring(load_err)))
     end
+end
+
+-- ── Rank-augmented "bundle" gear (Odyssey Sheol sets, Gaol weapons) ────
+-- These items carry a path (A-D) and a rank (0-30) in extdata, with the
+-- actual stats hidden from both the item description and the augment
+-- string list (extdata yields just 'Path: A'). The per-rank stat tables
+-- live in gearinfo/res/Odyssey_augments.lua, keyed by the AugmentIndex
+-- stored in exdata bytes 9..12 — so resolution needs no item-id mapping
+-- and never assumes a rank: the exact rank is read from the item.
+-- Globals, not file-locals: the main chunk is at Lua 5.1's 200-local
+-- limit (the same constraint that puts _ow_slips on _G).
+_ow_bundle_augments = {}
+do
+    local base = windower.addon_path or ''
+    if base ~= '' and base:sub(-1) ~= '/' and base:sub(-1) ~= '\\' then
+        base = base .. '/'
+    end
+    local path = base .. 'gearinfo/res/Odyssey_augments.lua'
+    local chunk, load_err = loadfile(path)
+    if chunk then
+        local ok_run, ret = pcall(chunk)
+        if ok_run and type(ret) == 'table' then
+            _ow_bundle_augments = ret
+            if _ow_buff_debug then
+                local n = 0
+                for _ in pairs(ret) do n = n + 1 end
+                windower.add_to_chat(207, string.format(
+                    '[OmniWatch] Odyssey_augments loaded: %d bundles', n))
+            end
+        else
+            windower.add_to_chat(123, string.format(
+                '[OmniWatch] Odyssey_augments.lua ran but returned no table: %s',
+                tostring(ret)))
+        end
+    else
+        windower.add_to_chat(123, string.format(
+            '[OmniWatch] Odyssey_augments.lua not loaded (%s) -- Odyssey rank augments inactive.',
+            tostring(load_err)))
+    end
+end
+
+-- ── Native client augment resolution ─────────────────────────────────
+-- Windower's windower.ffxi.get_item_augments (new, 2026-06; FFXIAH
+-- thread 58991) asks the game client itself to translate an item's
+-- exdata into resolved rank-augment stats — the same code path the
+-- in-game item window uses. Signature (confirmed by //ow augprobe):
+--   get_item_augments(item_id, extdata_string) -> {
+--     rank, path, max_rank, to_next_rank, main_hand_flag,
+--     augments = { {id, potency}, ... },   -- ids = res/augments ids
+--     line_counts = { [line] = n, ... } }  -- client display grouping
+-- Covers Odyssey/Limbus rank gear, JSE necks, Unity pieces, RP gear
+-- (Ambuscade belts, earrings) and Mythic/path weapons — verified
+-- against Sailfi Belt +1, Comm. Charm +2, Death Penalty, Odnowa
+-- Earring +1 and Rostam. Augment entries can be FRAGMENTS the client
+-- concatenates per line ("STR", "/", "AGI", "+%d" -> "STR/AGI+15"),
+-- which is why composition follows line_counts.
+--
+-- Returns a list of display strings, or nil when the function is
+-- absent (older Windower) or the item isn't rank gear — callers fall
+-- back to the existing chain (bundle resolver -> extdata -> tables).
+-- The path/rank header deliberately reads "Path A · Rank N/M" (no
+-- colon after Path) so the tooltip's "Path: X" re-resolver doesn't
+-- expand it a second time from the static tables.
+function _ow_native_item_augments(item_id, ext_raw)
+    local fn = windower.ffxi and windower.ffxi.get_item_augments
+    if type(fn) ~= 'function' or not ext_raw then return nil end
+    local ok, nat = pcall(fn, item_id, ext_raw)
+    if not ok or type(nat) ~= 'table' then return nil end
+    if type(nat.augments) ~= 'table' or not next(nat.augments) then
+        return nil
+    end
+    -- Only claim items the client itself treats as rank/path gear;
+    -- everything else keeps the proven extdata path.
+    local has_rank = type(nat.rank) == 'number' and nat.rank > 0
+    local has_path = nat.path ~= nil and tostring(nat.path) ~= ''
+    if not (has_rank or has_path) then return nil end
+
+    local out = {}
+    local hdr = {}
+    if has_path then hdr[#hdr + 1] = 'Path ' .. tostring(nat.path) end
+    if has_rank then
+        local r = 'Rank ' .. tostring(nat.rank)
+        if type(nat.max_rank) == 'number' and nat.max_rank > 0 then
+            r = r .. '/' .. tostring(nat.max_rank)
+        end
+        hdr[#hdr + 1] = r
+    end
+    if #hdr > 0 then out[#out + 1] = table.concat(hdr, ' · ') end
+
+    local function fmt_aug(a)
+        local e = res.augments and res.augments[a.id]
+        local s = e and (e.en or e.english)
+        if not s then
+            return string.format('aug#%s+%s',
+                tostring(a.id or 0), tostring(a.potency or 0))
+        end
+        -- res/augments en strings are string.format templates
+        -- ("STR%+d "); extra args are ignored for plain fragments.
+        local okf, txt = pcall(string.format, s, a.potency or 0)
+        return okf and txt or s
+    end
+
+    local idx = 1
+    if type(nat.line_counts) == 'table' then
+        local li = 1
+        while nat.line_counts[li] do
+            local parts = {}
+            for _ = 1, nat.line_counts[li] do
+                local a = nat.augments[idx]
+                if type(a) == 'table' then
+                    parts[#parts + 1] = fmt_aug(a)
+                end
+                idx = idx + 1
+            end
+            if #parts > 0 then
+                out[#out + 1] = (table.concat(parts):gsub('%s+$', ''))
+            end
+            li = li + 1
+        end
+    end
+    while nat.augments[idx] do          -- anything line_counts missed
+        local a = nat.augments[idx]
+        if type(a) == 'table' then
+            out[#out + 1] = (fmt_aug(a):gsub('%s+$', ''))
+        end
+        idx = idx + 1
+    end
+    if #out <= 1 then return nil end    -- header alone isn't useful
+    return out
+end
+
+function _ow_resolve_bundle_augments(item_id, raw, ext)
+    -- Resolve a system-4 ("bundle") augmented item to its real per-rank
+    -- stat strings. Returns nil to mean "use the normal augment path".
+    --
+    -- Items already covered by the JSE/Unity overlay pipeline are
+    -- skipped: those apply max-rank augments by item id during the
+    -- gear walk, and resolving them here too would double-count.
+    if ow_unity_augments[item_id] then return nil end
+    if Unity_rank and Unity_rank[item_id] then return nil end
+    if type(raw) ~= 'string' or #raw < 12 then return nil end
+
+    -- AugmentIndex: uint32 little-endian at exdata bytes 9..12 (the
+    -- field Windower's extdata lib doesn't decode).
+    local b9, b10, b11, b12 = raw:byte(9, 12)
+    local idx = (b9 or 0) + (b10 or 0) * 256
+              + (b11 or 0) * 65536 + (b12 or 0) * 16777216
+    -- Max-rank tier: bits 23-24 of the uint32 at bytes 5..8
+    -- (= byte 7 bit 7 + byte 8 bit 0): 0=15, 1=20, 2=25, 3=30.
+    local b7, b8 = raw:byte(7, 8)
+    local tier = math.floor((b7 or 0) / 128) + ((b8 or 0) % 2) * 2
+    local max_rank = ({15, 20, 25, 30})[tier + 1] or 30
+    local rank = ext.rank or 0
+
+    local out = {}
+    if ext.path then out[#out + 1] = 'Path: ' .. ext.path end
+    out[#out + 1] = string.format('Rank: %d/%d', rank, max_rank)
+
+    -- Unknown bundle (table missing or SE added new gear): stay
+    -- informative but contribute no stats — never assume.
+    local bundle = _ow_bundle_augments[idx]
+    if bundle and rank > 0 then
+        for _, eff in ipairs(bundle) do
+            local v = eff[2] and eff[2][rank + 1]
+            if v and v ~= 0 then
+                for _, f in ipairs(eff[1]) do
+                    out[#out + 1] = string.format(f, v)
+                end
+            end
+        end
+    end
+    return out
 end
 
 -- ── DREMA path-augment overlay loader ────────────────────────────────────
@@ -12267,6 +13023,27 @@ ow_parse_desc_line = function(tbl, text, prefix)
         -- 'fire' cell lookup.
         key = key:gsub('[%+%-]+%s*$', '')
         key = key:gsub('%s+$', '')
+        -- Compound stat names ("STR/AGI+15", "Mag. Acc./Mag. Dmg.+20"):
+        -- the one value applies to EACH slash-separated stat. Split and
+        -- credit every component through the same alias table; the
+        -- single-key path below then never sees a slash. (2026-06-11:
+        -- Comm. Charm +2's STR/AGI+15 was landing on a dead 'str/agi'
+        -- key — costing 15 STR and 15 AGI, and with them the derived
+        -- attack, ranged attack, ranged accuracy and evasion.)
+        if key ~= '' and key:find('/', 1, true) then
+            local cv = tonumber(value)
+            if cv then
+                for part in key:gmatch('[^/]+') do
+                    part = part:gsub('^%s+', ''):gsub('%s+$', '')
+                    if part ~= '' then
+                        part = ow_integrate[part] or part
+                        if prefix then part = prefix .. part end
+                        tbl[part] = cv + (tbl[part] or 0)
+                    end
+                end
+            end
+            key = ''   -- handled; skip the single-key path
+        end
         if key ~= '' then
             key = ow_integrate[key] or key
             if prefix then key = prefix .. key end
@@ -12319,10 +13096,30 @@ function ow_get_item_augments(bag, idx)
     local item = windower.ffxi.get_items(bag, idx)
     if not item or not item.id or item.id == 0 then return nil end
     local augs
+    -- (0) Native client resolution first (newer Windower builds): the
+    -- game's own per-rank translation beats every static table when it
+    -- answers. Self-gating: returns nil for non-rank gear, absent
+    -- function, or empty data — so the chain below is untouched
+    -- everywhere the native path doesn't apply.
+    if item.extdata and _ow_native_item_augments then
+        local okn, nat_lines = pcall(_ow_native_item_augments,
+                                     item.id, item.extdata)
+        if okn and type(nat_lines) == 'table' then augs = nat_lines end
+    end
     -- Prefer extdata.decode (Windower's library) since it's authoritative.
-    if extdata and item.extdata then
+    if not augs and extdata and item.extdata then
         local ok, ext = pcall(extdata.decode, {id = item.id, extdata = item.extdata})
-        if ok and ext and ext.augments then augs = ext.augments end
+        if ok and ext then
+            -- Rank-augmented bundle gear (Odyssey etc.): resolve the
+            -- exact per-rank stats instead of the opaque 'Path: A'.
+            -- The exact rank comes from the item's own exdata.
+            if ext.augment_system == 4 and _ow_resolve_bundle_augments then
+                local ok2, resolved = pcall(_ow_resolve_bundle_augments,
+                                            item.id, item.extdata, ext)
+                if ok2 then augs = resolved end
+            end
+            if not augs and ext.augments then augs = ext.augments end
+        end
     end
     if not augs and item.augments then augs = item.augments end
     if type(augs) ~= 'table' then return nil end
@@ -13101,15 +13898,40 @@ function ow_compute_stats()
                                 end
                                 if resolved then
                                     for _, line in ipairs(resolved) do
-                                        ow_parse_desc_line(stats, line)
-                                        -- Also record into the path-aug
-                                        -- delta table so eva/def/etc. can
-                                        -- be re-added after GearInfo (which
-                                        -- can't see opaque path augments)
-                                        -- overwrites them below. Flat copy
-                                        -- handles eva/def (not slot-split);
-                                        -- the per-slot copy lets acc/att
-                                        -- route to main/sub/ranged fields.
+                                        -- Parse the path-aug line into a
+                                        -- scratch table so we can route it
+                                        -- correctly. acc/att (and their
+                                        -- ranged variants) are SLOT-SPLIT
+                                        -- and re-applied after GearInfo's
+                                        -- overwrite by the _by_slot re-add
+                                        -- block below — so they must NOT be
+                                        -- written into stats here, or they
+                                        -- double-count whenever GearInfo's
+                                        -- conditional overwrite (it only
+                                        -- fires when acc.main/acc.sub are
+                                        -- present) doesn't reset the cell.
+                                        -- This was exactly the BLU Tizona+
+                                        -- Almace +15 main/+15 sub surplus
+                                        -- (2026-06-12). Everything else
+                                        -- (eva/def/primary stats/DA/etc.)
+                                        -- is flat and safe to merge now.
+                                        local _scratch = {}
+                                        ow_parse_desc_line(_scratch, line)
+                                        for _k, _v in pairs(_scratch) do
+                                            if _k ~= 'accuracy'
+                                               and _k ~= 'attack'
+                                               and _k ~= 'ranged accuracy'
+                                               and _k ~= 'ranged attack' then
+                                                stats[_k] = (stats[_k] or 0) + _v
+                                            end
+                                        end
+                                        -- Record into the path-aug delta
+                                        -- table for the post-GearInfo
+                                        -- re-add. Flat copy handles eva/def
+                                        -- and primaries; the per-slot copy
+                                        -- lets acc/att route to main/sub/
+                                        -- ranged fields (the SOLE place
+                                        -- acc/att are applied).
                                         ow_parse_desc_line(_ow_path_aug_stats, line)
                                         local _slot = entry.slot_name or '?'
                                         _ow_path_aug_stats._by_slot[_slot] =
@@ -13199,7 +14021,103 @@ function ow_compute_stats()
                     -- overlay from there would double-count (e.g. Ternion
                     -- Dagger +1's Accuracy+40 was being added once via
                     -- Gear_info and again via this overlay restamp).
-                    if not (Unity_rank and Unity_rank[id]) then
+                    -- OmniWatch accuracy upgrade (2026-06-11): when the
+                    -- client itself can translate this item's rank
+                    -- exdata (windower.ffxi.get_item_augments, newer
+                    -- Windower builds), feed the overlay the CLIENT's
+                    -- current-rank stat lines and skip the static
+                    -- tables entirely. This fixes two long-standing
+                    -- inaccuracies in one move:
+                    --   * JSE necks were applied from hand-maintained
+                    --     MAX-rank tables — a rank-10 neck contributed
+                    --     rank-25 numbers. Now it contributes exactly
+                    --     its rank-10 values.
+                    --   * Odyssey/Limbus rank gear and path weapons
+                    --     contributed NOTHING to stats (their exdata is
+                    --     opaque to GearInfo). Their rank augments are
+                    --     now counted.
+                    -- Unity_rank items are still excluded — GearInfo
+                    -- applies those rank-scaled inside find_all_values,
+                    -- so adding them here would double-count (the same
+                    -- rule the static path below has always followed).
+                    -- The native helper's first line is the
+                    -- "Path A · Rank N/M" header — display-only, so
+                    -- stat parsing starts at line 2. On older Windower
+                    -- builds (no native function) the legacy max-rank
+                    -- JSE table still applies as a fallback.
+                    -- Double-count guard (2026-06-11, second pass):
+                    -- GearInfo's find_all_values already parses any
+                    -- REAL augment strings extdata exposes (Delve /
+                    -- Escha-style gear specifies actual augment IDs in
+                    -- its extra data). Some of that gear ALSO answers
+                    -- the native rank query, and feeding the overlay
+                    -- from native on top of GearInfo's application
+                    -- counted those augments twice. Rule: the native
+                    -- overlay only fills the gap GearInfo cannot see —
+                    -- items whose extdata augments are absent or
+                    -- opaque (a bare "Path: X" line). Odyssey/Limbus
+                    -- gear, rank Mythics, and JSE necks are all
+                    -- Path-only/empty, so they keep their native stats.
+                    local gi_visible = false
+                    if extdata and item_data and item_data.extdata then
+                        local oke, extd = pcall(extdata.decode, item_data)
+                        if oke and extd
+                                and type(extd.augments) == 'table' then
+                            for _, a in ipairs(extd.augments) do
+                                local s = tostring(a or '')
+                                s = s:gsub('^[^%w%+%-]+', '')
+                                s = s:gsub('^%s+', '')
+                                if s ~= '' and s:lower() ~= 'none'
+                                        and not s:lower():match('^path:')
+                                        then
+                                    gi_visible = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    -- Third exclusion (2026-06-11, same-day report):
+                    -- REMA / Dynamis-D weapons in ow_path_augments
+                    -- (DREMA_Augments.lua) already have their path
+                    -- augments resolved into the stats accumulator by
+                    -- the established "Path: X" resolver further down
+                    -- this walk. Native on top doubled them (Tizona's
+                    -- and Heishi's Acc+30 each counted twice). Items
+                    -- with a DREMA entry stay on the res-file path;
+                    -- native covers only gear in NO static table.
+                    local native_done = false
+                    if not gi_visible
+                            and _ow_native_item_augments and item_data
+                            and item_data.extdata
+                            and not (Unity_rank and Unity_rank[id])
+                            and not (ow_path_augments
+                                     and ow_path_augments[id]) then
+                        local okn, nlines = pcall(_ow_native_item_augments,
+                                                  id, item_data.extdata)
+                        if okn and type(nlines) == 'table' then
+                            for li = 2, #nlines do
+                                ow_parse_desc_line(unity_aug_overlay,
+                                                   nlines[li])
+                            end
+                            native_done = true
+                        end
+                    end
+                    -- DREMA exclusion (2026-06-12): same rule as the
+                    -- native block above, for the same reason. An item
+                    -- with a DREMA entry gets its augments from the
+                    -- "Path: X" resolver + post-GearInfo re-add; if it
+                    -- ALSO has a Misc_augments.lua entry, this fallback
+                    -- fed the overlay a second copy (Armageddon's
+                    -- Rng.Acc+15/Rng.Atk+20 counted twice — surfaced
+                    -- only when the unspaced-alias fix brought both
+                    -- parses to life; before that, both were dead and
+                    -- the same values showed as MISSING). One item,
+                    -- one source: DREMA wins; this fallback covers only
+                    -- gear in NO other table (JSE necks et al.).
+                    if not native_done
+                            and not (Unity_rank and Unity_rank[id])
+                            and not (ow_path_augments
+                                     and ow_path_augments[id]) then
                         if ow_unity_augments[id] then
                             for _, aug_str in ipairs(ow_unity_augments[id]) do
                                 ow_parse_desc_line(unity_aug_overlay, aug_str)
@@ -13640,17 +14558,28 @@ function ow_compute_stats()
                         stats[key] = (stats[key] or 0) + v
                     end
                 end
-                -- DREMA path-augment acc/att. Per in-game /checkparam,
-                -- the augment accuracy/attack appears on BOTH primary and
-                -- auxiliary for this gear, so apply the main weapon's
-                -- path-aug acc/att to both hands (and the sub weapon's
-                -- own to sub). _slot_main/_slot_sub are populated only
-                -- from ow_path_augments (DREMA_augments.lua) resolution,
-                -- so non-DREMA weapons are never affected by this.
+                -- DREMA path-augment acc/att routing. EMPIRICAL (not
+                -- textbook): /checkparam on this client consistently shows
+                -- the AUXILIARY (sub) accuracy/attack receiving BOTH the
+                -- main and sub weapons' augment values, while PRIMARY
+                -- (main) receives only the main's. Documented research
+                -- says main-hand augments shouldn't affect the off-hand,
+                -- but Cooper has verified against /checkparam many times
+                -- over this addon's development that the off-hand DOES
+                -- pick them up — and /checkparam is ground truth here.
+                -- So: primary = main only; auxiliary = main + sub.
+                -- (A brief per-slot "each to its own hand" attempt on
+                -- 2026-06-12 left the sub 30 low — confirming the off-hand
+                -- needs the main contribution too. Reverted to this.)
+                -- _slot_main/_slot_sub come only from ow_path_augments
+                -- (DREMA_augments.lua), so non-DREMA weapons are never
+                -- affected.
                 _pa_add('accuracy',  _slot_main['accuracy'])
                 _pa_add('attack',    _slot_main['attack'])
-                _pa_add('accuracy2', (_slot_main['accuracy'] or 0) + (_slot_sub['accuracy'] or 0))
-                _pa_add('attack2',   (_slot_main['attack'] or 0) + (_slot_sub['attack'] or 0))
+                _pa_add('accuracy2', (_slot_main['accuracy'] or 0)
+                                     + (_slot_sub['accuracy'] or 0))
+                _pa_add('attack2',   (_slot_main['attack'] or 0)
+                                     + (_slot_sub['attack'] or 0))
                 -- Ranged weapon + ammo → ranged accuracy / ranged attack.
                 _pa_add('ranged accuracy',
                         (_slot_rng['ranged accuracy'] or _slot_rng['accuracy'] or 0)
@@ -13661,6 +14590,29 @@ function ow_compute_stats()
                 -- eva / def — flat (any slot contributes; not split).
                 _pa_add('evasion', _ow_path_aug_stats['evasion'])
                 _pa_add('defense', _ow_path_aug_stats['defense'])
+                -- NOTE (2026-06-12): a DREMA primary-stat -> combat-stat
+                -- derivation block lived here briefly (added in the
+                -- Armageddon "derivation audit" on the theory that path-
+                -- aug STR/AGI/DEX/etc. produced no derived combat stats).
+                -- It was WRONG and regressed a previously-correct BLU:
+                -- GearInfo's compute reads the player's EFFECTIVE primary
+                -- stats from windower.ffxi.get_player().stats, which the
+                -- game already reports WITH augment contributions applied
+                -- — so GearInfo's acc/att/def already include path-aug
+                -- DEX/STR/VIT. Deriving combat stats from those primaries
+                -- again here double-counted (BLU Tizona+Almace, whose
+                -- path augments carry DEX, showed +15 accuracy on BOTH
+                -- hands: floor(20 DEX * 0.75) = 15, applied a second time
+                -- on top of GearInfo's). The DREMA acc/att augment VALUES
+                -- (explicit "Accuracy+15" lines) are still re-added per
+                -- slot above — that is correct and separate; only the
+                -- primary-stat DERIVATION was the bug. Removed.
+                --
+                -- (Why the Armageddon case differed: Armageddon's hidden
+                -- rank augments are STR/AGI that the NATIVE-client overlay
+                -- feeds, not the DREMA path table — a different code path
+                -- with its own derivation, which is where the AGI->racc
+                -- fix correctly lives.)
                 if _ow_cast_debug then
                     local function _nz(t)
                         local out = {}
@@ -13776,7 +14728,7 @@ function ow_compute_stats()
                         -- trait key strings (panel cells):
                         --   'double attack','triple attack','subtle blow',
                         --   'fast cast','regen','refresh','store tp'
-                        -- Corrected against Cooper's in-game data (2026-05-27).
+                        -- Corrected against BalladOfWorms' in-game data (2026-05-27).
                         -- Tiers are {level, value}; highest met tier wins.
                         -- Job-point GIFT tiers (beyond the level-based ones)
                         -- are NOT modeled — these stop at the natural level
@@ -14091,11 +15043,18 @@ function ow_compute_stats()
                         -- bonus from one piece of gear adds to every
                         -- weapon slot's effective acc/att in unison).
                         if sk == 'accuracy' then
+                            -- Flat gear Accuracy/Attack is MELEE-ONLY in
+                            -- FFXI; ranged accuracy/attack have their own
+                            -- stat keys and gear states them explicitly
+                            -- ("Rng.Acc."). The old fanout bled flat acc/
+                            -- att into the ranged cells 1:1 — phantom
+                            -- racc/ratt whenever a hidden flat-acc augment
+                            -- was worn with a ranged weapon (2026-06-12
+                            -- derivation audit, same family as the
+                            -- AGI→ratt mis-wire).
                             stats['accuracy2']       = (stats['accuracy2']       or 0) + v
-                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + v
                         elseif sk == 'attack' then
                             stats['attack2']         = (stats['attack2']         or 0) + v
-                            stats['ranged attack']   = (stats['ranged attack']   or 0) + v
                         end
                     end
                 end
@@ -14120,7 +15079,7 @@ function ow_compute_stats()
                 --   Ranged:          1.00
                 --
                 -- AGI / DEX / INT / VIT / MND empirical ratios:
-                --   AGI → Ranged Attack 1.0, Evasion floor(/2)
+                --   AGI → Ranged Accuracy floor(×0.75), Evasion floor(/2)
                 --   DEX → Accuracy (all hands+ranged) 1.0
                 --   INT → Magic Acc / Magic Atk Bonus floor(/2) each
                 --   VIT → Defense × 1.5 (BG-wiki: VIT+2 = Def+3)
@@ -14144,16 +15103,29 @@ function ow_compute_stats()
                             stats['attack2']       = (stats['attack2']       or 0) + math.floor(v * 0.5)
                             stats['ranged attack'] = (stats['ranged attack'] or 0) + v
                         elseif sk == 'agi' then
-                            stats['ranged attack'] = (stats['ranged attack'] or 0) + v
-                            stats['evasion']       = (stats['evasion']       or 0) + math.floor(v / 2)
+                            -- AGI derives RANGED ACCURACY (~0.75/AGI,
+                            -- same post-2014 ratio as DEX->Accuracy),
+                            -- NOT Ranged Attack — that's STR's job.
+                            -- The old wiring added AGI to ranged attack
+                            -- 1:1 and nothing to ranged accuracy; with
+                            -- Armageddon's hidden rank STR+20/AGI+20 vs
+                            -- /checkparam this showed as ratt exactly
+                            -- +20 high and racc exactly -15 low (the
+                            -- two errors also pin the coefficients:
+                            -- STR->ratt 1.0, AGI->racc 0.75).
+                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + math.floor(v * 0.75)
+                            stats['evasion']         = (stats['evasion']         or 0) + math.floor(v / 2)
                         elseif sk == 'dex' then
                             -- DEX→Accuracy is ~0.75/DEX (post-2014), not
                             -- 1:1. Full-value here put both hands 4 over
                             -- /checkparam for a +15 DEX neck (15 vs 11).
+                            -- DEX derives MELEE accuracy only; ranged
+                            -- accuracy comes from AGI (handled above).
+                            -- The old code also added DEX-acc to ranged —
+                            -- phantom racc (2026-06-12 derivation audit).
                             local _dex_acc = math.floor(v * 0.75)
                             stats['accuracy']        = (stats['accuracy']        or 0) + _dex_acc
                             stats['accuracy2']       = (stats['accuracy2']       or 0) + _dex_acc
-                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + _dex_acc
                         elseif sk == 'int' then
                             stats['magic accuracy']     = (stats['magic accuracy']     or 0) + math.floor(v / 2)
                             stats['magic attack bonus'] = (stats['magic attack bonus'] or 0) + math.floor(v / 2)
@@ -14173,8 +15145,21 @@ function ow_compute_stats()
                 _ow_jse_primary_overlay = {}
                 for _, pk in ipairs({'str','dex','vit','agi',
                                      'int','mnd','chr'}) do
-                    local pv = unity_aug_overlay[pk]
-                    if pv and pv ~= 0 then
+                    -- NOTE (2026-06-12, second correction of the day):
+                    -- the derivation audit briefly added
+                    -- _ow_path_aug_stats[pk] here on the theory that
+                    -- DREMA path-aug primaries are invisible to
+                    -- Gear_info and would be clobbered. WRONG, same as
+                    -- the DEX->acc derivation: Gear_info's primary
+                    -- cells are built from the game's EFFECTIVE stats,
+                    -- which already include weapon-augment primaries —
+                    -- so adding the path-aug DEX/MND again here showed
+                    -- Almace's DEX/MND+20 twice on the panel (DEX read
+                    -- exactly +20 high; acc stayed correct because the
+                    -- combat stats never used this overlay). Only the
+                    -- JSE/native overlay belongs here.
+                    local pv = (unity_aug_overlay[pk] or 0)
+                    if pv ~= 0 then
                         _ow_jse_primary_overlay[pk] = pv
                     end
                 end
@@ -15716,11 +16701,21 @@ function ow_send_stats(stats)
                     if k == 'accuracy' then
                         stats['accuracy']        = (stats['accuracy']        or 0) + v
                         stats['accuracy2']       = (stats['accuracy2']       or 0) + v
-                        stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + v
+                        -- Bleed food acc into ranged ONLY when the food
+                        -- doesn't list an explicit Ranged Accuracy line
+                        -- of its own — standard FFXI foods list both
+                        -- separately, and the unconditional bleed
+                        -- double-counted the ranged bonus for those
+                        -- (2026-06-12 derivation audit).
+                        if food_stats['ranged accuracy'] == nil then
+                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + v
+                        end
                     elseif k == 'attack' then
                         stats['attack']        = (stats['attack']        or 0) + v
                         stats['attack2']       = (stats['attack2']       or 0) + v
-                        stats['ranged attack'] = (stats['ranged attack'] or 0) + v
+                        if food_stats['ranged attack'] == nil then
+                            stats['ranged attack'] = (stats['ranged attack'] or 0) + v
+                        end
                     else
                         -- Magic acc/MAB/MDmg etc. — single key, additive.
                         stats[k] = (stats[k] or 0) + v
@@ -16193,6 +17188,10 @@ ow_safe_register('prerender', function()
         pcall(_G._ow_warp_near_poll)
     end
 
+    -- Cutscene-status poll for the chat panel's continue arrow
+    -- (self-throttled to ~2 Hz internally).
+    pcall(_ow_poll_cs_state)
+
     -- Send sim inventory snapshot when needed. Rate-limited to once per
     -- second so we don't spam UDP on rapid inventory changes (item use
     -- bursts after a fight, etc.). Only fires when sim is active —
@@ -16488,13 +17487,37 @@ ow_safe_register('prerender', function()
                             -- NOT touch stat computation.
                             local augs = {}
                             local _aug_src
-                            if extdata and item_data and item_data.extdata then
+                            -- Native client resolution first (same
+                            -- helper ow_get_item_augments uses): when
+                            -- the game itself translates this item's
+                            -- rank exdata, those lines are final —
+                            -- the per-line "Path:" re-resolution below
+                            -- is bypassed entirely. This is what
+                            -- resolves rank Mythics (e.g. Death
+                            -- Penalty) whose path/rank data isn't in
+                            -- the static DREMA/Unity tables, so the
+                            -- equipment panel stops showing a bare
+                            -- "Path: A" for them.
+                            if _ow_native_item_augments and item_data
+                                    and item_data.extdata then
+                                local okn, nlines = pcall(
+                                    _ow_native_item_augments,
+                                    item_id, item_data.extdata)
+                                if okn and type(nlines) == 'table' then
+                                    for _, nl in ipairs(nlines) do
+                                        augs[#augs + 1] = nl
+                                    end
+                                end
+                            end
+                            if #augs == 0 and extdata and item_data
+                                    and item_data.extdata then
                                 local ok_ext, ext = pcall(extdata.decode, item_data)
                                 if ok_ext and ext and ext.augments then
                                     _aug_src = ext.augments
                                 end
                             end
-                            if not _aug_src and item_data and item_data.augments then
+                            if not _aug_src and #augs == 0
+                                    and item_data and item_data.augments then
                                 _aug_src = item_data.augments
                             end
                             if _aug_src then

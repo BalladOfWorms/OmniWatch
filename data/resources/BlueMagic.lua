@@ -160,7 +160,7 @@ M = {
     ["Metallic Body"                 ] = {id=517, level=8, max_mp_boost=4},
     ["Mind Blast"                    ] = {id=644, level=73, clear_mind=4, stats={mnd=1}, vitals={mp=5}},
     ["Molting Plumage"               ] = {id=715, level=99, dw=8, stats={agi=8}},
-    ["Mortal Ray"                    ] = {id=686, level=91, dw=4},
+    ["Mortal Ray"                    ] = {id=686, level=91, dw=4, stats={str=2, mnd=2}},
     ["MP Drainkiss"                  ] = {id=521, level=42, vitals={mp=5}},
     ["Mysterious Light"              ] = {id=534, level=40, max_mp_boost=4, stats={agi=3}},
     ["Nat. Meditation"               ] = {id=700, level=99, acc_bonus=8, stats={dex=6}},

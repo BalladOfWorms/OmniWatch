@@ -20,7 +20,7 @@ OMNIWATCH_BUILD_STAMP = "v1.7.0 (2026-06-09)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.7.0"
+OMNIWATCH_VERSION = "1.7.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -2131,7 +2131,6 @@ _chat_composer_rect_channel   = None
 _chat_composer_rect_input     = None
 _chat_composer_rect_tell_to   = None
 _chat_composer_rect_send      = None
-_chat_composer_rect_at        = None  # { } auto-translate wrap button
 
 # Wrap cache: maps (event_id, panel_width) → list[str] of wrapped lines.
 # Invalidated implicitly when panel width changes (different cache key).
@@ -3113,6 +3112,33 @@ def _chat_classify_event(ev):
     if mode in CHAT_MODE_SET_LS2:    return (actor, "chat_ls2")
     if mode in CHAT_MODE_SET_PARTY:  return (actor, "chat_party")
     if mode == 4 or mode == 12:      return (actor, "chat_tell")
+    # Casting-interruption notices ("Wormfood's casting is
+    # interrupted."). FFXI broadcasts one of these for EVERY caster in
+    # range, which buried other players' interrupts in System. One
+    # channel — chat_cast_interrupt — classified with the real actor
+    # (self / party / alliance / mob / other via the name classifier,
+    # with any of your own multibox characters counting as self), so
+    # the per-actor rows in the Filters GUI decide visibility: by
+    # default only YOUR interrupts show (Battle tab); enable the Mob
+    # or Party rows there to see those too.
+    _ci = text.find("'s casting is interrupted")
+    if _ci > 0:
+        _ci_name = text[:_ci].strip()
+        if (_ci_name == player_self_name
+                or _ci_name in _mb_seen_senders):
+            _ci_actor = "self"
+        else:
+            _ci_actor = _chat_classify_name(_ci_name)
+            if _ci_actor == "mob":
+                # The Filters GUI writes mob cells as mob_engaged /
+                # mob_passive; a monster whose interrupt reaches your
+                # battle log is treated as engaged so the GUI's Mob
+                # rows control it.
+                _ci_actor = "mob_engaged"
+        return (_ci_actor, "chat_cast_interrupt")
+    if text.startswith("Your casting is interrupted"):
+        return ("self", "chat_cast_interrupt")
+
     if mode in CHAT_MODE_SET_SYSTEM:
         # Some "system" modes (127 for loot, 131 for exp) carry BOTH
         # the player's own gains AND area-wide gains from OTHER
@@ -3190,6 +3216,15 @@ def _chat_classify_event(ev):
 # specific actor wins over "*".
 
 _CHAT_ROUTING_DEFAULTS = {
+    # Actor-specific overrides (specific actor wins over "*").
+    "self": {
+        # YOUR casting interruptions belong in Battle — that's where
+        # eyes are when a cast gets clipped. Every other actor class
+        # inherits the hidden default from "*" below; flip an actor's
+        # row in the Filters GUI to see that class (e.g. Mob rows for
+        # stun confirmations on bosses).
+        "chat_cast_interrupt": ["Battle"],
+    },
     "*": {
         # Real player chat channels — uniform across actors
         "chat_say":    ["World"],
@@ -3268,6 +3303,13 @@ _CHAT_ROUTING_DEFAULTS = {
         # this to a Custom tab via the routing GUI. Your OWN gains
         # still land in System unchanged.
         "chat_loot_other": [],
+        # Casting-interruption notices: hidden for every actor class
+        # by default — FFXI broadcasts one for each nearby caster and
+        # they're mostly noise. The "self" actor section below
+        # overrides this to Battle for YOUR interrupts; flip any
+        # actor's row in the Filters GUI to see that class (e.g.
+        # enable under Mob to see stun confirmations on bosses).
+        "chat_cast_interrupt": [],
         # Bazaar sale notices ("<Name> bought your <item>...") —
         # informational, default to System. Route to a Custom tab
         # when actively selling if you want a dedicated stream.
@@ -4334,7 +4376,7 @@ def _ingest_chat_packet(raw, stream_label):
         # for the first N chat events. Capped so the session log
         # doesn't bloat under sustained chat. Purpose: when a user
         # reports "filters not working", their session log already
-        # has the routing trace so Cooper can see WHY events landed
+        # has the routing trace showing WHY events landed
         # where they did without needing a reproducer or env var.
         #
         # Logging once-per-event for a short window covers the most
@@ -4688,7 +4730,7 @@ events_button_rect       = None      # set by draw_header, read by click handler
                                      # The Events button (formerly in the
                                      # settings menu) lives in the header now
                                      # so it's one click away from any UI
-                                     # state — see Cooper's reasoning that
+                                     # state — see BalladOfWorms' reasoning that
                                      # the live-events list is checked often
                                      # enough during play that hiding it
                                      # under Misc was friction.
@@ -5212,6 +5254,46 @@ cheatsheet_button_scale = 1.0     # independent button size multiplier
 cheatsheet_button_handle_rect = None  # corner resize handle (set during draw)
 _cs_btn_resize          = None    # {start_scale, anchor_x, anchor_y}
 
+# ── BLU Spellsets panel state ─────────────────────────────────────────────
+# Named Blue Magic loadouts: create/edit sets in the overlay, equip via
+# the Lua-side engine (BLUSETS rail message). Sets persist per character
+# as spell NAMES (human-readable, survives resource renumbering) in
+# omniwatch_blu_spellsets_<charname>.json next to the other per-char
+# data files. Opened from Settings → Misc → BluSpells.
+_blusets_open        = False
+_blusets_view        = "list"   # "list" | "edit"
+_blusets_sets        = {}       # {set_name: [Spell Name, ...]}
+_blusets_loaded_char = None     # char the sets/positions were loaded for
+_blusets_current     = set()    # lowercase names equipped right now (Lua)
+_blusets_btn_pos     = None     # legacy launcher pos (kept in JSON, unused)
+_blusets_win_pos     = None     # persisted window [x, y]
+_blusets_scroll      = 0
+_blusets_edit_name   = ""       # set-name text field contents
+_blusets_edit_orig   = None     # original name when editing (None = new)
+_blusets_edit_sel    = set()    # lowercase spell names ticked in editor
+_blusets_name_focus  = False
+_blusets_confirm_del = None     # (set_name, expire_ts) two-click delete
+_blusets_note        = None     # (text, expire_ts) status line
+_blusets_win_drag    = None     # titlebar drag state
+# Hit rects (set during draw, None when not drawn)
+_blusets_btn_rect    = None
+_blusets_win_rect    = None
+_blusets_title_rect  = None
+_blusets_close_rect  = None
+_blusets_row_rects   = []       # list view: (equip_r, edit_r, del_r, name)
+_blusets_new_rect    = None
+_blusets_name_rect   = None
+_blusets_save_rect   = None
+_blusets_cancel_rect = None
+_blusets_spell_rects = []       # edit view: (rect, display_name)
+_blusets_fonts       = {}       # lazy font cache
+_blusets_tiers       = {}       # trait_key -> (Label, [tier thresholds])
+_blusets_traits      = {}       # spell_lower -> (set_cost, [(trait_key, pts)])
+_blusets_bonus       = {"gifts": 0, "subs": {}}   # live JP gifts + subjob pools
+_blusets_sb_rect     = None     # scrollbar knob hit rect (inflated)
+_blusets_sb_meta     = None     # (track_y, track_h, bar_h, max_scroll)
+_blusets_sb_drag     = None     # {grab_y, scroll0}
+
 # ── Warp button (Home Point / Survival Guide one-click travel) ─────────────
 # A small floating button (sibling of the [CS] button) that pulses when a
 # Home Point or Survival Guide is in range, and opens a one-click travel
@@ -5237,7 +5319,10 @@ warp_confirm_rect   = None    # envelope (tooltip suppress)
 # Proximity status from lua. ts is the wall-clock of the last WARPNEAR; if
 # it goes stale (no update for a few seconds, e.g. zoning) we treat the
 # player as not-near so the button stops pulsing.
-warp_near           = {"hp": False, "sg": False, "ts": 0.0}
+warp_near           = {"hp": False, "sg": False, "wp": False,
+                       "ab": False, "ew": False, "po": False,
+                       "pwp": False, "un": False, "vw": False,
+                       "ts": 0.0}
 warp_config         = None    # lazily loaded from WARP_FILE (see _warp_load_config)
 
 buff_anchor     = None
@@ -5467,7 +5552,7 @@ _icon_scaled_cache = {}   # (item_id, size) -> pygame.Surface
 # Telemetry for the equipment-viewer "icons missing" banner. We track
 # item ids that load_icon_surface tried and couldn't find on disk. The
 # banner reads len(_icon_missing_ids) to decide whether to render, and
-# logs the first ~10 ids the first time it fires so the user (or Cooper
+# logs the first ~10 ids the first time it fires so the user (or
 # debugging a user's session log) can see WHICH items are missing
 # without scrolling through every single print.
 _icon_missing_ids   = set()    # item_ids that have failed to load this session
@@ -5774,6 +5859,7 @@ _mb_seen_senders = set()
 _MB_DEBUG = True
 _mb_dbg_seen = {}        # sender -> {"accept": n, "drop": n}
 _mb_dbg_last_ts = 0.0
+_mb_dbg_last_state = None   # change-detection key for the mb debug line
 
 def _mb_dbg_note(sender, accepted):
     global _mb_dbg_last_ts
@@ -5787,12 +5873,22 @@ def _mb_dbg_note(sender, accepted):
     if now - _mb_dbg_last_ts >= 2.0:
         _mb_dbg_last_ts = now
         tgt = _mb_lock_target()
-        summary = ", ".join(
-            f"{(s or '<empty>')}:A{r['accept']}/D{r['drop']}"
-            for s, r in _mb_dbg_seen.items())
-        print(f"[OmniWatch][mb] lock_target={tgt!r} "
-              f"active_view_char={active_view_char!r} "
-              f"current_char_name={current_char_name!r} | {summary}")
+        # Log only when the multibox state itself changes (lock target,
+        # view char, char name, or the set of senders). The accept/drop
+        # counters tick every packet, so including them in the change
+        # key flooded the session log with a line every 2s; counters
+        # are still printed whenever a real change occurs.
+        global _mb_dbg_last_state
+        state = (tgt, active_view_char, current_char_name,
+                 tuple(sorted(s or "" for s in _mb_dbg_seen)))
+        if state != _mb_dbg_last_state:
+            _mb_dbg_last_state = state
+            summary = ", ".join(
+                f"{(s or '<empty>')}:A{r['accept']}/D{r['drop']}"
+                for s, r in _mb_dbg_seen.items())
+            print(f"[OmniWatch][mb] lock_target={tgt!r} "
+                  f"active_view_char={active_view_char!r} "
+                  f"current_char_name={current_char_name!r} | {summary}")
 
 class _MBSkip(Exception):
     """Raised inside a recv block to abandon processing a packet that
@@ -5910,7 +6006,7 @@ def list_known_characters():
         lowercased name is 'sim player' / 'simplayer' / 'sim_player').
         That folder gets created when Simulation Mode runs because
         the sim addon emits a PLAYER packet with a fake name, and it
-        showing up in the live char switcher was confusing per Cooper.
+        showing up in the live char switcher was confusing in practice.
     """
     chars = []
     sim_names = {"sim player", "simplayer", "sim_player", "sim"}
@@ -8468,6 +8564,19 @@ SETTINGS_SCHEMA = [
                    "characters (Send All) or just the active one. Edit "
                    "destinations in omniwatch_warp.json.",
     },
+    # ── BLU Spellsets (opens from Misc) ──────────────────────────────
+    {
+        "key":     "bluspells_open",
+        "label":   "BluSpells",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_bluspells",
+        "help":    "Open the BLU Spellsets manager: save named Blue "
+                   "Magic loadouts and equip them in one click "
+                   "(preserve-traits set changes, run on the game side).",
+    },
     {
         "key":     "show_warp",
         "label":   "(internal) show warp button",
@@ -8851,6 +8960,47 @@ SETTINGS_SCHEMA = [
     # persists them via save_layout()/load_layout(). Eventually that
     # file may merge into this one, but for now we leave them out so
     # the two systems don't fight over the same globals.
+    # ── Chat panel: keep-game-focus + type-anywhere ─────────────────
+    {
+        "key":     "no_focus_steal",
+        "label":   "Keep game focus",
+        "kind":    "bool",
+        "default": False,
+        "section": "Chat",
+        "applies": "python",
+    },
+    {
+        "key":     "global_typing",
+        "label":   "Type anywhere",
+        "kind":    "bool",
+        "default": False,
+        "section": "Chat",
+        "applies": "python",
+    },
+    {
+        "key":     "global_typing_strict",
+        "label":   "(internal) type-anywhere strict FFXI id",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+    },
+    {
+        "key":     "global_typing_trace",
+        "label":   "(internal) type-anywhere trace",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+    },
+    {
+        "key":     "global_typing_vktrace",
+        "label":   "(internal) type-anywhere VK trace",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+    },
 ]
 
 # Index by key for O(1) lookups.
@@ -10253,6 +10403,7 @@ _SETTINGS_ACTIONS = {
     "exit_omniwatch":          _exit_omniwatch,
     "toggle_fullscreen":       _toggle_fullscreen,
     "open_checklist":          lambda: _open_checklist_modal(),
+    "open_bluspells":          lambda: _blusets_show(),
     "open_campaigns":          lambda: _open_campaigns_modal(),
 }
 
@@ -10292,6 +10443,13 @@ def apply_setting_side_effects(key, value):
     global dps_panel_visible, buttons_panel_visible, chat_panel_visible
     global skillchain_panel_visible
     global chat_composer_visible
+    if key == "no_focus_steal":
+        # Apply/remove WS_EX_NOACTIVATE immediately (defined further
+        # down; by the time any setting can be toggled it exists).
+        try:
+            _apply_no_activate(bool(value))
+        except NameError:
+            pass
     # Lua-side notifications: send SETTING|<key>|<value> on port 5005
     # (the same socket lua already uses for SETUP/LOCK/BUTTONS control
     # messages). The lua side handles SETTING tags in its gearswap
@@ -16350,7 +16508,7 @@ def _campaign_subcampaign_looks_useful(name, desc):
 # Section banners ("Characters are easier to develop!", etc.) are
 # wrapped in <strong>, separately from the campaign names. We use
 # the heading pattern preferentially because it's used on the bigger
-# / more interesting campaign overview pages (the kind Cooper wants
+# / more interesting campaign overview pages (the kind BalladOfWorms wants
 # to see), and fall back to bold-tag matching only when the heading
 # pattern finds nothing.
 
@@ -16792,7 +16950,7 @@ def _campaigns_group_for(entry):
 
 def _campaigns_group_color(group_key):
     """Background color for a section header band. Matches the
-    visual cue conventions Cooper showed from bg-wiki: greenish for
+    visual cue conventions taken from bg-wiki: greenish for
     active, blue/teal for upcoming, neutral for unknown/past."""
     if group_key == "current":
         return (60, 110, 70)        # warm green
@@ -17599,7 +17757,7 @@ _di_load_cache()
 # objective is currently rewarded.
 #
 # Source: bg-wiki "Records of Eminence" → "Limited-Time Objectives"
-# table (Cooper's screenshot). The schedule is stable — it's been the
+# table (per in-game screenshot). The schedule is stable — it's been the
 # same rotation since the system was introduced.
 #
 # Slot index 0 = 23:00-02:59 PST (rolls into the labelled day)
@@ -17673,7 +17831,7 @@ def _roe_current_objective():
     try:
         # zoneinfo is stdlib since Python 3.9. Fall back to a fixed
         # UTC-8 offset if it's unavailable (shouldn't happen on
-        # Cooper's Python 3.14 but defensive).
+        # the build's Python 3.14 but defensive).
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo("America/Los_Angeles")
@@ -17909,7 +18067,7 @@ transport_ferry_idx   = 0
 # doesn't make it jump-cycle on the first frame.
 transport_airship_last_cycle_ts = 0.0
 transport_ferry_last_cycle_ts   = 0.0
-TRANSPORT_AUTO_CYCLE_SEC        = 4.0    # ~middle of Cooper's 3-5s range
+TRANSPORT_AUTO_CYCLE_SEC        = 4.0    # ~middle of the requested 3-5s range
 TRANSPORT_STALE_THRESHOLD_SEC   = 30.0   # treat as "fresh open" if older
 
 # Click rects for the transport boxes — populated each render, cleared
@@ -20549,6 +20707,815 @@ def _clear_cheatsheet_rects():
     _cs_ctx_menu = None
 
 
+# ── BLU Spellsets panel ────────────────────────────────────────────────────
+# A small manager for named Blue Magic loadouts, inspired by the
+# AzureSets addon but living in the overlay: a floating [BLU] launcher
+# (shown only while the locked character's main job is BLU) opens a
+# window listing saved sets. Each set can be equipped (Lua-side
+# preserve-traits engine via the BLUSETS rail message), edited, or
+# deleted; the editor is a click-to-tick picker over the character's
+# LEARNED spells (sourced live from the BLU_SPELLS snapshot). The set
+# matching the live loadout (BLU_CURRENT snapshot) gets a green dot.
+
+def _blusets_font(sz, bold=False):
+    key = (sz, bold)
+    f = _blusets_fonts.get(key)
+    if f is None:
+        f = pygame.font.SysFont("Segoe UI", sz, bold=bold)
+        _blusets_fonts[key] = f
+    return f
+
+
+def _blusets_char():
+    try:
+        return _mb_lock_target() or ""
+    except Exception:
+        return ""
+
+
+def _blusets_file_for(char):
+    safe = "".join(c for c in (char or "") if c.isalnum()) or "default"
+    return os.path.join(USER_DIR, f"omniwatch_blu_spellsets_{safe}.json")
+
+
+def _blusets_ensure_loaded():
+    """(Re)load sets + positions when the locked character changes."""
+    global _blusets_sets, _blusets_loaded_char, _blusets_btn_pos
+    global _blusets_win_pos, _blusets_view, _blusets_confirm_del
+    ch = _blusets_char()
+    if ch == _blusets_loaded_char:
+        return
+    _blusets_loaded_char = ch
+    _blusets_sets = {}
+    _blusets_btn_pos = None
+    _blusets_win_pos = None
+    _blusets_view = "list"
+    _blusets_confirm_del = None
+    try:
+        with open(_blusets_file_for(ch), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        sets = data.get("sets")
+        if isinstance(sets, dict):
+            for k, v in sets.items():
+                if isinstance(v, list):
+                    _blusets_sets[str(k)] = [str(s) for s in v if str(s).strip()]
+        bp = data.get("button_pos")
+        if isinstance(bp, list) and len(bp) == 2:
+            _blusets_btn_pos = [int(bp[0]), int(bp[1])]
+        wp = data.get("win_pos")
+        if isinstance(wp, list) and len(wp) == 2:
+            _blusets_win_pos = [int(wp[0]), int(wp[1])]
+    except Exception:
+        pass
+
+
+def _blusets_persist():
+    try:
+        with open(_blusets_file_for(_blusets_loaded_char), "w",
+                  encoding="utf-8") as f:
+            json.dump({"sets": _blusets_sets,
+                       "button_pos": _blusets_btn_pos,
+                       "win_pos": _blusets_win_pos}, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] blusets save failed: {e!r}")
+
+
+def _blusets_set_note(text):
+    global _blusets_note
+    _blusets_note = (text, time.time() + 4.0)
+
+
+def _blusets_learned_names():
+    """Learned BLU spells in master-list casing, alphabetical."""
+    try:
+        learned = checklist_known["blu_spells"]["auto"]
+    except Exception:
+        learned = set()
+    return [n for n in _BLU_SPELLS_MASTER if n.lower() in learned]
+
+
+def _blusets_send_equip(name):
+    names = _blusets_sets.get(name) or []
+    clean = [n.replace("|", "").replace(";", "").strip() for n in names]
+    clean = [n for n in clean if n]
+    if not clean:
+        _blusets_set_note("Set is empty — nothing to equip.")
+        return
+    try:
+        payload = (f"BLUSETS|equip|{_blusets_char()}|"
+                   f"{name.replace('|', '')}|{';'.join(clean)}")
+        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        _blusets_set_note(f'Equipping "{name}" — watch game chat.')
+    except Exception as e:
+        print(f"[OmniWatch] blusets equip send failed: {e!r}")
+
+
+def _blusets_clear_rects():
+    global _blusets_btn_rect, _blusets_win_rect, _blusets_title_rect
+    global _blusets_close_rect, _blusets_new_rect, _blusets_name_rect
+    global _blusets_save_rect, _blusets_cancel_rect
+    _blusets_btn_rect = None
+    _blusets_win_rect = None
+    _blusets_title_rect = None
+    _blusets_close_rect = None
+    _blusets_new_rect = None
+    _blusets_name_rect = None
+    _blusets_save_rect = None
+    _blusets_cancel_rect = None
+    _blusets_row_rects.clear()
+    _blusets_spell_rects.clear()
+    global _blusets_sb_rect, _blusets_sb_meta
+    _blusets_sb_rect = None
+    _blusets_sb_meta = None
+
+
+def _blusets_show():
+    """Open the BLU Spellsets window (Settings → Misc → BluSpells).
+    Also closes the settings menu so the window isn't drawn behind it."""
+    global _blusets_open, settings_menu_open
+    _blusets_ensure_loaded()
+    _blusets_open = True
+    settings_menu_open = False
+
+
+def _blusets_draw_button_row(surface, label, x, y, w, h, danger=False,
+                             accent=False):
+    r = pygame.Rect(x, y, w, h)
+    hov = r.collidepoint(pygame.mouse.get_pos())
+    if danger:
+        bg = (88, 38, 42) if hov else (62, 30, 34)
+        bd = (170, 80, 90)
+    elif accent:
+        bg = (38, 66, 50) if hov else (30, 50, 40)
+        bd = (90, 170, 120)
+    else:
+        bg = (46, 50, 64) if hov else (36, 40, 52)
+        bd = (90, 96, 116)
+    pygame.draw.rect(surface, bg, r, border_radius=3)
+    pygame.draw.rect(surface, bd, r, 1, border_radius=3)
+    f = _blusets_font(11)
+    t = f.render(label, True, (215, 220, 232))
+    surface.blit(t, (x + (w - t.get_width()) // 2,
+                     y + (h - t.get_height()) // 2))
+    return r
+
+
+_BLU_ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII")
+
+
+def _blusets_grouped_learned():
+    """Learned spells grouped under trait-section labels:
+    [(label, [(name, cost, pts), ...]), ...] — alphabetical sections
+    with 'No trait' last, spells alphabetical inside each."""
+    groups = {}
+    for nm in _blusets_learned_names():
+        info = _blusets_traits.get(nm.lower())
+        cost = info[0] if info else None
+        pairs = info[1] if info else []
+        if pairs:
+            key, pts = pairs[0]
+            label = (_blusets_tiers.get(key) or (key, []))[0]
+        else:
+            pts, label = 0, "No trait"
+        groups.setdefault(label, []).append((nm, cost, pts))
+    out = sorted(((l, sp) for l, sp in groups.items() if l != "No trait"),
+                 key=lambda t: t[0].lower())
+    if "No trait" in groups:
+        out.append(("No trait", groups["No trait"]))
+    for _, sp in out:
+        sp.sort(key=lambda t: t[0].lower())
+    return out
+
+
+def _blusets_sel_costs():
+    """(total set cost, total trait points) of the ticked selection."""
+    sp = tp = 0
+    for nm in _blusets_edit_sel:
+        info = _blusets_traits.get(nm)
+        if info:
+            sp += info[0] or 0
+            for _, p in info[1]:
+                tp += p
+    return sp, tp
+
+
+def _blusets_trait_totals():
+    """Effective trait totals for the current editor selection,
+    including live JP gift bonuses and subjob trait pools — the same
+    model the live stats engine uses: gifts add +8 each to a gift-
+    eligible trait only once spell points alone unlock it, and the
+    game takes max(spell pool + gifts, subjob pool) before the tier
+    lookup. Returns [(label, eff_pts, tier, next_thr, src, val)] with
+    src in '', 'gift', 'sub' and val = the trait's resolved stat VALUE
+    at that tier (e.g. Dual Wield tier VI -> 40), or None when there is
+    no numeric value (locked traits, string-tier traits like Killers
+    whose per-tier values are 0). Values come from the per-tier arrays
+    Lua ships in BLU_TIERS; active traits first."""
+
+    def _tier_val(key, tier):
+        # Resolved stat value for `key` at 1-based `tier`, or None.
+        ent = _blusets_tiers.get(key)
+        if not ent or len(ent) < 5 or tier <= 0:
+            return None
+        vals = ent[4]
+        if not vals:
+            return None
+        v = vals[min(tier, len(vals)) - 1]
+        return v if v else None
+    sums = {}
+    for nm in _blusets_edit_sel:
+        info = _blusets_traits.get(nm)
+        if not info:
+            continue
+        for key, pts in info[1]:
+            sums[key] = sums.get(key, 0) + pts
+    gifts = _blusets_bonus.get("gifts", 0) or 0
+    subs = dict(_blusets_bonus.get("subs", {}) or {})
+    rows = []
+    # ── Double/Triple Attack combined family ──
+    # bg-wiki: one spell pool; 8 family points = Double Attack,
+    # 16 = Triple Attack, and Triple Attack REPLACES the spell DA.
+    # A subjob's Double Attack is a separate source that coexists
+    # with spell Triple Attack. Gift-exempt. Summed across both keys
+    # so the data file may attribute family spells to either.
+    fam = sums.pop("da", 0) + sums.pop("triple_attack", 0)
+    sub_da = subs.pop("da", 0)
+    sub_ta = subs.pop("triple_attack", 0)
+    lab_da = (_blusets_tiers.get("da") or ("Double Attack",))[0]
+    lab_ta = (_blusets_tiers.get("triple_attack") or ("Triple Attack",))[0]
+    spell_da = fam if 8 <= fam < 16 else 0
+    eff_da = max(spell_da, sub_da)
+    if eff_da >= 8:
+        rows.append((lab_da, eff_da, 1, None,
+                     "sub" if sub_da > spell_da else "",
+                     _tier_val("da", 1)))
+    elif 0 < fam < 8:
+        rows.append((lab_da, fam, 0, 8, "", None))
+    spell_ta = fam if fam >= 16 else 0
+    eff_ta = max(spell_ta, sub_ta)
+    if eff_ta > 0:
+        rows.append((lab_ta, eff_ta, 1, None,
+                     "sub" if sub_ta > spell_ta else "",
+                     _tier_val("triple_attack", 1)))
+    elif 8 <= fam < 16:
+        # show progress toward the 16-point Triple Attack upgrade
+        rows.append((lab_ta, fam, 0, 16, "", None))
+    for key in set(sums) | set(subs):
+        ent = _blusets_tiers.get(key) or (key, [], False)
+        label, thr = ent[0], ent[1]
+        giftable = bool(ent[2]) if len(ent) > 2 else False
+        base = sums.get(key, 0)
+        eff, src = base, ""
+        if giftable and gifts and thr and base >= thr[0]:
+            eff = base + 8 * gifts
+            src = "gift"
+        sub = subs.get(key, 0)
+        if sub > eff:
+            eff, src = sub, "sub"
+        if eff <= 0:
+            continue
+        tier = sum(1 for t in thr if eff >= t)
+        nxt = next((t for t in thr if eff < t), None)
+        rows.append((label, eff, tier, nxt, src, _tier_val(key, tier)))
+    rows.sort(key=lambda r: (-(1 if r[2] > 0 else 0), -r[1], r[0].lower()))
+    return rows
+
+
+def draw_blusets_window(surface):
+    """The main BLU Spellsets window (list view / edit view)."""
+    global _blusets_win_rect, _blusets_title_rect, _blusets_close_rect
+    global _blusets_new_rect, _blusets_name_rect, _blusets_save_rect
+    global _blusets_cancel_rect, _blusets_win_pos, _blusets_scroll
+    global _blusets_note
+    if not _blusets_open:
+        return
+    _blusets_ensure_loaded()
+
+    W = 400 if _blusets_view == "list" else 580
+    title_h, foot_h, note_h = 26, 34, 18
+    f_t  = _blusets_font(13, bold=True)
+    f_r  = _blusets_font(12)
+    f_s  = _blusets_font(11)
+
+    # ── Content metrics ──
+    if _blusets_view == "list":
+        names = sorted(_blusets_sets.keys(), key=str.lower)
+        row_h = 26
+        content_h = max(row_h, len(names) * row_h) + 6
+        if not names:
+            content_h = 40
+    else:
+        groups = _blusets_grouped_learned()
+        row_h = 20
+        n_rows = sum(1 + len(sp) for _, sp in groups)  # headers + spells
+        content_h = max(row_h, n_rows * row_h) + 6
+        if not groups:
+            content_h = 44
+
+    strip_h = 34 if _blusets_view == "edit" else 0
+    max_h = min(HEIGHT - 60, 560)
+    body_h = min(content_h, max_h - title_h - strip_h - foot_h - note_h)
+    H = title_h + strip_h + body_h + foot_h + note_h
+
+    if _blusets_win_pos is None:
+        _blusets_win_pos = [max(10, (WIDTH - W) // 2), max(10, (HEIGHT - H) // 3)]
+    x0 = max(0, min(int(_blusets_win_pos[0]), WIDTH - W))
+    y0 = max(0, min(int(_blusets_win_pos[1]), HEIGHT - title_h))
+    _blusets_win_rect = pygame.Rect(x0, y0, W, H)
+
+    # ── Frame ──
+    pygame.draw.rect(surface, (24, 26, 34), _blusets_win_rect, border_radius=6)
+    pygame.draw.rect(surface, (78, 86, 110), _blusets_win_rect, 1,
+                     border_radius=6)
+    _blusets_title_rect = pygame.Rect(x0, y0, W, title_h)
+    pygame.draw.rect(surface, (34, 38, 52), _blusets_title_rect,
+                     border_top_left_radius=6, border_top_right_radius=6)
+    ttl = "BLU SPELLSETS" if _blusets_view == "list" else (
+        "EDIT SET" if _blusets_edit_orig else "NEW SET")
+    surface.blit(f_t.render(ttl, True, (200, 210, 230)), (x0 + 10, y0 + 5))
+    # close [×]
+    _blusets_close_rect = pygame.Rect(x0 + W - 22, y0 + 5, 16, 16)
+    hov = _blusets_close_rect.collidepoint(pygame.mouse.get_pos())
+    pygame.draw.rect(surface, (90, 40, 44) if hov else (50, 36, 40),
+                     _blusets_close_rect, border_radius=3)
+    xs = f_s.render("✕", True, (220, 180, 184))
+    surface.blit(xs, (_blusets_close_rect.x + (16 - xs.get_width()) // 2,
+                      _blusets_close_rect.y + (16 - xs.get_height()) // 2))
+
+    _blusets_row_rects.clear()
+    _blusets_spell_rects.clear()
+    _blusets_name_rect = None
+    _blusets_new_rect = None
+    _blusets_save_rect = None
+    _blusets_cancel_rect = None
+
+    # ── Fixed header strip (edit view): name + totals, never scrolls ──
+    if _blusets_view == "edit":
+        sy = y0 + title_h
+        pygame.draw.rect(surface, (28, 31, 42),
+                         pygame.Rect(x0, sy, W, 34))
+        surface.blit(f_r.render("Name:", True, (190, 196, 210)),
+                     (x0 + 10, sy + 8))
+        _blusets_name_rect = pygame.Rect(x0 + 62, sy + 5, 230, 24)
+        focus = _blusets_name_focus
+        pygame.draw.rect(surface, (18, 20, 28), _blusets_name_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface,
+                         (120, 160, 230) if focus else (80, 86, 106),
+                         _blusets_name_rect, 1, border_radius=3)
+        nm_disp = _blusets_edit_name + ("|" if focus
+                                        and int(time.time() * 2) % 2 else "")
+        surface.blit(_blusets_font(12, bold=True).render(
+            nm_disp, True, (230, 233, 242)),
+            (_blusets_name_rect.x + 6, _blusets_name_rect.y + 3))
+        # Totals: slots, total set cost, total trait points
+        n_sel = len(_blusets_edit_sel)
+        sp_tot, tp_tot = _blusets_sel_costs()
+        slot_col = (235, 110, 110) if n_sel > 20 else (160, 210, 170)
+        f_c = _blusets_font(12, bold=True)
+        seg_tp = f_c.render(f"{tp_tot}tp", True, (170, 190, 230))
+        seg_sp = f_c.render(f"{sp_tot}sp · ", True, (200, 185, 150))
+        seg_sl = f_c.render(f"{n_sel}/20 · ", True, slot_col)
+        cx_ = x0 + W - 12 - seg_tp.get_width()
+        surface.blit(seg_tp, (cx_, sy + 8))
+        cx_ -= seg_sp.get_width()
+        surface.blit(seg_sp, (cx_, sy + 8))
+        cx_ -= seg_sl.get_width()
+        surface.blit(seg_sl, (cx_, sy + 8))
+
+    # ── Scrollable body ──
+    body = pygame.Rect(x0, y0 + title_h + strip_h, W, body_h)
+    prev_clip = surface.get_clip()
+    surface.set_clip(body)
+    max_scroll = max(0, content_h - body_h)
+    _blusets_scroll = max(0, min(_blusets_scroll, max_scroll))
+    cy = body.y - _blusets_scroll + 4
+
+    if _blusets_view == "list":
+        names = sorted(_blusets_sets.keys(), key=str.lower)
+        if not names:
+            surface.blit(f_r.render("No sets yet — click  + New Set.",
+                                    True, (150, 156, 172)), (x0 + 12, cy + 6))
+        live = _blusets_current
+        for nm in names:
+            spells = _blusets_sets.get(nm) or []
+            if body.y - 26 < cy < body.bottom:
+                is_live = (bool(spells) and live
+                           and {s.lower() for s in spells} == live)
+                tx = x0 + 10
+                if is_live:
+                    pygame.draw.circle(surface, (110, 220, 140),
+                                       (tx + 4, cy + 12), 4)
+                    tx += 14
+                label = nm if len(nm) <= 18 else nm[:17] + "…"
+                surface.blit(f_r.render(label, True, (220, 224, 236)),
+                             (tx, cy + 4))
+                cnt = f_s.render(f"({len(spells)})", True, (140, 146, 162))
+                surface.blit(cnt, (tx + f_r.size(label)[0] + 6, cy + 6))
+                # row buttons (right-aligned)
+                del_label = "sure?" if (
+                    _blusets_confirm_del
+                    and _blusets_confirm_del[0] == nm
+                    and time.time() < _blusets_confirm_del[1]) else "✕"
+                r_del = _blusets_draw_button_row(
+                    surface, del_label, x0 + W - 48, cy + 2, 38, 20,
+                    danger=True)
+                r_edit = _blusets_draw_button_row(
+                    surface, "Edit", x0 + W - 94, cy + 2, 40, 20)
+                r_eq = _blusets_draw_button_row(
+                    surface, "Equip", x0 + W - 152, cy + 2, 52, 20,
+                    accent=True)
+                _blusets_row_rects.append((r_eq, r_edit, r_del, nm))
+            cy += 26
+    else:
+        # ── Edit view: trait sections + spells (name strip is fixed
+        # above; only this list scrolls) ──
+        groups = _blusets_grouped_learned()
+        left_w = 350                       # left column: sections + spells
+        if not groups:
+            surface.blit(f_s.render(
+                "No learned-spell data yet — is the character logged in?",
+                True, (170, 150, 130)), (x0 + 12, cy + 6))
+        for label, spells in groups:
+            # Section header: trait name on a subtle bar.
+            if body.y - 20 < cy < body.bottom:
+                hdr = pygame.Rect(x0 + 6, cy + 3, left_w - 6, 16)
+                pygame.draw.rect(surface, (30, 34, 46), hdr,
+                                 border_radius=3)
+                surface.blit(_blusets_font(11, bold=True).render(
+                    label, True, (150, 170, 210)), (hdr.x + 6, hdr.y + 1))
+            cy += 20
+            for nm, cost, pts in spells:
+                if body.y - 20 < cy < body.bottom:
+                    r = pygame.Rect(x0 + 14, cy + 2, left_w - 18, 18)
+                    sel = nm.lower() in _blusets_edit_sel
+                    hov = r.collidepoint(pygame.mouse.get_pos())
+                    if hov:
+                        pygame.draw.rect(surface, (34, 38, 52), r,
+                                         border_radius=3)
+                    box = pygame.Rect(r.x + 2, r.y + 2, 13, 13)
+                    pygame.draw.rect(surface, (18, 20, 28), box,
+                                     border_radius=2)
+                    pygame.draw.rect(surface, (96, 104, 128), box, 1,
+                                     border_radius=2)
+                    if sel:
+                        pygame.draw.rect(
+                            surface, (120, 200, 150),
+                            pygame.Rect(box.x + 3, box.y + 3, 7, 7),
+                            border_radius=1)
+                    col = (235, 238, 248) if sel else (185, 191, 206)
+                    ns = _blusets_font(11, bold=True).render(nm, True, col)
+                    surface.blit(ns, (r.x + 22, r.y + 1))
+                    nrect = pygame.Rect(r.x + 22, r.y + 1,
+                                        ns.get_width(), 15)
+                    if nrect.collidepoint(pygame.mouse.get_pos()):
+                        # underline on hover: the name is a wiki link
+                        pygame.draw.line(
+                            surface, col,
+                            (nrect.x, nrect.bottom),
+                            (nrect.x + nrect.w, nrect.bottom))
+                    # spell points (set cost) / trait points, right-aligned
+                    if pts:
+                        meta = f"{cost}sp · {pts}tp" if cost is not None                                else f"{pts}tp"
+                    else:
+                        meta = f"{cost}sp" if cost is not None else ""
+                    if meta:
+                        ms = _blusets_font(10).render(
+                            meta, True, (152, 160, 178))
+                        mx_ = r.right - 14 - ms.get_width()
+                        surface.blit(ms, (mx_, r.y + 2))
+                    if nm.lower() in _blusets_current:
+                        pygame.draw.circle(surface, (110, 220, 140),
+                                           (r.right - 7, r.centery), 3)
+                    _blusets_spell_rects.append((r, nrect, nm))
+                cy += 20
+    surface.set_clip(prev_clip)
+
+    # ── Edit view: fixed (non-scrolling) trait totals panel, right ──
+    if _blusets_view == "edit":
+        rp_x = x0 + 362
+        rp = pygame.Rect(rp_x, body.y + 6, W - 372, body_h - 10)
+        pygame.draw.line(surface, (58, 64, 84), (rp_x - 6, body.y + 4),
+                         (rp_x - 6, body.bottom - 4))
+        surface.set_clip(rp.clip(body))
+        surface.blit(_blusets_font(11, bold=True).render(
+            "TRAIT TOTALS", True, (150, 170, 210)), (rp.x, rp.y))
+        ty = rp.y + 18
+        totals = _blusets_trait_totals()
+        if not totals:
+            surface.blit(f_s.render("Tick spells to see traits.",
+                                    True, (130, 138, 156)),
+                         (rp.x, ty + 2))
+        shown = 0
+        f_b = _blusets_font(11, bold=True)
+        for label, pts, tier, nxt, srcb, tval in totals:
+            # Reserve room for the trait line plus its value sub-line
+            # (when present) so we never draw a label whose value gets
+            # clipped off the panel bottom.
+            need = 17 + (13 if tval is not None else 0)
+            if ty > rp.bottom - need:
+                more = len(totals) - shown
+                if more > 0:
+                    surface.blit(f_s.render(f"+{more} more…", True,
+                                            (130, 138, 156)), (rp.x, ty))
+                break
+            suffix = " (sub)" if srcb == "sub" else (
+                " (+gift)" if srcb == "gift" else "")
+            if tier > 0:
+                col = (140, 220, 160)
+                mark = (f"Tier "
+                        f"{_BLU_ROMAN[min(tier, len(_BLU_ROMAN)) - 1]}"
+                        f" · {pts}p")
+            else:
+                col = (160, 166, 182)
+                mark = f"{pts}/{nxt}p" if nxt else f"{pts}p"
+            # Truncate the label by pixel width so it never collides
+            # with the right-aligned tier mark.
+            avail = rp.w - f_b.size(mark)[0] - 8
+            lab = label + suffix
+            if f_b.size(lab)[0] > avail:
+                base_lab = label
+                while base_lab and f_b.size(
+                        base_lab + "…" + suffix)[0] > avail:
+                    base_lab = base_lab[:-1]
+                lab = base_lab + "…" + suffix
+            surface.blit(f_b.render(lab, True, col), (rp.x, ty))
+            ms = f_b.render(mark, True, col)
+            surface.blit(ms, (rp.right - ms.get_width(), ty))
+            ty += 17
+            # Indented grey value line under the trait (e.g. "+40" for
+            # Dual Wield tier VI) — only for traits with a numeric value.
+            if tval is not None:
+                surface.blit(f_s.render(f"+{tval}", True,
+                                        (130, 138, 156)),
+                             (rp.x + 12, ty - 2))
+                ty += 13
+            shown += 1
+        surface.set_clip(prev_clip)
+
+    # scrollbar: draggable knob (generous hit box); hugs the left
+    # column's edge in the edit view so it stays clear of the fixed
+    # trait-totals panel, and never overlaps the fixed name strip
+    # because the track starts at the scroll body's top.
+    global _blusets_sb_rect, _blusets_sb_meta
+    if max_scroll > 0:
+        frac = body_h / float(content_h)
+        bar_h = max(18, int(body_h * frac))
+        bar_y = body.y + int((body_h - bar_h)
+                             * (_blusets_scroll / float(max_scroll)))
+        bar_x = (x0 + 350) if _blusets_view == "edit" else (x0 + W - 7)
+        knob = pygame.Rect(bar_x, bar_y, 5, bar_h)
+        hot = _blusets_sb_drag is not None or knob.inflate(
+            10, 0).collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(surface, (110, 120, 150) if hot else (70, 76, 96),
+                         knob, border_radius=2)
+        _blusets_sb_rect = knob.inflate(10, 4)
+        _blusets_sb_meta = (body.y, body_h, bar_h, max_scroll)
+    else:
+        _blusets_sb_rect = None
+        _blusets_sb_meta = None
+
+    # ── Footer ──
+    fy = y0 + title_h + strip_h + body_h + 4
+    if _blusets_view == "list":
+        _blusets_new_rect = _blusets_draw_button_row(
+            surface, "+ New Set", x0 + 10, fy, 86, 24)
+    else:
+        _blusets_save_rect = _blusets_draw_button_row(
+            surface, "Save", x0 + 10, fy, 64, 24, accent=True)
+        _blusets_cancel_rect = _blusets_draw_button_row(
+            surface, "Cancel", x0 + 84, fy, 64, 24)
+
+    # status note
+    if _blusets_note and time.time() < _blusets_note[1]:
+        surface.blit(f_s.render(_blusets_note[0], True, (170, 180, 150)),
+                     (x0 + 10, fy + 28))
+    elif _blusets_note:
+        _blusets_note = None
+    elif _blusets_view == "edit":
+        surface.blit(f_s.render(
+            "Click a spell name for its bg-wiki page · "
+            "tick the box to set it", True,
+            (110, 118, 136)), (x0 + 10, fy + 28))
+
+
+def _blusets_open_editor(orig_name=None):
+    global _blusets_view, _blusets_edit_name, _blusets_edit_orig
+    global _blusets_edit_sel, _blusets_name_focus, _blusets_scroll
+    _blusets_view = "edit"
+    _blusets_scroll = 0
+    _blusets_edit_orig = orig_name
+    if orig_name:
+        _blusets_edit_name = orig_name
+        _blusets_edit_sel = {s.lower()
+                             for s in (_blusets_sets.get(orig_name) or [])}
+        _blusets_name_focus = False
+    else:
+        _blusets_edit_name = ""
+        _blusets_edit_sel = set()
+        _blusets_name_focus = True
+
+
+def _blusets_editor_save():
+    global _blusets_view, _blusets_scroll
+    name = _blusets_edit_name.strip()
+    if not name:
+        _blusets_set_note("Give the set a name first.")
+        return
+    if len(_blusets_edit_sel) > 20:
+        _blusets_set_note("Too many spells — a set holds at most 20.")
+        return
+    # Persist with master-list casing; keep original casing for any
+    # selected name no longer in the master (stale saved sets).
+    case = {n.lower(): n for n in _BLU_SPELLS_MASTER}
+    spells = sorted(case.get(s, s) for s in _blusets_edit_sel)
+    if _blusets_edit_orig and _blusets_edit_orig != name:
+        _blusets_sets.pop(_blusets_edit_orig, None)
+    _blusets_sets[name] = spells
+    _blusets_persist()
+    _blusets_set_note(f'Saved "{name}" ({len(spells)} spells).')
+    _blusets_view = "list"
+    _blusets_scroll = 0
+
+
+def _blusets_open_wiki(nm):
+    """Open a spell's bg-wiki page in the default browser. os.startfile
+    is the reliable opener inside the PyInstaller-frozen windowed exe;
+    webbrowser is the fallback elsewhere. Posts a status note either
+    way so the click visibly registered."""
+    from urllib.parse import quote
+    url = ("https://www.bg-wiki.com/ffxi/"
+           + quote(nm.replace(" ", "_"), safe="_'-.()"))
+    ok = False
+    try:
+        if os.name == "nt":
+            os.startfile(url)
+            ok = True
+    except Exception as e:
+        print(f"[OmniWatch][blusets] startfile failed: {e}")
+    if not ok:
+        try:
+            import webbrowser
+            ok = bool(webbrowser.open(url))
+        except Exception as e:
+            print(f"[OmniWatch][blusets] webbrowser failed: {e}")
+    _blusets_set_note(("bg-wiki: " + nm) if ok
+                      else "Couldn't open browser — see session log")
+    return ok
+
+
+def _blusets_handle_event(event):
+    """All input for the BLU Spellsets launcher + window. Returns True
+    when the event was consumed (callers skip their own handling)."""
+    global _blusets_open, _blusets_view, _blusets_scroll
+    global _blusets_win_drag, _blusets_win_pos, _blusets_sb_drag
+    global _blusets_name_focus, _blusets_edit_name, _blusets_confirm_del
+
+    if event.type == pygame.MOUSEWHEEL:
+        if (_blusets_open and _blusets_win_rect is not None
+                and _blusets_win_rect.collidepoint(pygame.mouse.get_pos())):
+            _blusets_scroll = max(0, _blusets_scroll - event.y * 30)
+            return True
+        return False
+
+    if event.type == pygame.KEYDOWN:
+        if not _blusets_open:
+            return False
+        if _blusets_name_focus:
+            if event.key == pygame.K_BACKSPACE:
+                _blusets_edit_name = _blusets_edit_name[:-1]
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                               pygame.K_ESCAPE):
+                _blusets_name_focus = False
+            elif event.unicode and event.unicode.isprintable() \
+                    and event.unicode not in "|;" \
+                    and len(_blusets_edit_name) < 24:
+                _blusets_edit_name += event.unicode
+            return True
+        if event.key == pygame.K_ESCAPE:
+            if _blusets_view == "edit":
+                _blusets_view = "list"
+                _blusets_scroll = 0
+            else:
+                _blusets_open = False
+            return True
+        return False
+
+    if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 3
+            and _blusets_open and _blusets_win_rect is not None):
+        mx, my = event.pos
+        if _blusets_view == "edit":
+            for r, _nr, nm in _blusets_spell_rects:
+                if r.collidepoint(mx, my):
+                    _blusets_open_wiki(nm)
+                    return True
+        if _blusets_win_rect.collidepoint(mx, my):
+            return True   # don't leak right-clicks to panels beneath
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if not _blusets_open or _blusets_win_rect is None:
+            return False
+        if not _blusets_win_rect.collidepoint(mx, my):
+            _blusets_name_focus = False
+            return False
+        # Close box
+        if _blusets_close_rect and _blusets_close_rect.collidepoint(mx, my):
+            _blusets_open = False
+            return True
+        # Scrollbar knob: hold to drag
+        if (_blusets_sb_rect is not None
+                and _blusets_sb_rect.collidepoint(mx, my)):
+            _blusets_sb_drag = {"grab_y": my, "scroll0": _blusets_scroll}
+            return True
+        # Title drag
+        if _blusets_title_rect and _blusets_title_rect.collidepoint(mx, my):
+            _blusets_win_drag = {"x": mx, "y": my,
+                                 "ox": _blusets_win_pos[0],
+                                 "oy": _blusets_win_pos[1]}
+            return True
+        if _blusets_view == "list":
+            if _blusets_new_rect and _blusets_new_rect.collidepoint(mx, my):
+                _blusets_open_editor(None)
+                return True
+            for r_eq, r_edit, r_del, nm in _blusets_row_rects:
+                if r_eq.collidepoint(mx, my):
+                    _blusets_send_equip(nm)
+                    return True
+                if r_edit.collidepoint(mx, my):
+                    _blusets_open_editor(nm)
+                    return True
+                if r_del.collidepoint(mx, my):
+                    now = time.time()
+                    if (_blusets_confirm_del
+                            and _blusets_confirm_del[0] == nm
+                            and now < _blusets_confirm_del[1]):
+                        _blusets_sets.pop(nm, None)
+                        _blusets_persist()
+                        _blusets_confirm_del = None
+                        _blusets_set_note(f'Deleted "{nm}".')
+                    else:
+                        _blusets_confirm_del = (nm, now + 2.5)
+                    return True
+        else:
+            if _blusets_name_rect and _blusets_name_rect.collidepoint(mx, my):
+                _blusets_name_focus = True
+                return True
+            _blusets_name_focus = False
+            if _blusets_save_rect and _blusets_save_rect.collidepoint(mx, my):
+                _blusets_editor_save()
+                return True
+            if _blusets_cancel_rect \
+                    and _blusets_cancel_rect.collidepoint(mx, my):
+                _blusets_view = "list"
+                _blusets_scroll = 0
+                return True
+            for r, nrect, nm in _blusets_spell_rects:
+                if nrect.collidepoint(mx, my):
+                    # the spell NAME is a link — open its bg-wiki page
+                    _blusets_open_wiki(nm)
+                    return True
+                if r.collidepoint(mx, my):
+                    # box / anywhere else on the row toggles the spell
+                    key = nm.lower()
+                    if key in _blusets_edit_sel:
+                        _blusets_edit_sel.discard(key)
+                    else:
+                        _blusets_edit_sel.add(key)
+                    return True
+        return True   # swallow clicks anywhere inside the window
+
+    if event.type == pygame.MOUSEMOTION:
+        if _blusets_sb_drag is not None:
+            if _blusets_sb_meta:
+                _, track_h, bar_h, max_scroll = _blusets_sb_meta
+                span = max(1, track_h - bar_h)
+                dy = event.pos[1] - _blusets_sb_drag["grab_y"]
+                _blusets_scroll = max(0, min(
+                    max_scroll,
+                    _blusets_sb_drag["scroll0"]
+                    + int(dy * max_scroll / span)))
+            return True
+        if _blusets_win_drag is not None:
+            _blusets_win_pos = [
+                _blusets_win_drag["ox"] + event.pos[0] - _blusets_win_drag["x"],
+                _blusets_win_drag["oy"] + event.pos[1] - _blusets_win_drag["y"]]
+            return True
+        return False
+
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _blusets_sb_drag is not None:
+            _blusets_sb_drag = None
+            return True
+        if _blusets_win_drag is not None:
+            _blusets_win_drag = None
+            _blusets_persist()          # save new window position
+            return True
+        return False
+
+    return False
+
+
 def draw_cheatsheet_button(surface):
     """Draw the floating, draggable, resizable [CS] button. Click toggles
     the window; dragging the body repositions it; dragging the corner
@@ -20846,8 +21813,220 @@ WARP_DEFAULT_CONFIG = {
     },
 }
 
+# Superwarp activity-module networks added 2026-06-11. These are plain
+# data appended to WARP_DEFAULT_CONFIG; destination "zone" strings are
+# the exact targets superwarp's matching resolves against each module's
+# warpdata (zone name [+ sub-destination]). Numbered sub-destinations
+# (confluxes, portals, waypoints) become children, so the menu tree is
+# network -> zone -> point. Counts mirror the shipped superwarp data.
+
+WARP_DEFAULT_CONFIG["wp"] = {
+    "label": "Waypoint",
+    "command": "sw wp",
+    "destinations": (
+        [{"label": "Western Adoulin", "children": [
+            {"label": lab, "zone": f"western adoulin {i}"}
+            for i, lab in enumerate(
+                ("Platea", "Pioneers", "Mummers", "Inventors",
+                 "Auction House", "Mog House", "Bridge", "Airship",
+                 "Waterfront"), 1)]},
+         {"label": "Eastern Adoulin", "children": [
+            {"label": lab, "zone": f"eastern adoulin {i}"}
+            for i, lab in enumerate(
+                ("Peacekeepers", "Scouts", "Statue", "Wharf",
+                 "Mog House", "Auction House", "Sverdhried Hill",
+                 "Coronal Esplanade", "Castle Gates"), 1)]}]
+        + [{"label": z, "children":
+            [{"label": "Station", "zone": f"{t} frontier station"}]
+            + [{"label": f"#{i}", "zone": f"{t} {i}"}
+               for i in range(1, n + 1)]
+            + ([{"label": "Enigmatic Device",
+                 "zone": f"{t} enigmatic device"}] if dev else [])}
+           for z, t, n, dev in (
+               ("Ceizak Battlegrounds", "ceizak", 3, False),
+               ("Yahse Hunting Grounds", "yahse", 3, False),
+               ("Foret de Hennetiel", "hennetiel", 4, False),
+               ("Morimar Basalt Fields", "morimar", 5, False),
+               ("Yorcia Weald", "yorcia", 3, True),
+               ("Marjami Ravine", "marjami", 4, False),
+               ("Kamihr Drifts", "kamihr", 4, False))]
+        + [{"label": "Dungeons", "children": [
+            {"label": z, "zone": f"{t} enigmatic device"}
+            for z, t in (("Rala Waterways", "rala"),
+                         ("Cirdas Caverns", "cirdas"),
+                         ("Outer Ra'Kaznar", "ra'kaznar"))]}]
+        + [{"label": "Towns", "children": [
+            {"label": z, "zone": z.lower()} for z in (
+                "Jeuno", "Northern San d'Oria", "Bastok Markets",
+                "Windurst Woods", "Selbina", "Mhaura", "Kazham",
+                "Rabao", "Norg", "Tavnazian Safehold",
+                "Aht Urhgan Whitegate", "Nashmau")]}]),
+}
+
+WARP_DEFAULT_CONFIG["ab"] = {
+    "label": "Abyssea Conflux",
+    "command": "sw ab",
+    "destinations": [
+        {"label": z, "children":
+            [{"label": f"#{i}", "zone": f"{t} {i}"}
+             for i in range(1, 9)]}
+        for z, t in (
+            ("La Theine", "la theine"), ("Konschtat", "konschtat"),
+            ("Tahrongi", "tahrongi"), ("Vunkerl", "vunkerl"),
+            ("Misareaux", "misareaux"), ("Attohwa", "attohwa"),
+            ("Altepa", "altepa"), ("Uleguerand", "uleguerand"),
+            ("Grauberg", "grauberg"))],
+}
+
+WARP_DEFAULT_CONFIG["ew"] = {
+    "label": "Eschan Portal",
+    "command": "sw ew",
+    "destinations": [
+        {"label": "Escha Zi'Tah", "children": [
+            {"label": f"#{i}", "zone": f"zi'tah {i}"}
+            for i in range(1, 9)]},
+        {"label": "Escha Ru'Aun", "children": [
+            {"label": f"#{i}", "zone": f"ru'an {i}"}
+            for i in range(1, 16)]},
+        {"label": "Reisenjima", "children": [
+            {"label": f"#{i}", "zone": f"reisenjima {i}"}
+            for i in range(1, 11)]},
+        {"label": "Exit Escha", "zone": "exit"},
+        {"label": "Domain Return", "zone": "domain return"},
+    ],
+}
+
+WARP_DEFAULT_CONFIG["po"] = {
+    "label": "Runic Portal",
+    "command": "sw po",
+    "destinations": [
+        {"label": "Azouph Isle (Leujaoam)", "zone": "azouph isle"},
+        {"label": "Dvucca Isle (Periqia)", "zone": "dvucca isle"},
+        {"label": "Mamool Ja Grounds",
+         "zone": "mamool ja training grounds"},
+        {"label": "Halvung (Lebros)", "zone": "halvung"},
+        {"label": "Ilrusi Atoll", "zone": "ilrusi atoll"},
+        {"label": "Nyzul Isle", "zone": "nyzul isle"},
+        {"label": "Assault Orders", "zone": "assault"},
+        {"label": "Return to Whitegate", "zone": "return"},
+    ],
+}
+
+WARP_DEFAULT_CONFIG["pwp"] = {
+    "label": "Proto-Waypoint",
+    "command": "sw pwp",
+    "destinations": [
+        {"label": "Towns (30 KU)", "children": [
+            {"label": z, "zone": z.lower()} for z in (
+                "Ru'lude Gardens", "Selbina", "Mhaura", "Rabao",
+                "Norg")]},
+        {"label": "Fields (100 KU)", "children": [
+            {"label": z, "zone": z.lower()} for z in (
+                "West Ronfaure", "North Gustaberg",
+                "West Sarutabaruta", "La Theine Plateau",
+                "Konschtat Highlands", "Tahrongi Canyon",
+                "Jugner Forest", "Pashhow Marshlands",
+                "Meriphataud Mountains", "Attohwa Chasm",
+                "Uleguerand Range")]},
+        {"label": "Dungeons (300 KU)", "children": [
+            {"label": z, "zone": z.lower()} for z in (
+                "Davoi", "Beadeaux", "Castle Oztroja",
+                "Quicksand Caves", "Sea Serpent Grotto",
+                "Temple of Uggalepih", "The Boyahda Tree",
+                "Oldton Movalpolos", "Riverne - Site #B01",
+                "Castle Zvahl Keep")]},
+    ],
+}
+
+_UNITY_ZONES = (
+    "East Ronfaure", "South Gustaberg", "East Sarutabaruta",
+    "La Theine Plateau", "Konschtat Highlands", "Tahrongi Canyon",
+    "Valkurm Dunes", "Buburimu Peninsula", "Qufim Island",
+    "Bibiki Bay", "Carpenters' Landing", "Yuhtunga Jungle",
+    "Lufaise Meadows", "Jugner Forest", "Pashhow Marshlands",
+    "Meriphataud Mountains", "Eastern Altepa Desert",
+    "Yhoator Jungle", "The Sanctuary of Zi'Tah", "Misareaux Coast",
+    "Labyrinth of Onzozo", "Bostaunieux Oubliette", "Batallia Downs",
+    "Rolanberry Fields", "Sauromugue Champaign", "Beaucedine Glacier",
+    "Xarcabard", "Ro'Maeve", "Western Altepa Desert", "Attohwa Chasm",
+    "Garlaige Citadel", "Ifrit's Cauldron", "The Boyahda Tree",
+    "Kuftal Tunnel", "Sea Serpent Grotto", "Temple of Uggalepih",
+    "Quicksand Caves", "Wajaom Woodlands", "Cape Teriggan",
+    "Uleguerand Range", "Den of Rancor", "Fei'Yin",
+    "Alzadaal Undersea Ruins", "Mount Zhayolm", "Gustav Tunnel",
+    "Behemoth's Dominion", "Valley of Sorrows", "Caedarva Mire",
+    "Aydeewa Subterrane",
+)
+
+def _unity_bucket(z):
+    c = z[0].upper()
+    if c <= "B":
+        return "A – B"
+    if c <= "G":
+        return "C – G"
+    if c <= "M":
+        return "H – M"
+    if c <= "S":
+        return "N – S"
+    return "T – Z"
+
+_un_groups = {}
+for _z in sorted(_UNITY_ZONES):
+    _un_groups.setdefault(_unity_bucket(_z), []).append(
+        {"label": _z, "zone": _z.lower()})
+WARP_DEFAULT_CONFIG["un"] = {
+    "label": "Unity Warp",
+    "command": "sw un",
+    "destinations": [{"label": b, "children": _un_groups[b]}
+                     for b in ("A – B", "C – G", "H – M",
+                               "N – S", "T – Z")
+                     if b in _un_groups],
+}
+
+WARP_DEFAULT_CONFIG["vw"] = {
+    "label": "Voidwatch",
+    "command": "sw vw",
+    "destinations": [
+        {"label": grp, "children": [
+            {"label": z, "zone": z.lower()} for z in zones]}
+        for grp, zones in (
+            ("Ronfaure Path", ("East Ronfaure", "Ordelle's Caves",
+                "Jugner Forest", "King Ranperre's Tomb")),
+            ("Gustaberg Path", ("North Gustaberg", "Gusgen Mines",
+                "Pashhow Marshlands", "Dangruf Wadi")),
+            ("Sarutabaruta Path", ("West Sarutabaruta",
+                "Maze of Shakhrami", "Meriphataud Mountains",
+                "Outer Horutoto Ruins")),
+            ("Jeuno Path", ("Batallia Downs", "Rolanberry Fields",
+                "Sauromugue Champaign", "Eldieme Necropolis",
+                "Crawlers' Nest", "Garlaige Citadel", "Qufim Island",
+                "Delkfutt's Tower", "Behemoth's Dominion")),
+            ("Quon / Mindartia", ("West Ronfaure", "South Gustaberg",
+                "East Sarutabaruta", "La Theine Plateau",
+                "Konschtat Highlands", "Tahrongi Canyon",
+                "Valkurm Dunes", "Buburimu Peninsula",
+                "Beaucedine Glacier")),
+            ("Zilart", ("Yuhtunga Jungle", "Ifrit's Cauldron",
+                "Temple of Uggalepih", "Western Altepa Desert",
+                "Kuftal Tunnel", "Quicksand Caves",
+                "The Sanctuary of Zi'Tah", "The Boyahda Tree",
+                "Ro'Maeve", "The Hall of the Gods")),
+            ("CoP", ("Lufaise Meadows", "Misareaux Coast",
+                "Uleguerand Range", "Attohwa Chasm", "Bibiki Bay")),
+            ("ToAU", ("Arrapago Reef", "Mount Zhayolm", "Mamook",
+                "Caedarva Mire", "Aydeewa Subterrane")),
+            ("Shadowreign [S]", ("East Ronfaure [S]",
+                "Jugner Forest [S]", "North Gustaberg [S]",
+                "Pashhow Marshlands [S]", "West Sarutabaruta [S]",
+                "Meriphataud Mountains [S]", "Batallia Downs [S]",
+                "Rolanberry Fields [S]", "Sauromugue Champaign [S]",
+                "Eldieme Necropolis [S]", "Crawlers' Nest [S]",
+                "Garlaige Citadel [S]", "Vunkerl Inlet [S]",
+                "Grauberg [S]", "Fort Karugo-Narugo [S]")))],
+}
+
 # Networks, in menu order. Keys must match lua's WARPNEAR| fields.
-WARP_NETWORKS = ("hp", "sg")
+WARP_NETWORKS = ("hp", "sg", "wp", "ab", "ew", "po", "pwp", "un", "vw")
 
 # Travel menu shows at most this many rows at once; the rest scroll.
 WARP_MENU_MAX_ROWS = 12
@@ -21084,12 +22263,13 @@ def _warp_destinations_for(net):
     return cfg.get(net, {}).get("destinations", [])
 
 def _warp_is_near():
-    """Return (hp_near, sg_near). Treats the proximity status as not-near
-    once it goes stale (no WARPNEAR for >3s — e.g. after zoning), so the
-    button stops pulsing when the player walks away or changes zone."""
+    """Return {net: bool} for every network in WARP_NETWORKS. Treats the
+    proximity status as not-near once it goes stale (no WARPNEAR for
+    >3s — e.g. after zoning), so the button stops pulsing when the
+    player walks away or changes zone."""
     if (time.time() - warp_near.get("ts", 0.0)) > 3.0:
-        return (False, False)
-    return (bool(warp_near.get("hp")), bool(warp_near.get("sg")))
+        return {net: False for net in WARP_NETWORKS}
+    return {net: bool(warp_near.get(net)) for net in WARP_NETWORKS}
 
 
 def _warp_send(command):
@@ -21151,8 +22331,7 @@ def draw_warp_button(surface):
     warp_button_rect = pygame.Rect(x, y, bw, bh)
     mx, my = pygame.mouse.get_pos()
     hov = warp_button_rect.collidepoint(mx, my)
-    hp_near, sg_near = _warp_is_near()
-    near = hp_near or sg_near
+    near = any(_warp_is_near().values())
 
     base_bg = (62, 62, 78) if (hov or warp_menu_open) else (44, 44, 54)
     if near:
@@ -21199,8 +22378,7 @@ def draw_warp_menu(surface):
     if not warp_menu_open:
         return
     cfg = _warp_load_config()
-    hp_near, sg_near = _warp_is_near()
-    near_map = {"hp": hp_near, "sg": sg_near}
+    near_map = _warp_is_near()
 
     title_font = get_font("Consolas", 12, bold=True)
     row_font   = get_font("Consolas", 12)
@@ -26978,6 +28156,8 @@ _SUBDIALOG_CONFIGS = {
             ("show_chat",          "Show chat panel", "bool"),
             ("chat_font_size",     "Font size",       "enum"),
             ("show_chat_composer", "Show input bar",  "bool"),
+            ("no_focus_steal",     "Keep game focus", "bool"),
+            ("global_typing",      "Type anywhere",   "bool"),
         ],
         "helpers": {},
     },
@@ -28009,7 +29189,7 @@ def draw_campaigns_modal(surface):
 
     # ── Persistent info banners (above the scrollable content) ──
     # Two side-by-side boxes that stay fixed when the user scrolls
-    # the campaigns list below. Cooper's "look at the top of the
+    # the campaigns list below. The "look at the top of the
     # modal first" pattern: the rotating RoE objective and the
     # current Domain Invasion location are the two pieces of info
     # he checks most often. Putting them in fixed boxes means he
@@ -28291,7 +29471,7 @@ def draw_campaigns_modal(surface):
     # Each group gets a colored header band at the top so the user can
     # tell at a glance which campaigns are running NOW vs which are
     # upcoming. Within each group, individual event cards render as
-    # before. Cooper requested this sectioned layout to mirror bg-wiki's
+    # before. This sectioned layout mirrors bg-wiki's
     # "Ongoing and Upcoming Events" widget convention.
     card_x = content_rect.x
     card_w = content_rect.w
@@ -31489,6 +32669,36 @@ def _chat_composer_handle_textinput(text):
         chat_composer_cursor += len(insert)
 
 
+# ── NPC dialog "continue" arrow (ported from OmniChat) ────────────────
+# Each client's OmniWatch.lua reports CSSTATE over the chat stream
+# (pre-gate, so alts count) whenever it enters/leaves FFXI's Event
+# status — i.e. while an NPC dialog or cutscene is waiting on the
+# player. While the pinned character is in that state, the chat panel
+# draws a small pulsing ▼ at the end of the last line, mirroring the
+# game's own blinking continue cursor: more to read — hit Enter in
+# the game to advance.
+_cs_state = {}              # char -> [in_event(bool), last_seen_ts]
+CS_FRESH = 6.0              # seconds a CSSTATE report stays trusted
+
+
+def _dialog_chars():
+    """Characters currently reported in Event status (fresh)."""
+    now = time.time()
+    return sorted(c for c, (on, ts) in _cs_state.items()
+                  if on and (now - ts) <= CS_FRESH)
+
+
+def _chat_continue_arrow_active():
+    """True when the character whose chat the panel shows is sitting
+    in an NPC dialog/cutscene. Falls back to 'anyone' before a pin
+    target exists."""
+    chars = _dialog_chars()
+    if not chars:
+        return False
+    target = _mb_chat_lock_target() or ""
+    return (target in chars) if target else True
+
+
 def _chat_composer_height():
     """Pixel height of the composer row. Constant — same height
     whether or not the tell target field is showing (the target
@@ -31513,7 +32723,6 @@ def _draw_chat_composer(surface, x, y, w, body_font, meta_font, cjk_font):
     global _chat_composer_rect_arrow_l, _chat_composer_rect_arrow_r
     global _chat_composer_rect_channel, _chat_composer_rect_input
     global _chat_composer_rect_tell_to, _chat_composer_rect_send
-    global _chat_composer_rect_at
     global chat_composer_last_blink
 
     h = _chat_composer_height()
@@ -31577,31 +32786,6 @@ def _draw_chat_composer(surface, x, y, w, body_font, meta_font, cjk_font):
                  (arr_r.x + (arr_r.w - ar_surf.get_width()) // 2,
                   arr_r.y + (arr_r.h - ar_surf.get_height()) // 2))
     cx += arrow_w + 4
-
-    # ── { } auto-translate button (ported from OmniChat) ─────────
-    # Wraps the composer text for auto-translate sending (see the
-    # click handler): with text present, the whole message becomes
-    # {message} (click again to unwrap); empty, it inserts {} and
-    # parks the cursor inside so you type the phrase directly. The
-    # lua side converts {phrase} into the real in-game auto-translate
-    # token on send.
-    global _chat_composer_rect_at
-    at_label = "{ }"
-    at_w = body_font.size(at_label)[0] + 12
-    at_rect = pygame.Rect(cx, y + 3, at_w, h - 6)
-    _chat_composer_rect_at = at_rect
-    _at_hov = at_rect.collidepoint(pygame.mouse.get_pos())
-    at_bg = pygame.Surface((at_rect.w, at_rect.h), pygame.SRCALPHA)
-    at_bg.fill((70, 85, 110, 235) if _at_hov else (46, 54, 68, 225))
-    surface.blit(at_bg, at_rect.topleft)
-    pygame.draw.rect(surface, CHAT_COMPOSER_FIELD_BDR, at_rect, 1)
-    at_surf = body_font.render(at_label, True,
-                               (240, 240, 245) if _at_hov
-                               else (185, 195, 210))
-    surface.blit(at_surf,
-                 (at_rect.x + (at_rect.w - at_surf.get_width()) // 2,
-                  at_rect.y + (at_rect.h - at_surf.get_height()) // 2))
-    cx += at_w + 4
 
     # ── Send button (right-aligned, reserved width) ────────────
     send_label = "send"
@@ -32948,6 +34132,27 @@ def draw_chat_panel(surface, x, y, locked=False):
             body_surf = _chat_render_mixed(seg["text"], body_font,
                                            cjk_font, seg["color"])
             surface.blit(body_surf, (text_x, ly))
+
+    # NPC-dialog continue arrow: a small pulsing ▼ at the end of the
+    # last line while the pinned character is in a dialog/cutscene —
+    # the panel's version of the game's blinking continue cursor.
+    # Only at the live bottom (scrolled up = reading history).
+    if active_scroll == 0 and window and _chat_continue_arrow_active():
+        _bot = window[0]
+        _bplain = _bot.get("spans")
+        _bplain = ("".join(t for t, _ in _bplain) if _bplain
+                   else (_bot.get("text") or ""))
+        try:
+            _aend = text_x + body_font.size(_bplain)[0] + 7
+        except Exception:
+            _aend = text_x
+        _aend = min(_aend, content_x + content_w - 14)
+        _pulse = (math.sin(time.time() * 5.0) + 1.0) * 0.5   # 0..1
+        _aalpha = int(90 + 165 * _pulse)
+        _asurf = meta_font.render("\u25bc", True, (245, 205, 120))
+        _asurf.set_alpha(_aalpha)
+        surface.blit(_asurf, (_aend, bottom_y + (line_h
+                              - _asurf.get_height()) // 2))
 
     # Jump-to-bottom badge: shown when active tab is scrolled up.
     _chat_jump_badge_rect = None
@@ -37763,7 +38968,7 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
                                            badge_surf.get_height())
         # Log the detail line ONCE per session — the cache means we
         # don't spam if the user toggles the viewer on/off, but we DO
-        # capture which ids are missing so Cooper can debug from the
+        # capture which ids are missing so BalladOfWorms can debug from the
         # user's session log.
         if not _icon_missing_logged:
             _icon_missing_logged = True
@@ -38282,6 +39487,504 @@ _last_job_check_ts  = 0.0
 _last_seen_main_job = None
 _rt_mtimes = {}     # routing-file mtime watcher state (live GUI saves)
 JOB_CHECK_INTERVAL  = 1.0    # seconds; cheap enough to do often
+
+
+
+# ════════ Keep-game-focus + Type-anywhere (ported from OmniChat) ════════
+def _get_hwnd():
+    """pygame window HWND (Windows only; None elsewhere)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        info = pygame.display.get_wm_info()
+        return info.get("window") or info.get("hwnd")
+    except Exception:
+        return None
+
+
+# WS_EX_NOACTIVATE makes the window receive mouse input (clicks, drags,
+# wheel on Win10+ "scroll inactive windows") WITHOUT ever becoming the
+# active window — so clicking tabs/buttons/scrollbar never takes
+# keyboard focus away from FFXI. WS_EX_APPWINDOW is set alongside it to
+# keep the taskbar button (NOACTIVATE alone would remove it).
+#
+# The exception is typing: SDL only delivers key/TEXTINPUT events to a
+# focused window, so the composer explicitly takes focus when its text
+# field is clicked and hands it straight back to the game on
+# send/Esc/unfocus (see the focus-edge hook in the main loop).
+
+_prev_foreground_hwnd = None     # window to give focus back to
+
+
+def _apply_no_activate(enabled):
+    """Set/clear WS_EX_NOACTIVATE (+APPWINDOW) on the overlay window."""
+    if sys.platform != "win32" \
+            or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        hwnd = _get_hwnd()
+        if not hwnd:
+            return
+        u32 = ctypes.WinDLL("user32", use_last_error=True)
+        GWL_EXSTYLE = -20
+        WS_EX_NOACTIVATE, WS_EX_APPWINDOW = 0x08000000, 0x00040000
+        try:
+            GetWL, SetWL = u32.GetWindowLongPtrW, u32.SetWindowLongPtrW
+        except AttributeError:
+            GetWL, SetWL = u32.GetWindowLongW, u32.SetWindowLongW
+        hwnd_t = wintypes.HWND(hwnd)
+        style = GetWL(hwnd_t, GWL_EXSTYLE)
+        if enabled:
+            style = style | WS_EX_NOACTIVATE | WS_EX_APPWINDOW
+        else:
+            style = style & ~WS_EX_NOACTIVATE
+        SetWL(hwnd_t, GWL_EXSTYLE, style)
+        # SWP_FRAMECHANGED so the style change takes effect now.
+        u32.SetWindowPos(hwnd_t, None, 0, 0, 0, 0,
+                         0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+        print("[OmniWatch] keep-game-focus: "
+              + ("ON (clicks do not steal focus)" if enabled else "OFF"))
+    except Exception as e:
+        print(f"[OmniWatch] keep-game-focus failed: {e!r}")
+
+
+def _take_keyboard_focus():
+    """Composer field clicked: remember the game window, then activate
+    ourselves so SDL receives key/TEXTINPUT events. Explicit
+    SetForegroundWindow is allowed despite WS_EX_NOACTIVATE (the style
+    only suppresses mouse/system activation), and succeeds here because
+    our process just received the click."""
+    global _prev_foreground_hwnd
+    if sys.platform != "win32" \
+            or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.WinDLL("user32", use_last_error=True)
+        ours = _get_hwnd()
+        cur = u32.GetForegroundWindow()
+        if cur and cur != ours:
+            _prev_foreground_hwnd = cur
+        if ours:
+            u32.SetForegroundWindow(wintypes.HWND(ours))
+    except Exception:
+        pass
+
+
+def _return_keyboard_focus():
+    """Composer done (send/Esc/unfocus): give focus back to whatever
+    had it before — i.e., the game."""
+    global _prev_foreground_hwnd
+    if sys.platform != "win32" \
+            or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    prev, _prev_foreground_hwnd = _prev_foreground_hwnd, None
+    if not prev:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.WinDLL("user32", use_last_error=True)
+        if u32.IsWindow(wintypes.HWND(prev)):
+            u32.SetForegroundWindow(wintypes.HWND(prev))
+    except Exception:
+        pass
+
+
+# ── Type-anywhere (global keyboard capture) ──────────────────────────────
+# With the overlay always-on-top and FFXI keeping focus, typing a message
+# normally requires clicking the composer field (which borrows focus).
+# Type-anywhere removes the click: pressing the trigger key while FFXI is
+# the foreground window starts a capture session — a low-level Windows
+# keyboard hook (WH_KEYBOARD_LL, ctypes only, no extra packages, no admin)
+# intercepts every keystroke system-wide, SUPPRESSES it so the game never
+# sees it (no accidental movement / native chat opening), translates it
+# via the active keyboard layout, and feeds it into the composer through
+# the same handlers click-typing uses. Enter sends (the existing UDP
+# "input <cmd>" path to the Lua side), Escape cancels. The session also
+# auto-cancels if focus leaves FFXI (alt-tab safety) or lands on the
+# overlay itself (then SDL delivers keys natively and the hook backing
+# off prevents doubled characters).
+#
+# Toggle: Options ▸ "Type anywhere". Trigger key: settings
+# global_typing_key — named key, default "grave" (the ` key). "enter" is
+# supported but beware: FFXI uses Enter to confirm menus, and the trigger
+# press is swallowed, so only remappers should choose it.
+
+OW_CAPTURE_EVENT = pygame.USEREVENT + 7
+
+
+_gt_state = {"capturing": False, "thread": None, "debug": False,
+             "hook": None, "proc_ref": None, "vktrace": False,
+             "tid": None, "u32": None, "shutdown": False}
+
+def _gt_trace(msg):
+    """Type-anywhere trace -> session log, gated on global_typing_trace.
+    Turn on by setting \"global_typing_trace\": true in the settings
+    JSON, then read <config>/logs/session_*.log to see the chain:
+    hook install -> trigger seen -> events posted -> events received."""
+    try:
+        if setting("global_typing_trace"):
+            print("[OmniWatch][gt] " + str(msg))
+    except Exception:
+        pass
+
+
+def _gt_post(kind, text=""):
+    try:
+        _gt_trace("post -> %s %r" % (kind, text))
+        pygame.event.post(pygame.event.Event(
+            OW_CAPTURE_EVENT, oc_capture=kind, text=text))
+    except Exception as _e:
+        _gt_trace("post FAILED: %r" % (_e,))
+
+
+# Known FFXI client window classes across launchers. Retail/PlayOnline
+# uses "FFXiClass"; some bootloaders/wrappers (Ashita, private-server
+# loaders, windowed-mode shims) report different classes or only a
+# recognizable title. We match generously and, crucially, FALL BACK to
+# "foreground is not our overlay" — because in the intended use the
+# trigger is pressed while the game has focus, so any non-OmniChat
+# foreground window is, by definition of the moment, the thing you're
+# playing. The strict class/title checks above are kept only to AVOID
+# capturing when some OTHER app (browser, Discord) is focused IF we can
+# positively identify the foreground as FFXI; when we can't identify it
+# at all we still allow capture, trading a little over-eagerness for the
+# feature actually working on every launcher. Set global_typing_strict
+# = true to require positive FFXI identification instead.
+_FFXI_CLASSES = ("FFXiClass", "FINAL FANTASY XI", "PlayOnlineViewer")
+
+def _gt_foreground_label(u32, ours):
+    """Return (is_ours, classname, title) for the foreground window."""
+    import ctypes
+    hwnd = u32.GetForegroundWindow()
+    if not hwnd:
+        return (False, "", "", True)   # last field: is_empty
+    is_ours = (hwnd == ours)
+    cls = ctypes.create_unicode_buffer(96)
+    u32.GetClassNameW(hwnd, cls, 96)
+    ttl = ctypes.create_unicode_buffer(160)
+    u32.GetWindowTextW(hwnd, ttl, 160)
+    return (is_ours, cls.value, ttl.value, False)
+
+def _gt_foreground_is_ffxi(u32, ours):
+    """True when we should capture: the foreground is (probably) FFXI and
+    definitely not our own overlay. Permissive by default (see note)."""
+    try:
+        is_ours, cls, ttl, is_empty = _gt_foreground_label(u32, ours)
+        if is_ours or is_empty:
+            return False
+        # positive identification
+        if cls in _FFXI_CLASSES:
+            return True
+        if "final fantasy xi" in (ttl or "").lower():
+            return True
+        # strict mode: require the positive match above
+        if setting("global_typing_strict"):
+            return False
+        # permissive fallback: foreground isn't us and isn't empty —
+        # treat it as the game. This is what makes capture work on
+        # launchers whose window class we don't recognize.
+        return True
+    except Exception:
+        return False
+
+
+def _process_is_elevated():
+    """True if THIS process runs at High integrity (elevated/admin).
+    Used to warn about the UIPI case where a Medium-integrity overlay
+    can't receive a low-level keyboard hook over an elevated game."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        adv = ctypes.WinDLL("advapi32", use_last_error=True)
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        TOKEN_QUERY = 0x0008
+        TokenElevation = 20
+        hproc = k32.GetCurrentProcess()
+        htok = wintypes.HANDLE()
+        if not adv.OpenProcessToken(hproc, TOKEN_QUERY,
+                                    ctypes.byref(htok)):
+            return None
+        try:
+            elev = wintypes.DWORD()
+            ret = wintypes.DWORD()
+            ok = adv.GetTokenInformation(
+                htok, TokenElevation, ctypes.byref(elev),
+                ctypes.sizeof(elev), ctypes.byref(ret))
+            if not ok:
+                return None
+            return bool(elev.value)
+        finally:
+            k32.CloseHandle(htok)
+    except Exception:
+        return None
+
+
+def _gt_hook_thread():
+    """Dedicated thread: install WH_KEYBOARD_LL and pump messages.
+    Runs for the process lifetime; the enabled setting and capture
+    state are consulted per-event, so toggling is instant."""
+    import ctypes
+    from ctypes import wintypes
+    u32 = ctypes.WinDLL("user32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    # ── Correct ctypes signatures (CRITICAL on 64-bit) ──
+    # Without explicit argtypes/restype, ctypes treats every argument and
+    # return as a C int (32-bit), which TRUNCATES 64-bit pointers: the
+    # HHOOK handle, the lParam pointer to KBDLLHOOKSTRUCT, and window
+    # handles. On a 64-bit frozen build that silently corrupts the hook —
+    # it installs but never delivers usable events, or fails outright with
+    # no error. Declaring the signatures is the fix.
+    HOOKPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+    u32.SetWindowsHookExW.argtypes = [
+        ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+    u32.SetWindowsHookExW.restype = wintypes.HHOOK
+    u32.CallNextHookEx.argtypes = [
+        wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+    u32.CallNextHookEx.restype = wintypes.LPARAM
+    u32.GetMessageW.argtypes = [
+        ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+        wintypes.UINT, wintypes.UINT]
+    u32.GetMessageW.restype = ctypes.c_int
+    u32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    u32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    u32.GetForegroundWindow.restype = wintypes.HWND
+    u32.GetClassNameW.argtypes = [
+        wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    u32.GetClassNameW.restype = ctypes.c_int
+    u32.GetWindowTextW.argtypes = [
+        wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    u32.GetWindowTextW.restype = ctypes.c_int
+    u32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    u32.GetAsyncKeyState.restype = ctypes.c_short
+    u32.GetKeyState.argtypes = [ctypes.c_int]
+    u32.GetKeyState.restype = ctypes.c_short
+    u32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
+    u32.GetKeyboardLayout.restype = wintypes.HKL
+    u32.ToUnicodeEx.argtypes = [
+        wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_ubyte),
+        wintypes.LPWSTR, ctypes.c_int, wintypes.UINT, wintypes.HKL]
+    u32.ToUnicodeEx.restype = ctypes.c_int
+    k32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    k32.GetModuleHandleW.restype = wintypes.HMODULE
+
+    WH_KEYBOARD_LL = 13
+    WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+    WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0104, 0x0105
+    VK_RETURN, VK_ESCAPE, VK_BACK = 0x0D, 0x1B, 0x08
+    VK_LEFT, VK_RIGHT = 0x25, 0x27
+    VK_SHIFT, VK_CAPITAL = 0x10, 0x14
+    VK_CONTROL, VK_MENU = 0x11, 0x12   # MENU = Alt
+
+    class KBDLLHOOKSTRUCT(ctypes.Structure):
+        _fields_ = [("vkCode", wintypes.DWORD),
+                    ("scanCode", wintypes.DWORD),
+                    ("flags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))]
+
+    def translate(vk, sc):
+        """vk -> typed character(s) via the active keyboard layout."""
+        try:
+            state = (ctypes.c_ubyte * 256)()
+            if u32.GetAsyncKeyState(VK_SHIFT) & 0x8000:
+                state[VK_SHIFT] = 0x80
+            # Deliberately do NOT set Ctrl/Alt in the translation state:
+            # we want plain letters even if the user is still holding the
+            # Ctrl from the Ctrl+Backspace trigger. Feeding Ctrl here would
+            # make ToUnicodeEx emit control chars (Ctrl+A -> 0x01) which we
+            # then discard as non-printable, eating the first keystrokes.
+            if u32.GetKeyState(VK_CAPITAL) & 1:
+                state[VK_CAPITAL] = 0x01
+            hkl = u32.GetKeyboardLayout(0)
+            buf = ctypes.create_unicode_buffer(8)
+            n = u32.ToUnicodeEx(vk, sc, state, buf, 8, 0, hkl)
+            if n > 0:
+                s = buf.value[:n]
+                return s if s.isprintable() else ""
+        except Exception:
+            pass
+        return ""
+
+    ours_hwnd = _get_hwnd() or 0
+
+    @HOOKPROC
+    def proc(nCode, wParam, lParam):
+        # Continuous-capture model: when the "Type anywhere" toggle is ON
+        # and FFXI is the foreground window, EVERY keystroke is routed
+        # into OmniChat's composer (and withheld from the game). Toggle
+        # OFF and the hook passes everything straight through — you click
+        # the input box to type, or type in-game normally. There is no
+        # per-message trigger key: the menu toggle is the whole control.
+        if _gt_state.get("shutdown") or nCode < 0 \
+                or not setting("global_typing") \
+                or not setting("show_chat_composer"):
+            return u32.CallNextHookEx(None, nCode, wParam, lParam)
+        try:
+            kb = ctypes.cast(lParam,
+                             ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+            vk, sc = kb.vkCode, kb.scanCode
+            is_down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
+            is_up = wParam in (WM_KEYUP, WM_SYSKEYUP)
+
+            # Only capture while the game has focus. If the foreground is
+            # anything else (the overlay itself after a click, alt-tabbed
+            # app, etc.) pass keys through so SDL/other apps get them.
+            fg_ok = _gt_foreground_is_ffxi(u32, ours_hwnd)
+
+            if is_down and _gt_state.get("vktrace"):
+                try:
+                    _io2, _c2, _t2, _e2 = _gt_foreground_label(
+                        u32, ours_hwnd)
+                    _gt_post("debug", "KEYDOWN vk=0x%02X (%d) sc=%d "
+                             "fg_ok=%s fg=%r" % (vk, vk, sc, fg_ok, _c2))
+                except Exception:
+                    pass
+
+            if not fg_ok:
+                # Not capturing right now. If we WERE mid-session, tell the
+                # loop so it drops the caret (keeps any draft text).
+                if _gt_state["capturing"]:
+                    _gt_state["capturing"] = False
+                    _gt_post("cancel_silent")
+                return u32.CallNextHookEx(None, nCode, wParam, lParam)
+
+            # Game is focused and toggle is ON → we are capturing. Open the
+            # session on first captured key so the composer focuses/reveals.
+            if not _gt_state["capturing"]:
+                _gt_state["capturing"] = True
+                _gt_post("start")
+
+            if is_up:
+                return 1              # suppress key-ups while capturing
+            if not is_down:
+                return 1
+
+            if vk == VK_RETURN:
+                # Send, but STAY capturing (toggle is still on) — Enter is
+                # send-and-continue, not an exit. The loop re-arms.
+                _gt_post("submit")
+            elif vk == VK_ESCAPE:
+                # Clear the current draft but keep capturing — ON means
+                # ON. (Use the menu toggle to actually stop.)
+                _gt_post("clear")
+            elif vk == VK_BACK:
+                _gt_post("backspace")
+            elif vk == VK_LEFT:
+                _gt_post("left")
+            elif vk == VK_RIGHT:
+                _gt_post("right")
+            else:
+                ch = translate(vk, sc)
+                if ch:
+                    _gt_post("text", ch)
+            return 1                  # withhold all captured keys from game
+        except Exception:
+            return u32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    _gt_state["vktrace"] = bool(setting("global_typing_vktrace"))
+    _gt_state["proc_ref"] = proc   # prevent GC of the callback
+    hook = u32.SetWindowsHookExW(WH_KEYBOARD_LL, proc,
+                                 k32.GetModuleHandleW(None), 0)
+    _gt_state["hook"] = hook
+    if not hook:
+        print("[OmniWatch] type-anywhere: hook install FAILED "
+              f"(err {ctypes.get_last_error()})")
+        return
+    print("[OmniWatch] type-anywhere: ready (continuous capture; toggle in Settings > Chat Panel)")
+    _elev = _process_is_elevated()
+    if _elev is False:
+        print("[OmniWatch] type-anywhere: NOTE this process is NOT elevated. "
+              "If FFXI/Windower runs as administrator, Windows (UIPI) will "
+              "BLOCK this keyboard hook from seeing keys while the game has "
+              "focus — and capture will silently do nothing. Fix: run "
+              "OmniWatch as administrator too (right-click > Run as "
+              "administrator), or run Windower un-elevated.")
+    elif _elev is True:
+        print("[OmniWatch] type-anywhere: process is elevated (admin) — "
+              "good for hooking an elevated game.")
+    _gt_trace("hook installed OK, hHook=%r, elevated=%r, entering loop"
+              % (hook, _elev))
+    u32.GetCurrentThreadId.restype = wintypes.DWORD
+    u32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+    u32.UnhookWindowsHookEx.restype = wintypes.BOOL
+    _gt_state["tid"] = u32.GetCurrentThreadId()
+    _gt_state["u32"] = u32
+    msg = wintypes.MSG()
+    while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+        u32.TranslateMessage(ctypes.byref(msg))
+        u32.DispatchMessageW(ctypes.byref(msg))
+    # Pump ended (WM_QUIT) -> release the hook so no keystrokes are ever
+    # withheld after we stop (the "typing dead after close" bug).
+    try:
+        if _gt_state.get("hook"):
+            u32.UnhookWindowsHookEx(_gt_state["hook"])
+            _gt_state["hook"] = None
+            _gt_trace("hook released on thread exit")
+    except Exception:
+        pass
+
+
+def _start_global_typing_hook():
+    if sys.platform != "win32" \
+            or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    if _gt_state["thread"] is not None:
+        return
+    import threading
+    t = threading.Thread(target=_gt_hook_thread,
+                         name="oc-global-typing", daemon=True)
+    _gt_state["thread"] = t
+    t.start()
+
+
+def _stop_global_typing_hook():
+    """Cleanly release the keyboard hook and stop its thread on exit —
+    otherwise the low-level hook can linger and SWALLOW keystrokes
+    system-wide until Windows times it out. Posts WM_QUIT to break the
+    pump (the thread then unhooks itself), and unhooks directly as a
+    fallback."""
+    _gt_state["shutdown"] = True   # proc now passes everything through
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = _gt_state.get("u32") or ctypes.windll.user32
+        tid = _gt_state.get("tid")
+        WM_QUIT = 0x0012
+        if tid:
+            u32.PostThreadMessageW(wintypes.DWORD(tid), WM_QUIT, 0, 0)
+        hook = _gt_state.get("hook")
+        if hook:
+            try:
+                u32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+                u32.UnhookWindowsHookEx.restype = wintypes.BOOL
+            except Exception:
+                pass
+            u32.UnhookWindowsHookEx(hook)
+            _gt_state["hook"] = None
+        print("[OmniWatch] type-anywhere: hook released")
+    except Exception as _e:
+        print(f"[OmniWatch] type-anywhere: unhook on exit failed: {_e!r}")
+
+
+import atexit as _atexit
+_atexit.register(_stop_global_typing_hook)
+
+_start_global_typing_hook()
+
+_apply_no_activate(bool(setting("no_focus_steal")))
+_gt_capturing_active = False   # hook-driven type-anywhere session
+_composer_focus_prev = False   # keep-game-focus edge tracker
 
 while running:
     screen.fill(COL_BG)
@@ -39498,19 +41201,17 @@ while running:
                 # the receive time so a stale status (zoning) stops the
                 # pulse via _warp_is_near's freshness check.
                 body = raw[len("WARPNEAR|"):]
-                _hp_near = _sg_near = False
+                # Generic per-network parse: any key matching a known
+                # network updates; absent keys reset to False so an
+                # older lua (fewer fields) can't leave stale trues.
+                seen = {}
                 for ent in body.split(";"):
                     if "=" not in ent:
                         continue
                     k, v = ent.split("=", 1)
-                    k = k.strip()
-                    on = v.strip() in ("1", "true", "True")
-                    if k == "hp":
-                        _hp_near = on
-                    elif k == "sg":
-                        _sg_near = on
-                warp_near["hp"] = _hp_near
-                warp_near["sg"] = _sg_near
+                    seen[k.strip()] = v.strip() in ("1", "true", "True")
+                for net in WARP_NETWORKS:
+                    warp_near[net] = seen.get(net, False)
                 warp_near["ts"] = time.time()
             elif raw.startswith("CURRENCY|"):
                 # Format: CURRENCY|gil=N;sparks=N;accolades=N;gallimaufry=N;
@@ -39690,6 +41391,87 @@ while running:
                         # sorted by Lua, but enforce here defensively).
                         master_names.sort(key=lambda s: s.lower())
                         _BLU_SPELLS_MASTER.extend(master_names)
+            elif raw.startswith("BLU_CURRENT|"):
+                # Currently equipped BLU set spell names, for the BLU
+                # Spellsets panel ("which saved set is live" indicator).
+                # Format: BLU_CURRENT|<name1>|<name2>|... — empty body
+                # when not on BLU main. REPLACE on each emit.
+                body = raw[len("BLU_CURRENT|"):]
+                _blusets_current.clear()
+                _blusets_current.update(
+                    s.strip().lower() for s in body.split("|") if s.strip())
+            elif raw.startswith("AUGPROBE|"):
+                # augprobe dump mirror from lua — log verbatim so the
+                # session log carries the full probe output.
+                print("[OmniWatch][augprobe] " + raw[len("AUGPROBE|"):])
+            elif raw.startswith("BLU_TIERS|"):
+                # Trait tier ladders for the BLU Spellsets editor.
+                # Format (new): BLU_TIERS|<key>=<Label>=<t1,t2,...>=<gift>
+                #                       =<stat>=<v1,v2,...>|...
+                # Older Lua sent only the first 3-4 fields; both are
+                # accepted. Stored as a 5-tuple
+                # (label, points[], giftable, stat_key, values[]); the
+                # trailing two power the "show live" stat preview.
+                body = raw[len("BLU_TIERS|"):]
+                for part in body.split("|"):
+                    bits = part.split("=")
+                    if len(bits) >= 3:
+                        key, label, thr = bits[0], bits[1], bits[2]
+                        giftable = len(bits) >= 4 and bits[3].strip() == "1"
+                        stat_key = bits[4].strip() if len(bits) >= 5 else ""
+                        try:
+                            pts = [int(x) for x in thr.split(",") if x]
+                        except ValueError:
+                            continue
+                        vals = []
+                        if len(bits) >= 6:
+                            try:
+                                vals = [int(x) for x in bits[5].split(",") if x]
+                            except ValueError:
+                                vals = []
+                        _blusets_tiers[key.strip()] = (
+                            label.strip(), pts, giftable, stat_key, vals)
+            elif raw.startswith("BLU_BONUS|"):
+                # Live JP gift count + current subjob trait pools.
+                # Format: BLU_BONUS|gifts=<n>|<key>:<pts>|...
+                body = raw[len("BLU_BONUS|"):]
+                subs = {}
+                gifts = 0
+                for part in body.split("|"):
+                    if part.startswith("gifts="):
+                        try:
+                            gifts = int(part[6:])
+                        except ValueError:
+                            pass
+                    elif ":" in part:
+                        k, _, p = part.partition(":")
+                        try:
+                            subs[k.strip()] = int(p)
+                        except ValueError:
+                            pass
+                _blusets_bonus["gifts"] = gifts
+                _blusets_bonus["subs"] = subs
+            elif raw.startswith("BLU_TRAITS|"):
+                # Per-spell trait contributions + set cost.
+                # Format: BLU_TRAITS|<Name>=<cost>=<key:pts[,key:pts]>|...
+                body = raw[len("BLU_TRAITS|"):]
+                for part in body.split("|"):
+                    bits = part.split("=")
+                    if len(bits) == 3:
+                        nm, cost, tps = bits
+                        pairs = []
+                        for kp in tps.split(","):
+                            if ":" in kp:
+                                k, _, p = kp.partition(":")
+                                try:
+                                    pairs.append((k.strip(), int(p)))
+                                except ValueError:
+                                    pass
+                        try:
+                            c = int(cost)
+                        except ValueError:
+                            c = 0
+                        _blusets_traits[nm.strip().lower()] = (c, pairs)
             elif raw.startswith("MOUNTS|"):
                 # Mount ownership snapshot. Same shape as BLU_SPELLS:
                 #   MOUNTS|<learned1>|<learned2>|...||<master1>|...
@@ -40073,6 +41855,21 @@ while running:
             raw = cdata.decode("utf-8", errors="replace")
             if not raw:
                 continue
+            # Cutscene-state reports bypass the chat pin: alts in a
+            # dialog count too. Tag format mirrors the gate's.
+            if "CSSTATE\t" in raw[:32]:
+                _cs_sender = ""
+                _cs_payload = raw
+                if raw.startswith("@"):
+                    _cs_end = raw.find("@", 1)
+                    if _cs_end != -1:
+                        _cs_sender = raw[1:_cs_end]
+                        _cs_payload = raw[_cs_end + 1:]
+                if _cs_payload.startswith("CSSTATE\t") and _cs_sender:
+                    _mb_seen_senders.add(_cs_sender)
+                    _cs_on = _cs_payload.split("\t")[1:2] == ["1"]
+                    _cs_state[_cs_sender] = [_cs_on, time.time()]
+                    continue
             # Multibox: chat is pinned to the chosen "main" character (Header
             # settings → Chat main character) so it stays on your main even
             # while viewing another character's panels. Falls back to the
@@ -40744,17 +42541,37 @@ while running:
         nm = m["name"]
         akey = _anchor_key(slot_idx, nm)
         if _MB_DEBUG:
+            # Change-only diagnostics: a stable party used to flood the
+            # session log with identical order/slot lines every 2s. The
+            # decision is made once per pass at slot 0 (time throttle +
+            # state-change check); a frame flag lets the later slots
+            # print their lines only on a changed pass.
             import time as _t
-            _now = _t.time()
-            if _now - globals().get("_party_diag_last", 0) >= 2.0:
-                if slot_idx == 0:
+            if slot_idx == 0:
+                _now = _t.time()
+                _emit = False
+                if _now - globals().get("_party_diag_last", 0) >= 2.0:
                     globals()["_party_diag_last"] = _now
+                    _state = (
+                        tuple(mm.get("name") for mm in party_data),
+                        current_char_name, active_view_char,
+                        tuple((_anchor_key(i, mm.get("name")),
+                               str(panel_anchors.get(
+                                   _anchor_key(i, mm.get("name")))))
+                              for i, mm in enumerate(party_data)))
+                    if _state != globals().get("_party_diag_state"):
+                        globals()["_party_diag_state"] = _state
+                        _emit = True
+                globals()["_party_diag_emit"] = _emit
+                if _emit:
                     _names = [mm.get("name") for mm in party_data]
                     print(f"[OmniWatch][party] order={_names} "
                           f"current={current_char_name!r} "
                           f"view={active_view_char!r}")
-                print(f"[OmniWatch][party]   slot {slot_idx}: {nm!r} -> "
-                      f"akey={akey!r} anchor={panel_anchors.get(akey)}")
+            if globals().get("_party_diag_emit"):
+                print(f"[OmniWatch][party]   slot {slot_idx}: {nm!r} "
+                      f"-> akey={akey!r} "
+                      f"anchor={panel_anchors.get(akey)}")
         if nm not in panel_scales:
             panel_scales[nm] = panel_scales.get(akey, 1.0)
         sc = max(MIN_SCALE, min(MAX_SCALE, panel_scales[nm]))
@@ -41917,6 +43734,15 @@ while running:
         draw_cheatsheet_button(screen)
         draw_cheatsheet_ctx_menu(screen)
 
+    # ── BLU Spellsets launcher + window ──────────────────────────────────
+    # Launcher only shows on BLU main (window persists if open across a
+    # job change so mid-edit work isn't stranded). Suppressed with the
+    # rest of the overlay while the display is hidden.
+    if display_hidden:
+        _blusets_clear_rects()
+    else:
+        draw_blusets_window(screen)
+
     # ── Warp button + travel menu (floating, pulses when in range) ──────────
     # Floats on the overlay (draggable/resizable); the menu draws above
     # panels. Suppressed when the display is hidden or the setting is off.
@@ -42185,6 +44011,22 @@ while running:
         pass
 
     # ── Events ───────────────────────────────────────────────────────────────
+    # ── Keep-game-focus: borrow OS keyboard focus only while a text
+    # field is focused; hand it back the moment none is. Hook-driven
+    # type-anywhere sessions are EXCLUDED (the hook delivers keys
+    # directly; activating ourselves would pull foreground off FFXI and
+    # cancel the capture).
+    _focus_now = bool((chat_composer_focused or chat_composer_tell_to_focused
+                       or _blusets_name_focus or inventory_search_focused
+                       or (sim_import_open and sim_import_field))
+                      and not _gt_capturing_active)
+    if setting("no_focus_steal"):
+        if _focus_now and not _composer_focus_prev:
+            _take_keyboard_focus()
+        elif _composer_focus_prev and not _focus_now:
+            _return_keyboard_focus()
+    _composer_focus_prev = _focus_now
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -42200,6 +44042,12 @@ while running:
             screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
             # Anchors handle repositioning automatically on the next frame.
             # No save needed — nothing on disk changes.
+
+        elif _blusets_handle_event(event):
+            # BLU Spellsets panel consumed the event (its window draws
+            # above the cheat sheet and panels, so it gets first claim
+            # on input — mirroring draw order).
+            pass
 
         elif event.type == pygame.MOUSEWHEEL:
             mx, my = pygame.mouse.get_pos()
@@ -43722,28 +45570,6 @@ while running:
             # Chat composer click handlers — channel selector, send,
             # focus the input fields. Also functional UI, bypasses lock.
             if chat_panel_visible and chat_composer_visible:
-                # { } auto-translate button: wrap the message for AT
-                # sending. With text: the whole message becomes
-                # {message} (click again to unwrap). Empty: insert {}
-                # with the cursor parked inside so you type the phrase
-                # directly. Focuses the input either way so typing
-                # continues without another click.
-                if _chat_composer_rect_at is not None \
-                        and _chat_composer_rect_at.collidepoint(mx, my):
-                    _t = chat_composer_text
-                    if not _t:
-                        chat_composer_text = "{}"
-                        chat_composer_cursor = 1
-                    elif _t.startswith("{") and _t.endswith("}") \
-                            and len(_t) >= 2:
-                        chat_composer_text = _t[1:-1]
-                        chat_composer_cursor = len(chat_composer_text)
-                    else:
-                        chat_composer_text = "{" + _t + "}"
-                        chat_composer_cursor = len(chat_composer_text)
-                    chat_composer_focused = True
-                    chat_composer_tell_to_focused = False
-                    continue
                 # Right arrow / channel-name click → next channel.
                 # Left arrow → previous channel.
                 if (_chat_composer_rect_arrow_r is not None
@@ -44198,7 +46024,7 @@ while running:
             # Right-click on chat-panel header strip dumps the routing
             # diagnostic to the session log. Lets a user with the
             # packaged .exe capture the state when they think filters
-            # aren't working, then send the log to Cooper. The "header
+            # aren't working, then send the log to BalladOfWorms. The "header
             # strip" is the top 18 pixels of the chat panel (above the
             # tab strip). Functional UI — bypasses panels_locked.
             if chat_panel_visible and chat_pos is not None:
@@ -44578,6 +46404,64 @@ while running:
                 save_layout()
             dragging_key = None
             drag_mode    = None
+
+        elif event.type == OW_CAPTURE_EVENT:
+            # Type-anywhere capture session events from the global
+            # keyboard hook thread. The hook already swallowed the raw
+            # keys (FFXI never saw them); here we feed the composer
+            # through the exact handlers click-typing uses.
+            kind = getattr(event, "oc_capture", "")
+            _gt_trace("recv <- %s %r (active=%s focused=%s)" % (
+                kind, getattr(event, "text", ""),
+                _gt_capturing_active, chat_composer_focused))
+            if kind == "start":
+                # Begin a hook-driven session. We mark the composer
+                # focused for the CARET/visual and to satisfy the
+                # composer's own handlers, but the real gate for hook
+                # input is _gt_capturing_active — which is deliberately
+                # excluded from the take-SDL-focus edge above, so the
+                # overlay never steals foreground from the game.
+                chat_composer_visible = True
+                chat_composer_focused = True
+                chat_composer_tell_to_focused = False
+                _gt_capturing_active = True
+            elif kind == "text":
+                if _gt_capturing_active or chat_composer_focused:
+                    _chat_composer_handle_textinput(event.text)
+            elif kind in ("backspace", "left", "right",
+                          "submit", "clear"):
+                if _gt_capturing_active or chat_composer_focused:
+                    _key = {"backspace": pygame.K_BACKSPACE,
+                            "left": pygame.K_LEFT,
+                            "right": pygame.K_RIGHT,
+                            "submit": pygame.K_RETURN,
+                            "clear": pygame.K_ESCAPE}[kind]
+                    _chat_composer_handle_keydown(
+                        pygame.event.Event(pygame.KEYDOWN, key=_key,
+                                           mod=0, unicode=""))
+                    # Continuous-capture model: with the toggle ON, the
+                    # session never ends from a keystroke. Enter sends and
+                    # keeps capturing; Escape clears the draft (the
+                    # K_ESCAPE handler above already wiped the text) and
+                    # keeps capturing. Both just re-assert the session so
+                    # the very next key still lands in the composer. Only
+                    # the menu toggle (or losing game focus) stops it.
+                    if kind in ("submit", "clear"):
+                        _gt_state["capturing"] = True
+                        _gt_capturing_active = True
+                        chat_composer_focused = True
+            elif kind == "cancel_silent":
+                # Hook reported focus left FFXI mid-capture (alt-tab, or
+                # the overlay itself was clicked). End the hook session;
+                # keep the draft text. If the overlay genuinely has SDL
+                # focus now (a real click), leave chat_composer_focused
+                # so click-typing still works; otherwise drop the caret.
+                _gt_capturing_active = False
+                if not pygame.key.get_focused():
+                    chat_composer_focused = False
+            elif kind == "debug":
+                # Diagnostic line from the hook thread (foreground probe).
+                print("[OmniWatch] type-anywhere:", event.text)
 
         elif event.type == pygame.TEXTINPUT:
             # Unicode text input — typed character ready to insert.
@@ -45070,4 +46954,5 @@ try:
     _save_buff_state_snapshot(force=True)
 except Exception:
     pass
+_stop_global_typing_hook()   # release the keyboard hook BEFORE exit (atexit is the backstop)
 pygame.quit()

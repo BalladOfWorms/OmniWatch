@@ -229,6 +229,49 @@ Use detection is done lua-side by deep-walking action packets for the ring's ite
 
 Configure visibility, rotation speed (2–15s), and per-ring inclusion in the **Equipment Configure modal** (settings → Equipment → CONFIGURE). Disabled rings are skipped during cycle advance, so the rotation only shows what you actually want to see.
 
+#### Rank augments (Odyssey, Limbus)
+
+On newer Windower builds OmniWatch resolves these natively first, by asking the game client itself to translate the item's rank data (`windower.ffxi.get_item_augments`) — covering Odyssey/Limbus gear, JSE necks, Unity pieces, RP gear and path weapons with the exact lines the in-game item window shows. The file below is the fallback for older Windower builds and anywhere the client doesn't answer. The live stats engine uses the same native translation, so rank gear contributes its *actual current-rank* values to computed stats — not max-rank assumptions.
+
+Odyssey Sheol gear (Nyame, Sakpata, Gleti, Mpaca, Ikenga, Agwu and the
+Gaol weapons), the revamped Limbus armor sets (Hope / Perfection /
+Revelation), and Atonement 1/2 accessories all hide their augment
+stats behind a path and a rank (up to 30 depending on the item).
+OmniWatch reads the **exact rank from the item itself** and resolves
+the real stat values at that rank — tooltips show `Path: A` /
+`Rank: 17/30` plus the actual augment lines, and the stats panel
+counts them precisely. Nothing is ever assumed: an un-ranked piece
+contributes no augment stats, and two copies at different ranks are
+treated as different items. The per-rank tables live in
+`gearinfo/res/Odyssey_augments.lua` (ships with the addon).
+
+### BLU Spellsets
+
+Named Blue Magic loadouts, equipped in one click. Open the manager
+from **Settings → Misc → BluSpells** (the window is draggable and its
+position is remembered). **+ New Set** opens the editor — type a name,
+then tick spells from your learned list (max 20), grouped under the
+trait each spell contributes to, with set cost and trait points shown
+per spell. The Trait Totals panel on the right updates live: it sums
+your ticked selection per trait — folding in your JP gift bonuses and
+your current subjob's trait pools exactly the way the game does — and
+shows the tier you'd get (green when active, `4/8p` while short of
+the threshold, with `(+gift)` / `(sub)` marking where a bonus came
+from). Double/Triple Attack is handled as the combined family it
+really is: 8 family points give Double Attack, 16 upgrade it to
+Triple Attack (replacing the spell DA — your subjob's DA, e.g. from
+/WAR, stays alongside it), with a progress row showing how far you
+are from the upgrade. Click a spell's name to open its bg-wiki page
+in your browser if you want to check what it does (it underlines on
+hover); click the checkbox or anywhere else on the row to set it. The name field and running totals (slots used, total set cost,
+total trait points) stay pinned at the top while the spell list
+scrolls; the scrollbar can be dragged. Save when happy. Each saved set has
+**Equip** (runs a preserve-traits set change in game: spells shared
+with your current loadout are never unset, so their trait timers
+survive; progress and any skipped spells report in game chat),
+**Edit**, and **✕** (click twice to confirm). A green dot marks the
+set matching what's equipped right now. Sets are saved per character.
+
 ### Recast tracker
 
 Two columns — **magic** and **abilities** — with horizontal timer bars per recast.
@@ -301,7 +344,12 @@ Each tab tracks its own unread count and shows a red badge in the tab header whe
 - Channel picker: **say / tell / reply / shout / yell / ls1 / ls2** — click the channel label or use the `<` / `>` arrows to cycle
 - **Tell target** field appears next to the channel when "tell" is selected
 - Click the body to focus, type, **Enter** to send, **Esc** to cancel. Sends go through Windower as if you'd typed them in the game's chat field
-- **Auto-translate**: wrap a phrase in curly braces — `Need help? {Yes, please.}` — and it sends as the real in-game auto-translate token (JP players see it in Japanese). The **{ }** button next to the channel picker does the wrapping: with text typed it wraps the whole message (click again to unwrap); empty, it inserts `{}` with the cursor inside so you just type the phrase. Matching is case-insensitive, English or Japanese names; non-phrases in braces send literally. Incoming auto-translate renders as `{phrase}`, so you can copy anything you see straight into the composer
+
+**Keep game focus** (Settings ▸ Chat Panel ▸ Configure, default off): clicking the overlay — tabs, buttons, scrollbar, anything — never takes keyboard focus away from FFXI (the window gets the Windows no-activate style). Text fields are the exception: clicking into the composer (or any other OmniWatch text box, like a search field or set name) borrows focus so you can type, and hands it straight back to the game when the field unfocuses.
+
+**Type anywhere** (Settings ▸ Chat Panel ▸ Configure, default off): type into the composer without clicking the panel at all. While the toggle is ON and the game window has focus, every keystroke goes into OmniWatch's composer instead of the game — **Enter** sends and keeps capturing, **Esc** clears the draft and keeps capturing, alt-tabbing pauses capture (draft preserved) and refocusing the game resumes it. The toggle is the only off switch; while it's ON you can't use FFXI's own keyboard (its `/` chat, hotbars, movement), so flip it OFF to play normally. Requires the composer ("Show input bar") to be enabled — with the input bar hidden the capture stays dormant.
+
+> **Run OmniWatch as administrator if Windower runs elevated.** Type anywhere works through a low-level Windows keyboard hook, and Windows' UIPI security (User Interface Privilege Isolation) silently blocks a normal-privilege hook from seeing input destined for an elevated window — the feature reports ready but captures nothing, with no error. If your Windower/FFXI runs as administrator, either run OmniWatch elevated too (right-click ▸ Run as administrator, or Properties ▸ Compatibility ▸ "Run this program as an administrator" to make it permanent) or run Windower un-elevated. OmniWatch detects the mismatch at startup and prints an advisory in its console/session log.
 
 **Routing config** (the **Filters ⚙** button in the panel header):
 Opens `omniwatch_routing_gui.exe` — a standalone editor for the routing rules that decide which combat events appear on which tab. Rules are stored per-job, with a global fallback and baked-in defaults. Each event type (melee hits, weapon skills, magic, buffs, debuffs, etc.) can be:
@@ -391,12 +439,21 @@ Items are grouped by bag and searchable by name. **GearSwap reference detection*
 
 Both actions are multibox-guarded: they're tagged with the displayed character and only that client acts, so you can't drop from the wrong box. Esc or clicking elsewhere closes the menu.
 
+### NPC dialog "continue" arrow
+
+While the pinned character is in a cutscene or NPC dialog (Event
+status), a small pulsing **▼** appears at the end of the last chat
+line — the panel's version of the game's blinking continue cursor:
+more to read, hit Enter in the game to advance. Draws only at the
+live bottom of the scrollback and fades a few seconds after the
+dialog ends.
+
 ### Warp button
 
-One-click Home Point / Survival Guide travel, fired through the [superwarp](https://github.com/lorand-ffxi/superwarp) addon (install it alongside OmniWatch). A small floating button — drag it anywhere, resize it by the corner handle, both persist — **pulses teal whenever a Home Point or Survival Guide crystal is within superwarp's 6-yalm interaction range**.
+One-click travel across nine superwarp networks, fired through the [superwarp](https://github.com/lorand-ffxi/superwarp) addon (install it alongside OmniWatch). A small floating button — drag it anywhere, resize it by the corner handle, both persist — **pulses teal whenever any network's NPC is within superwarp's 6-yalm interaction range**: Home Point and Survival Guide crystals, Adoulin Waypoints, Abyssea Confluxes (and the town teleporter NPCs), Eschan Portals, Assault Runic Portals, Proto-Waypoints, Unity concierges, and Voidwatch Atmacite Refiners. Only NPCs count for proximity — a player who happens to share a teleporter's name won't light anything up.
 
 Click it for the travel menu:
-- Grouped by network (**Home Point** / **Survival Guide**), with destinations built from your **checklist attunement data** — you only see what you've unlocked, organized by region. No attunement data? It falls back to `omniwatch_warp.json` (written with editable defaults on first run; any zone superwarp accepts works).
+- Grouped by network, each greyed out until you're in range of its NPC. **Home Point** / **Survival Guide** destinations are built from your **checklist attunement data** — you only see what you've unlocked, organized by region (no attunement data? They fall back to `omniwatch_warp.json` defaults). The other networks list everything their NPC offers — Waypoint city points by name (Platea, Mummers, ...), frontier zones by Station/number, Abyssea confluxes #1–8, Eschan portals by number plus Exit / Domain Return, Assault staging points plus Assault Orders / Return, Proto-Waypoints grouped by Kinetic Unit cost, all 49 Unity zones, and Voidwatch grouped by nation path and expansion (Shadowreign included). Locked destinations fail gracefully inside superwarp with its own message. Everything is editable in `omniwatch_warp.json` (written with defaults on first run); existing configs gain the new networks automatically.
 - Multi-zone cities expand into sub-menus (Jeuno → Port / Lower / Upper / Ru'Lude Gardens).
 - The list windows to 12 rows with mouse-wheel scrolling; out-of-range networks pin to the bottom as greyed headers so they stay visible as future options.
 - Every pick confirms first — **"Warp to X?"** with Warp / Cancel — then fires `sw hp <zone>` / `sw sg <zone>`.

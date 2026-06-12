@@ -123,6 +123,10 @@ CHANNELS = [
     ("buff_wear",    "Buff wore off"),
     ("debuff_apply", "Debuff applied"),
     ("debuff_wear",  "Debuff wore off"),
+    # Casting interruptions: one channel, controlled per actor row —
+    # Self shows yours (default Battle), enable under Mob / Party /
+    # etc. to see those classes (hidden by default).
+    ("chat_cast_interrupt",  "Casting interrupted"),
 ]
 
 # Destination tabs (must match OmniWatch.py chat_tab_names — combat-relevant only).
