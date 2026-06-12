@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.3] — 2026-06-12
+
+### Added
+
+- **BLU Spellsets editor — Utility / Damage / Procs tabs (bluGuide's four views)** — a tab row between the Name field and the spell list switches how the learned-spell checklist is organized, mirroring bluGuide exactly. **Traits** is the existing trait-section grouping. **Utility** groups spells by effect (Cure, Erase, Haste, Attack Boost … Sleep, Dispel, the enfeebles, DoTs and stat-downs) in bluGuide's category order. **Damage** lists each skillchain property's spells — a spell whose *secondary* property matches the section shows its primary as a suffix, e.g. "Death Scissors (Com)" under Reverberation, exactly like bluGuide — followed by nukes grouped by element. **Procs** groups Voidwatch spells by element plus the Abyssea proc list. The classification data (per-spell effects, skillchain properties, nuke/element, Voidwatch/Abyssea flags for all 178 spells) comes from bluGuide's res/spellinfo.lua, embedded into the overlay so bluGuide doesn't need to be installed. The tabs only reorganize the same list: ticks, sp/tp annotations, bg-wiki name links, the green in-set dot, and the TRAIT TOTALS panel all work identically in every view, a spell ticked in one tab is ticked in all of them (a spell can appear under several sections, e.g. both its skillchain properties), and sections with no learned spells are hidden. The editor always opens on Traits.
+
+### Fixed
+
+- **Type anywhere captured nothing — keys went to the game** — the keyboard-hook thread fetched GetCurrentThreadId from user32 instead of kernel32, raising AttributeError and killing the thread immediately after the "type-anywhere: ready" line printed. A low-level keyboard hook whose owning thread isn't pumping messages never receives a callback, so Windows passed every key straight through: the toggle looked on, the log looked healthy, and nothing was captured. Diagnosed from a user session log showing the thread traceback. The lookup now targets kernel32 (where the export actually lives), and every other DLL→function mapping in the hook/elevation/window code was audited clean. Same fix applied to OmniChat.
+
 ## [1.7.2] — 2026-06-12
 
 ### Hotbar — editor page desync, edit form z-order (2026-06-12)
@@ -11,6 +21,10 @@ The slot edit form now draws after the settings menu and every modal, so it is a
 The form also gained a **DELETE** button (danger-styled, right-aligned away from Paste): one click empties the selected slot and saves immediately — no Save step needed. The slot stays selected with a blank draft so a replacement can be typed straight in; COPY first if you want an undo path.
 
 The hotbar also grew: **13 columns × 2 rows (26 buttons per page, up from 20) and 12 pages (up from 10)**. Existing button configs migrate automatically on first load — saved buttons keep their slots, and the new slots and pages start empty.
+
+### Update check — works with commit-to-main releases (2026-06-12)
+
+Diagnosed why the "Update available" button never appeared for the 1.7.1 update: the checker queries GitHub's /releases/latest, but the repo's only published Release is v1.0.0 (May 10) — every update since shipped as commits to main with no GitHub Release, so the API kept answering v1.0.0 and the comparison never fired. The checker now falls back to reading OMNIWATCH_VERSION directly from OmniWatch.py on main (raw.githubusercontent.com, first 4 KB) when the Releases API yields nothing newer, pointing the button at the repo page since /releases/latest may be stale. The Releases path still wins when a proper Release exists. Same silent-failure contract on every network path. Verified live against the repo: a 1.7.1 build detects 1.7.2 from main; a 1.7.2 build shows no button.
 
 ## [1.7.1] — 2026-06-10
 
