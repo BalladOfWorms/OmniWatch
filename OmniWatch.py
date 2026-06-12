@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.7.2 (2026-06-12)"
+OMNIWATCH_BUILD_STAMP = "v1.7.3 (2026-06-12)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.7.2"
+OMNIWATCH_VERSION = "1.7.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -110,8 +110,47 @@ def _update_check_worker():
     except Exception:
         # No network, rate limit, repo not found, JSON change — all silent.
         pass
-    finally:
-        _update_check_done = True
+    # ── Fallback: read OMNIWATCH_VERSION straight off main ──────────
+    # Releases on this repo have historically lagged the actual updates
+    # (1.6.x–1.7.1 shipped as commits to main with no GitHub Release, so
+    # /releases/latest kept returning v1.0.0 and the button never fired —
+    # the live case behind "the update button didn't show"). If the
+    # Releases API produced nothing newer, probe the raw source on main
+    # and compare its OMNIWATCH_VERSION constant. Same silent-failure
+    # contract; the API path still wins when it works (its release-page
+    # URL is the nicer landing spot).
+    if not _update_available:
+        try:
+            raw_url = (f"https://raw.githubusercontent.com/"
+                       f"{OMNIWATCH_GITHUB_OWNER}/{OMNIWATCH_GITHUB_REPO}"
+                       f"/main/OmniWatch.py")
+            req = urllib.request.Request(raw_url, headers={
+                "User-Agent": f"OmniWatch/{OMNIWATCH_VERSION}",
+                # Only the file head is needed; servers that ignore
+                # Range just send everything and read(4096) trims it.
+                "Range": "bytes=0-4095",
+            })
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                head = resp.read(4096).decode("utf-8", errors="replace")
+            m = re.search(r'OMNIWATCH_VERSION\s*=\s*"([^"]+)"', head)
+            if m:
+                main_ver = m.group(1)
+                latest = _parse_version(main_ver)
+                current = _parse_version(OMNIWATCH_VERSION)
+                if latest and current and latest > current:
+                    _update_latest_ver = main_ver
+                    # Commit-to-main release style: send the user to the
+                    # repo page, not /releases/latest (which may be stale).
+                    _update_html_url = (
+                        f"https://github.com/{OMNIWATCH_GITHUB_OWNER}"
+                        f"/{OMNIWATCH_GITHUB_REPO}")
+                    _update_available = True
+                    print(f"[OmniWatch] update available: {main_ver} "
+                          f"(running {OMNIWATCH_VERSION}; detected from "
+                          f"main — no matching GitHub Release)")
+        except Exception:
+            pass
+    _update_check_done = True
 
 def _start_update_check():
     """Kick off the one-shot update check on a daemon thread so it can
@@ -5271,6 +5310,9 @@ _blusets_scroll      = 0
 _blusets_edit_name   = ""       # set-name text field contents
 _blusets_edit_orig   = None     # original name when editing (None = new)
 _blusets_edit_sel    = set()    # lowercase spell names ticked in editor
+_blusets_edit_tab    = "Traits"  # active editor list tab (Traits/Utility/
+                                 # Damage/Procs — bluGuide's four views)
+_blusets_tab_rects   = []        # [(rect, tab_name)] rebuilt each frame
 _blusets_name_focus  = False
 _blusets_confirm_del = None     # (set_name, expire_ts) two-click delete
 _blusets_note        = None     # (text, expire_ts) status line
@@ -20868,10 +20910,228 @@ def _blusets_draw_button_row(surface, label, x, y, w, h, danger=False,
 _BLU_ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII")
 
 
+
+# ── BLU spell classification (from bluGuide's res/spellinfo.lua) ──────────
+# Per-spell data driving the Spellsets editor's Utility / Damage / Procs
+# tabs, embedded so the editor doesn't depend on bluGuide being installed.
+# name(lower) -> (effects tuple, SCA, SCB, element, Nuke, Voidwatch, Abyssea)
+# element: 0 Fire 1 Ice 2 Wind 3 Earth 4 Thunder 5 Water 6 Light 7 Dark
+# (15 = none/physical).
+_BLUSETS_SPELLINFO = {
+    "venom shell": (("Poison",), None, None, 5, False, False, False),
+    "maelstrom": (("Str Down",), None, None, 5, True, True, True),
+    "metallic body": (("Stoneskin",), None, None, 3, False, False, False),
+    "screwdriver": ((), "Transfixion", "Scission", 15, False, False, False),
+    "mp drainkiss": (("Aspir",), None, None, 7, False, False, False),
+    "death ray": ((), None, None, 7, True, True, False),
+    "sandspin": (("Accuracy Down",), None, None, 3, True, True, False),
+    "smite of rage": ((), "Detonation", None, 15, False, False, False),
+    "bludgeon": ((), "Liquifaction", None, 15, False, False, False),
+    "refueling": (("Haste",), None, None, 2, False, False, False),
+    "ice break": (("Bind",), None, None, 1, True, True, True),
+    "blitzstrahl": (("Stun",), None, None, 4, True, True, False),
+    "self-destruct": ((), None, None, 0, True, False, False),
+    "mysterious light": (("Gravity",), None, None, 2, True, True, True),
+    "cold wave": (("Frost",), None, None, 1, False, True, False),
+    "poison breath": (("Poison",), None, None, 5, True, False, False),
+    "stinking gas": (("Vit Down",), None, None, 2, False, False, False),
+    "memento mori": (("Magic Attack Boost",), None, None, 1, False, False, False),
+    "terror touch": (("Attack Down",), "Compression", "Reverberation", 15, False, False, False),
+    "spinal cleave": ((), "Scission", "Detonation", 15, False, False, False),
+    "blood saber": (("Drain",), None, None, 7, True, False, False),
+    "digest": (("Drain",), None, None, 7, True, False, False),
+    "mandibular bite": ((), "Induration", None, 15, False, False, False),
+    "cursed sphere": (("Poison",), None, None, 5, False, True, False),
+    "sickle slash": ((), "Compression", None, 15, False, False, False),
+    "cocoon": (("Defense Boost",), None, None, 3, False, False, False),
+    "filamented hold": (("Slow",), None, None, 3, False, False, False),
+    "pollen": (("Cure",), None, None, 6, False, False, False),
+    "power attack": ((), "Reverberation", None, 15, False, False, False),
+    "death scissors": ((), "Compression", "Reverberation", 15, False, False, False),
+    "magnetite cloud": (("Gravity",), None, None, 3, True, True, True),
+    "eyes on me": ((), None, None, 7, True, True, True),
+    "frenetic rip": ((), "Induration", None, 15, False, False, False),
+    "frightful roar": (("Defense Down",), None, None, 2, False, False, False),
+    "hecatomb wave": (("Blind",), None, None, 2, True, True, False),
+    "body slam": ((), "Impaction", None, 15, False, False, False),
+    "radiant breath": (("Silence", "Slow"), None, None, 6, True, True, True),
+    "helldive": ((), "Transfixion", None, 15, False, False, False),
+    "jet stream": ((), "Impaction", None, 15, False, False, False),
+    "blood drain": (("Drain",), None, None, 7, True, False, False),
+    "sound blast": (("Int Down",), None, None, 0, False, False, False),
+    "feather tickle": (("Reduce TP",), "Transfixion", None, 2, False, False, False),
+    "feather barrier": (("Evasion Boost",), None, None, 2, False, False, False),
+    "jettatura": (("Terror",), None, None, 7, False, False, False),
+    "yawn": (("Sleep",), None, None, 6, False, False, False),
+    "foot kick": ((), "Detonation", None, 15, False, False, False),
+    "wild carrot": (("Cure",), None, None, 6, False, False, False),
+    "voracious trunk": (("Dispel",), None, None, 2, False, False, False),
+    "healing breeze": (("Cure",), None, None, 2, False, False, False),
+    "chaotic eye": (("Silence",), None, None, 2, False, False, False),
+    "sheep song": (("Sleep",), None, None, 6, False, False, False),
+    "ram charge": ((), "Fragmentation", None, 15, False, False, False),
+    "claw cyclone": ((), "Scission", None, 15, False, False, False),
+    "lowing": (("Plague",), None, None, 0, False, False, False),
+    "dimensional death": ((), "Impaction", None, 15, False, False, False),
+    "heat breath": ((), None, None, 0, True, True, True),
+    "blank gaze": (("Dispel",), None, None, 6, False, True, False),
+    "magic fruit": (("Cure",), None, None, 6, False, False, False),
+    "uppercut": ((), "Liquifaction", None, 15, False, False, False),
+    "1000 needles": ((), None, None, 6, True, False, False),
+    "pinecone bomb": (("Sleep",), "Liquifaction", None, 15, False, False, False),
+    "sprout smack": (("Slow",), "Reverberation", None, 15, False, False, False),
+    "soporific": (("Sleep",), None, None, 7, False, False, False),
+    "queasyshroom": (("Poison",), "Compression", None, 15, False, False, False),
+    "wild oats": (("Vit Down",), "Transfixion", None, 15, False, False, False),
+    "bad breath": (("Bind", "Blind", "Gravity", "Paralyze", "Poison", "Silence", "Slow"), None, None, 3, False, True, False),
+    "geist wall": (("Dispel",), None, None, 7, False, False, False),
+    "awful eye": (("Str Down",), None, None, 5, False, False, False),
+    "frost breath": (("Paralyze",), None, None, 1, True, True, False),
+    "infrasonics": (("Evasion Down",), None, None, 1, False, True, False),
+    "disseverment": (("Poison",), "Distortion", None, 15, False, False, False),
+    "actinic burst": (("Flash",), None, None, 6, False, True, False),
+    "reactor cool": (("Defense Boost", "Spikes"), None, None, 1, False, False, False),
+    "saline coat": (("Magic Defense Boost",), None, None, 6, False, False, False),
+    "plasma charge": (("Spikes",), None, None, 4, False, False, False),
+    "temporal shift": (("Stun",), None, None, 4, False, True, False),
+    "vertical cleave": ((), "Gravitation", None, 15, False, False, False),
+    "blastbomb": (("Bind",), None, None, 0, True, True, False),
+    "battle dance": (("Dex Down",), "Impaction", None, 15, False, False, False),
+    "sandspray": (("Blind",), None, None, 7, False, True, False),
+    "grand slam": ((), "Induration", None, 15, False, False, False),
+    "head butt": (("Stun",), "Impaction", None, 15, False, False, False),
+    "bomb toss": ((), None, None, 0, True, False, False),
+    "frypan": (("Stun",), "Impaction", None, 15, False, False, False),
+    "flying hip press": ((), None, None, 2, True, False, False),
+    "hydro shot": ((), "Reverberation", None, 15, False, False, False),
+    "diamondhide": (("Stoneskin",), None, None, 3, False, False, False),
+    "enervation": (("Defense Down", "Magic Defense Down"), None, None, 7, False, False, False),
+    "light of penance": (("Bind", "Blind", "Reduce TP"), None, None, 6, False, True, False),
+    "warm-up": (("Accuracy Boost", "Evasion Boost"), None, None, 3, False, False, False),
+    "firespit": ((), None, None, 0, True, True, False),
+    "feather storm": (("Poison",), "Transfixion", None, 15, False, False, False),
+    "tail slap": (("Stun",), "Reverberation", None, 15, False, False, False),
+    "hysteric barrage": ((), "Detonation", None, 15, False, False, False),
+    "amplification": (("Magic Attack Boost",), None, None, 5, False, False, False),
+    "cannonball": ((), "Fusion", None, 15, False, False, False),
+    "mind blast": (("Paralyze",), None, None, 4, True, True, True),
+    "exuviation": (("Erase",), None, None, 0, False, False, False),
+    "magic hammer": (("Aspir",), None, None, 6, True, False, False),
+    "zephyr mantle": (("Blink",), None, None, 2, False, False, False),
+    "regurgitation": (("Bind",), None, None, 5, True, False, False),
+    "seedspray": (("Defense Down",), "Induration", "Detonation", 15, False, False, False),
+    "corrosive ooze": (("Attack Down", "Defense Down"), None, None, 5, True, True, False),
+    "spiral spin": (("Accuracy Down",), "Transfixion", None, 15, False, False, False),
+    "asuran claws": ((), "Liquifaction", "Impaction", 15, False, False, False),
+    "sub-zero smash": (("Paralyze",), "Fragmentation", None, 15, False, False, False),
+    "triumphant roar": (("Attack Boost",), None, None, 0, False, False, False),
+    "acrid stream": (("Magic Defense Down",), None, None, 5, True, True, False),
+    "blazing bound": ((), None, None, 0, True, False, False),
+    "plenilune embrace": (("Cure",), None, None, 6, False, False, False),
+    "demoralizing roar": ((), None, None, 5, False, False, False),
+    "cimicine discharge": (("Slow",), None, None, 3, False, True, False),
+    "animating wail": (("Haste",), None, None, 2, False, False, False),
+    "battery charge": (("Refresh",), None, None, 6, False, False, False),
+    "leafstorm": ((), None, None, 2, True, True, False),
+    "regeneration": (("Regen",), None, None, 6, False, False, False),
+    "final sting": ((), "Fusion", None, 15, False, False, False),
+    "goblin rush": ((), "Fusion", None, 15, False, False, False),
+    "vanity dive": ((), "Scission", None, 15, False, False, False),
+    "magic barrier": (("Stoneskin",), None, None, 7, False, False, False),
+    "whirl of rage": (("Stun",), "Scission", "Detonation", 15, False, False, False),
+    "benthic typhoon": (("Defense Down",), "Gravitation", "Transfixion", 15, False, False, False),
+    "auroral drape": (("Blind", "Silence"), None, None, 2, False, False, False),
+    "osmosis": (("Drain",), None, None, 7, True, False, False),
+    "quad. continuum": ((), "Gravitation", None, 15, False, False, False),
+    "fantod": (("Attack Boost",), None, None, 0, False, False, False),
+    "thermal pulse": (("Blind",), None, None, 0, True, True, False),
+    "empty thrash": ((), "Compression", "Scission", 15, False, False, False),
+    "dream flower": (("Sleep",), None, None, 7, False, False, False),
+    "occultation": (("Blink",), None, None, 2, False, False, False),
+    "charged whisker": ((), None, None, 4, True, True, False),
+    "winds of promy.": (("Erase",), None, None, 6, False, False, False),
+    "delta thrust": (("Plague",), "Liquifaction", "Detonation", 15, False, False, False),
+    "evryone. grudge": ((), None, None, 7, True, False, False),
+    "reaving wind": (("Reduce TP",), None, None, 2, False, True, False),
+    "barrier tusk": (("Phalanx",), None, None, 3, False, False, False),
+    "mortal ray": (("Doom",), None, None, 7, False, False, False),
+    "water bomb": (("Silence",), None, None, 5, True, False, False),
+    "heavy strike": ((), "Fragmentation", "Transfixion", 15, False, False, False),
+    "dark orb": ((), None, None, 7, True, False, False),
+    "white wind": (("Cure",), None, None, 2, False, False, False),
+    "sudden lunge": (("Stun",), "Detonation", "Impaction", 15, False, False, False),
+    "quadrastrike": ((), "Liquifaction", "Scission", 15, False, False, False),
+    "vapor spray": ((), None, None, 5, True, False, False),
+    "thunder breath": ((), None, None, 4, True, False, False),
+    "o. counterstance": (("Counter",), None, None, 0, False, False, False),
+    "amorphic spikes": ((), "Gravitation", "Transfixion", 15, False, False, False),
+    "wind breath": ((), None, None, 2, True, False, False),
+    "barbed crescent": (("Accuracy Down",), "Distortion", "Liquifaction", 15, False, False, False),
+    "nat. meditation": (("Attack Boost",), None, None, 0, False, False, False),
+    "tem. upheaval": ((), None, None, 2, True, False, False),
+    "rending deluge": (("Dispel",), None, None, 5, True, False, False),
+    "embalming earth": (("Slow",), None, None, 3, True, False, False),
+    "paralyzing triad": (("Paralyze",), "Gravitation", None, 15, False, False, False),
+    "foul waters": (("Drown",), None, None, 5, True, False, False),
+    "glutinous dart": ((), "Fragmentation", None, 15, False, False, False),
+    "retinal glare": (("Flash",), None, None, 6, True, False, False),
+    "subduction": (("Gravity",), None, None, 2, True, False, False),
+    "thrashing assault": ((), "Fusion", None, 15, False, False, False),
+    "erratic flutter": (("Haste",), None, None, 2, False, False, False),
+    "restoral": (("Cure",), None, None, 6, False, False, False),
+    "rail cannon": ((), None, None, 6, True, False, False),
+    "diffusion ray": ((), None, None, 6, True, False, False),
+    "sinker drill": ((), "Gravitation", "Reverberation", 15, False, False, False),
+    "molting plumage": ((), None, None, 2, True, False, False),
+    "nectarous deluge": (("Poison",), None, None, 5, True, False, False),
+    "sweeping gouge": (("Defense Down",), "Fragmentation", "Scission", 15, False, False, False),
+    "atra. libations": (("Drain",), None, None, 7, True, False, False),
+    "searing tempest": (("Burn",), None, None, 0, True, False, False),
+    "spectral floe": (("Terror",), None, None, 1, True, False, False),
+    "anvil lightning": (("Stun",), None, None, 4, True, False, False),
+    "entomb": (("Petrify",), None, None, 3, True, False, False),
+    "saurian slide": (("Attack Down",), "Fragmentation", "Distortion", 15, False, False, False),
+    "palling salvo": (("Bio",), None, None, 7, True, False, False),
+    "blinding fulgor": (("Flash",), None, None, 6, True, False, False),
+    "scouring spate": (("Attack Down",), None, None, 5, True, False, False),
+    "silent storm": (("Silence",), None, None, 2, True, False, False),
+    "tenebral crush": (("Defense Down",), None, None, 7, True, False, False),
+}
+
+# bluGuide's Utility-view category order (its "buffpage"), verbatim.
+_BLUSETS_UTILITY_ORDER = (
+    "Cure", "Erase", "Haste", "Attack Boost", "Refresh", "Accuracy Boost",
+    "Magic Attack Boost", "Blink", "Defense Boost", "Phalanx", "Stoneskin",
+    "Spikes", "Magic Defense Boost", "Evasion Boost", "Regen", "Counter",
+    "Sleep", "Dispel", "Defense Down", "Evasion Down", "Magic Defense Down",
+    "Aspir", "Drain", "Poison", "Stun", "Terror", "Silence", "Slow",
+    "Paralyze", "Reduce TP", "Plague", "Bind", "Gravity", "Petrify",
+    "Flash", "Blind", "Accuracy Down", "Bio", "Doom", "Frost", "Burn",
+    "Drown", "Vit Down", "Int Down", "Str Down", "Dex Down")
+
+# bluGuide's Damage-view skillchain section order (its "scpage").
+_BLUSETS_SC_ORDER = (
+    "Gravitation", "Fusion", "Distortion", "Fragmentation", "Transfixion",
+    "Compression", "Reverberation", "Induration", "Impaction",
+    "Liquifaction", "Detonation", "Scission")
+
+_BLUSETS_ELEMENTS = ("Fire", "Ice", "Wind", "Earth", "Thunder", "Water",
+                     "Light", "Dark")
+
+
+def _blusets_cost_pts(nm):
+    """(set cost, trait points) for a spell name (lowercase ok)."""
+    info = _blusets_traits.get(nm.lower())
+    if not info:
+        return None, 0
+    pairs = info[1] or []
+    return info[0], (pairs[0][1] if pairs else 0)
+
+
 def _blusets_grouped_learned():
     """Learned spells grouped under trait-section labels:
-    [(label, [(name, cost, pts), ...]), ...] — alphabetical sections
-    with 'No trait' last, spells alphabetical inside each."""
+    [(label, [(name, cost, pts, disp), ...]), ...] — alphabetical
+    sections with 'No trait' last, spells alphabetical inside each."""
     groups = {}
     for nm in _blusets_learned_names():
         info = _blusets_traits.get(nm.lower())
@@ -20882,7 +21142,7 @@ def _blusets_grouped_learned():
             label = (_blusets_tiers.get(key) or (key, []))[0]
         else:
             pts, label = 0, "No trait"
-        groups.setdefault(label, []).append((nm, cost, pts))
+        groups.setdefault(label, []).append((nm, cost, pts, nm))
     out = sorted(((l, sp) for l, sp in groups.items() if l != "No trait"),
                  key=lambda t: t[0].lower())
     if "No trait" in groups:
@@ -20890,6 +21150,77 @@ def _blusets_grouped_learned():
     for _, sp in out:
         sp.sort(key=lambda t: t[0].lower())
     return out
+
+
+def _blusets_grouped_by(sections):
+    """Shared builder for the bluGuide-style views: `sections` is
+    [(label, predicate(name, si) -> disp|None|False), ...]. A spell
+    appears under every section whose predicate accepts it (so e.g. a
+    spell with both SC properties shows under both — same as bluGuide);
+    ticking any instance toggles them all, since tick state is by spell
+    name. Sections with no learned spells are skipped."""
+    learned = sorted(_blusets_learned_names(), key=str.lower)
+    out = []
+    for label, pred in sections:
+        rows = []
+        for nm in learned:
+            si = _BLUSETS_SPELLINFO.get(nm.lower())
+            if si is None:
+                continue
+            disp = pred(nm, si)
+            if not disp:
+                continue
+            cost, pts = _blusets_cost_pts(nm)
+            rows.append((nm, cost, pts,
+                         nm if disp is True else disp))
+        if rows:
+            out.append((label, rows))
+    return out
+
+
+def _blusets_grouped_utility():
+    """bluGuide's Utility view: spells grouped by effect, in its order."""
+    return _blusets_grouped_by([
+        (eff, (lambda e: lambda nm, si: e in si[0])(eff))
+        for eff in _BLUSETS_UTILITY_ORDER])
+
+
+def _blusets_grouped_damage():
+    """bluGuide's Damage view: skillchain-property sections (a spell
+    whose SECONDARY property matches shows its primary as a '(Abc)'
+    suffix, exactly like bluGuide), then nukes by element."""
+    secs = []
+    for sc in _BLUSETS_SC_ORDER:
+        def pred(nm, si, sc=sc):
+            sca, scb = si[1], si[2]
+            if scb == sc:
+                return "%s (%s)" % (nm, (sca or "")[:3])
+            return sca == sc
+        secs.append((sc, pred))
+    for i, el in enumerate(_BLUSETS_ELEMENTS):
+        secs.append((el, (lambda i: lambda nm, si:
+                          si[4] and si[3] == i)(i)))
+    return _blusets_grouped_by(secs)
+
+
+def _blusets_grouped_procs():
+    """bluGuide's Procs view: Voidwatch by element, then Abyssea."""
+    secs = [("Voidwatch - " + el,
+             (lambda i: lambda nm, si: si[5] and si[3] == i)(i))
+            for i, el in enumerate(_BLUSETS_ELEMENTS)]
+    secs.append(("Abyssea", lambda nm, si: si[6]))
+    return _blusets_grouped_by(secs)
+
+
+_BLUSETS_TABS = ("Traits", "Utility", "Damage", "Procs")
+
+
+def _blusets_groups_for_tab():
+    """Grouped learned-spell rows for the active editor tab."""
+    return {"Utility": _blusets_grouped_utility,
+            "Damage": _blusets_grouped_damage,
+            "Procs": _blusets_grouped_procs,
+            }.get(_blusets_edit_tab, _blusets_grouped_learned)()
 
 
 def _blusets_sel_costs():
@@ -21010,14 +21341,16 @@ def draw_blusets_window(surface):
         if not names:
             content_h = 40
     else:
-        groups = _blusets_grouped_learned()
+        groups = _blusets_groups_for_tab()
         row_h = 20
         n_rows = sum(1 + len(sp) for _, sp in groups)  # headers + spells
         content_h = max(row_h, n_rows * row_h) + 6
         if not groups:
             content_h = 44
 
-    strip_h = 34 if _blusets_view == "edit" else 0
+    # Edit strip: name+totals row (34) plus the Traits/Utility/Damage/
+    # Procs tab row (24).
+    strip_h = 58 if _blusets_view == "edit" else 0
     max_h = min(HEIGHT - 60, 560)
     body_h = min(content_h, max_h - title_h - strip_h - foot_h - note_h)
     H = title_h + strip_h + body_h + foot_h + note_h
@@ -21087,6 +21420,31 @@ def draw_blusets_window(surface):
         surface.blit(seg_sp, (cx_, sy + 8))
         cx_ -= seg_sl.get_width()
         surface.blit(seg_sl, (cx_, sy + 8))
+        # ── Tab row: the four bluGuide views of the spell list ──
+        _blusets_tab_rects.clear()
+        ty = sy + 34
+        pygame.draw.rect(surface, (26, 29, 40),
+                         pygame.Rect(x0, ty, W, 24))
+        f_tab = _blusets_font(11, bold=True)
+        tx = x0 + 8
+        for tab in _BLUSETS_TABS:
+            tw = f_tab.size(tab)[0] + 18
+            tr = pygame.Rect(tx, ty + 2, tw, 20)
+            active = (tab == _blusets_edit_tab)
+            hov = tr.collidepoint(pygame.mouse.get_pos())
+            if active:
+                pygame.draw.rect(surface, (38, 52, 66), tr,
+                                 border_radius=3)
+                pygame.draw.rect(surface, (90, 150, 190), tr, 1,
+                                 border_radius=3)
+            elif hov:
+                pygame.draw.rect(surface, (34, 38, 52), tr,
+                                 border_radius=3)
+            col = (170, 215, 245) if active else (165, 172, 190)
+            ts_ = f_tab.render(tab, True, col)
+            surface.blit(ts_, (tr.x + 9, tr.y + 3))
+            _blusets_tab_rects.append((tr, tab))
+            tx += tw + 6
 
     # ── Scrollable body ──
     body = pygame.Rect(x0, y0 + title_h + strip_h, W, body_h)
@@ -21135,7 +21493,7 @@ def draw_blusets_window(surface):
     else:
         # ── Edit view: trait sections + spells (name strip is fixed
         # above; only this list scrolls) ──
-        groups = _blusets_grouped_learned()
+        groups = _blusets_groups_for_tab()
         left_w = 350                       # left column: sections + spells
         if not groups:
             surface.blit(f_s.render(
@@ -21150,7 +21508,7 @@ def draw_blusets_window(surface):
                 surface.blit(_blusets_font(11, bold=True).render(
                     label, True, (150, 170, 210)), (hdr.x + 6, hdr.y + 1))
             cy += 20
-            for nm, cost, pts in spells:
+            for nm, cost, pts, disp in spells:
                 if body.y - 20 < cy < body.bottom:
                     r = pygame.Rect(x0 + 14, cy + 2, left_w - 18, 18)
                     sel = nm.lower() in _blusets_edit_sel
@@ -21169,7 +21527,8 @@ def draw_blusets_window(surface):
                             pygame.Rect(box.x + 3, box.y + 3, 7, 7),
                             border_radius=1)
                     col = (235, 238, 248) if sel else (185, 191, 206)
-                    ns = _blusets_font(11, bold=True).render(nm, True, col)
+                    ns = _blusets_font(11, bold=True).render(disp, True,
+                                                             col)
                     surface.blit(ns, (r.x + 22, r.y + 1))
                     nrect = pygame.Rect(r.x + 22, r.y + 1,
                                         ns.get_width(), 15)
@@ -21307,6 +21666,8 @@ def draw_blusets_window(surface):
 def _blusets_open_editor(orig_name=None):
     global _blusets_view, _blusets_edit_name, _blusets_edit_orig
     global _blusets_edit_sel, _blusets_name_focus, _blusets_scroll
+    global _blusets_edit_tab
+    _blusets_edit_tab = "Traits"
     _blusets_view = "edit"
     _blusets_scroll = 0
     _blusets_edit_orig = orig_name
@@ -21375,6 +21736,7 @@ def _blusets_handle_event(event):
     global _blusets_open, _blusets_view, _blusets_scroll
     global _blusets_win_drag, _blusets_win_pos, _blusets_sb_drag
     global _blusets_name_focus, _blusets_edit_name, _blusets_confirm_del
+    global _blusets_edit_tab
 
     if event.type == pygame.MOUSEWHEEL:
         if (_blusets_open and _blusets_win_rect is not None
@@ -21463,6 +21825,12 @@ def _blusets_handle_event(event):
                         _blusets_confirm_del = (nm, now + 2.5)
                     return True
         else:
+            for tr, tab in _blusets_tab_rects:
+                if tr.collidepoint(mx, my):
+                    if tab != _blusets_edit_tab:
+                        _blusets_edit_tab = tab
+                        _blusets_scroll = 0
+                    return True
             if _blusets_name_rect and _blusets_name_rect.collidepoint(mx, my):
                 _blusets_name_focus = True
                 return True
@@ -39964,10 +40332,16 @@ def _gt_hook_thread():
               "good for hooking an elevated game.")
     _gt_trace("hook installed OK, hHook=%r, elevated=%r, entering loop"
               % (hook, _elev))
-    u32.GetCurrentThreadId.restype = wintypes.DWORD
+    # GetCurrentThreadId is a KERNEL32 export — fetching it off
+    # user32 raised AttributeError and KILLED this thread right
+    # after the hook installed; with no message pump on the
+    # owning thread, Windows never delivered a single hook
+    # callback, so type-anywhere passed every key through to the
+    # game (the 'ready' line printed, making it look healthy).
+    k32.GetCurrentThreadId.restype = wintypes.DWORD
     u32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
     u32.UnhookWindowsHookEx.restype = wintypes.BOOL
-    _gt_state["tid"] = u32.GetCurrentThreadId()
+    _gt_state["tid"] = k32.GetCurrentThreadId()
     _gt_state["u32"] = u32
     msg = wintypes.MSG()
     while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
