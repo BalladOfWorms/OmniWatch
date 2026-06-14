@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.7.5'
+_addon.version  = '1.7.6'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -264,7 +264,7 @@ end
 -- Format per line:
 --   YYYY-MM-DD HH:MM:SS [where] message
 --     traceback (indented)
-local function ow_log_path()
+function ow_log_path()
     -- windower.addon_path may not be set yet when this file is first loaded.
     local base = (windower.addon_path or '') 
     if base == '' and windower.windower_path then
@@ -273,7 +273,7 @@ local function ow_log_path()
     return base .. 'logs/'
 end
 
-local function ow_ensure_log_dir()
+function ow_ensure_log_dir()
     local dir = ow_log_path()
     if dir == 'logs/' then return dir end  -- couldn't resolve, skip
     -- Best-effort mkdir. windower has no native mkdir; we rely on os.execute
@@ -285,7 +285,7 @@ local function ow_ensure_log_dir()
 end
 
 local _ow_crash_log_dir_checked = false
-local function ow_log_crash(where, err_text, traceback)
+function ow_log_crash(where, err_text, traceback)
     -- Never throw from this function. We swallow any I/O error since
     -- logging failure must not cascade into the very crash handler itself.
     local ok = pcall(function()
@@ -492,7 +492,7 @@ local _ow_refresh_geo_settings
 --   %APPDATA%\OmniWatch\user_config.lua
 -- which is typically  C:\Users\<you>\AppData\Roaming\OmniWatch\user_config.lua
 -- Press Win+R, type %APPDATA%, hit Enter to navigate there.
-local function ow_user_config_dir()
+function ow_user_config_dir()
     -- os.getenv('APPDATA') returns the Roaming folder path on Windows
     -- (e.g. 'C:\Users\Joe\AppData\Roaming'). Use forward slashes for
     -- consistency with windower.addon_path elsewhere; Windows io.open
@@ -540,7 +540,7 @@ function _ow_trustprobe_log(line)
     end
 end
 
-local function ow_user_config_path()
+function ow_user_config_path()
     return ow_user_config_dir() .. '/user_config.lua'
 end
 
@@ -548,7 +548,7 @@ end
 -- mkdir directly in stock Lua 5.1, so we use os.execute with mkdir.
 -- Windows mkdir is idempotent if the dir exists (returns nonzero but
 -- the dir is there); silenced via '> nul 2>&1'.
-local function ow_ensure_user_config_dir()
+function ow_ensure_user_config_dir()
     local dir = ow_user_config_dir()
     -- Skip if it's the addon's own data/ folder — that always exists.
     if dir == windower.addon_path .. 'data' then
@@ -1898,7 +1898,7 @@ end
 -- commands. Runtime config changes (//ow config <bard> <family> <N>)
 -- update the in-memory ow_user_config but the user re-saves their
 -- file by hand. This avoids fighting with hand-formatted comments.
-local function ow_write_user_config_template_if_missing()
+function ow_write_user_config_template_if_missing()
     -- Make sure %APPDATA%\OmniWatch\ exists before trying to write.
     -- No-ops if it's already there or if we can't run mkdir.
     ow_ensure_user_config_dir()
@@ -2007,7 +2007,7 @@ end
 -- other top-level sections the user added by hand are NOT preserved
 -- (we round-trip only the bards section since that's what we own).
 -- If you keep a hand-edit-only workflow you'll never call this.
-local function ow_save_user_config()
+function ow_save_user_config()
     -- AppData location, not the addon folder — see ow_user_config_dir
     -- comments above. Make sure the dir exists first; on a fresh
     -- install the user might run //ow setup before the load handler
@@ -2418,7 +2418,7 @@ local _OW_BAG_INV_BAGS = {
     'wardrobe5', 'wardrobe6', 'wardrobe7', 'wardrobe8',
 }
 
-local function _ow_sanitize_item_name(name)
+function _ow_sanitize_item_name(name)
     -- Strip wire delimiters from item names. Returns cleaned string.
     if not name then return '' end
     return (tostring(name):gsub('[|;,]', ' '))
@@ -4134,7 +4134,7 @@ local _OW_SIM_SLOT_KEYS = {
 local _OW_SLOT_NAME_TO_ID = nil   -- 'main' → bit number
 local _OW_JOB_NAME_TO_ID  = nil   -- 'NIN'  → bit number
 
-local function _ow_build_sim_lookups()
+function _ow_build_sim_lookups()
     if _OW_SLOT_NAME_TO_ID and _OW_JOB_NAME_TO_ID then return end
     _OW_SLOT_NAME_TO_ID = {}
     _OW_JOB_NAME_TO_ID  = {}
@@ -4182,7 +4182,7 @@ local _ow_inv_snap_last_sent = 0  -- guards against multi-send per second
 -- _ow_inv_snap_dirty: 0x01D-0x020). Rebuilt on next access.
 local _ow_inv_id_to_loc = nil  -- nil = needs rebuild
 
-local function _ow_rebuild_id_to_loc()
+function _ow_rebuild_id_to_loc()
     local map = {}
     if res and res.bags then
         for _, bag in pairs(res.bags) do
@@ -4259,7 +4259,7 @@ end
 -- per copy, ride a separate AUG stream. Mirrors the equip_rich field
 -- derivation so non-equipped tooltips match the live equipment panel.
 -- Returns ilvl, lvl, jobs, stat_lines (or nil if the id is unknown).
-local function _ow_sim_item_card(item_id)
+function _ow_sim_item_card(item_id)
     local resource = res.items and res.items[item_id]
     if not resource then return nil end
     local ilvl = tonumber(resource.item_level) or 0
@@ -7754,7 +7754,7 @@ PW_BUFF_CROOKED_CARDS = 601
 -- Read live merit/JP values for a song-class from windower's player
 -- data. Returns (merit_levels, jp_levels). Falls back to 0 if the
 -- player data isn't loaded yet or the keys aren't present.
-local function _ow_brd_song_levels(merit_key, jp_key)
+function _ow_brd_song_levels(merit_key, jp_key)
     local merit_lv, jp_lv = 0, 0
     local p = windower.ffxi.get_player()
     if not p then return merit_lv, jp_lv end
@@ -7780,7 +7780,7 @@ end
 -- }
 -- Reads from windower.ffxi.get_items('equipment') and consults the
 -- PW_SONG_GEAR_BY_NAME rules (loaded from gearinfo/res/BardGear.lua).
-local function _ow_brd_per_family_song_plus()
+function _ow_brd_per_family_song_plus()
     local result = {
         all=0, minuet=0, madrigal=0, minne=0, paeon=0,
         ballad=0, prelude=0, mambo=0, march=0,
@@ -8382,7 +8382,7 @@ local DPS_MAGIC_RESIST_MSG = {[85]=true, [283]=true, -- no effect, resisted
 -- Resolve "is this actor someone we're tracking?" → returns
 -- (src_tag, src_name) or nil if we don't track them. src_tag is one of
 -- 'me', 'pet', or '<party_name>' (also used as src_name in that case).
-local function _ow_dps_classify_actor(actor_id)
+function _ow_dps_classify_actor(actor_id)
     if not actor_id or actor_id == 0 then return nil end
     local me = windower.ffxi.get_player()
     if not me then return nil end
@@ -8418,13 +8418,13 @@ local function _ow_dps_classify_actor(actor_id)
     return nil
 end
 
-local function _ow_dps_target_name(target_id)
+function _ow_dps_target_name(target_id)
     if not target_id or target_id == 0 then return '?' end
     local m = windower.ffxi.get_mob_by_id(target_id)
     return (m and m.name) or '?'
 end
 
-local function _ow_dps_record(ev)
+function _ow_dps_record(ev)
     ev.ts = os.clock()
     table.insert(_ow_dps_events, ev)
     _ow_dps_last_event_ts = ev.ts
@@ -8459,7 +8459,7 @@ end
 -- Hook called by handle_incoming_action — feeds DPS-relevant data in.
 -- Returns nothing; safe to call on every action without consequence to
 -- the existing pipeline.
-local function _ow_dps_record_action(act)
+function _ow_dps_record_action(act)
     if not act or not act.targets or not act.actor_id then return end
     local cat = act.category
     if not cat then return end
@@ -8667,7 +8667,7 @@ end
 -- Aggregator: walk events and produce the per-source rolled-up totals.
 -- Returns a nested table keyed by src_tag with all the metrics, plus
 -- a per-WS map and per-mob map.
-local function _ow_dps_aggregate()
+function _ow_dps_aggregate()
     _ow_dps_prune()
     local out = {}
     local ws_per_src   = {}    -- src → {ws_name → {count, total, best}}
@@ -8755,7 +8755,7 @@ local function _ow_dps_aggregate()
 end
 
 -- Send a single DPS payload over UDP. Throttled to 2 Hz by the caller.
-local function _ow_dps_emit()
+function _ow_dps_emit()
     local out, ws_per_src, mob_per_src = _ow_dps_aggregate()
     local lines = {}
     local now = os.clock()

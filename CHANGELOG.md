@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.6] — 2026-06-14
+
+### Changed
+
+- **Main-chunk local-variable headroom** — `OmniWatch.lua`'s top-level chunk had reached Lua 5.1's hard limit of **200 local variables per function**, so adding any new top-level `local` (e.g. a contributor's helper) broke the build with `main function has more than 200 local variables` — an error whose reported line is unrelated to the real cause. Twenty clearly-internal `_ow_*`/`ow_*` helper functions (logging, user-config I/O, sim-lookup building, DPS internals, bard-song helpers) were converted from `local function` to plain global `function`. This frees ~20 slots (main now ≈180/200) for future features and PRs. The change is mechanical and call-site-neutral: a global function is invoked identically to a local one, the names are uniquely prefixed (no shadowing), and each was verified to have a single definition. New top-level helpers should follow the same global-with-`_ow_`-prefix convention rather than adding `local`s.
+
 ## [1.7.5] — 2026-06-12
 
 ### Changed
