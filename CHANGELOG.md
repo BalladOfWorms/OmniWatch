@@ -6,6 +6,12 @@
 
 - **Main-chunk local-variable headroom** — `OmniWatch.lua`'s top-level chunk had reached Lua 5.1's hard limit of **200 local variables per function**, so adding any new top-level `local` (e.g. a contributor's helper) broke the build with `main function has more than 200 local variables` — an error whose reported line is unrelated to the real cause. Twenty clearly-internal `_ow_*`/`ow_*` helper functions (logging, user-config I/O, sim-lookup building, DPS internals, bard-song helpers) were converted from `local function` to plain global `function`. This frees ~20 slots (main now ≈180/200) for future features and PRs. The change is mechanical and call-site-neutral: a global function is invoked identically to a local one, the names are uniquely prefixed (no shadowing), and each was verified to have a single definition. New top-level helpers should follow the same global-with-`_ow_`-prefix convention rather than adding `local`s.
 
+### Fixed
+
+- **Non-self Marches now count toward DW haste sources** — Trust/other-bard Marches could show correctly in the visible buff/timer path while still missing from `_ow_buff_sources[214]`, so `//ow dwtest` and the streamed `hasteinfo` value undercounted magic haste and GearSwap could pick an inflated Dual Wield bucket even with Marches active. Non-self BardSong packets are now recognized via `Bard_Songs[song_probe_id]` as a fallback when `spell_data.type` isn't `BardSong`, and a new helper resolves a configured non-self bard's March+/All Songs+ from `settings.Bards[name].song_bonus` (falling back to `ow_user_config.bards[name]`) into the existing March potency/source path. *Contributed by **gorschu** ([#26](https://github.com/BalladOfWorms/OmniWatch/pull/26)).*
+
+- **Haste source timestamps preserved across state saves** — magic-haste source records could be restored without timing metadata, so the prune logic might treat a freshly-applied Haste/Haste II source as stale before `player.buffs` caught up, briefly undercounting magic haste and streaming an inflated `hasteinfo` to GearSwap. `_ow_save_buff_state()` now writes `cast_time`, and Haste/Haste II spell sources are stamped with `cast_time = os.time()`. *Contributed by **gorschu** ([#25](https://github.com/BalladOfWorms/OmniWatch/pull/25)).*
+
 ## [1.7.5] — 2026-06-12
 
 ### Changed
