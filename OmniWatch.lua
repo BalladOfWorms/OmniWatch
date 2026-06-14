@@ -8082,6 +8082,25 @@ local function _ow_build_song_tables()
     end
 end
 
+local function _ow_song_plus_for_actor(actor_id, family)
+    local mob = windower.ffxi.get_mob_by_id(actor_id or 0)
+    local caster_name = mob and mob.name and mob.name:lower() or nil
+    if not caster_name then return 0 end
+
+    local family_key = ({
+        marches = 'march',
+    })[family] or family
+
+    local config_bards = ow_user_config and ow_user_config.bards
+    local user_cfg = config_bards and config_bards[caster_name]
+    local settings_cfg = settings and settings.Bards and settings.Bards[caster_name]
+    local song_bonus = (settings_cfg and settings_cfg.song_bonus) or user_cfg
+    if not song_bonus then return 0 end
+
+    return (tonumber(song_bonus.all_songs) or 0)
+        + (tonumber(song_bonus[family_key]) or 0)
+end
+
 -- ── DPS tracker ────────────────────────────────────────────────────────
 -- Rolling 5-minute combat metrics. Built from the same action-packet hook
 -- that drives mob debuff tracking and roll detection. Sends a per-tick
@@ -9597,8 +9616,11 @@ local function handle_incoming_action(act)
                 -- the safe choice). This sets display_name to the
                 -- specific tier without disturbing the self path's
                 -- gear-aware numbers.
-                if act.actor_id ~= my_id and spell_data
-                   and spell_data.type == 'BardSong' then
+                local is_other_bard_song = act.actor_id ~= my_id
+                    and spell_data
+                    and (spell_data.type == 'BardSong'
+                         or (Bard_Songs and Bard_Songs[song_probe_id]))
+                if is_other_bard_song then
                     local _tname = spell_data.enl or spell_data.en
                     local _tbid  = spell_data.status
                     if _tname and _tbid and _tbid > 0 then
@@ -9634,7 +9656,10 @@ local function handle_incoming_action(act)
 
                     -- Compute potency using HasteInfo's proven formula:
                     --   potency_pct = floor(potency_base * (1 + 0.1 * sp)) / 1024 * 100
-                    -- where sp is gear March+ capped at song-specific cap.
+                    -- where sp is caster March+/All Songs+ capped at the
+                    -- song-specific cap. Self songs use equipped gear;
+                    -- other bards use configured bards.<name> bonuses and
+                    -- otherwise fall back to base potency.
                     local entry = PW_SONG_HASTE_TABLE[song_id]
                     local potency = nil
                     if entry then
@@ -9646,7 +9671,11 @@ local function handle_incoming_action(act)
                             -- tiers thereof) to their gear-derived
                             -- contribution.
                             sp = ow_song_plus_for_family('marches')
+                        else
+                            sp = _ow_song_plus_for_actor(
+                                act.actor_id, 'marches')
                         end
+                        sp = math.max(0, math.floor(tonumber(sp) or 0))
                         sp = math.min(sp, entry.cap)
                         local potency_1024 = entry.per_1024[sp] or entry.per_1024[0]
                         potency = potency_1024 / 1024 * 100
