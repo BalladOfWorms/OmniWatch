@@ -5349,9 +5349,9 @@ local function _ow_save_buff_state()
         f:write(string.format('  [%d] = {\n', buff_id))
         for _, s in ipairs(srcs) do
             f:write(string.format(
-                '    { src_kind = %q, src_id = %d, src_name = %q, potency = %s },\n',
+                '    { src_kind = %q, src_id = %d, src_name = %q, potency = %s, cast_time = %s },\n',
                 s.src_kind or '', s.src_id or 0, s.src_name or '',
-                tostring(s.potency or 0)))
+                tostring(s.potency or 0), tostring(s.cast_time or 0)))
         end
         f:write('  },\n')
     end
@@ -10077,6 +10077,7 @@ local function handle_incoming_action(act)
                     src_id   = spell_id,
                     src_name = spell_name,
                     potency  = potency,
+                    cast_time = os.time(),
                 }
                 _ow_buff_sources[33] = kept
                 _ow_save_buff_state()
