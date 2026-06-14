@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.7.3 (2026-06-12)"
+OMNIWATCH_BUILD_STAMP = "v1.7.5 (2026-06-12)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.7.3"
+OMNIWATCH_VERSION = "1.7.5"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1143,8 +1143,9 @@ SIM_BUFF_CATALOG = [
     ("chaos_roll",      "Rolls",    "Chaos Roll",      "roll", 11),
     ("sam_roll",        "Rolls",    "Samurai Roll",    "roll", 11),
     ("tactician_roll",  "Rolls",    "Tactician's Roll","roll", 11),
-    ("indi_fury",       "Geomancy", "Indi-Fury",       "song", 10),
-    ("indi_haste",      "Geomancy", "Indi-Haste",      "song", 10),
+    ("indi_fury",       "Geomancy", "Indi / Geo Fury",      "song", 10),
+    ("indi_haste",      "Geomancy", "Indi / Geo Haste",     "song", 10),
+    ("indi_precision",  "Geomancy", "Indi / Geo Precision", "song", 10),
     # Spells: flat values, no plus/level/optimal toggles. The 'spell'
     # kind renders as a single name+remove row in the sim UI; potency
     # is fixed (no math needed beyond the catalog base value).
@@ -1152,6 +1153,14 @@ SIM_BUFF_CATALOG = [
     ("spell_haste2",    "Spells",   "Haste II",        "spell", 0),
     ("spell_flurry",    "Spells",   "Flurry",          "spell", 0),
     ("spell_flurry2",   "Spells",   "Flurry II",       "spell", 0),
+    ("embrava",         "Spells",   "Embrava",         "spell", 0),
+    # Blue Magic: self-cast BLU spells. Same flat 'spell' kind as the
+    # Spells bucket; kept as its own category because players think of
+    # BLU buffs separately. Modeled on their magic-haste piece (see
+    # BUFF_DATA notes for what's not modeled, e.g. Mighty Guard's
+    # Defense/MDB/Regen, which have no stats-panel cell).
+    ("erratic_flutter", "Blue Magic", "Erratic Flutter", "spell", 0),
+    ("mighty_guard",    "Blue Magic", "Mighty Guard",    "spell", 0),
 ]
 # Index by category for the two-stage picker. Tuples come back as
 # (id, name, kind, plus_max) — same shape as the catalog minus the
@@ -1208,28 +1217,71 @@ SIM_GEAR_SLOTS = [
 # needed; format makes it data-only.
 SIM_FOOD_LIST = [
     # id     display                              stats (canonical keys)
-    (5736,   "Grape Daifuku",                     {"accuracy": 50, "attack": 50,
-                                                    "magic accuracy": 35, "magic attack bonus": 35}),
-    (5734,   "Pear Crepe",                        {"accuracy": 60, "attack": 60,
-                                                    "magic accuracy": 40, "magic attack bonus": 40}),
-    (5733,   "Marine Stewpot",                    {"accuracy": 60, "attack": 60}),
-    (4359,   "Sublime Sushi",                     {"accuracy": 75, "ranged accuracy": 75,
+    #
+    # Stat VALUES are either a flat int (e.g. "str": 5 → STR +5) or a
+    # (percent, cap) tuple (e.g. "accuracy": (15, 72) → Accuracy +15%, max
+    # +72). FFXI's combat foods are mostly percent-of-base with a flat cap;
+    # the lua resolves the tuple against your pre-food stat and clamps to
+    # the cap. ids are the real windower res.items ids (verified) so the
+    # name and the right-click BG-Wiki link resolve correctly. This list
+    # mirrors the lua _FOOD_STATS table 1:1 (same id → same stats).
+    #
+    # VERIFIED (exact, from in-game): only the ids in _SIM_FOOD_VERIFIED.
+    # The rest still carry the old flat approximations and are flagged
+    # "(unverified)" in the tooltip — right-click a food to open its
+    # BG-Wiki page and confirm the real percent/cap, and they'll be set
+    # exactly. Real food is e.g. "Accuracy +15% (Cap: 72)".
+    (6343,   "Grape Daifuku",                     {"hp": 20, "str": 2, "vit": 3,
+                                                    "accuracy": (10, 80), "attack": (10, 50),
+                                                    "ranged accuracy": (10, 80), "ranged attack": (10, 50),
+                                                    "magic attack bonus": 3}),
+    (6344,   "Grape Daifuku +1",                  {"hp": 30, "str": 3, "vit": 4,
+                                                    "accuracy": (11, 85), "attack": (11, 55),
+                                                    "ranged accuracy": (11, 85), "ranged attack": (11, 55),
+                                                    "magic attack bonus": 4}),
+    (5777,   "Pear Crepe",                        {"int": 2, "magic accuracy": (20, 45)}),
+    (5893,   "Marine Stewpot",                    {"hp": 90, "accuracy": 90,
+                                                    "ranged accuracy": 90, "magic accuracy": 90}),
+    (6468,   "Sublime Sushi",                     {"accuracy": 75, "ranged accuracy": 75,
                                                     "attack": 50, "ranged attack": 50}),
-    (4360,   "Sublime Sushi +1",                  {"accuracy": 80, "ranged accuracy": 80,
-                                                    "attack": 55, "ranged attack": 55}),
-    (5735,   "Sole Sushi",                        {"accuracy": 90, "ranged accuracy": 90,
-                                                    "attack": 30, "ranged attack": 30}),
-    (5739,   "Sole Sushi +1",                     {"accuracy": 95, "ranged accuracy": 95,
-                                                    "attack": 35, "ranged attack": 35}),
-    (5746,   "Akamochi",                          {"accuracy": 90, "attack": 50,
+    (6469,   "Sublime Sushi +1",                  {"hp": 45, "str": 7, "dex": 8, "mnd": -4, "chr": 7,
+                                                    "accuracy": (11, 105), "ranged accuracy": (11, 105)}),
+    (5149,   "Sole Sushi",                        {"hp": 20, "str": 5, "dex": 6,
+                                                    "accuracy": (15, 72), "ranged accuracy": (15, 72)}),
+    (5163,   "Sole Sushi +1",                     {"accuracy": (16, 76), "ranged accuracy": (16, 76),
+                                                    "str": 5, "dex": 6, "hp": 20}),
+    (5166,   "Coeurl Sub",                        {"str": 5, "agi": 1, "int": -2,
+                                                    "attack": (20, 75), "ranged attack": (20, 75)}),
+    (5167,   "Coeurl Sub +1",                     {"attack": (22, 80), "ranged attack": (22, 80),
+                                                    "str": 5, "agi": 1}),
+    (5190,   "Carbonara",                         {"attack": (18, 65), "str": 4, "vit": 2,
+                                                    "store tp": 6}),
+    (6260,   "Akamochi",                          {"accuracy": 90, "attack": 50,
                                                     "magic accuracy": 60}),
-    (5660,   "Soy Ramen",                         {"accuracy": 70, "attack": 70,
-                                                    "magic accuracy": 50, "magic attack bonus": 50}),
-    (5754,   "Tropical Crepe",                    {"magic attack bonus": 80, "magic accuracy": 60,
-                                                    "magic damage": 40}),
-    (5305,   "Red Curry Bun",                     {"attack": 75, "accuracy": 50}),
-    (5306,   "Yellow Curry Bun",                  {"magic attack bonus": 75, "magic accuracy": 50}),
+    (6261,   "Akamochi +1",                       {"hp": 30, "vit": 4,
+                                                    "accuracy": (11, 54), "attack": (17, 54),
+                                                    "ranged accuracy": (11, 54), "ranged attack": (17, 54)}),
+    (6458,   "Soy Ramen",                         {"hp": 50, "str": 5, "vit": 5, "agi": 3,
+                                                    "attack": (10, 170), "ranged attack": (10, 170)}),
+    (6459,   "Soy Ramen +1",                      {"hp": 55, "str": 6, "vit": 6, "agi": 4,
+                                                    "attack": (11, 175), "ranged attack": (11, 175)}),
+    (6567,   "Tropical Crepe",                    {"int": 2, "mnd": 2, "magic accuracy": (20, 90)}),
+    (5759,   "Red Curry Bun",                     {"hp": 25, "str": 7, "agi": 1, "int": -2,
+                                                    "attack": (23, 150), "ranged attack": (23, 150)}),
+    (5757,   "Yellow Curry Bun",                  {"hp": 20, "str": 5, "agi": 2, "int": -4,
+                                                    "attack": (20, 75), "ranged attack": (20, 75)}),
+    (5763,   "Yellow Curry Bun +1",               {"hp": 30, "str": 5, "vit": 2, "agi": 3, "int": -2,
+                                                    "attack": (22, 85), "ranged attack": (22, 85)}),
 ]
+
+# Food ids whose stats have been verified exact against in-game / BG-Wiki
+# (percent + cap where applicable). Foods NOT in this set still carry the
+# old flat approximations and render "(unverified)" in the tooltip.
+_SIM_FOOD_VERIFIED = {5149, 5163, 5166, 5167, 5190, 5759, 5763, 5777, 5893,
+                      6261, 6343, 6344, 6458, 6459, 6469, 6567, 5757}
+
+# id → display name, for the right-click BG-Wiki link.
+_SIM_FOOD_NAME_BY_ID = {fid: fname for fid, fname, _ in SIM_FOOD_LIST}
 
 # Sim equipment dropdown options accessor. Returns list of
 # (item_id, display_name) tuples for items currently in the player's
@@ -1275,11 +1327,254 @@ def _sim_get_slot_options(slot):
 #       "main_job": "NIN",
 #       "by_slot":  { "main": [{id, name, jobs:[...]}, ...], ... },
 #   }
-_inv_for_sim = {"main_job": "", "by_slot": {}, "equipped": {}, "fingerprints": {}}
+_inv_for_sim = {"main_job": "", "by_slot": {}, "equipped": {},
+                "fingerprints": {}, "cards": {}, "augs": {}}
 # Staging buffer used while a SIM_INV snapshot is being assembled.
 # Atomically swapped into _inv_for_sim when SIM_INV|END arrives so the
 # dropdown UI never reads a half-built snapshot.
-_sim_inv_buffer = {"main_job": "", "by_slot": {}, "equipped": {}, "fingerprints": {}}
+# - "cards": { item_id: {"ilvl", "level", "jobs", "stat_lines":[...]} }
+#   static per-id tooltip data (description stats), from the CARD stream.
+# - "augs":  { (bag, idx): [aug_line, ...] } full augment lines per copy,
+#   from the AUG stream. Both back the gear-selection tooltips for items
+#   that aren't currently equipped (equipped items use live equip_rich).
+_sim_inv_buffer = {"main_job": "", "by_slot": {}, "equipped": {},
+                   "fingerprints": {}, "cards": {}, "augs": {}}
+
+# ── Sim equipment-panel takeover ────────────────────────────────────────
+# When sim mode is active, the EQUIPMENT panel should display exactly what
+# the user picked in the Simulation window — not whatever live gear the
+# lua stream is still pushing. Python already owns the authoritative sim
+# picks (sim_state["equipment"]) and the inventory snapshot needed to
+# resolve item names/tags, so we build the panel data here rather than
+# round-tripping through lua. This keeps the panel correct regardless of
+# what the lua equip-send path happens to emit while sim is on.
+#
+# Delta semantics (matches the lua compute path): a slot the user has
+# explicitly set wins (0 = force-empty, otherwise the chosen item); a slot
+# absent from sim_state["equipment"] falls back to the live gear for that
+# panel index. After activation the snapshot seeds every equipped slot, so
+# in practice the panel mirrors the sim picks exactly.
+def _sim_build_equip_display():
+    """Return (slots, rich) for the equipment panel while sim is active.
+
+      slots : list of 16 item ids in SIM_GEAR_SLOTS / SLOT_LABELS order
+              (the core.lua display order equip_data uses), 0 = empty.
+      rich  : {panel_idx -> rich_dict} for tooltips (best-effort name/aug
+              data resolved from the inventory snapshot).
+    """
+    sim_eq = sim_state.get("equipment", {}) or {}
+    slots = []
+    rich  = {}
+    for i, (slot_key, _label) in enumerate(SIM_GEAR_SLOTS):
+        live_id   = equip_data[i] if i < len(equip_data) else 0
+        live_rich = equip_rich.get(i)
+
+        # Untouched slot → keep live gear (delta semantics).
+        if slot_key not in sim_eq:
+            slots.append(live_id)
+            if live_rich is not None:
+                rich[i] = live_rich
+            continue
+
+        ref = sim_eq[slot_key]
+
+        # Explicit empty (0, or a dict with no/zero id).
+        if ref == 0 or (isinstance(ref, dict) and (ref.get("id", 0) or 0) <= 0):
+            slots.append(0)
+            continue
+
+        # Resolve target id + (bag, idx) location.
+        if isinstance(ref, dict):
+            target_id  = ref.get("id", 0) or 0
+            target_loc = (ref.get("bag", 0), ref.get("idx", 0))
+        else:
+            target_id  = int(ref) if isinstance(ref, int) else 0
+            target_loc = None
+        slots.append(target_id)
+
+        # Rich entry for tooltips. Use the same builder the sim window
+        # uses (_sim_item_tooltip_info), so the EQUIPMENT — SIM panel
+        # shows the SAME full card as the live panel and the sim window:
+        # it borrows the item description / ilvl / level / jobs from live
+        # equip_rich for a piece you're wearing, with augments from this
+        # specific copy's tag. Falls back to the live rich entry if the
+        # inventory snapshot doesn't have the item.
+        entry = None
+        for cand in _sim_get_slot_options(slot_key):
+            if target_loc and (cand.get("bag", 0), cand.get("idx", 0)) == target_loc:
+                entry = cand
+                break
+            if not target_loc and cand.get("id") == target_id:
+                entry = cand
+                break
+        if entry is not None:
+            info = _sim_item_tooltip_info(entry)
+            if info is not None:
+                rich[i] = info
+            elif live_rich is not None and live_rich.get("item_id") == target_id:
+                rich[i] = live_rich
+        elif live_rich is not None and live_rich.get("item_id") == target_id:
+            # Same item the player is actually wearing → reuse the full
+            # live rich data (carries real augments / stat lines).
+            rich[i] = live_rich
+    return slots, rich
+
+# Per-frame mirror of the rich data backing the equipment panel. Set in
+# the render loop to either the live equip_rich (normal play) or the
+# sim-derived rich (sim active). Read by the hover-tooltip block, which
+# runs far from the draw site in the same loop iteration.
+equip_rich_view = {}
+
+# ── Sim window item tooltips ────────────────────────────────────────────
+# Hovering an item in the sim window (a slot cell's chosen item, or any
+# row in an open equip dropdown) shows the same rich card the equipment
+# panel uses. draw_sim_window refills these each frame; the end-of-frame
+# tooltip dispatch reads them.
+#   sim_item_tooltip_rects : list of (pygame.Rect, inv_entry_dict)
+#   sim_window_bounds_rect : full window rect, for suppressing the
+#                            equipment-panel tooltip when the cursor is
+#                            over the sim window (which draws on top).
+sim_item_tooltip_rects = []
+sim_window_bounds_rect = None
+
+def _sim_equipped_rich_for(entry):
+    """If `entry`'s exact instance (id, bag, idx) is the item currently
+    equipped in some slot, return that slot's full live equip_rich dict
+    (complete augment strings, description lines, ilvl, level, jobs).
+    Else None. The match is by instance, so only the actually-equipped
+    copy gets the live card — a different augmented copy of the same item
+    does not."""
+    eid = entry.get("id")
+    if eid is None:
+        return None
+    ebag = entry.get("bag")
+    eidx = entry.get("idx")
+    equipped = _inv_for_sim.get("equipped", {}) or {}
+    for slot_key, eref in equipped.items():
+        if (eref.get("id") == eid
+                and eref.get("bag") == ebag
+                and eref.get("idx") == eidx):
+            for i, (sk, _label) in enumerate(SIM_GEAR_SLOTS):
+                if sk == slot_key:
+                    return equip_rich.get(i)
+            return None
+    return None
+
+def _sim_item_tooltip_info(entry):
+    """Build a draw_item_tooltip() info dict for a sim inventory entry.
+
+    If the hovered instance is the one currently equipped, return the live
+    equip_rich card verbatim — so it's identical to the live equipment
+    panel's tooltip (full augment strings like 'Path A · Rank 15/15' and
+    '"Double Attack"+5%', plus description lines, ilvl, jobs). For any
+    other (non-equipped) copy, fall back to the inventory snapshot: name +
+    the short augment tag, since the full per-copy augment strings for
+    non-equipped items aren't sent to the overlay yet (that needs the lua
+    inventory-snapshot change)."""
+    if not entry:
+        return None
+    iid  = entry.get("id", 0) or 0
+    name = entry.get("name", "") or (f"Item #{iid}" if iid else "")
+    if not name:
+        return None
+    # Exact-equipped instance → use the complete live card.
+    full = _sim_equipped_rich_for(entry)
+    if full is not None:
+        out = dict(full)
+        out.setdefault("item_id", iid)
+        if not out.get("name"):
+            out["name"] = name
+        return out
+    # Non-equipped copy → build the card from the inventory snapshot's
+    # rich CARD/AUG streams (description stat lines + per-copy augments),
+    # so the gear-selection tooltip matches the live equipment panel.
+    # Falls back gracefully to the short tag if the rich streams haven't
+    # arrived (older lua build, or mid-snapshot).
+    card = (_inv_for_sim.get("cards") or {}).get(iid)
+    bag  = entry.get("bag")
+    idx  = entry.get("idx")
+    full_augs = None
+    if bag is not None and idx is not None:
+        full_augs = (_inv_for_sim.get("augs") or {}).get((bag, idx))
+    if full_augs is None:
+        tag = entry.get("tag", "")
+        full_augs = [a for a in tag.split("/") if a] if tag else []
+    if card is not None:
+        return {
+            "item_id":   iid,
+            "name":      name,
+            "augments":  full_augs,
+            "stat_lines": list(card.get("stat_lines", [])),
+            "ilvl":      card.get("ilvl", 0),
+            "level":     card.get("level", 0),
+            "jobs":      card.get("jobs", ""),
+        }
+    # No card yet → name + augments only.
+    return {
+        "item_id":   iid,
+        "name":      name,
+        "augments":  full_augs,
+        "stat_lines": [],
+        "ilvl":      0,
+        "level":     0,
+        "jobs":      "",
+    }
+
+# Display labels for the canonical food-stat keys (the dict keys used in
+# SIM_FOOD_LIST). Anything not listed is title-cased as a fallback.
+_SIM_FOOD_STAT_LABELS = {
+    "accuracy": "Accuracy", "attack": "Attack",
+    "ranged accuracy": "Ranged Accuracy", "ranged attack": "Ranged Attack",
+    "magic accuracy": "Magic Accuracy", "magic attack bonus": "Magic Atk. Bonus",
+    "magic damage": "Magic Damage",
+    "str": "STR", "dex": "DEX", "vit": "VIT", "agi": "AGI",
+    "int": "INT", "mnd": "MND", "chr": "CHR",
+    "magic haste": "Magic Haste", "snapshot": "Snapshot",
+    "store tp": "Store TP", "regen": "Regen", "refresh": "Refresh",
+}
+
+# Tooltip rects for the food picker rows (current selection + open
+# options). (rect, food_id) pairs; dispatched alongside the item tooltips.
+sim_food_tooltip_rects = []
+
+def _sim_food_tooltip_info(food_id):
+    """Build a draw_item_tooltip() info dict for a sim food id, turning its
+    curated stat dict (SIM_FOOD_LIST) into displayable stat lines. A flat
+    int renders as 'Accuracy +50'; a (percent, cap) tuple renders as
+    'Accuracy +15% (Cap: 72)'. Foods not in _SIM_FOOD_VERIFIED get an
+    '(unverified)' tag on the name. Returns None if the id isn't listed."""
+    for fid, fname, stats in SIM_FOOD_LIST:
+        if fid != food_id:
+            continue
+        lines = []
+        for key, val in stats.items():
+            label = _SIM_FOOD_STAT_LABELS.get(key, key.title())
+            if isinstance(val, (tuple, list)) and len(val) == 2:
+                pct, cap = val
+                if cap is not None:
+                    lines.append(f"{label} +{pct}% (Cap: {cap})")
+                else:
+                    lines.append(f"{label} +{pct}%")
+            else:
+                try:
+                    sign = "+" if float(val) >= 0 else ""
+                except (TypeError, ValueError):
+                    sign = ""
+                lines.append(f"{label} {sign}{val}")
+        verified = fid in _SIM_FOOD_VERIFIED
+        if not verified:
+            lines.append("")
+            lines.append("(unverified — right-click for BG-Wiki)")
+        return {
+            "item_id":   fid,
+            "name":      fname if verified else f"{fname}  (unverified)",
+            "augments":  [],
+            "stat_lines": lines,
+            "ilvl":      0,
+            "level":     0,
+            "jobs":      "",
+        }
+    return None
 
 gearswap_gil   = -1      # -1 = never received; >= 0 = real value
 
@@ -5313,6 +5608,7 @@ _blusets_edit_sel    = set()    # lowercase spell names ticked in editor
 _blusets_edit_tab    = "Traits"  # active editor list tab (Traits/Utility/
                                  # Damage/Procs — bluGuide's four views)
 _blusets_tab_rects   = []        # [(rect, tab_name)] rebuilt each frame
+_blusets_tt_toggle_rect = None   # "Tooltips" checkbox in the edit strip
 _blusets_name_focus  = False
 _blusets_confirm_del = None     # (set_name, expire_ts) two-click delete
 _blusets_note        = None     # (text, expire_ts) status line
@@ -5478,6 +5774,9 @@ hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
 # Six pixels is small enough that intentional drags trigger reliably but
 # large enough to absorb mouse jitter on click.
 hotbar_drag = None
+_hotbar_tooltip = None   # (label, command, kind) of the hovered hotbar
+                         # button — stashed by draw_buttons_panel, drawn
+                         # at end-of-frame so it sits above everything
 HOTBAR_DRAG_THRESHOLD_PX = 6
 # Seconds the cursor must hover over a page-nav arrow during a drag
 # before the page auto-flips. Lets the user move a button to a different
@@ -5541,6 +5840,99 @@ hovered_url_idx = -1
 buff_scroll     = {}            # (name, "buff" | "debuff") -> int (starting line index)
 
 # Cache of fonts by (name, size, bold) so we don't rebuild SysFont every frame.
+# ── UI polish helpers: soft drop shadows + bevel borders ─────────────
+# pygame has no native blur, so soft shadows are pre-rendered once per
+# (size, radius) and cached, then blitted offset behind a panel. A
+# bevel is a light inner top-left + dark outer edge, the cheap trick
+# that reads as depth. Both are pure-additive: callers opt in, nothing
+# else changes.
+_shadow_cache = {}
+
+
+def draw_panel_shadow(surface, rect, radius=6, grow=7, offset=(0, 6),
+                      alpha=90):
+    """Soft drop shadow behind `rect`. `grow` = blur spread in px,
+    `offset` = (dx, dy) drop. Cached by (w, h, radius, grow, alpha)."""
+    key = (rect.width, rect.height, radius, grow, alpha)
+    shadow = _shadow_cache.get(key)
+    if shadow is None:
+        pad = grow * 2 + 2
+        w, h = rect.width + pad * 2, rect.height + pad * 2
+        base = pygame.Surface((w, h), pygame.SRCALPHA)
+        # Concentric rounded rects with rising alpha fake a gaussian
+        # falloff — darkest at the core, fading outward over `grow`.
+        for i in range(grow, 0, -1):
+            a = int(alpha * (1.0 - i / (grow + 1)) ** 1.6)
+            r = pygame.Rect(pad - i, pad - i,
+                            rect.width + i * 2, rect.height + i * 2)
+            pygame.draw.rect(base, (0, 0, 0, a), r,
+                             border_radius=radius + i)
+        pygame.draw.rect(base, (0, 0, 0, alpha),
+                         pygame.Rect(pad, pad, rect.width, rect.height),
+                         border_radius=radius)
+        # One cheap box-blur pass softens the concentric banding.
+        try:
+            small = pygame.transform.smoothscale(
+                base, (max(1, w // 3), max(1, h // 3)))
+            base = pygame.transform.smoothscale(small, (w, h))
+        except Exception:
+            pass
+        shadow = base
+        _shadow_cache[key] = shadow
+    surface.blit(shadow, (rect.x - (grow * 2 + 2) + offset[0],
+                          rect.y - (grow * 2 + 2) + offset[1]))
+
+
+def draw_bevel(surface, rect, radius=6, light=(255, 255, 255, 26),
+               dark=(0, 0, 0, 60)):
+    """A 1px light inner top-left + dark outer edge for subtle depth.
+    Drawn over an already-filled rect; alpha-blended so it tints
+    rather than overwrites the fill color."""
+    ov = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    lr = pygame.Rect(0, 0, rect.width, rect.height)
+    pygame.draw.line(ov, light, (radius, 1),
+                     (rect.width - radius, 1))            # top hi-light
+    pygame.draw.line(ov, light, (1, radius),
+                     (1, rect.height - radius))           # left hi-light
+    pygame.draw.line(ov, dark, (radius, rect.height - 1),
+                     (rect.width - radius, rect.height - 1))  # bottom
+    pygame.draw.line(ov, dark, (rect.width - 1, radius),
+                     (rect.width - 1, rect.height - radius))  # right
+    surface.blit(ov, rect.topleft)
+
+
+_glow_cache = {}
+
+
+def draw_glow_text(surface, font, text, pos, color=(120, 190, 255),
+                   glow=(40, 120, 230), radius=2):
+    """Blit `text` with a soft colored halo — the glow is the text
+    re-rendered in `glow`, blitted at small offsets around the main
+    text at low alpha, then the crisp text on top. Cached per
+    (text, color, glow, radius, font id)."""
+    key = (text, color, glow, radius, id(font))
+    layer = _glow_cache.get(key)
+    if layer is None:
+        base = font.render(text, True, color)
+        gw, gh = base.get_size()
+        pad = radius + 2
+        layer = pygame.Surface((gw + pad * 2, gh + pad * 2),
+                               pygame.SRCALPHA)
+        halo = font.render(text, True, glow)
+        halo.set_alpha(70)
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if dx or dy:
+                    layer.blit(halo, (pad + dx, pad + dy))
+        layer.blit(base, (pad, pad))
+        _glow_cache[key] = layer
+        # Keep the cache from growing without bound on dynamic text.
+        if len(_glow_cache) > 256:
+            _glow_cache.pop(next(iter(_glow_cache)))
+    pad = radius + 2
+    surface.blit(layer, (pos[0] - pad, pos[1] - pad))
+
+
 _font_cache = {}
 def get_font(name, size, bold=False, italic=False):
     size = max(6, int(size))
@@ -7226,15 +7618,44 @@ def _normalize_button_entry(raw):
     kind = str(raw.get("kind", "none")).strip().lower()
     if kind not in ("windower", "shell", "url", "file", "none"):
         kind = "none"
+    color = str(raw.get("color", "") or "")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        color = ""
     return {
         "label":   str(raw.get("label",   "") or ""),
         "icon":    str(raw.get("icon",    "") or ""),
         "kind":    kind,
         "command": str(raw.get("command", "") or ""),
+        "color":   color,
     }
 
 def _empty_button():
-    return {"label": "", "icon": "", "kind": "none", "command": ""}
+    return {"label": "", "icon": "", "kind": "none", "command": "",
+            "color": ""}
+
+
+# Preset background colors offered in the hotbar editor's Color row —
+# muted tones that sit well on the dark theme. "" = default (no tint).
+HOTBAR_COLOR_PALETTE = (
+    # muted row
+    "#8c3c40", "#96603a", "#927c30", "#46784e", "#387470",
+    "#3e6096", "#545096", "#744686", "#8c4868", "#4a4e5c",
+    # bright row
+    "#ff5050", "#f08428", "#ecc832", "#34d858", "#22c4b4",
+    "#3a96f0", "#8472f8", "#c050e0", "#f060a8", "#aab4c8")
+
+
+# How strongly a button's custom color tints the cell: 1.0 = solid
+# paint, lower = more translucent (the default dark cell shows through).
+# 0.7 reads as a colored cell that still belongs to the dark theme.
+HOTBAR_COLOR_ALPHA = 0.7
+
+
+def _hotbar_parse_color(s):
+    """'#RRGGBB' -> (r, g, b), or None for anything else."""
+    if isinstance(s, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", s):
+        return tuple(int(s[i:i + 2], 16) for i in (1, 3, 5))
+    return None
 
 def _empty_page(name="Page"):
     return {"name": name, "buttons": [_empty_button() for _ in range(HOTBAR_SLOTS_PER_PAGE)]}
@@ -9025,6 +9446,14 @@ SETTINGS_SCHEMA = [
         "applies": "python",
     },
     {
+        "key":     "blusets_tooltips",
+        "label":   "(internal) BLU editor spell tooltips",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+    },
+    {
         "key":     "global_typing_strict",
         "label":   "(internal) type-anywhere strict FFXI id",
         "kind":    "bool",
@@ -9213,6 +9642,19 @@ def setting(key):
     if s.get("kind") == "button":
         return None
     return s.get("default")
+
+def panel_header_h():
+    """Uniform title-strip height for the dashboard panels (EQUIPMENT,
+    STATISTICS, ...). Scales with the global UI scale only, so panel
+    headers stay identical even when their bodies are resized to
+    different per-panel scales."""
+    try:
+        g = float(setting("global_ui_scale") or 1.0)
+    except (TypeError, ValueError):
+        g = 1.0
+    g = max(0.5, min(3.0, g))
+    return max(16, int(22 * g))
+
 
 def _eff(panel_scale):
     """Effective render scale for a panel: its own scale times the
@@ -19176,7 +19618,7 @@ DEBUFF_KEYWORDS = [
 ]
 
 # ── Colours ─────────────────────────────────────────────────────────────────
-COL_BG        = (15,  15,  20)
+COL_BG        = (  6,   7,  12)   # midnight black
 COL_PANEL     = (25,  25,  32)
 COL_HEADER    = (20,  20,  28)
 COL_BORDER    = (50,  50,  65)
@@ -19207,7 +19649,7 @@ COL_SLOT_FULL = ( 45,  45,  58)
 COL_SLOT_TEXT = (170, 170, 190)
 COL_SLOT_EMPTY= ( 50,  50,  65)
 COL_EV_HEADER = ( 22,  22,  30)
-COL_EV_TITLE  = (160, 160, 200)
+COL_EV_TITLE  = (200, 210, 230)   # soft off-white (matches BLU title)
 
 # Slot label for each display_pos (matches core.lua slotMapping order)
 SLOT_LABELS = [
@@ -19364,6 +19806,8 @@ PANEL_W      = BARS_X_OFF + BAR_W + 16 + BUFF_COL_W + 12 + DEBUFF_COL_W + 20
 
 # ── Equip Viewer layout ───────────────────────────────────────────────────────
 EV_COLS      = 4
+EV_STRIPE_INSET = 4   # px the grid is shifted right of the accent
+                      # stripe so gear never covers the colored edge
 EV_ROWS      = 4
 EV_SLOT_SIZE = 52          # px per cell (icon area)
 EV_PAD       = 6           # inner padding around icon
@@ -20914,188 +21358,192 @@ _BLU_ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII")
 # ── BLU spell classification (from bluGuide's res/spellinfo.lua) ──────────
 # Per-spell data driving the Spellsets editor's Utility / Damage / Procs
 # tabs, embedded so the editor doesn't depend on bluGuide being installed.
-# name(lower) -> (effects tuple, SCA, SCB, element, Nuke, Voidwatch, Abyssea)
+# name(lower) -> (effects, SCA, SCB, element, Nuke, Voidwatch, Abyssea,
+#                 level, spell_id, target, mp_cost, cast_time)
+# target/mp_cost/cast_time come from Windower res/spells.lua (the
+# game's own data); target is a friendly string ("Single enemy",
+# "Self", "Self / Party (AoE)").
 # element: 0 Fire 1 Ice 2 Wind 3 Earth 4 Thunder 5 Water 6 Light 7 Dark
 # (15 = none/physical).
 _BLUSETS_SPELLINFO = {
-    "venom shell": (("Poison",), None, None, 5, False, False, False),
-    "maelstrom": (("Str Down",), None, None, 5, True, True, True),
-    "metallic body": (("Stoneskin",), None, None, 3, False, False, False),
-    "screwdriver": ((), "Transfixion", "Scission", 15, False, False, False),
-    "mp drainkiss": (("Aspir",), None, None, 7, False, False, False),
-    "death ray": ((), None, None, 7, True, True, False),
-    "sandspin": (("Accuracy Down",), None, None, 3, True, True, False),
-    "smite of rage": ((), "Detonation", None, 15, False, False, False),
-    "bludgeon": ((), "Liquifaction", None, 15, False, False, False),
-    "refueling": (("Haste",), None, None, 2, False, False, False),
-    "ice break": (("Bind",), None, None, 1, True, True, True),
-    "blitzstrahl": (("Stun",), None, None, 4, True, True, False),
-    "self-destruct": ((), None, None, 0, True, False, False),
-    "mysterious light": (("Gravity",), None, None, 2, True, True, True),
-    "cold wave": (("Frost",), None, None, 1, False, True, False),
-    "poison breath": (("Poison",), None, None, 5, True, False, False),
-    "stinking gas": (("Vit Down",), None, None, 2, False, False, False),
-    "memento mori": (("Magic Attack Boost",), None, None, 1, False, False, False),
-    "terror touch": (("Attack Down",), "Compression", "Reverberation", 15, False, False, False),
-    "spinal cleave": ((), "Scission", "Detonation", 15, False, False, False),
-    "blood saber": (("Drain",), None, None, 7, True, False, False),
-    "digest": (("Drain",), None, None, 7, True, False, False),
-    "mandibular bite": ((), "Induration", None, 15, False, False, False),
-    "cursed sphere": (("Poison",), None, None, 5, False, True, False),
-    "sickle slash": ((), "Compression", None, 15, False, False, False),
-    "cocoon": (("Defense Boost",), None, None, 3, False, False, False),
-    "filamented hold": (("Slow",), None, None, 3, False, False, False),
-    "pollen": (("Cure",), None, None, 6, False, False, False),
-    "power attack": ((), "Reverberation", None, 15, False, False, False),
-    "death scissors": ((), "Compression", "Reverberation", 15, False, False, False),
-    "magnetite cloud": (("Gravity",), None, None, 3, True, True, True),
-    "eyes on me": ((), None, None, 7, True, True, True),
-    "frenetic rip": ((), "Induration", None, 15, False, False, False),
-    "frightful roar": (("Defense Down",), None, None, 2, False, False, False),
-    "hecatomb wave": (("Blind",), None, None, 2, True, True, False),
-    "body slam": ((), "Impaction", None, 15, False, False, False),
-    "radiant breath": (("Silence", "Slow"), None, None, 6, True, True, True),
-    "helldive": ((), "Transfixion", None, 15, False, False, False),
-    "jet stream": ((), "Impaction", None, 15, False, False, False),
-    "blood drain": (("Drain",), None, None, 7, True, False, False),
-    "sound blast": (("Int Down",), None, None, 0, False, False, False),
-    "feather tickle": (("Reduce TP",), "Transfixion", None, 2, False, False, False),
-    "feather barrier": (("Evasion Boost",), None, None, 2, False, False, False),
-    "jettatura": (("Terror",), None, None, 7, False, False, False),
-    "yawn": (("Sleep",), None, None, 6, False, False, False),
-    "foot kick": ((), "Detonation", None, 15, False, False, False),
-    "wild carrot": (("Cure",), None, None, 6, False, False, False),
-    "voracious trunk": (("Dispel",), None, None, 2, False, False, False),
-    "healing breeze": (("Cure",), None, None, 2, False, False, False),
-    "chaotic eye": (("Silence",), None, None, 2, False, False, False),
-    "sheep song": (("Sleep",), None, None, 6, False, False, False),
-    "ram charge": ((), "Fragmentation", None, 15, False, False, False),
-    "claw cyclone": ((), "Scission", None, 15, False, False, False),
-    "lowing": (("Plague",), None, None, 0, False, False, False),
-    "dimensional death": ((), "Impaction", None, 15, False, False, False),
-    "heat breath": ((), None, None, 0, True, True, True),
-    "blank gaze": (("Dispel",), None, None, 6, False, True, False),
-    "magic fruit": (("Cure",), None, None, 6, False, False, False),
-    "uppercut": ((), "Liquifaction", None, 15, False, False, False),
-    "1000 needles": ((), None, None, 6, True, False, False),
-    "pinecone bomb": (("Sleep",), "Liquifaction", None, 15, False, False, False),
-    "sprout smack": (("Slow",), "Reverberation", None, 15, False, False, False),
-    "soporific": (("Sleep",), None, None, 7, False, False, False),
-    "queasyshroom": (("Poison",), "Compression", None, 15, False, False, False),
-    "wild oats": (("Vit Down",), "Transfixion", None, 15, False, False, False),
-    "bad breath": (("Bind", "Blind", "Gravity", "Paralyze", "Poison", "Silence", "Slow"), None, None, 3, False, True, False),
-    "geist wall": (("Dispel",), None, None, 7, False, False, False),
-    "awful eye": (("Str Down",), None, None, 5, False, False, False),
-    "frost breath": (("Paralyze",), None, None, 1, True, True, False),
-    "infrasonics": (("Evasion Down",), None, None, 1, False, True, False),
-    "disseverment": (("Poison",), "Distortion", None, 15, False, False, False),
-    "actinic burst": (("Flash",), None, None, 6, False, True, False),
-    "reactor cool": (("Defense Boost", "Spikes"), None, None, 1, False, False, False),
-    "saline coat": (("Magic Defense Boost",), None, None, 6, False, False, False),
-    "plasma charge": (("Spikes",), None, None, 4, False, False, False),
-    "temporal shift": (("Stun",), None, None, 4, False, True, False),
-    "vertical cleave": ((), "Gravitation", None, 15, False, False, False),
-    "blastbomb": (("Bind",), None, None, 0, True, True, False),
-    "battle dance": (("Dex Down",), "Impaction", None, 15, False, False, False),
-    "sandspray": (("Blind",), None, None, 7, False, True, False),
-    "grand slam": ((), "Induration", None, 15, False, False, False),
-    "head butt": (("Stun",), "Impaction", None, 15, False, False, False),
-    "bomb toss": ((), None, None, 0, True, False, False),
-    "frypan": (("Stun",), "Impaction", None, 15, False, False, False),
-    "flying hip press": ((), None, None, 2, True, False, False),
-    "hydro shot": ((), "Reverberation", None, 15, False, False, False),
-    "diamondhide": (("Stoneskin",), None, None, 3, False, False, False),
-    "enervation": (("Defense Down", "Magic Defense Down"), None, None, 7, False, False, False),
-    "light of penance": (("Bind", "Blind", "Reduce TP"), None, None, 6, False, True, False),
-    "warm-up": (("Accuracy Boost", "Evasion Boost"), None, None, 3, False, False, False),
-    "firespit": ((), None, None, 0, True, True, False),
-    "feather storm": (("Poison",), "Transfixion", None, 15, False, False, False),
-    "tail slap": (("Stun",), "Reverberation", None, 15, False, False, False),
-    "hysteric barrage": ((), "Detonation", None, 15, False, False, False),
-    "amplification": (("Magic Attack Boost",), None, None, 5, False, False, False),
-    "cannonball": ((), "Fusion", None, 15, False, False, False),
-    "mind blast": (("Paralyze",), None, None, 4, True, True, True),
-    "exuviation": (("Erase",), None, None, 0, False, False, False),
-    "magic hammer": (("Aspir",), None, None, 6, True, False, False),
-    "zephyr mantle": (("Blink",), None, None, 2, False, False, False),
-    "regurgitation": (("Bind",), None, None, 5, True, False, False),
-    "seedspray": (("Defense Down",), "Induration", "Detonation", 15, False, False, False),
-    "corrosive ooze": (("Attack Down", "Defense Down"), None, None, 5, True, True, False),
-    "spiral spin": (("Accuracy Down",), "Transfixion", None, 15, False, False, False),
-    "asuran claws": ((), "Liquifaction", "Impaction", 15, False, False, False),
-    "sub-zero smash": (("Paralyze",), "Fragmentation", None, 15, False, False, False),
-    "triumphant roar": (("Attack Boost",), None, None, 0, False, False, False),
-    "acrid stream": (("Magic Defense Down",), None, None, 5, True, True, False),
-    "blazing bound": ((), None, None, 0, True, False, False),
-    "plenilune embrace": (("Cure",), None, None, 6, False, False, False),
-    "demoralizing roar": ((), None, None, 5, False, False, False),
-    "cimicine discharge": (("Slow",), None, None, 3, False, True, False),
-    "animating wail": (("Haste",), None, None, 2, False, False, False),
-    "battery charge": (("Refresh",), None, None, 6, False, False, False),
-    "leafstorm": ((), None, None, 2, True, True, False),
-    "regeneration": (("Regen",), None, None, 6, False, False, False),
-    "final sting": ((), "Fusion", None, 15, False, False, False),
-    "goblin rush": ((), "Fusion", None, 15, False, False, False),
-    "vanity dive": ((), "Scission", None, 15, False, False, False),
-    "magic barrier": (("Stoneskin",), None, None, 7, False, False, False),
-    "whirl of rage": (("Stun",), "Scission", "Detonation", 15, False, False, False),
-    "benthic typhoon": (("Defense Down",), "Gravitation", "Transfixion", 15, False, False, False),
-    "auroral drape": (("Blind", "Silence"), None, None, 2, False, False, False),
-    "osmosis": (("Drain",), None, None, 7, True, False, False),
-    "quad. continuum": ((), "Gravitation", None, 15, False, False, False),
-    "fantod": (("Attack Boost",), None, None, 0, False, False, False),
-    "thermal pulse": (("Blind",), None, None, 0, True, True, False),
-    "empty thrash": ((), "Compression", "Scission", 15, False, False, False),
-    "dream flower": (("Sleep",), None, None, 7, False, False, False),
-    "occultation": (("Blink",), None, None, 2, False, False, False),
-    "charged whisker": ((), None, None, 4, True, True, False),
-    "winds of promy.": (("Erase",), None, None, 6, False, False, False),
-    "delta thrust": (("Plague",), "Liquifaction", "Detonation", 15, False, False, False),
-    "evryone. grudge": ((), None, None, 7, True, False, False),
-    "reaving wind": (("Reduce TP",), None, None, 2, False, True, False),
-    "barrier tusk": (("Phalanx",), None, None, 3, False, False, False),
-    "mortal ray": (("Doom",), None, None, 7, False, False, False),
-    "water bomb": (("Silence",), None, None, 5, True, False, False),
-    "heavy strike": ((), "Fragmentation", "Transfixion", 15, False, False, False),
-    "dark orb": ((), None, None, 7, True, False, False),
-    "white wind": (("Cure",), None, None, 2, False, False, False),
-    "sudden lunge": (("Stun",), "Detonation", "Impaction", 15, False, False, False),
-    "quadrastrike": ((), "Liquifaction", "Scission", 15, False, False, False),
-    "vapor spray": ((), None, None, 5, True, False, False),
-    "thunder breath": ((), None, None, 4, True, False, False),
-    "o. counterstance": (("Counter",), None, None, 0, False, False, False),
-    "amorphic spikes": ((), "Gravitation", "Transfixion", 15, False, False, False),
-    "wind breath": ((), None, None, 2, True, False, False),
-    "barbed crescent": (("Accuracy Down",), "Distortion", "Liquifaction", 15, False, False, False),
-    "nat. meditation": (("Attack Boost",), None, None, 0, False, False, False),
-    "tem. upheaval": ((), None, None, 2, True, False, False),
-    "rending deluge": (("Dispel",), None, None, 5, True, False, False),
-    "embalming earth": (("Slow",), None, None, 3, True, False, False),
-    "paralyzing triad": (("Paralyze",), "Gravitation", None, 15, False, False, False),
-    "foul waters": (("Drown",), None, None, 5, True, False, False),
-    "glutinous dart": ((), "Fragmentation", None, 15, False, False, False),
-    "retinal glare": (("Flash",), None, None, 6, True, False, False),
-    "subduction": (("Gravity",), None, None, 2, True, False, False),
-    "thrashing assault": ((), "Fusion", None, 15, False, False, False),
-    "erratic flutter": (("Haste",), None, None, 2, False, False, False),
-    "restoral": (("Cure",), None, None, 6, False, False, False),
-    "rail cannon": ((), None, None, 6, True, False, False),
-    "diffusion ray": ((), None, None, 6, True, False, False),
-    "sinker drill": ((), "Gravitation", "Reverberation", 15, False, False, False),
-    "molting plumage": ((), None, None, 2, True, False, False),
-    "nectarous deluge": (("Poison",), None, None, 5, True, False, False),
-    "sweeping gouge": (("Defense Down",), "Fragmentation", "Scission", 15, False, False, False),
-    "atra. libations": (("Drain",), None, None, 7, True, False, False),
-    "searing tempest": (("Burn",), None, None, 0, True, False, False),
-    "spectral floe": (("Terror",), None, None, 1, True, False, False),
-    "anvil lightning": (("Stun",), None, None, 4, True, False, False),
-    "entomb": (("Petrify",), None, None, 3, True, False, False),
-    "saurian slide": (("Attack Down",), "Fragmentation", "Distortion", 15, False, False, False),
-    "palling salvo": (("Bio",), None, None, 7, True, False, False),
-    "blinding fulgor": (("Flash",), None, None, 6, True, False, False),
-    "scouring spate": (("Attack Down",), None, None, 5, True, False, False),
-    "silent storm": (("Silence",), None, None, 2, True, False, False),
-    "tenebral crush": (("Defense Down",), None, None, 7, True, False, False),
+    "venom shell": (("Poison",), None, None, 5, False, False, False, 42, 513, "Single enemy", 86, 3),
+    "maelstrom": (("Str Down",), None, None, 5, True, True, True, 61, 515, "Single enemy", 162, 6),
+    "metallic body": (("Stoneskin",), None, None, 3, False, False, False, 8, 517, "Self", 19, 2.5),
+    "screwdriver": ((), "Transfixion", "Scission", 15, False, False, False, 26, 519, "Single enemy", 21, 0.5),
+    "mp drainkiss": (("Aspir",), None, None, 7, False, False, False, 42, 521, "Single enemy", 20, 4),
+    "death ray": ((), None, None, 7, True, True, False, 34, 522, "Single enemy", 49, 4.5),
+    "sandspin": (("Accuracy Down",), None, None, 3, True, True, False, 1, 524, "Single enemy", 10, 1.5),
+    "smite of rage": ((), "Detonation", None, 15, False, False, False, 34, 527, "Single enemy", 28, 0.5),
+    "bludgeon": ((), "Liquifaction", None, 15, False, False, False, 18, 529, "Single enemy", 16, 0.5),
+    "refueling": (("Haste",), None, None, 2, False, False, False, 48, 530, "Self", 29, 1.5),
+    "ice break": (("Bind",), None, None, 1, True, True, True, 50, 531, "Single enemy", 142, 5.25),
+    "blitzstrahl": (("Stun",), None, None, 4, True, True, False, 44, 532, "Single enemy", 70, 4.5),
+    "self-destruct": ((), None, None, 0, True, False, False, 50, 533, "Single enemy", 100, 3.25),
+    "mysterious light": (("Gravity",), None, None, 2, True, True, True, 40, 534, "Single enemy", 73, 3.75),
+    "cold wave": (("Frost",), None, None, 1, False, True, False, 52, 535, "Single enemy", 37, 4),
+    "poison breath": (("Poison",), None, None, 5, True, False, False, 22, 536, "Single enemy", 22, 3),
+    "stinking gas": (("Vit Down",), None, None, 2, False, False, False, 44, 537, "Single enemy", 37, 4),
+    "memento mori": (("Magic Attack Boost",), None, None, 1, False, False, False, 62, 538, "Self", 46, 3.5),
+    "terror touch": (("Attack Down",), "Compression", "Reverberation", 15, False, False, False, 40, 539, "Single enemy", 62, 3.25),
+    "spinal cleave": ((), "Scission", "Detonation", 15, False, False, False, 63, 540, "Single enemy", 61, 0.5),
+    "blood saber": (("Drain",), None, None, 7, True, False, False, 48, 541, "Single enemy", 25, 4),
+    "digest": (("Drain",), None, None, 7, True, False, False, 36, 542, "Single enemy", 20, 4),
+    "mandibular bite": ((), "Induration", None, 15, False, False, False, 44, 543, "Single enemy", 38, 0.5),
+    "cursed sphere": (("Poison",), None, None, 5, False, True, False, 18, 544, "Single enemy", 36, 3),
+    "sickle slash": ((), "Compression", None, 15, False, False, False, 48, 545, "Single enemy", 41, 0.5),
+    "cocoon": (("Defense Boost",), None, None, 3, False, False, False, 8, 547, "Self", 10, 1.75),
+    "filamented hold": (("Slow",), None, None, 3, False, False, False, 52, 548, "Single enemy", 38, 2),
+    "pollen": (("Cure",), None, None, 6, False, False, False, 1, 549, "Self", 8, 2),
+    "power attack": ((), "Reverberation", None, 15, False, False, False, 4, 551, "Single enemy", 5, 0.5),
+    "death scissors": ((), "Compression", "Reverberation", 15, False, False, False, 60, 554, "Single enemy", 51, 0.5),
+    "magnetite cloud": (("Gravity",), None, None, 3, True, True, True, 46, 555, "Single enemy", 86, 4.5),
+    "eyes on me": ((), None, None, 7, True, True, True, 61, 557, "Single enemy", 112, 4.5),
+    "frenetic rip": ((), "Induration", None, 15, False, False, False, 63, 560, "Single enemy", 61, 0.5),
+    "frightful roar": (("Defense Down",), None, None, 2, False, False, False, 50, 561, "Single enemy", 32, 2),
+    "hecatomb wave": (("Blind",), None, None, 2, True, True, False, 54, 563, "Single enemy", 116, 5.25),
+    "body slam": ((), "Impaction", None, 15, False, False, False, 62, 564, "Single enemy", 74, 1),
+    "radiant breath": (("Silence", "Slow"), None, None, 6, True, True, True, 54, 565, "Single enemy", 116, 5.25),
+    "helldive": ((), "Transfixion", None, 15, False, False, False, 16, 567, "Single enemy", 16, 0.5),
+    "jet stream": ((), "Impaction", None, 15, False, False, False, 38, 569, "Single enemy", 47, 0.5),
+    "blood drain": (("Drain",), None, None, 7, True, False, False, 20, 570, "Single enemy", 10, 4),
+    "sound blast": (("Int Down",), None, None, 0, False, False, False, 32, 572, "Single enemy", 25, 4),
+    "feather tickle": (("Reduce TP",), "Transfixion", None, 2, False, False, False, 64, 573, "Single enemy", 48, 4),
+    "feather barrier": (("Evasion Boost",), None, None, 2, False, False, False, 56, 574, "Self", 29, 2),
+    "jettatura": (("Terror",), None, None, 7, False, False, False, 48, 575, "Single enemy", 37, 0.5),
+    "yawn": (("Sleep",), None, None, 6, False, False, False, 64, 576, "Single enemy", 55, 3),
+    "foot kick": ((), "Detonation", None, 15, False, False, False, 1, 577, "Single enemy", 5, 0.5),
+    "wild carrot": (("Cure",), None, None, 6, False, False, False, 30, 578, "Self / Party (AoE)", 37, 2.5),
+    "voracious trunk": (("Dispel",), None, None, 2, False, False, False, 64, 579, "Single enemy", 72, 10),
+    "healing breeze": (("Cure",), None, None, 2, False, False, False, 16, 581, "Self", 55, 4.5),
+    "chaotic eye": (("Silence",), None, None, 2, False, False, False, 32, 582, "Single enemy", 13, 3),
+    "sheep song": (("Sleep",), None, None, 6, False, False, False, 16, 584, "Single enemy", 22, 3),
+    "ram charge": ((), "Fragmentation", None, 15, False, False, False, 73, 585, "Single enemy", 79, 0.5),
+    "claw cyclone": ((), "Scission", None, 15, False, False, False, 20, 587, "Single enemy", 24, 1),
+    "lowing": (("Plague",), None, None, 0, False, False, False, 71, 588, "Single enemy", 66, 7),
+    "dimensional death": ((), "Impaction", None, 15, False, False, False, 60, 589, "Single enemy", 48, 0.5),
+    "heat breath": ((), None, None, 0, True, True, True, 71, 591, "Single enemy", 169, 7.5),
+    "blank gaze": (("Dispel",), None, None, 6, False, True, False, 38, 592, "Single enemy", 25, 3),
+    "magic fruit": (("Cure",), None, None, 6, False, False, False, 58, 593, "Self / Party (AoE)", 72, 2.5),
+    "uppercut": ((), "Liquifaction", None, 15, False, False, False, 38, 594, "Single enemy", 31, 0.5),
+    "1000 needles": ((), None, None, 6, True, False, False, 62, 595, "Single enemy", 350, 12),
+    "pinecone bomb": (("Sleep",), "Liquifaction", None, 15, False, False, False, 36, 596, "Single enemy", 48, 2.5),
+    "sprout smack": (("Slow",), "Reverberation", None, 15, False, False, False, 4, 597, "Single enemy", 6, 0.5),
+    "soporific": (("Sleep",), None, None, 7, False, False, False, 24, 598, "Single enemy", 38, 3),
+    "queasyshroom": (("Poison",), "Compression", None, 15, False, False, False, 8, 599, "Single enemy", 20, 2),
+    "wild oats": (("Vit Down",), "Transfixion", None, 15, False, False, False, 4, 603, "Single enemy", 9, 0.5),
+    "bad breath": (("Bind", "Blind", "Gravity", "Paralyze", "Poison", "Silence", "Slow"), None, None, 3, False, True, False, 61, 604, "Single enemy", 212, 8.75),
+    "geist wall": (("Dispel",), None, None, 7, False, False, False, 46, 605, "Single enemy", 35, 3),
+    "awful eye": (("Str Down",), None, None, 5, False, False, False, 46, 606, "Single enemy", 32, 2.5),
+    "frost breath": (("Paralyze",), None, None, 1, True, True, False, 66, 608, "Single enemy", 136, 6.5),
+    "infrasonics": (("Evasion Down",), None, None, 1, False, True, False, 65, 610, "Single enemy", 42, 3),
+    "disseverment": (("Poison",), "Distortion", None, 15, False, False, False, 72, 611, "Single enemy", 74, 0.5),
+    "actinic burst": (("Flash",), None, None, 6, False, True, False, 74, 612, "Single enemy", 24, 0.5),
+    "reactor cool": (("Defense Boost", "Spikes"), None, None, 1, False, False, False, 74, 613, "Self", 28, 3),
+    "saline coat": (("Magic Defense Boost",), None, None, 6, False, False, False, 72, 614, "Self", 66, 3),
+    "plasma charge": (("Spikes",), None, None, 4, False, False, False, 75, 615, "Self", 24, 3),
+    "temporal shift": (("Stun",), None, None, 4, False, True, False, 73, 616, "Single enemy", 48, 0.5),
+    "vertical cleave": ((), "Gravitation", None, 15, False, False, False, 75, 617, "Single enemy", 86, 0.5),
+    "blastbomb": (("Bind",), None, None, 0, True, True, False, 18, 618, "Single enemy", 36, 2.25),
+    "battle dance": (("Dex Down",), "Impaction", None, 15, False, False, False, 12, 620, "Single enemy", 12, 1),
+    "sandspray": (("Blind",), None, None, 7, False, True, False, 66, 621, "Single enemy", 43, 3),
+    "grand slam": ((), "Induration", None, 15, False, False, False, 30, 622, "Single enemy", 24, 1),
+    "head butt": (("Stun",), "Impaction", None, 15, False, False, False, 12, 623, "Single enemy", 12, 0.5),
+    "bomb toss": ((), None, None, 0, True, False, False, 28, 626, "Single enemy", 42, 3.75),
+    "frypan": (("Stun",), "Impaction", None, 15, False, False, False, 63, 628, "Single enemy", 65, 1),
+    "flying hip press": ((), None, None, 2, True, False, False, 58, 629, "Single enemy", 125, 5.75),
+    "hydro shot": ((), "Reverberation", None, 15, False, False, False, 63, 631, "Single enemy", 55, 0.5),
+    "diamondhide": (("Stoneskin",), None, None, 3, False, False, False, 67, 632, "Self", 99, 7),
+    "enervation": (("Defense Down", "Magic Defense Down"), None, None, 7, False, False, False, 67, 633, "Single enemy", 48, 3.5),
+    "light of penance": (("Bind", "Blind", "Reduce TP"), None, None, 6, False, True, False, 58, 634, "Single enemy", 53, 3),
+    "warm-up": (("Accuracy Boost", "Evasion Boost"), None, None, 3, False, False, False, 68, 636, "Self", 59, 2.5),
+    "firespit": ((), None, None, 0, True, True, False, 68, 637, "Single enemy", 121, 6.5),
+    "feather storm": (("Poison",), "Transfixion", None, 15, False, False, False, 12, 638, "Single enemy", 12, 0.5),
+    "tail slap": (("Stun",), "Reverberation", None, 15, False, False, False, 69, 640, "Single enemy", 77, 1),
+    "hysteric barrage": ((), "Detonation", None, 15, False, False, False, 69, 641, "Single enemy", 61, 0.5),
+    "amplification": (("Magic Attack Boost",), None, None, 5, False, False, False, 70, 642, "Self", 48, 3.5),
+    "cannonball": ((), "Fusion", None, 15, False, False, False, 70, 643, "Single enemy", 66, 0.5),
+    "mind blast": (("Paralyze",), None, None, 4, True, True, True, 73, 644, "Single enemy", 82, 3),
+    "exuviation": (("Erase",), None, None, 0, False, False, False, 75, 645, "Self", 40, 3),
+    "magic hammer": (("Aspir",), None, None, 6, True, False, False, 74, 646, "Single enemy", 40, 4),
+    "zephyr mantle": (("Blink",), None, None, 2, False, False, False, 65, 647, "Self", 31, 3.5),
+    "regurgitation": (("Bind",), None, None, 5, True, False, False, 69, 648, "Single enemy", 69, 3),
+    "seedspray": (("Defense Down",), "Induration", "Detonation", 15, False, False, False, 61, 650, "Single enemy", 61, 2.5),
+    "corrosive ooze": (("Attack Down", "Defense Down"), None, None, 5, True, True, False, 66, 651, "Single enemy", 55, 3.5),
+    "spiral spin": (("Accuracy Down",), "Transfixion", None, 15, False, False, False, 60, 652, "Single enemy", 39, 2.5),
+    "asuran claws": ((), "Liquifaction", "Impaction", 15, False, False, False, 70, 653, "Single enemy", 81, 2),
+    "sub-zero smash": (("Paralyze",), "Fragmentation", None, 15, False, False, False, 72, 654, "Single enemy", 44, 1),
+    "triumphant roar": (("Attack Boost",), None, None, 0, False, False, False, 71, 655, "Self", 24, 0.5),
+    "acrid stream": (("Magic Defense Down",), None, None, 5, True, True, False, 77, 656, "Single enemy", 89, 3),
+    "blazing bound": ((), None, None, 0, True, False, False, 80, 657, "Single enemy", 113, 4),
+    "plenilune embrace": (("Cure",), None, None, 6, False, False, False, 76, 658, "Self / Party (AoE)", 106, 2.75),
+    "demoralizing roar": ((), None, None, 5, False, False, False, 80, 659, "Single enemy", 46, 2.75),
+    "cimicine discharge": (("Slow",), None, None, 3, False, True, False, 78, 660, "Single enemy", 32, 1.5),
+    "animating wail": (("Haste",), None, None, 2, False, False, False, 79, 661, "Self", 53, 2),
+    "battery charge": (("Refresh",), None, None, 6, False, False, False, 79, 662, "Self", 50, 3.5),
+    "leafstorm": ((), None, None, 2, True, True, False, 77, 663, "Single enemy", 132, 6),
+    "regeneration": (("Regen",), None, None, 6, False, False, False, 78, 664, "Self", 36, 1.5),
+    "final sting": ((), "Fusion", None, 15, False, False, False, 81, 665, "Single enemy", 88, 5),
+    "goblin rush": ((), "Fusion", None, 15, False, False, False, 81, 666, "Single enemy", 76, 0.5),
+    "vanity dive": ((), "Scission", None, 15, False, False, False, 82, 667, "Single enemy", 58, 0.5),
+    "magic barrier": (("Stoneskin",), None, None, 7, False, False, False, 82, 668, "Self", 29, 5),
+    "whirl of rage": (("Stun",), "Scission", "Detonation", 15, False, False, False, 83, 669, "Single enemy", 73, 1),
+    "benthic typhoon": (("Defense Down",), "Gravitation", "Transfixion", 15, False, False, False, 83, 670, "Single enemy", 43, 0.5),
+    "auroral drape": (("Blind", "Silence"), None, None, 2, False, False, False, 84, 671, "Single enemy", 51, 4),
+    "osmosis": (("Drain",), None, None, 7, True, False, False, 84, 672, "Single enemy", 47, 6),
+    "quad. continuum": ((), "Gravitation", None, 15, False, False, False, 85, 673, "Single enemy", 91, 1),
+    "fantod": (("Attack Boost",), None, None, 0, False, False, False, 85, 674, "Self", 12, 0.5),
+    "thermal pulse": (("Blind",), None, None, 0, True, True, False, 86, 675, "Single enemy", 151, 5.5),
+    "empty thrash": ((), "Compression", "Scission", 15, False, False, False, 87, 677, "Single enemy", 33, 0.5),
+    "dream flower": (("Sleep",), None, None, 7, False, False, False, 87, 678, "Single enemy", 68, 2),
+    "occultation": (("Blink",), None, None, 2, False, False, False, 88, 679, "Self", 138, 1.5),
+    "charged whisker": ((), None, None, 4, True, True, False, 88, 680, "Single enemy", 183, 5),
+    "winds of promy.": (("Erase",), None, None, 6, False, False, False, 89, 681, "Self", 36, 2.5),
+    "delta thrust": (("Plague",), "Liquifaction", "Detonation", 15, False, False, False, 89, 682, "Single enemy", 28, 0.5),
+    "evryone. grudge": ((), None, None, 7, True, False, False, 90, 683, "Single enemy", 185, 6),
+    "reaving wind": (("Reduce TP",), None, None, 2, False, True, False, 90, 684, "Single enemy", 84, 4),
+    "barrier tusk": (("Phalanx",), None, None, 3, False, False, False, 91, 685, "Self", 41, 5),
+    "mortal ray": (("Doom",), None, None, 7, False, False, False, 91, 686, "Single enemy", 267, 8.5),
+    "water bomb": (("Silence",), None, None, 5, True, False, False, 92, 687, "Single enemy", 67, 2.5),
+    "heavy strike": ((), "Fragmentation", "Transfixion", 15, False, False, False, 92, 688, "Single enemy", 32, 0.5),
+    "dark orb": ((), None, None, 7, True, False, False, 93, 689, "Single enemy", 124, 7),
+    "white wind": (("Cure",), None, None, 2, False, False, False, 94, 690, "Self", 145, 4.5),
+    "sudden lunge": (("Stun",), "Detonation", "Impaction", 15, False, False, False, 95, 692, "Single enemy", 18, 0.5),
+    "quadrastrike": ((), "Liquifaction", "Scission", 15, False, False, False, 96, 693, "Single enemy", 98, 0.5),
+    "vapor spray": ((), None, None, 5, True, False, False, 96, 694, "Single enemy", 172, 3),
+    "thunder breath": ((), None, None, 4, True, False, False, 97, 695, "Single enemy", 193, 7),
+    "o. counterstance": (("Counter",), None, None, 0, False, False, False, 98, 696, "Self", 18, 4),
+    "amorphic spikes": ((), "Gravitation", "Transfixion", 15, False, False, False, 98, 697, "Single enemy", 79, 0.5),
+    "wind breath": ((), None, None, 2, True, False, False, 99, 698, "Single enemy", 26, 1),
+    "barbed crescent": (("Accuracy Down",), "Distortion", "Liquifaction", 15, False, False, False, 99, 699, "Single enemy", 52, 0.5),
+    "nat. meditation": (("Attack Boost",), None, None, 0, False, False, False, 99, 700, "Self", 38, 1),
+    "tem. upheaval": ((), None, None, 2, True, False, False, 99, 701, "Single enemy", 133, 0.5),
+    "rending deluge": (("Dispel",), None, None, 5, True, False, False, 99, 702, "Single enemy", 118, 2),
+    "embalming earth": (("Slow",), None, None, 3, True, False, False, 99, 703, "Single enemy", 57, 3),
+    "paralyzing triad": (("Paralyze",), "Gravitation", None, 15, False, False, False, 99, 704, "Single enemy", 33, 0.5),
+    "foul waters": (("Drown",), None, None, 5, True, False, False, 99, 705, "Single enemy", 76, 3.5),
+    "glutinous dart": ((), "Fragmentation", None, 15, False, False, False, 99, 706, "Single enemy", 16, 0.5),
+    "retinal glare": (("Flash",), None, None, 6, True, False, False, 99, 707, "Single enemy", 26, 0.5),
+    "subduction": (("Gravity",), None, None, 2, True, False, False, 99, 708, "Single enemy", 27, 1),
+    "thrashing assault": ((), "Fusion", None, 15, False, False, False, 99, 709, "Single enemy", 119, 0.5),
+    "erratic flutter": (("Haste",), None, None, 2, False, False, False, 99, 710, "Self", 92, 2),
+    "restoral": (("Cure",), None, None, 6, False, False, False, 99, 711, "Self", 127, 2),
+    "rail cannon": ((), None, None, 6, True, False, False, 99, 712, "Single enemy", 200, 2.5),
+    "diffusion ray": ((), None, None, 6, True, False, False, 99, 713, "Single enemy", 238, 4),
+    "sinker drill": ((), "Gravitation", "Reverberation", 15, False, False, False, 99, 714, "Single enemy", 91, 0.5),
+    "molting plumage": ((), None, None, 2, True, False, False, 99, 715, "Single enemy", 146, 1),
+    "nectarous deluge": (("Poison",), None, None, 5, True, False, False, 99, 716, "Single enemy", 97, 3),
+    "sweeping gouge": (("Defense Down",), "Fragmentation", "Scission", 15, False, False, False, 99, 717, "Single enemy", 29, 0.5),
+    "atra. libations": (("Drain",), None, None, 7, True, False, False, 99, 718, "Single enemy", 164, 4),
+    "searing tempest": (("Burn",), None, None, 0, True, False, False, 99, 719, "Single enemy", 116, 6),
+    "spectral floe": (("Terror",), None, None, 1, True, False, False, 99, 720, "Single enemy", 116, 6),
+    "anvil lightning": (("Stun",), None, None, 4, True, False, False, 99, 721, "Single enemy", 116, 6),
+    "entomb": (("Petrify",), None, None, 3, True, False, False, 99, 722, "Single enemy", 116, 6),
+    "saurian slide": (("Attack Down",), "Fragmentation", "Distortion", 15, False, False, False, 99, 723, "Single enemy", 109, 0.5),
+    "palling salvo": (("Bio",), None, None, 7, True, False, False, 99, 724, "Single enemy", 175, 3),
+    "blinding fulgor": (("Flash",), None, None, 6, True, False, False, 99, 725, "Single enemy", 116, 6),
+    "scouring spate": (("Attack Down",), None, None, 5, True, False, False, 99, 726, "Single enemy", 116, 6),
+    "silent storm": (("Silence",), None, None, 2, True, False, False, 99, 727, "Single enemy", 116, 6),
+    "tenebral crush": (("Defense Down",), None, None, 7, True, False, False, 99, 728, "Single enemy", 116, 6),
 }
 
 # bluGuide's Utility-view category order (its "buffpage"), verbatim.
@@ -21117,6 +21565,204 @@ _BLUSETS_SC_ORDER = (
 
 _BLUSETS_ELEMENTS = ("Fire", "Ice", "Wind", "Earth", "Thunder", "Water",
                      "Light", "Dark")
+
+
+# Spell icons for the Spellsets editor's hover tooltips. User-supplied
+# PNGs live in the addon's data\bludata\icons folder, one per spell,
+# named lowercase with underscores: "Sheep Song" -> sheep_song.png.
+# data\\bludata\\spell_info.json — user-editable per-spell tooltip
+# overrides. Resolved against the same root the icons/ folder search
+# won, so it follows the exe wherever it lives.
+BLUSETS_DATA_DIR = os.path.join(os.path.dirname(_icon_root),
+                                "data", "bludata")
+_blusets_overrides_cache = None
+_blusets_overrides_mtime = None
+
+
+def _blusets_spell_overrides():
+    """Per-spell tooltip overrides from data\\bludata\\spell_info.json.
+
+    Shape: { "spell name": {"target": "Conal AoE", "range": "...",
+    "mp_cost": 48, "cast": "4s", "lines": ["extra line", ...]}, ... }.
+    Keys matched lowercase. Any field present overrides the embedded
+    value; absent fields fall through to the game data. Reloaded when
+    the file's mtime changes (edits show on next hover, no restart).
+    Missing/malformed file -> empty dict, never raises."""
+    global _blusets_overrides_cache, _blusets_overrides_mtime
+    path = os.path.join(BLUSETS_DATA_DIR, "spell_info.json")
+    try:
+        m = os.path.getmtime(path)
+    except OSError:
+        _blusets_overrides_cache = {}
+        _blusets_overrides_mtime = None
+        return _blusets_overrides_cache
+    if _blusets_overrides_cache is None or m != _blusets_overrides_mtime:
+        data = {}
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if isinstance(raw, dict):
+                data = {str(k).lower(): v for k, v in raw.items()
+                        if isinstance(v, dict)}
+        except Exception as e:
+            print("[OmniWatch] spell_info.json parse error: %s" % e)
+            data = {}
+        _blusets_overrides_cache = data
+        _blusets_overrides_mtime = m
+    return _blusets_overrides_cache
+
+
+def _blusets_effect_color(word):
+    """Element/status tint for an effect word. Elemental words map
+    directly; common status effects map to a thematically-matching
+    element color so e.g. Sleep reads dark, Silence wind, Burn fire."""
+    w = word.strip().lower()
+    EL = {
+        "fire": (240, 130, 90), "ice": (140, 200, 240),
+        "wind": (160, 220, 160), "earth": (200, 170, 110),
+        "thunder": (210, 180, 240), "water": (130, 170, 230),
+        "light": (240, 230, 180), "dark": (175, 155, 200),
+    }
+    if w in EL:
+        return EL[w]
+    # Status effect -> element association (FFXI elemental wheel).
+    STATUS = {
+        "sleep": "dark", "bind": "ice", "petrify": "earth",
+        "stun": "thunder", "silence": "wind", "slow": "earth",
+        "paralyze": "ice", "poison": "water", "blind": "dark",
+        "gravity": "wind", "burn": "fire", "frost": "ice",
+        "choke": "wind", "rasp": "earth", "shock": "thunder",
+        "drown": "water", "dia": "light", "bio": "dark",
+        "plague": "water", "curse": "dark", "doom": "dark",
+        "terror": "dark", "amnesia": "light", "weight": "wind",
+        "defense down": "earth", "evasion down": "ice",
+        "attack down": "fire", "accuracy down": "wind",
+        "str down": "fire", "dex down": "thunder",
+        "vit down": "earth", "int down": "ice", "mnd down": "water",
+        "magic def. down": "dark", "max hp down": "dark",
+        "flash": "light", "dispel": "light", "aspir": "dark",
+        "drain": "dark",
+    }
+    el = STATUS.get(w)
+    return EL.get(el) if el else None
+
+
+def _blusets_sc_color(name):
+    """Color for a skillchain property, by its traditional element."""
+    EL = {
+        "fire": (240, 130, 90), "ice": (140, 200, 240),
+        "wind": (160, 220, 160), "earth": (200, 170, 110),
+        "thunder": (210, 180, 240), "water": (130, 170, 230),
+        "light": (240, 230, 180), "dark": (175, 155, 200),
+    }
+    SC = {
+        "transfixion": "light", "compression": "dark",
+        "liquefaction": "fire", "liquifaction": "fire",
+        "scission": "earth", "reverberation": "water",
+        "induration": "ice", "impaction": "thunder",
+        "detonation": "wind",
+        # Level 2 / 3 chains -> their dominant element.
+        "scission ": "earth", "fusion": "fire", "fragmentation": "wind",
+        "gravitation": "earth", "distortion": "ice",
+        "light": "light", "darkness": "dark", "umbra": "dark",
+        "radiance": "light",
+    }
+    el = SC.get(name.strip().lower())
+    return EL.get(el) if el else None
+
+
+def _blusets_spell_tooltip_info(nm):
+    """Assemble a draw_item_tooltip() info dict for a BLU spell.
+
+    Tooltip content is read STRICTLY from data\\bludata\\spell_info.json
+    (one editable file for everything shown on the card) — the embedded
+    _BLUSETS_SPELLINFO table drives the editor's grouping/trait logic,
+    not the tooltip. Effect words are tinted to their element color; the
+    set cost / trait points sit in the footer (below the separator)."""
+    key = nm.lower()
+    ov = _blusets_spell_overrides().get(key, {})
+    cost, pts = _blusets_cost_pts(nm)
+    lines = []
+
+    def add(text, color=None):
+        # Plain line (optionally a single color via a one-segment list).
+        lines.append([(text, color)] if color else text)
+
+    def add_segments(segs):
+        lines.append(list(segs))
+
+    sptype = ov.get("type")
+    if sptype:
+        add("Type: " + str(sptype))
+    target = ov.get("target")
+    if target:
+        add("Target: " + str(target))
+    if ov.get("range"):
+        add("Range: " + str(ov["range"]))
+    if ov.get("mp_cost"):
+        add("MP cost: %s" % ov["mp_cost"])
+    if ov.get("cast"):
+        # JSON stores "cast / recast" (e.g. "0.5s / 24.5s"); render it
+        # as "Cast 0.5s / Recast 24.5s".
+        _cv = str(ov["cast"])
+        if "/" in _cv:
+            _c, _r = (p.strip() for p in _cv.split("/", 1))
+            add("Cast %s / Recast %s" % (_c, _r))
+        else:
+            add("Cast %s" % _cv)
+
+    # Effects: a single "Effect(s):" line; the label stays white and
+    # each effect word is tinted to its element color, comma-separated.
+    effects = ov.get("effects") or []
+    if isinstance(effects, str):
+        effects = [effects]
+    if effects:
+        label = "Effects: " if len(effects) > 1 else "Effect: "
+        segs = [(label, None)]
+        for k, eff in enumerate(effects):
+            if k:
+                segs.append((", ", None))
+            segs.append((str(eff), _blusets_effect_color(str(eff))))
+        add_segments(segs)
+
+    # Elemental (nuke) damage: white label, colored element.
+    elem = ov.get("element")
+    if elem:
+        add_segments([("Magic damage: ", None),
+                      (str(elem), _blusets_effect_color(str(elem)))])
+
+    # Skillchain: white label, each property tinted to its SC color.
+    sc = ov.get("skillchain") or []
+    if isinstance(sc, str):
+        sc = [sc]
+    if sc:
+        segs = [("Skillchain: ", None)]
+        for k, s in enumerate(sc):
+            if k:
+                segs.append((" / ", None))
+            segs.append((str(s), _blusets_sc_color(str(s))))
+        add_segments(segs)
+
+    for extra in (ov.get("lines") or []):
+        add(str(extra))
+
+    # Footer (below the separator): set cost / trait points.
+    footer = []
+    if cost is not None:
+        bits = "Set cost %d" % cost
+        if pts:
+            bits += "   Trait points %d" % pts
+        footer.append(bits)
+
+    # Stat bonus (orange section under skillchain). JSON may store a
+    # string or a list of strings.
+    sb = ov.get("stat_bonus")
+    if isinstance(sb, str):
+        sb = [sb] if sb else []
+    sb = [str(x) for x in (sb or []) if str(x).strip()]
+
+    return {"name": nm, "item_id": 0, "stat_lines": lines,
+            "stat_bonus_lines": sb, "footer_lines": footer}
 
 
 def _blusets_cost_pts(nm):
@@ -21321,6 +21967,7 @@ def draw_blusets_window(surface):
     """The main BLU Spellsets window (list view / edit view)."""
     global _blusets_win_rect, _blusets_title_rect, _blusets_close_rect
     global _blusets_new_rect, _blusets_name_rect, _blusets_save_rect
+    global _blusets_tt_toggle_rect
     global _blusets_cancel_rect, _blusets_win_pos, _blusets_scroll
     global _blusets_note
     if not _blusets_open:
@@ -21362,12 +22009,14 @@ def draw_blusets_window(surface):
     _blusets_win_rect = pygame.Rect(x0, y0, W, H)
 
     # ── Frame ──
+    draw_panel_shadow(surface, _blusets_win_rect, radius=6)
     pygame.draw.rect(surface, (24, 26, 34), _blusets_win_rect, border_radius=6)
-    pygame.draw.rect(surface, (78, 86, 110), _blusets_win_rect, 1,
-                     border_radius=6)
     _blusets_title_rect = pygame.Rect(x0, y0, W, title_h)
     pygame.draw.rect(surface, (34, 38, 52), _blusets_title_rect,
                      border_top_left_radius=6, border_top_right_radius=6)
+    draw_bevel(surface, _blusets_win_rect, radius=6)
+    pygame.draw.rect(surface, (78, 86, 110), _blusets_win_rect, 1,
+                     border_radius=6)
     ttl = "BLU SPELLSETS" if _blusets_view == "list" else (
         "EDIT SET" if _blusets_edit_orig else "NEW SET")
     surface.blit(f_t.render(ttl, True, (200, 210, 230)), (x0 + 10, y0 + 5))
@@ -21395,6 +22044,27 @@ def draw_blusets_window(surface):
         surface.blit(f_r.render("Name:", True, (190, 196, 210)),
                      (x0 + 10, sy + 8))
         _blusets_name_rect = pygame.Rect(x0 + 62, sy + 5, 230, 24)
+        # "Tooltips" toggle just right of the name box: small checkbox
+        # + label, controls the spell hover tooltips in this window.
+        _tt_on = bool(setting("blusets_tooltips"))
+        _cb = pygame.Rect(_blusets_name_rect.right + 14, sy + 10, 14, 14)
+        pygame.draw.rect(surface, (30, 34, 46), _cb, border_radius=3)
+        pygame.draw.rect(surface,
+                         (120, 190, 140) if _tt_on else (90, 96, 116),
+                         _cb, 1, border_radius=3)
+        if _tt_on:
+            pygame.draw.lines(surface, (140, 220, 160), False,
+                              [(_cb.x + 3, _cb.y + 7),
+                               (_cb.x + 6, _cb.y + 10),
+                               (_cb.x + 11, _cb.y + 4)], 2)
+        _lbl = _blusets_font(11).render(
+            "Tooltips", True,
+            (185, 195, 210) if _tt_on else (140, 146, 162))
+        surface.blit(_lbl, (_cb.right + 6,
+                            _cb.centery - _lbl.get_height() // 2))
+        _blusets_tt_toggle_rect = pygame.Rect(
+            _cb.x, _cb.y - 2,
+            _cb.width + 6 + _lbl.get_width(), _cb.height + 4)
         focus = _blusets_name_focus
         pygame.draw.rect(surface, (18, 20, 28), _blusets_name_rect,
                          border_radius=3)
@@ -21662,12 +22332,31 @@ def draw_blusets_window(surface):
             "tick the box to set it", True,
             (110, 118, 136)), (x0 + 10, fy + 28))
 
+    # ── Spell hover tooltip: icon + name for the hovered row (icons are
+    # user-supplied PNGs in data\bludata\icons; rows without one show
+    # no tooltip). Drawn last so it sits above the window. ──
+    if _blusets_view == "edit" and setting("blusets_tooltips"):
+        _mxy = pygame.mouse.get_pos()
+        _hover_nm = None
+        # Only rows visibly inside the scroll body (rects exist for
+        # clipped rows too; the body rect excludes header + footer).
+        for _r, _nr, _nm in _blusets_spell_rects:
+            if _r.collidepoint(_mxy) and body.collidepoint(_mxy):
+                _hover_nm = _nm
+                break
+        if _hover_nm:
+            _sw_, _sh_ = surface.get_size()
+            draw_item_tooltip(surface, _mxy[0], _mxy[1],
+                              _blusets_spell_tooltip_info(_hover_nm),
+                              _sw_, _sh_)
+
 
 def _blusets_open_editor(orig_name=None):
     global _blusets_view, _blusets_edit_name, _blusets_edit_orig
     global _blusets_edit_sel, _blusets_name_focus, _blusets_scroll
-    global _blusets_edit_tab
+    global _blusets_edit_tab, _blusets_overrides_cache
     _blusets_edit_tab = "Traits"
+    _blusets_overrides_cache = None   # re-read spell_info.json overrides
     _blusets_view = "edit"
     _blusets_scroll = 0
     _blusets_edit_orig = orig_name
@@ -21825,6 +22514,11 @@ def _blusets_handle_event(event):
                         _blusets_confirm_del = (nm, now + 2.5)
                     return True
         else:
+            if (_blusets_tt_toggle_rect
+                    and _blusets_tt_toggle_rect.collidepoint(mx, my)):
+                set_setting("blusets_tooltips",
+                            not setting("blusets_tooltips"))
+                return True
             for tr, tab in _blusets_tab_rects:
                 if tr.collidepoint(mx, my):
                     if tab != _blusets_edit_tab:
@@ -22688,11 +23382,16 @@ def draw_warp_button(surface):
     def _bs(v):
         return max(1, round(v * g))
     f = get_font("Consolas", _bs(13), bold=True)
-    label = f.render("Warp", True, (225, 225, 235))
+    # Two-line label: "Super" over "Warp", centered. Sized identically
+    # to the Cheat Sheet button (lh*2 + padv*2, no inter-line gap) so
+    # the two buttons match.
+    label_top = f.render("Super", True, (225, 225, 235))
+    label_bot = f.render("Warp",  True, (225, 225, 235))
     pad  = _bs(8)
     padv = _bs(4)
-    bw = label.get_width() + pad * 2
-    bh = label.get_height() + padv * 2
+    lh = f.get_height()
+    bw = max(label_top.get_width(), label_bot.get_width()) + pad * 2
+    bh = lh * 2 + padv * 2
     sw, shh = surface.get_size()
     if warp_button_pos is None:
         # Default: just below the cheat sheet button's default spot.
@@ -22720,7 +23419,10 @@ def draw_warp_button(surface):
     pygame.draw.rect(surface, bg, warp_button_rect, border_radius=4)
     pygame.draw.rect(surface, bdr, warp_button_rect, bdr_w, border_radius=4)
     draw_accent_stripe(surface, x, y, bh, ACCENT_WARP, w=max(2, _bs(2)))
-    surface.blit(label, (x + (bw - label.get_width()) // 2, y + padv))
+    surface.blit(label_top,
+                 (x + (bw - label_top.get_width()) // 2, y + padv))
+    surface.blit(label_bot,
+                 (x + (bw - label_bot.get_width()) // 2, y + padv + lh))
 
     # Corner resize handle (bottom-right), shown on hover like the [CS] one.
     hsz = max(6, _bs(6))
@@ -25392,7 +26094,7 @@ def _sim_compute_height():
     h += SIM_WIN_ROW_H            # food header
     h += SIM_WIN_ROW_H            # food row
     if sim_active_field and sim_active_field.get("kind") == "food":
-        h += min(12, len(SIM_FOOD_LIST) + 1) * 18  # +1 for "(none)"
+        h += (len(SIM_FOOD_LIST) + 1) * 18  # +1 for "(none)"; show all (like slot dropdowns)
     h += 4
     # Buffs section: header + active buffs + picker UI.
     h += SIM_WIN_ROW_H            # buffs header
@@ -25409,8 +26111,8 @@ def _sim_compute_height():
         # Row count per kind/category:
         #   Songs song (kind='song', cat='Songs'): 3 rows
         #     (name+X, plus +/-, SV/Marcato boost toggles)
-        #   Geomancy indi-* (kind='song', cat='Geomancy'): 2 rows
-        #     (name+X, plus +/- — no boost row applies)
+        #   Geomancy indi-* (kind='song', cat='Geomancy'): 3 rows
+        #     (name+X, plus +/-, Bolster/Blaze-of-Glory boost toggles)
         #   Rolls roll (kind='roll'): 3 rows
         #     (name+X, level/plus, C.Cards/Job-present checkboxes)
         #   Spells spell (kind='spell'): 1 row
@@ -25418,7 +26120,8 @@ def _sim_compute_height():
         if ckind == "spell":
             h += 1 * SIM_WIN_ROW_H
         elif ckind == "song":
-            h += (3 * SIM_WIN_ROW_H) if ccat == "Songs" else (2 * SIM_WIN_ROW_H)
+            # Songs and Geomancy both carry a boost-toggle row now.
+            h += 3 * SIM_WIN_ROW_H
         else:  # roll
             h += 3 * SIM_WIN_ROW_H
     # Picker UI height varies by stage.
@@ -25454,9 +26157,14 @@ def draw_sim_window(surface):
     """
     global sim_window_rects, sim_window_titlebar_rect, sim_window_resize_rect
     global sim_window_scroll
+    global sim_item_tooltip_rects, sim_window_bounds_rect
+    global sim_food_tooltip_rects
     sim_window_rects = []
     sim_window_titlebar_rect = None
     sim_window_resize_rect = None
+    sim_item_tooltip_rects = []
+    sim_food_tooltip_rects = []
+    sim_window_bounds_rect = None
     if not sim_window_open:
         return
 
@@ -25483,6 +26191,7 @@ def draw_sim_window(surface):
     wx = max(0, min(WIDTH - ww, int(wx)))
     wy = max(0, min(HEIGHT - wh, int(wy)))
     sim_window_pos[0], sim_window_pos[1] = wx, wy
+    sim_window_bounds_rect = pygame.Rect(wx, wy, ww, wh)
 
     # Background + border.
     pygame.draw.rect(surface, SIM_WIN_BG, (wx, wy, ww, wh),
@@ -25635,6 +26344,7 @@ def draw_sim_window(surface):
         is_empty = (sim_val == 0)
         is_dict  = isinstance(sim_val, dict) and (sim_val.get("id", 0) or 0) > 0
         is_int   = isinstance(sim_val, int) and sim_val > 0
+        matched_entry = None
         if is_empty:
             display, dim = "(empty)", False
         elif is_dict or is_int:
@@ -25646,9 +26356,11 @@ def draw_sim_window(surface):
                 # Match exact instance when possible (dict ref), else by id.
                 if target_loc and (entry.get("bag", 0), entry.get("idx", 0)) == target_loc:
                     display = _display_name_for_item(entry)
+                    matched_entry = entry
                     break
                 if not target_loc and entry.get("id") == target_id:
                     display = _display_name_for_item(entry)
+                    matched_entry = entry
                     break
             dim = False
         else:
@@ -25673,6 +26385,12 @@ def draw_sim_window(surface):
                               ed_rect.y + (ed_rect.height - v_surf.get_height()) // 2))
         sim_window_rects.append((ed_rect,
             {"action": "open_dropdown", "kind": "equip_slot", "slot": slot_key}))
+        # Tooltip: hovering the cell shows the chosen item's card. Only
+        # register when the cell is within the visible (clipped) body band
+        # so a scrolled-out cell can't trigger a phantom tooltip.
+        if (matched_entry is not None
+                and ed_rect.bottom > body_top and ed_rect.top < body_bottom):
+            sim_item_tooltip_rects.append((ed_rect.copy(), matched_entry))
         return ed_rect, active, sim_val
 
     # Walk slots in groups of `col_count`. After each row, if any cell
@@ -25759,6 +26477,10 @@ def draw_sim_window(surface):
                         {"action": "select", "kind": "equip_slot",
                          "slot": active_slot,
                          "value": {"id": iid, "bag": bag_id, "idx": idx_id}}))
+                    # Tooltip: hovering an option shows that item's card.
+                    # Body-band gate keeps scrolled-out rows from firing.
+                    if opt_rect.bottom > body_top and opt_rect.top < body_bottom:
+                        sim_item_tooltip_rects.append((opt_rect.copy(), entry))
                     cy += 18
 
     cy += 4
@@ -25797,6 +26519,10 @@ def draw_sim_window(surface):
     surface.blit(fd_surf, (fd_rect.x + 6,
                            fd_rect.y + (fd_rect.height - fd_surf.get_height()) // 2))
     sim_window_rects.append((fd_rect, {"action": "open_dropdown", "kind": "food"}))
+    # Tooltip on the current selection cell (when a food is chosen).
+    if (food_id is not None
+            and fd_rect.bottom > body_top and fd_rect.top < body_bottom):
+        sim_food_tooltip_rects.append((fd_rect.copy(), food_id))
     cy += SIM_WIN_ROW_H
 
     if fd_active:
@@ -25812,7 +26538,7 @@ def draw_sim_window(surface):
         sim_window_rects.append((opt_rect,
             {"action": "select", "kind": "food", "value": None}))
         cy += 18
-        for fid, fname, _ in SIM_FOOD_LIST[:11]:
+        for fid, fname, _ in SIM_FOOD_LIST:
             opt_rect = pygame.Rect(fd_x, cy, fd_w, 18)
             hov = (food_id == fid)
             pygame.draw.rect(surface,
@@ -25824,6 +26550,9 @@ def draw_sim_window(surface):
                                   opt_rect.y + (opt_rect.height - o_surf.get_height()) // 2))
             sim_window_rects.append((opt_rect,
                 {"action": "select", "kind": "food", "value": fid}))
+            # Tooltip: hovering a food option shows its stat card.
+            if opt_rect.bottom > body_top and opt_rect.top < body_bottom:
+                sim_food_tooltip_rects.append((opt_rect.copy(), fid))
             cy += 18
 
     cy += 4
@@ -25914,23 +26643,26 @@ def draw_sim_window(surface):
                  "field": "plus", "delta": +1, "min": 0, "max": bplus_max}))
             cy += SIM_WIN_ROW_H
 
-            # Row 3 (BRD songs only): per-buff Soul Voice + Marcato
-            # toggles. Both are BRD boosts that multiply the song's
-            # output. SV is a 1-hour (x2); Marcato is a JA (x1.5) that
-            # in real play only boosts the NEXT song cast — but since
-            # each active buff has its own toggle here, the user picks
-            # which song Marcato applies to. Stacks multiplicatively.
-            # Skip for non-Songs categories (e.g. Geomancy Indi-*
-            # spells, which share the song UI shape but have no BRD-
-            # style boost mechanics).
+            # Row 3: per-buff boost toggles. BRD Songs get Soul Voice +
+            # Marcato (x2 / x1.5, stack multiplicatively). Geomancy gets
+            # Bolster + Blaze of Glory (each x2; they do NOT stack with
+            # each other in-game, so the lua applies x2 once if either is
+            # set). Both multiply the buff's output. Other song-shaped
+            # categories (none currently) fall through with no row.
+            _boost_pairs = None
             if bcat == "Songs":
-                sv_on   = bool(entry.get("boost_sv", False))
-                marc_on = bool(entry.get("boost_marcato", False))
+                _boost_pairs = [
+                    ("boost_sv",      "Soul Voice", bool(entry.get("boost_sv", False))),
+                    ("boost_marcato", "Marcato",    bool(entry.get("boost_marcato", False))),
+                ]
+            elif bcat == "Geomancy":
+                _boost_pairs = [
+                    ("boost_bolster", "Bolster",   bool(entry.get("boost_bolster", False))),
+                    ("boost_bog",     "Blaze Glory", bool(entry.get("boost_bog", False))),
+                ]
+            if _boost_pairs is not None:
                 half_w  = (ww - SIM_WIN_PAD * 2) // 2
-                for ti, (tkey, tlabel, ton) in enumerate([
-                    ("boost_sv",      "Soul Voice", sv_on),
-                    ("boost_marcato", "Marcato",    marc_on),
-                ]):
+                for ti, (tkey, tlabel, ton) in enumerate(_boost_pairs):
                     tx = wx + SIM_WIN_PAD + ti * half_w
                     # Whole half is clickable; checkbox square at left.
                     box_size = 11
@@ -34815,8 +35547,20 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
             is_inert = (entry is None
                         or entry["kind"] == "none"
                         or not entry["command"])
-            is_hover = (rect.collidepoint(mx, my) and not is_inert
-                        and not locked)
+            hovered = rect.collidepoint(mx, my) and not is_inert
+            # is_hover drives the highlight, which stays tied to the
+            # unlocked state (its original drag-affordance role)…
+            is_hover = hovered and not locked
+            # …but the tooltip must NOT be gated on locked: panels are
+            # locked in normal play (lock stops panel dragging, not
+            # button clicks), and that gate made the tooltip never show
+            # outside setup mode. Stash on any hover; suppress only
+            # while a drag is in flight (the ghost is the feedback).
+            if hovered and hotbar_drag is None and entry is not None:
+                globals()["_hotbar_tooltip"] = (
+                    entry.get("label") or "",
+                    entry.get("command") or "",
+                    entry.get("kind") or "")
 
             # Cell background. Inert buttons are dimmer so users can see
             # which slots are unconfigured at a glance.
@@ -34829,6 +35573,18 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
             else:
                 cell_bg    = (44, 44, 54)
                 border_col = (100, 100, 115)
+            _cc = None
+            if not is_inert and entry is not None:
+                _cc = _hotbar_parse_color(entry.get("color"))
+                if _cc:
+                    # Tint, don't paint: blend the chosen color over the
+                    # default cell color so it reads as a translucent
+                    # wash with the theme's depth, not a solid block.
+                    _a = HOTBAR_COLOR_ALPHA
+                    _cc = tuple(int(c * _a + b * (1.0 - _a))
+                                for c, b in zip(_cc, (44, 44, 54)))
+                    cell_bg = (tuple(min(255, c + 28) for c in _cc)
+                               if is_hover else _cc)
             pygame.draw.rect(surface, cell_bg, rect, border_radius=3)
             pygame.draw.rect(surface, border_col, rect, 1, border_radius=3)
 
@@ -34839,6 +35595,13 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
             icon  = entry["icon"]
             icon_surf = get_ui_icon_scaled(icon, icon_sz) if icon else None
             text_color = (160, 160, 170) if is_inert else (220, 220, 230)
+            if _cc is not None:
+                # Perceived luminance of the chosen background — light
+                # colors get dark text so labels stay readable.
+                _lum = (0.299 * cell_bg[0] + 0.587 * cell_bg[1]
+                        + 0.114 * cell_bg[2])
+                if _lum > 130:
+                    text_color = (28, 30, 38)
 
             # Layout: icon-only | label-only | icon+label (icon left).
             if icon_surf and label:
@@ -34893,7 +35656,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
 #   7. User clicks Save                      → buttons_config[slot] = draft, save_buttons_config()
 #   8. User clicks Cancel / "Done editing"   → exits edit mode without saving in-progress draft
 
-HOTBAR_EDIT_FORM_H   = 200   # height of the inline form panel
+HOTBAR_EDIT_FORM_H   = 248   # height of the inline form panel
 HOTBAR_EDIT_FIELD_H  = 22
 HOTBAR_KINDS         = ["windower", "shell", "url", "file", "none"]
 
@@ -35301,7 +36064,43 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
                           clear_rect.y + (clear_rect.h - cs.get_height()) // 2))
         hotbar_editor_rects.append((pick_rect, {"kind": "pick_icon"}))
         hotbar_editor_rects.append((clear_rect, {"kind": "clear_icon"}))
-        cy += HOTBAR_EDIT_FIELD_H + 8
+        cy += HOTBAR_EDIT_FIELD_H + 6
+
+        # Row 5: Color — preset background swatches + a default chip.
+        _draw_field_label("Color", cy)
+        sw = HOTBAR_EDIT_FIELD_H - 4
+        sx = control_x
+        cur_color = hotbar_edit_draft.get("color", "") or ""
+        # Default chip first: dark cell color with a diagonal slash.
+        dflt = pygame.Rect(sx, cy + 2, sw, sw)
+        pygame.draw.rect(surface, (44, 44, 54), dflt, border_radius=2)
+        pygame.draw.line(surface, (130, 134, 150),
+                         (dflt.x + 3, dflt.bottom - 4),
+                         (dflt.right - 4, dflt.y + 3))
+        pygame.draw.rect(surface,
+                         (235, 238, 248) if cur_color == ""
+                         else (90, 90, 110),
+                         dflt, 2 if cur_color == "" else 1,
+                         border_radius=2)
+        hotbar_editor_rects.append((dflt, {"kind": "set_color",
+                                           "color": ""}))
+        sx += sw + 5
+        sy_row = cy + 2
+        for hexcol in HOTBAR_COLOR_PALETTE:
+            if sx + sw > form_rect.right - pad:   # wrap to next line
+                sx = control_x
+                sy_row += sw + 5
+            r_sw = pygame.Rect(sx, sy_row, sw, sw)
+            pygame.draw.rect(surface, _hotbar_parse_color(hexcol),
+                             r_sw, border_radius=2)
+            sel = (cur_color.lower() == hexcol)
+            pygame.draw.rect(surface,
+                             (235, 238, 248) if sel else (90, 90, 110),
+                             r_sw, 2 if sel else 1, border_radius=2)
+            hotbar_editor_rects.append(
+                (r_sw, {"kind": "set_color", "color": hexcol}))
+            sx += sw + 5
+        cy = sy_row + sw + 8
 
     # Save button (commits draft → buttons_config[slot] + writes file).
     save_w, save_h = 80, 22
@@ -35513,6 +36312,10 @@ def dispatch_hotbar_editor_click(mx, my):
             _refresh_ui_icon_listing()
             hotbar_icon_picker_open = True
             hotbar_icon_picker_scroll = 0
+        elif kind == "set_color":
+            if hotbar_edit_draft is not None:
+                hotbar_edit_draft["color"] = action.get("color", "")
+            return True
         elif kind == "clear_icon":
             if hotbar_edit_draft is not None:
                 hotbar_edit_draft["icon"] = ""
@@ -37984,8 +38787,10 @@ def equip_panel_size(scale):
     """Return (panel_w, panel_h, slot_size, title_h) at the given scale."""
     scale = _eff(scale)
     slot_size = max(20, int(EV_SLOT_SIZE * scale))
-    title_h   = max(16, int(EV_TITLE_H   * scale))
-    panel_w   = EV_COLS * slot_size + 2
+    # Header height is shared with STATISTICS (global UI scale only) so
+    # the two panels' title strips always match regardless of body scale.
+    title_h   = panel_header_h()
+    panel_w   = EV_COLS * slot_size + 2 + EV_STRIPE_INSET
     panel_h   = title_h + EV_ROWS * slot_size + 2
     return panel_w, panel_h, slot_size, title_h
 
@@ -38579,7 +39384,7 @@ def stats_panel_size(scale, _unused=None, job=None, setup_mode=False):
     cell_w  = max(32, int(STATS_CELL_W * scale))
     cell_h  = max(20, int(STATS_CELL_H * scale))
     pad     = max(3,  int(STATS_PAD    * scale))
-    title_h = max(16, int(STATS_TITLE_H * scale))
+    title_h = panel_header_h()   # shared with EQUIPMENT (global scale only)
     gap     = max(2,  int(STATS_SECTION_GAP * scale))
 
     panel_w = STATS_COLS_PER_ROW * cell_w + pad * 2
@@ -38757,7 +39562,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     cell_w  = max(32, int(STATS_CELL_W * scale))
     cell_h  = max(20, int(STATS_CELL_H * scale))
     pad     = max(3,  int(STATS_PAD    * scale))
-    title_h = max(16, int(STATS_TITLE_H * scale))
+    title_h = panel_header_h()   # shared with EQUIPMENT (global scale only)
     gap     = max(2,  int(STATS_SECTION_GAP * scale))
     panel_w, panel_h = stats_panel_size(_raw_scale, job=job, setup_mode=setup_mode)
 
@@ -39262,11 +40067,10 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
     # left edge — otherwise the title bar (which spans the full inner
     # width starting at x+1) covers the stripe near the top of the panel.
     draw_accent_stripe(surface, x, y, panel_h, ACCENT_EQUIP)
-    # Title is always literally "EQUIPMENT". The header used to reflect
-    # the active gearswap set or state, but that was noisy and the
-    # gearswap_set/state values are still tracked elsewhere for other
-    # purposes.
-    title_text = "EQUIPMENT"
+    # Title is normally literally "EQUIPMENT". While sim mode is active
+    # the panel is showing the user's sim picks rather than live gear, so
+    # we append a "— SIM" marker to make the takeover state obvious.
+    title_text = "EQUIPMENT — SIM" if sim_window_open else "EQUIPMENT"
     # Truncate to fit available width (panel minus padding).
     avail_w = panel_w - 12
     t_render = title_font.render(title_text, True, COL_EV_TITLE)
@@ -39276,7 +40080,8 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
             _cut = _cut[:-1]
         title_text = (_cut + "…") if _cut else title_text[:1]
         t_render = title_font.render(title_text, True, COL_EV_TITLE)
-    surface.blit(t_render, (x + 6, y + (title_h - t_render.get_height()) // 2))
+    _ty = y + (title_h - t_render.get_height()) // 2
+    surface.blit(t_render, (x + 6, _ty))
     # Divider line under the title bar, matching the STATISTICS panel
     # so headers across panels share the same visual treatment.
     pygame.draw.line(surface, COL_SLOT_BDR,
@@ -39407,29 +40212,34 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
                      (x + panel_w - 2, y + title_h))
 
     gy = y + title_h + 1                           # grid top
-    icon_px   = max(16, slot_size - 4)             # leave 2px padding per side
+    # Inter-cell gap so the EQUIPMENT grid breathes like STATISTICS
+    # (which spaces its cells by STATS_PAD). The stride includes the
+    # gap; the drawn cell is gap-px smaller so icon area is unchanged.
+    ev_gap   = max(1, int(STATS_PAD * scale))
+    cell_px  = slot_size - ev_gap
+    icon_px  = max(16, cell_px - 4)                # 2px padding per side
     label_font = get_font("Consolas", max(8, int(9 * scale)))
 
     for i in range(16):
         col = i % EV_COLS
         row = i // EV_COLS
-        sx  = x + 1 + col * slot_size
+        sx  = x + 1 + EV_STRIPE_INSET + col * slot_size
         sy  = gy   + row * slot_size
         item_id = slots[i] if i < len(slots) else 0
 
-        equip_slot_rects[i] = pygame.Rect(sx, sy, slot_size, slot_size)
+        equip_slot_rects[i] = pygame.Rect(sx, sy, cell_px, cell_px)
 
         # Cell background + border
         cell_col = COL_SLOT_FULL if item_id else COL_SLOT_BG
-        pygame.draw.rect(surface, cell_col, (sx, sy, slot_size, slot_size))
-        pygame.draw.rect(surface, COL_SLOT_BDR, (sx, sy, slot_size, slot_size), 1)
+        pygame.draw.rect(surface, cell_col, (sx, sy, cell_px, cell_px))
+        pygame.draw.rect(surface, COL_SLOT_BDR, (sx, sy, cell_px, cell_px), 1)
 
         if item_id:
             icon = get_icon_scaled(item_id, icon_px)
             if icon is not None:
                 # Centre icon in the cell.
-                ix = sx + (slot_size - icon_px) // 2
-                iy = sy + (slot_size - icon_px) // 2
+                ix = sx + (cell_px - icon_px) // 2
+                iy = sy + (cell_px - icon_px) // 2
                 surface.blit(icon, (ix, iy))
             else:
                 # Icon file missing — fall back to showing the item id in the cell
@@ -39443,21 +40253,21 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
             _cnt = equip_counts.get(i)
             if _cnt and _cnt > 0:
                 _cnt_font = get_font("Consolas",
-                                     max(9, int(slot_size * 0.30)),
+                                     max(9, int(cell_px * 0.30)),
                                      bold=True)
                 _cnt_text = str(_cnt)
                 _cnt_surf = _cnt_font.render(_cnt_text, True, (255, 255, 255))
                 # 1px drop-shadow for contrast against any icon.
                 _shad = _cnt_font.render(_cnt_text, True, (0, 0, 0))
-                _tx = sx + slot_size - _cnt_surf.get_width() - 2
-                _ty = sy + slot_size - _cnt_surf.get_height() - 1
+                _tx = sx + cell_px - _cnt_surf.get_width() - 2
+                _ty = sy + cell_px - _cnt_surf.get_height() - 1
                 surface.blit(_shad,     (_tx + 1, _ty + 1))
                 surface.blit(_cnt_surf, (_tx, _ty))
         else:
             # Empty slot: dim slot label as placeholder.
             lbl = label_font.render(SLOT_LABELS[i], True, COL_SLOT_EMPTY)
-            surface.blit(lbl, (sx + (slot_size - lbl.get_width()) // 2,
-                               sy + (slot_size - lbl.get_height()) // 2))
+            surface.blit(lbl, (sx + (cell_px - lbl.get_width()) // 2,
+                               sy + (cell_px - lbl.get_height()) // 2))
 
 
 def draw_help_tooltip(surface, mx, my, lines, screen_w, screen_h):
@@ -39624,11 +40434,27 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
         rows.append(f_name.render(wl, True, COL_NAME))
 
     for sl in (info.get("stat_lines") or []):
-        sl = _tt_normalize_line(sl)
-        if not sl or sl == name:
-            continue
-        for wl in _tt_wrap(f_stat, sl, MAX_TEXT_W):
-            rows.append(f_stat.render(wl, True, COL_STAT))
+        if isinstance(sl, (list, tuple)):
+            # Segmented line: [(text, color|None), ...] composed on one
+            # row so a label can be white and its value colored.
+            segs = [(str(t), c or COL_STAT) for t, c in sl if str(t)]
+            if not segs:
+                continue
+            surfs = [f_stat.render(t, True, c) for t, c in segs]
+            w = sum(s.get_width() for s in surfs)
+            h = max(s.get_height() for s in surfs)
+            row = pygame.Surface((max(1, w), h), pygame.SRCALPHA)
+            cx = 0
+            for s in surfs:
+                row.blit(s, (cx, 0))
+                cx += s.get_width()
+            rows.append(row)
+        else:
+            sl = _tt_normalize_line(sl)
+            if not sl or sl == name:
+                continue
+            for wl in _tt_wrap(f_stat, sl, MAX_TEXT_W):
+                rows.append(f_stat.render(wl, True, COL_STAT))
 
     for ag in (info.get("augments") or []):
         ag = _tt_normalize_line(ag)
@@ -39656,17 +40482,52 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     if jobs:
         for wl in _tt_wrap(f_meta, jobs, MAX_TEXT_W):
             footer_rows.append(f_meta.render(wl, True, COL_META))
+    # Caller-supplied footer lines (e.g. BLU set cost / trait points) —
+    # rendered below the separator in the augment highlight color.
+    for fl in (info.get("footer_lines") or []):
+        fl = _tt_normalize_line(fl)
+        for wl in _tt_wrap(f_stat, fl, MAX_TEXT_W):
+            footer_rows.append(f_stat.render(wl, True, COL_AUG))
 
-    all_rows = rows + footer_rows
+    # Stat-bonus section: its own separator, drawn between the body and
+    # the set/trait footer. Each stat token is colored by sign — light
+    # green for a positive bonus, light red for a negative one.
+    COL_STAT_POS = (140, 220, 150)   # light green
+    COL_STAT_NEG = (235, 130, 130)   # light red
+    COL_STAT_SEP = (200, 205, 215)   # the ", " separators stay neutral
+    stat_rows = []
+    for sl in (info.get("stat_bonus_lines") or []):
+        sl = _tt_normalize_line(sl)
+        # Split into "STAT±N" tokens; color each by its sign.
+        toks = [t.strip() for t in sl.split(",") if t.strip()]
+        surfs = []
+        for ti, tok in enumerate(toks):
+            if ti:
+                surfs.append(f_stat.render(", ", True, COL_STAT_SEP))
+            col = COL_STAT_NEG if "-" in tok else COL_STAT_POS
+            surfs.append(f_stat.render(tok, True, col))
+        if not surfs:
+            continue
+        w = sum(s.get_width() for s in surfs)
+        h = max(s.get_height() for s in surfs)
+        row = pygame.Surface((max(1, w), h), pygame.SRCALPHA)
+        cx = 0
+        for s in surfs:
+            row.blit(s, (cx, 0))
+            cx += s.get_width()
+        stat_rows.append(row)
+
+    all_rows = rows + stat_rows + footer_rows
     if not all_rows:
         return
 
     content_w = max(r.get_width() for r in all_rows)
     content_h = sum(r.get_height() for r in all_rows) + line_gap * (len(all_rows) - 1)
-    sep_h = 5 if footer_rows else 0
+    sep_h  = 5 if footer_rows else 0
+    sep2_h = 5 if stat_rows else 0
 
     total_w = content_w + pad_x * 2
-    total_h = content_h + pad_y * 2 + sep_h
+    total_h = content_h + pad_y * 2 + sep_h + sep2_h
 
     # Position: bottom-right of cursor by default, flip if off-screen.
     tx = mx + 14
@@ -39686,6 +40547,14 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     for r in rows:
         surface.blit(r, (tx + pad_x, cy))
         cy += r.get_height() + line_gap
+    if stat_rows:
+        sep_y = cy + 1
+        pygame.draw.line(surface, (70, 70, 88),
+                         (tx + pad_x, sep_y), (tx + total_w - pad_x, sep_y))
+        cy += sep2_h
+        for r in stat_rows:
+            surface.blit(r, (tx + pad_x, cy))
+            cy += r.get_height() + line_gap
     if footer_rows:
         sep_y = cy + 1
         pygame.draw.line(surface, (70, 70, 88),
@@ -42154,6 +43023,13 @@ while running:
                 sub = parts[1]
                 if sub == "MAIN_JOB" and len(parts) >= 3:
                     _sim_inv_buffer["main_job"] = parts[2]
+                    # MAIN_JOB is the first packet of a snapshot — clear the
+                    # rich-tooltip buffers so a new snapshot's CARD/AUG data
+                    # can't be polluted by the previous one's stale entries
+                    # (cards key by id, augs key by bag/idx, both of which
+                    # change as items move between bags).
+                    _sim_inv_buffer["cards"] = {}
+                    _sim_inv_buffer["augs"] = {}
                 elif sub == "SLOT" and len(parts) >= 4:
                     # New entry format: <id>@<bag>:<idx>:<tag>:<name>
                     # - id, bag, idx ints
@@ -42214,6 +43090,34 @@ while running:
                                     "id": iid, "bag": bag_id, "idx": idx_id,
                                 }
                     _sim_inv_buffer["equipped"] = eq_map
+                elif sub == "IMPORTED" and len(parts) >= 3:
+                    # Gear set imported via the sim "Import Set" modal, echoed
+                    # back from lua (M.import_set) after it resolved the named
+                    # set to item ids. Wire form:
+                    #   SIM_INV|IMPORTED|<slot>:<id>;<slot>:<id>;...
+                    # id 0 = explicit empty slot.
+                    #
+                    # Unlike EQUIPPED (which only SEEDS sim_state when it is
+                    # empty), an import REPLACES sim_state.equipment wholesale
+                    # so the imported set takes over the window immediately.
+                    # Slots absent from the set follow the usual delta rule and
+                    # fall back to live gear. lua already holds the import in
+                    # its own sim state, so we do NOT push these back to it.
+                    body = "|".join(parts[2:])
+                    eq_map = {}
+                    if body:
+                        for ent in body.split(";"):
+                            if not ent:
+                                continue
+                            try:
+                                slot_name, id_str = ent.split(":", 1)
+                                iid = int(id_str)
+                            except (ValueError, IndexError):
+                                continue
+                            # 0 = explicit empty; >0 = item by id (augmented
+                            # items arrive id-only — no specific instance).
+                            eq_map[slot_name] = iid
+                    sim_state["equipment"] = eq_map
                 elif sub == "FP" and len(parts) >= 3:
                     # Fingerprint index: <bag>:<idx>:<id>:<fingerprint>;...
                     # Used for nickname lookup (key = item_id + fingerprint).
@@ -42238,12 +43142,77 @@ while running:
                                 "id": iid, "fp": ef[3].replace("~", "|"),
                             }
                     _sim_inv_buffer["fingerprints"] = fp_map
+                elif sub == "CARD" and len(parts) >= 3:
+                    # Per-unique-id tooltip cards for non-equipped items.
+                    # Body is \x1e-separated records; each record is
+                    # \x1f-separated: <id> <ilvl> <lvl> <jobs> <stat_line>*
+                    # (zero or more stat lines). Packed many-per-packet.
+                    body = "|".join(parts[2:])
+                    cards = _sim_inv_buffer.setdefault("cards", {})
+                    for rec in body.split("\x1e"):
+                        if not rec:
+                            continue
+                        f = rec.split("\x1f")
+                        if len(f) < 4:
+                            continue
+                        try:
+                            iid = int(f[0])
+                        except ValueError:
+                            continue
+                        try:
+                            ilvl = int(f[1])
+                        except ValueError:
+                            ilvl = 0
+                        try:
+                            lvl = int(f[2])
+                        except ValueError:
+                            lvl = 0
+                        cards[iid] = {
+                            "ilvl":  ilvl,
+                            "level": lvl,
+                            "jobs":  f[3],
+                            "stat_lines": [s for s in f[4:] if s],
+                        }
+                elif sub == "AUG" and len(parts) >= 3:
+                    # Per-copy full augment lines for non-equipped items.
+                    # Body is \x1e-separated records; each record is
+                    # \x1f-separated: <bag> <idx> <aug_line>+ (one or more).
+                    body = "|".join(parts[2:])
+                    augs_map = _sim_inv_buffer.setdefault("augs", {})
+                    for rec in body.split("\x1e"):
+                        if not rec:
+                            continue
+                        f = rec.split("\x1f")
+                        if len(f) < 3:
+                            continue
+                        try:
+                            bag_id = int(f[0])
+                            idx_id = int(f[1])
+                        except ValueError:
+                            continue
+                        augs_map[(bag_id, idx_id)] = [s for s in f[2:] if s]
                 elif sub == "END":
                     # Swap staging buffers into the live dicts.
                     _inv_for_sim["main_job"]  = _sim_inv_buffer.get("main_job", "")
                     _inv_for_sim["by_slot"]   = _sim_inv_buffer.get("by_slot", {})
                     _inv_for_sim["equipped"]  = _sim_inv_buffer.get("equipped", {})
                     _inv_for_sim["fingerprints"] = _sim_inv_buffer.get("fingerprints", {})
+                    # Cards (static per item id) and augs (per copy) are the
+                    # rich tooltip data. MERGE them rather than replacing, so a
+                    # snapshot that didn't carry CARD/AUG records — a dropped
+                    # UDP packet on a re-send, or a momentarily-empty pool when
+                    # something in the addon triggers a resend — doesn't wipe
+                    # every tooltip back to name-only. New records add/update;
+                    # absent ones keep their last-known values. (Cards never
+                    # change for a given id, so accumulating across snapshots
+                    # is always correct; the next clean snapshot refreshes any
+                    # augs that actually moved.)
+                    new_cards = _sim_inv_buffer.get("cards")
+                    if new_cards:
+                        _inv_for_sim.setdefault("cards", {}).update(new_cards)
+                    new_augs = _sim_inv_buffer.get("augs")
+                    if new_augs:
+                        _inv_for_sim.setdefault("augs", {}).update(new_augs)
                     # Seed sim_state.equipment from currently-equipped gear
                     # ONLY if the sim equipment dict is empty (first snapshot
                     # after activation). Subsequent snapshots don't clobber
@@ -43545,14 +44514,21 @@ while running:
 
     # ── Equip viewer (draggable + resizable) ─────────────────────────────────
     if setting("show_equipment"):
-        draw_equip_viewer(screen, equip_pos[0], equip_pos[1], equip_data, equip_scale)
+        # Sim takeover: while sim mode is open, the panel shows the user's
+        # sim picks (sim_state["equipment"]) instead of the live gear
+        # stream. equip_rich_view backs the hover-tooltip block lower down.
+        if sim_window_open:
+            _disp_equip, equip_rich_view = _sim_build_equip_display()
+        else:
+            _disp_equip, equip_rich_view = equip_data, equip_rich
+        draw_equip_viewer(screen, equip_pos[0], equip_pos[1], _disp_equip, equip_scale)
         ev_pw, ev_ph, _, _ = equip_panel_size(equip_scale)
         draw_resize_grip(screen, equip_pos[0] + ev_pw, equip_pos[1] + ev_ph)
 
         # Register clickable URLs for any filled equip slots — click opens
         # the item's BG-Wiki page.
         for _slot_idx, _rect in equip_slot_rects.items():
-            _info = equip_rich.get(_slot_idx)
+            _info = equip_rich_view.get(_slot_idx)
             if _info and _info.get("name"):
                 _url = "https://www.bg-wiki.com/ffxi/" + _info["name"].replace(" ", "_")
                 click_targets.append((_rect, _url))
@@ -44235,6 +45211,43 @@ while running:
     # ghost is never hidden mid-drag.
     draw_hotbar_drag_overlay(screen)
 
+    # ── Hotbar hover tooltip (stashed by draw_buttons_panel; drawn here
+    # so it renders above panels, modals and the editor) ──
+    if _hotbar_tooltip is not None:
+        _tt_label, _tt_cmd, _tt_kind = _hotbar_tooltip
+        globals()["_hotbar_tooltip"] = None
+        _tt_f1 = get_font("Consolas", 13, bold=True)
+        _tt_f2 = get_font("Consolas", 11)
+        _tt_lines = []
+        if _tt_label:
+            _tt_lines.append((_tt_f1, _tt_label, (225, 228, 238)))
+        if _tt_cmd:
+            _pfx = {"windower": "//", "shell": "$ "}.get(_tt_kind, "")
+            _cmd_disp = _pfx + _tt_cmd
+            if len(_cmd_disp) > 64:
+                _cmd_disp = _cmd_disp[:63] + "…"
+            _tt_lines.append((_tt_f2, _cmd_disp, (160, 168, 186)))
+        if _tt_lines:
+            _tt_pad = 7
+            _tt_w = max(f.size(t)[0] for f, t, _ in _tt_lines) + _tt_pad * 2
+            _tt_h = sum(f.get_height() + 2 for f, t, _ in _tt_lines) \
+                + _tt_pad * 2 - 2
+            _tmx, _tmy = pygame.mouse.get_pos()
+            _tt_x = min(max(0, _tmx + 14), WIDTH - _tt_w)
+            _tt_y = _tmy + 18
+            if _tt_y + _tt_h > HEIGHT:
+                _tt_y = _tmy - _tt_h - 8
+            _tt_rect = pygame.Rect(_tt_x, _tt_y, _tt_w, _tt_h)
+            pygame.draw.rect(screen, (22, 24, 32), _tt_rect,
+                             border_radius=4)
+            pygame.draw.rect(screen, (96, 104, 128), _tt_rect, 1,
+                             border_radius=4)
+            _ty = _tt_rect.y + _tt_pad
+            for _f, _t, _c in _tt_lines:
+                screen.blit(_f.render(_t, True, _c),
+                            (_tt_rect.x + _tt_pad, _ty))
+                _ty += _f.get_height() + 2
+
 
     # ── Achievement check (throttled to 1Hz; no-op once unlocked) ─────────
     _achievement_periodic_check()
@@ -44304,6 +45317,34 @@ while running:
                                            _aw, 220)
                 if _picker_rect.collidepoint(mpos):
                     _suppress_tooltip = True
+    # Sim window item tooltips. The sim window draws above the panels, so
+    # when the cursor is over it we (a) suppress the equipment-panel
+    # tooltip so an item card from the panel underneath can't leak
+    # through, and (b) show the same rich card for the sim item being
+    # hovered (a slot's chosen item or any open-dropdown row). Gated on
+    # the same show_equip_tooltips setting and paused while dragging.
+    if (sim_window_open and sim_window_bounds_rect is not None
+            and sim_window_bounds_rect.collidepoint(mpos)):
+        _suppress_tooltip = True
+        if (setting("show_equip_tooltips")
+                and sim_window_drag is None
+                and sim_window_resize is None):
+            for _strect, _stentry in sim_item_tooltip_rects:
+                if _strect.collidepoint(mpos):
+                    _stinfo = _sim_item_tooltip_info(_stentry)
+                    if _stinfo:
+                        draw_item_tooltip(screen, mpos[0], mpos[1],
+                                          _stinfo, WIDTH, HEIGHT)
+                    break
+            else:
+                # No item-row hit — try the food picker rows.
+                for _ftrect, _ftfid in sim_food_tooltip_rects:
+                    if _ftrect.collidepoint(mpos):
+                        _ftinfo = _sim_food_tooltip_info(_ftfid)
+                        if _ftinfo:
+                            draw_item_tooltip(screen, mpos[0], mpos[1],
+                                              _ftinfo, WIDTH, HEIGHT)
+                        break
     if not _suppress_tooltip:
         for _sidx, _srect in equip_slot_rects.items():
             if _srect.collidepoint(mpos):
@@ -44329,7 +45370,7 @@ while running:
                                       _help_lines, WIDTH, HEIGHT)
                 else:
                     if setting("show_equip_tooltips"):
-                        _tt_info = equip_rich.get(_sidx)
+                        _tt_info = equip_rich_view.get(_sidx)
                         if _tt_info:
                             draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info, WIDTH, HEIGHT)
                 break
@@ -46173,8 +47214,13 @@ while running:
             if hit is None and chat_panel_visible and chat_pos is not None:
                 cxp, cyp = chat_pos
                 _chw, _chh = chat_panel_size()
-                if (cxp + _chw - RESIZE_GRIP) <= mx < (cxp + _chw) and \
-                   (cyp + _chh - RESIZE_GRIP) <= my < (cyp + _chh):
+                # Grab zone is larger than the drawn 14px handle — the
+                # chat panel is busy and a 14px target was easy to miss
+                # ("hard to grab"). A 26px bottom-right corner catches
+                # the intent without eating into usable panel space.
+                _grab = max(RESIZE_GRIP, 26)
+                if (cxp + _chw - _grab) <= mx < (cxp + _chw) and \
+                   (cyp + _chh - _grab) <= my < (cyp + _chh):
                     hit = ("chat", "__chat__", cxp, cyp, "resize",
                            _chw, _chh, chat_scale)
                 elif cxp <= mx < cxp + _chw and cyp <= my < cyp + _chh:
@@ -46387,6 +47433,15 @@ while running:
                     action = payload.get("action")
                     if action != "select":
                         continue
+                    # Right-click a food row → open its BG-Wiki page.
+                    if payload.get("kind") == "food":
+                        fval = payload.get("value")
+                        if isinstance(fval, int):
+                            fname = _SIM_FOOD_NAME_BY_ID.get(fval)
+                            if fname:
+                                open_url(bgwiki_url(fname))
+                        handled = True
+                        break
                     if payload.get("kind") != "equip_slot":
                         continue
                     value = payload.get("value")

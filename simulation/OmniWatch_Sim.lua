@@ -68,8 +68,14 @@ local BUFF_DATA = {
         -- level on the bard (same potency that PW_HONOR_MARCH_STATS_BY_NAME
         -- in OmniWatch.lua uses, kept in sync). Magic haste still scales
         -- linearly via base + per_plus.
+        -- Magic haste per BG-wiki Honor March potency table:
+        --   +0 = 126/1024 (12.30%), then +12/1024 per gear March+ step
+        --   (+1 138, +2 150, +3 162, +4 174). The acc/att rows below are
+        --   the same table's Attack (168 +16/step) and Accuracy
+        --   (42 +4/step) columns. Keep in sync with
+        --   PW_HONOR_MARCH_STATS_BY_NAME in OmniWatch.lua.
         stat = 'magic_haste', unit_div = 1024,
-        base = 90, per_plus = 48, plus_max = 8,
+        base = 126, per_plus = 12, plus_max = 8,
         -- Multi-stat additions: each entry is {stat_key, by_plus_table}.
         -- by_plus_table maps gear March+ level (0..max) → flat amount.
         -- Indexed up to plus 4 since that's the live cap; entries beyond
@@ -80,22 +86,29 @@ local BUFF_DATA = {
             accuracy = {[0]=42,  [1]=46,  [2]=50,  [3]=54,  [4]=58,
                         [5]=58,  [6]=58,  [7]=58,  [8]=58},
         },
-        notes = 'BRD self-buff (NPC instrument). +1 March gives +48/1024 magic haste plus acc/att.',
+        notes = 'BRD self-buff (NPC instrument). +0 = 126/1024 (12.3%) '
+             .. 'magic haste, +12/1024 per March+ step, plus acc/att.',
     },
     advancing_march = {
         job = 'BRD', name = 'Advancing March', kind = 'song',
+        -- Magic haste scales as floor(base * (1 + 0.1 * March+)) per the
+        -- HasteInfo/BG-wiki march formula (NOT a flat linear step). Base
+        -- 108/1024 (10.55%) → 108,118,129,140,151,162,172,183,194 at
+        -- +0..+8. haste_mult triggers the floor formula in compute.
         stat = 'magic_haste', unit_div = 1024,
-        base = 108, per_plus = 16, plus_max = 8,
-        notes = 'Standard March song. +1 gives +16/1024.',
+        base = 108, plus_max = 8, haste_mult = true,
+        notes = 'Standard March song. floor(108*(1+0.1*March+))/1024; '
+             .. '+0 = 10.55%.',
     },
     victory_march = {
         job = 'BRD', name = 'Victory March', kind = 'song',
-        -- Victory March: stronger magic haste than Advancing, weaker
-        -- than Honor. Base 138/1024 ≈ 13.5%; +1 March gives +24/1024.
-        -- Cap at plus 8 same as the other marches.
+        -- Victory March is the strongest pure-haste march. Base
+        -- 163/1024 (15.92%), scaling floor(163*(1+0.1*March+)) →
+        -- 163,179,195,211,228,244,260,277,293 at +0..+8.
         stat = 'magic_haste', unit_div = 1024,
-        base = 138, per_plus = 24, plus_max = 8,
-        notes = 'BRD March song. Base 138/1024 ≈ 13.5%; +1 gives +24/1024.',
+        base = 163, plus_max = 8, haste_mult = true,
+        notes = 'BRD March song. floor(163*(1+0.1*March+))/1024; '
+             .. '+0 = 15.92%.',
     },
     -- ─── Minuets ────────────────────────────────────────────────────
     -- Pure attack-boost songs. Base values per BG-wiki Minuet pages,
@@ -202,11 +215,12 @@ local BUFF_DATA = {
         -- 900 combined), and use the "Plus" +/- picker to represent
         -- equipped Geomancy+ tier (0..10). Plus 0 = no gear, Plus 1
         -- = Dunna, Plus 5 = Idris-equivalent endgame, etc.
-        job = 'GEO', name = 'Indi-Fury', kind = 'song',
+        job = 'GEO', name = 'Indi / Geo Fury', kind = 'song',
         stat = 'attack_pct',
         base = 34.7, per_plus = 2.7, plus_max = 10,
-        notes = 'Atk%. Base assumes capped 900 combined skill. '
-             .. 'Plus = Geomancy+ gear tier (Dunna +1, Idris +5+).',
+        notes = 'Atk%. Base assumes capped 900 combined skill (34.7%). '
+             .. 'Plus = Geomancy+ points: each point = 2.7% attack '
+             .. '(Dunna 5 → +13.5%, Idris 10 → +27%).',
     },
     indi_haste = {
         -- Indi-Haste: GEO indicolure magic-haste spell. Per BG-wiki:
@@ -227,11 +241,34 @@ local BUFF_DATA = {
         -- the lua post-buff block handles overflow visually (red
         -- when over-cap, per the user's "raw value displayed"
         -- visualization preference).
-        job = 'GEO', name = 'Indi-Haste', kind = 'song',
+        job = 'GEO', name = 'Indi / Geo Haste', kind = 'song',
         stat = 'magic_haste', unit_div = 1024,
-        base = 306, per_plus = 56, plus_max = 10,
-        notes = 'Magic haste. Base assumes capped 900 combined skill. '
-             .. 'Plus = Geomancy+ tier (Dunna +1, Idris ≈ +2).',
+        base = 306, per_plus = 11.26, plus_max = 10,
+        notes = 'Magic haste. Base assumes capped 900 combined skill '
+             .. '(29.9%). Plus = Geomancy+ points: each point = 1.1% '
+             .. 'magic haste (11.26/1024). Eminent Bell 3, Dunna/Bagua 5, '
+             .. 'Bagua+1 6, Bagua+2 7, Idris 10 (+11%).',
+    },
+    indi_precision = {
+        -- Indi-/Geo-Precision: GEO accuracy spell (boosts Accuracy AND
+        -- Ranged Accuracy equally). Per SE's official "Effect Values of
+        -- Indicolure Enhancement Spells" + BG-wiki Indi-Precision:
+        --   • 900 combined skill (cap): +50 acc / +50 ranged acc
+        --   • Each Geomancy+ gear tier:  +5 acc / +5 ranged acc
+        --   • Idris counts as +10 tiers → +50 (max with Idris = 100)
+        -- Modeled like the other GEO spells: assume capped 900 skill as
+        -- the base, and the "Plus" picker is the Geomancy+ gear tier
+        -- (0..10; Dunna +1, Idris ≈ +10). The ranged-accuracy half rides
+        -- along via extra_stats_scaled so it tracks the same plus value.
+        job = 'GEO', name = 'Indi / Geo Precision', kind = 'song',
+        stat = 'accuracy',
+        base = 50, per_plus = 5, plus_max = 10,
+        extra_stats_scaled = {
+            ['ranged accuracy'] = { base = 50, per_plus = 5 },
+        },
+        notes = 'Accuracy + Ranged Accuracy. Base assumes capped 900 '
+             .. 'combined skill. Plus = Geomancy+ tier (Dunna +1, '
+             .. 'Idris ≈ +10 for +50).',
     },
     -- ─── Spell-kind: flat values, no plus/level/optimal ───────────
     -- These are simple "is the spell on?" buffs. The compute path
@@ -269,6 +306,65 @@ local BUFF_DATA = {
         stat = 'snapshot',
         base = 30,
         notes = 'Snapshot +30%. Overwritten by Haste/Haste II.',
+    },
+    embrava = {
+        -- Embrava (SCH enhancing magic, lvl 5 w/ Tabula Rasa). A single
+        -- unique status that bundles several effects; at the 500-skill
+        -- cap (per BG-wiki Embrava) the combat-relevant pieces are:
+        --   • Haste  : +20 +1 Haste  → 25.9% magic haste (266/1024)
+        --   • Flurry : +20 +1 Flurry → 25.9% snapshot   (266/1024)
+        --   • Regen  : +72 HP/tick   (panel 'regen' cell)
+        --   • Refresh: +6  MP/tick   (panel 'refresh' cell)
+        -- Because Embrava is a UNIQUE status it stacks with regular
+        -- Haste/Flurry rather than overwriting them; the sim adds it into
+        -- the magic-haste / snapshot buckets and the lua post-buff clamp
+        -- handles the 43.75% magic-haste cap visually.
+        --
+        -- Primary stat is magic_haste (266/1024); the Flurry/snapshot
+        -- and Regen/Refresh pieces ride along via extra_stats_flat (flat,
+        -- no scaling — the spell path has no plus/level math).
+        job = 'SCH', name = 'Embrava', kind = 'spell',
+        stat = 'magic_haste', unit_div = 1024,
+        base = 266,
+        extra_stats_flat = { snapshot = 25.9, regen = 72, refresh = 6 },
+        notes = 'SCH unique status. Magic haste 266/1024 (~25.9%) + '
+             .. 'Flurry 25.9% snapshot + Regen 72/tick + Refresh 6/tick '
+             .. 'at 500 skill. Stacks with Haste/Flurry.',
+    },
+    -- ─── Blue Magic (BLU) ───────────────────────────────────────────
+    -- Self-cast BLU spells. Modeled on their combat-relevant pieces;
+    -- non-combat / percent-defense effects that have no stats-panel
+    -- cell are noted but not modeled (same policy as Embrava).
+    erratic_flutter = {
+        -- Erratic Flutter (BLU lvl 99). Grants Haste II — 307/1024
+        -- magic haste (~29.98%), per BG-wiki. Same magnitude as the
+        -- WHM Haste II spell. Overwrites Hojo: Ni / Hojo: Ichi / Slow
+        -- but not most Slowga forms (not relevant to the stats panel).
+        job = 'BLU', name = 'Erratic Flutter', kind = 'spell',
+        stat = 'magic_haste', unit_div = 1024,
+        base = 307,
+        notes = 'BLU self-haste. Magic haste 307/1024 (~29.98%, Haste II).',
+    },
+    mighty_guard = {
+        -- Mighty Guard (BLU lvl 99, requires Unbridled Learning/Wisdom).
+        -- A unique status buff that stacks with other regen/haste/defense
+        -- buffs (incl. Embrava). Per BG-wiki the effects are:
+        --   • Magical haste +15%  → 153.6/1024 (panel 'magic haste')
+        --   • Defense +25%        → 'defense pct' 25; the lua applies this
+        --                           as a multiplier on the SIMULATED gear
+        --                           defense (like Chaos Roll's attack pct)
+        --   • Regen +30 HP/tick   → panel 'regen' cell
+        --   • Magic Defense Bonus +15  (no stats-panel cell — not modeled)
+        -- Mighty Guard grants NO Refresh (Regen only); only the pieces
+        -- that map to a panel cell are modeled. 153.6/1024 = exactly
+        -- 15.00% (wiki states "+15%").
+        job = 'BLU', name = 'Mighty Guard', kind = 'spell',
+        stat = 'magic_haste', unit_div = 1024,
+        base = 153.6,
+        extra_stats_flat = { regen = 30, ['defense pct'] = 25 },
+        notes = 'BLU unique status. Magic haste +15% (153.6/1024) + '
+             .. 'Regen +30/tick + Defense +25% (applied to sim defense). '
+             .. 'MDB +15 has no panel cell. Stacks with Haste and Embrava.',
     },
 }
 
@@ -407,7 +503,9 @@ function M.set_value(key, value, sub)
                 elseif field == 'optimal'
                     or field == 'boost_sv'
                     or field == 'boost_marcato'
-                    or field == 'boost_cc' then
+                    or field == 'boost_cc'
+                    or field == 'boost_bolster'
+                    or field == 'boost_bog' then
                     entry[field] = (new_v == 'true' or new_v == '1')
                 end
             end
@@ -514,6 +612,12 @@ function M.compute_active_buff_stats()
     --                           per-buff toggle here lets the user
     --                           pick exactly which song it lands on)
     --   boost_cc (rolls)      : Crooked Cards, x1.5 — COR 1-hour
+    --   boost_bolster (GEO)   : Bolster, x2.0 — doubles ALL Geomancy
+    --                           potency incl. Geomancy+ gear (BG-wiki).
+    --   boost_bog (GEO)       : Blaze of Glory, x2.0 — same doubling.
+    --                           Bolster and Blaze of Glory do NOT stack
+    --                           with each other (BG-wiki), so either flag
+    --                           applies x2 once, not x4.
     -- Multipliers stack multiplicatively when both apply (e.g. SV +
     -- Marcato on the same song = x3.0).
     local raw = {}
@@ -526,13 +630,30 @@ function M.compute_active_buff_stats()
             if def.kind == 'song' then
                 if entry.boost_sv      then mult = mult * 2.0 end
                 if entry.boost_marcato then mult = mult * 1.5 end
+                -- Bolster / Blaze of Glory (GEO). Both double geomancy
+                -- potency and are mutually exclusive in-game, so OR them
+                -- into a single x2 rather than multiplying twice.
+                if entry.boost_bolster or entry.boost_bog then
+                    mult = mult * 2.0
+                end
             elseif def.kind == 'roll' then
                 if entry.boost_cc      then mult = mult * 1.5 end
             end
 
             if def.kind == 'song' then
                 local p = math.min(def.plus_max, math.max(0, entry.plus or 0))
-                local add = (def.base or 0) + (def.per_plus or 0) * p
+                local add
+                if def.haste_mult then
+                    -- Marches (Advancing/Victory) scale multiplicatively:
+                    -- floor(base * (1 + 0.1 * March+)), per the HasteInfo /
+                    -- BG-wiki march formula. Not a flat linear per-plus
+                    -- step. (Honor March is the exception — it uses an
+                    -- explicit +12/1024 linear step, so it does NOT set
+                    -- haste_mult.)
+                    add = math.floor((def.base or 0) * (1 + 0.1 * p))
+                else
+                    add = (def.base or 0) + (def.per_plus or 0) * p
+                end
                 raw[def.stat] = (raw[def.stat] or 0) + add * mult
                 -- Some songs (Honor March) also grant acc/att/racc/ratt
                 -- in addition to their primary stat. extra_stats maps
@@ -540,6 +661,17 @@ function M.compute_active_buff_stats()
                 if def.extra_stats then
                     for stat_key, by_plus in pairs(def.extra_stats) do
                         local v = by_plus[p] or by_plus[def.plus_max] or 0
+                        raw[stat_key] = (raw[stat_key] or 0) + v * mult
+                    end
+                end
+                -- extra_stats_scaled: additional stats that scale with the
+                -- SAME plus value as the primary (base + per_plus * p),
+                -- rather than a fixed per-plus table. Used by Indi-/Geo-
+                -- Precision so its ranged-accuracy half tracks the
+                -- accuracy half exactly. Keys are canonical stat names.
+                if def.extra_stats_scaled then
+                    for stat_key, sdef in pairs(def.extra_stats_scaled) do
+                        local v = (sdef.base or 0) + (sdef.per_plus or 0) * p
                         raw[stat_key] = (raw[stat_key] or 0) + v * mult
                     end
                 end
@@ -556,6 +688,16 @@ function M.compute_active_buff_stats()
                 -- spells — they don't have SV/Marcato/CC equivalents).
                 local add = (def.base or 0)
                 raw[def.stat] = (raw[def.stat] or 0) + add
+                -- Some spells (Embrava) bundle additional flat stats on
+                -- top of their primary. extra_stats_flat maps a buff-data
+                -- stat key → flat amount (already in that stat's canonical
+                -- unit; no plus/level scaling). Normalized below alongside
+                -- the primary stat.
+                if def.extra_stats_flat then
+                    for stat_key, amount in pairs(def.extra_stats_flat) do
+                        raw[stat_key] = (raw[stat_key] or 0) + (amount or 0)
+                    end
+                end
             end
         end
     end
@@ -641,31 +783,62 @@ end
 -- list. The dual-source isn't ideal but lua/python don't share a data
 -- file; if you add a food, add the same entry in both places.
 local _FOOD_STATS = {
-    [5736] = {accuracy=50, attack=50, ['magic accuracy']=35, ['magic attack bonus']=35},
-    [5734] = {accuracy=60, attack=60, ['magic accuracy']=40, ['magic attack bonus']=40},
-    [5733] = {accuracy=60, attack=60},
-    [4359] = {accuracy=75, ['ranged accuracy']=75, attack=50, ['ranged attack']=50},
-    [4360] = {accuracy=80, ['ranged accuracy']=80, attack=55, ['ranged attack']=55},
-    [5735] = {accuracy=90, ['ranged accuracy']=90, attack=30, ['ranged attack']=30},
-    [5739] = {accuracy=95, ['ranged accuracy']=95, attack=35, ['ranged attack']=35},
-    [5746] = {accuracy=90, attack=50, ['magic accuracy']=60},
-    [5660] = {accuracy=70, attack=70, ['magic accuracy']=50, ['magic attack bonus']=50},
-    [5754] = {['magic attack bonus']=80, ['magic accuracy']=60, ['magic damage']=40},
-    [5305] = {attack=75, accuracy=50},
-    [5306] = {['magic attack bonus']=75, ['magic accuracy']=50},
+    -- Real windower res.items ids (verified against the Windower Resources
+    -- items table) so res.items[id].en resolves to the right food name in
+    -- the export "-- Food:" comment. Mirrors the python SIM_FOOD_LIST 1:1.
+    --
+    -- A stat value is either a NUMBER (flat add, e.g. str=5 → STR +5) or a
+    -- TABLE {pct, cap} (percent-of-base with a flat cap, e.g.
+    -- accuracy={15,72} → Accuracy +15%, max +72). FFXI's combat foods are
+    -- mostly the latter; get_food_stats(base) resolves the percent against
+    -- the caller's pre-food stat value and clamps to the cap.
+    [6343] = {hp=20, str=2, vit=3, accuracy={10,80}, attack={10,50}, ['ranged accuracy']={10,80}, ['ranged attack']={10,50}, ['magic attack bonus']=3},
+    [6344] = {hp=30, str=3, vit=4, accuracy={11,85}, attack={11,55}, ['ranged accuracy']={11,85}, ['ranged attack']={11,55}, ['magic attack bonus']=4},
+    [5777] = {['int']=2, ['magic accuracy']={20,45}},
+    [5893] = {hp=90, accuracy=90, ['ranged accuracy']=90, ['magic accuracy']=90},
+    [6468] = {accuracy=75, ['ranged accuracy']=75, attack=50, ['ranged attack']=50},
+    [6469] = {hp=45, str=7, dex=8, mnd=-4, chr=7, accuracy={11,105}, ['ranged accuracy']={11,105}},
+    [5149] = {hp=20, str=5, dex=6, accuracy={15,72}, ['ranged accuracy']={15,72}},
+    [5163] = {accuracy={16,76}, ['ranged accuracy']={16,76}, str=5, dex=6, hp=20},
+    [5166] = {str=5, agi=1, ['int']=-2, attack={20,75}, ['ranged attack']={20,75}},
+    [5167] = {attack={22,80}, ['ranged attack']={22,80}, str=5, agi=1},
+    [5190] = {attack={18,65}, str=4, vit=2, ['store tp']=6},
+    [6260] = {accuracy=90, attack=50, ['magic accuracy']=60},
+    [6261] = {hp=30, vit=4, accuracy={11,54}, attack={17,54}, ['ranged accuracy']={11,54}, ['ranged attack']={17,54}},
+    [6458] = {hp=50, str=5, vit=5, agi=3, attack={10,170}, ['ranged attack']={10,170}},
+    [6459] = {hp=55, str=6, vit=6, agi=4, attack={11,175}, ['ranged attack']={11,175}},
+    [6567] = {['int']=2, mnd=2, ['magic accuracy']={20,90}},
+    [5759] = {hp=25, str=7, agi=1, ['int']=-2, attack={23,150}, ['ranged attack']={23,150}},
+    [5757] = {hp=20, str=5, agi=2, ['int']=-4, attack={20,75}, ['ranged attack']={20,75}},
+    [5763] = {hp=30, str=5, vit=2, agi=3, ['int']=-2, attack={22,85}, ['ranged attack']={22,85}},
 }
 
 -- Returns flat-stat additions from the active sim food, or empty table
 -- if no food. Keys are canonical OmniWatch stat names so the caller
--- can add them directly to stats[].
-function M.get_food_stats()
+-- can add them directly to stats[]. `base` is the caller's pre-food
+-- stats table (e.g. the `stats` table mid-compute); percent foods read
+-- their base value from it. Pass {} (or nil) and percent foods resolve
+-- to 0 (no base to take a percent of).
+function M.get_food_stats(base)
     local fid = _ow_sim_state.food
     if not fid then return {} end
     local entry = _FOOD_STATS[fid]
     if not entry then return {} end
-    -- Shallow copy so caller's mutations don't affect our table.
+    base = base or {}
     local out = {}
-    for k, v in pairs(entry) do out[k] = v end
+    for k, v in pairs(entry) do
+        if type(v) == 'table' then
+            -- {pct, cap}: percent of the pre-food base stat, capped.
+            local pct = v[1] or 0
+            local cap = v[2]
+            local b   = base[k] or 0
+            local bonus = math.floor(b * pct / 100)
+            if cap and bonus > cap then bonus = cap end
+            out[k] = bonus
+        else
+            out[k] = v   -- flat add
+        end
+    end
     return out
 end
 
@@ -681,10 +854,54 @@ function M.export_set()
         return
     end
 
-    -- Build slot → name lookups. Item id 0 means "(empty)" → we omit
-    -- that slot from the export rather than writing empty='' (gearswap
-    -- treats absent slots as "leave alone", which matches the user's
-    -- "build a partial set" intent).
+    -- GearSwap slot-name mapping. The sim stores slots as left_ear /
+    -- right_ear / left_ring / right_ring; GearSwap sets conventionally
+    -- use ear1/ear2/ring1/ring2, which is the form shown in gear files.
+    local GS_SLOT = {
+        main = 'main', sub = 'sub', range = 'range', ammo = 'ammo',
+        head = 'head', neck = 'neck',
+        left_ear = 'ear1', right_ear = 'ear2',
+        body = 'body', hands = 'hands',
+        left_ring = 'ring1', right_ring = 'ring2',
+        back = 'back', waist = 'waist', legs = 'legs', feet = 'feet',
+    }
+    -- Quote an augment string the GearSwap way: single quotes so inner
+    -- stat names that carry double quotes (e.g. '"Store TP"+10') read
+    -- cleanly. If an augment itself contains a single quote (rare), fall
+    -- back to Lua's %q double-quoted escaping so the file still loads.
+    local function quote_aug(s)
+        s = tostring(s)
+        if not s:find("'", 1, true) then
+            return "'" .. s .. "'"
+        end
+        return string.format('%q', s)
+    end
+    -- Decode the augment strings for an item instance at (bag, idx) via
+    -- Windower's extdata library. Returns a list of clean augment strings
+    -- (empty when the item has none or decode is unavailable). Guarded so
+    -- a missing lib / bad slot never aborts the export — we just emit the
+    -- item name-only for that slot.
+    local function read_augments(id, bag, idx)
+        local out = {}
+        if not (bag and idx) then return out end
+        local ok, decoded = pcall(function()
+            local extdata = require('extdata')
+            local item = windower.ffxi.get_items(bag, idx)
+            if item and item.id == id then
+                return extdata.decode(item)
+            end
+            return nil
+        end)
+        if ok and decoded and type(decoded.augments) == 'table' then
+            for _, a in ipairs(decoded.augments) do
+                if a and a ~= '' and a ~= 'none' then
+                    out[#out + 1] = a
+                end
+            end
+        end
+        return out
+    end
+
     local slot_order = {
         'main', 'sub', 'range', 'ammo',
         'head', 'neck', 'left_ear', 'right_ear',
@@ -694,14 +911,37 @@ function M.export_set()
     local lines = {}
     table.insert(lines, '-- OmniWatch sim export — ' .. os.date('%Y-%m-%d %H:%M:%S'))
     table.insert(lines, '-- Paste this into your gearswap file or rename "exported"')
-    table.insert(lines, '-- to whatever set name you want (e.g. sets.engaged.high_acc).')
+    table.insert(lines, '-- to whatever set name you want (e.g. sets.engaged.DT.HighHaste).')
     table.insert(lines, 'sets.exported = {')
     for _, slot in ipairs(slot_order) do
-        local iid = eq[slot]
-        if iid and iid > 0 then
-            local res_ok, item = pcall(function() return res and res.items and res.items[iid] end)
-            local name = (res_ok and item and (item.en or item.enl)) or ('item:' .. iid)
-            table.insert(lines, string.format('    %-12s = %q,', slot, name))
+        local ref = eq[slot]
+        -- Resolve the slot's item id + (bag, idx) from the stored ref.
+        -- ref may be: a {id,bag,idx} instance table, a legacy id int, or
+        -- 0 / nil (empty / unset → omitted from the export).
+        local id, bag, idx
+        if type(ref) == 'table' then
+            id  = ref.id or 0
+            bag = ref.bag
+            idx = ref.idx
+        elseif type(ref) == 'number' then
+            id = ref
+        end
+        if id and id > 0 then
+            local res_ok, item = pcall(function()
+                return res and res.items and res.items[id]
+            end)
+            local name = (res_ok and item and (item.en or item.enl)) or ('item:' .. id)
+            local gs_slot = GS_SLOT[slot] or slot
+            local augs = read_augments(id, bag, idx)
+            if #augs > 0 then
+                local parts = {}
+                for _, a in ipairs(augs) do parts[#parts + 1] = quote_aug(a) end
+                table.insert(lines, string.format(
+                    '    %s={name=%q, augments={%s,}},',
+                    gs_slot, name, table.concat(parts, ',')))
+            else
+                table.insert(lines, string.format('    %s=%q,', gs_slot, name))
+            end
         end
     end
     table.insert(lines, '}')

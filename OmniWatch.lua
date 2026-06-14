@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.7.3'
+_addon.version  = '1.7.5'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -1510,13 +1510,43 @@ do
                             }
                         end
                     end
+                    -- Assert the correct magic-haste values from BG-wiki's
+                    -- Honor March potency table, independent of whatever the
+                    -- vendored GearInfo Bard_Songs data ships (which has been
+                    -- seen carrying a too-low base): +0 = 126/1024 (12.30%),
+                    -- then +12/1024 per gear March+ step (138/150/162/174 at
+                    -- +1..+4), continuing linearly to cap. Acc/Att rows above
+                    -- are left as GearInfo provides them (already correct).
+                    -- Kept in sync with honor_march in OmniWatch_Sim.lua.
+                    for plus = 0, cap do
+                        per_1024[plus] = 126 + 12 * plus
+                    end
                     PW_SONG_HASTE_BY_NAME[name]        = {cap=cap, per_1024=per_1024}
                     PW_HONOR_MARCH_STATS_BY_NAME[name] = stats_by_plus
                 else
-                    -- Flat per-plus list.
+                    -- Flat per-plus list (from GearInfo Bard_Songs).
                     local per_1024 = {}
                     for plus = 0, cap do
                         per_1024[plus] = bonus[plus] or 0
+                    end
+                    -- Assert the correct march magic-haste values from
+                    -- BG-wiki, independent of the vendored GearInfo data.
+                    -- Advancing/Victory March scale as
+                    --   floor(base * (1 + 0.1 * March+))
+                    -- (the HasteInfo/BG-wiki march formula), with base
+                    -- 108/1024 (Advancing) and 163/1024 (Victory). Kept in
+                    -- sync with advancing_march / victory_march in
+                    -- OmniWatch_Sim.lua. Other haste songs keep GearInfo's
+                    -- values. (Honor March is handled in the branch above —
+                    -- it uses a +12/1024 linear step, not this formula.)
+                    local march_base = ({
+                        ['Advancing March'] = 108,
+                        ['Victory March']   = 163,
+                    })[name]
+                    if march_base then
+                        for plus = 0, cap do
+                            per_1024[plus] = math.floor(march_base * (1 + 0.1 * plus))
+                        end
                     end
                     PW_SONG_HASTE_BY_NAME[name] = {cap=cap, per_1024=per_1024}
                 end
@@ -4221,6 +4251,45 @@ function _ow_resolve_sim_equip(ref)
     return loc and loc.bag or nil, loc and loc.idx or nil
 end
 
+-- Build the static (per-item-id) tooltip card for the sim's gear-
+-- selection tooltips: item level, equip level, jobs string, and the
+-- description-derived stat lines. These depend only on the item id (not
+-- on the specific augmented copy), so the sim sends them once per unique
+-- id (deduped) rather than per inventory entry — augments, which DO vary
+-- per copy, ride a separate AUG stream. Mirrors the equip_rich field
+-- derivation so non-equipped tooltips match the live equipment panel.
+-- Returns ilvl, lvl, jobs, stat_lines (or nil if the id is unknown).
+local function _ow_sim_item_card(item_id)
+    local resource = res.items and res.items[item_id]
+    if not resource then return nil end
+    local ilvl = tonumber(resource.item_level) or 0
+    local lvl  = tonumber(resource.level) or 0
+    local jobs = ''
+    if type(resource.jobs) == 'table' then
+        local jlist = {}
+        for k, v in pairs(resource.jobs) do
+            local jid = (type(k) == 'number' and v == true) and k
+                     or (type(v) == 'number' and v) or nil
+            if jid and res.jobs and res.jobs[jid] then
+                jlist[#jlist + 1] = res.jobs[jid].ens or ''
+            end
+        end
+        jobs = table.concat(jlist, ',')
+    end
+    local stat_lines = {}
+    local dent  = res.item_descriptions and res.item_descriptions[item_id]
+    local dtext = dent and (dent.english or dent.en)
+    if dtext and dtext ~= '' then
+        for line in dtext:gmatch('[^\r\n]+') do
+            local trimmed = line:gsub('^%s+', ''):gsub('%s+$', '')
+            if trimmed ~= '' then
+                stat_lines[#stat_lines + 1] = trimmed
+            end
+        end
+    end
+    return ilvl, lvl, jobs, stat_lines
+end
+
 local function _ow_send_sim_inventory()
     if not (_sim and _sim.is_active and _sim.is_active()) then return end
     if not res or not res.items then return end
@@ -4261,7 +4330,7 @@ local function _ow_send_sim_inventory()
                                 id = it.id, name = en,
                                 slots = meta.slots, jobs = meta.jobs,
                                 bag = bag.id, idx = slot_idx,
-                                tag = tag, fp = fp,
+                                tag = tag, fp = fp, augs = augs,
                             })
                         end
                     end
@@ -4313,7 +4382,120 @@ local function _ow_send_sim_inventory()
         end
     end
 
-    -- Currently-equipped item ids per slot. Python uses this to seed
+    -- ── Rich tooltip data for non-equipped items ──────────────────────
+    -- The SLOT stream above carries only id/bag/idx/short-tag/name, which
+    -- makes the gear-selection tooltips thin next to the live equipment
+    -- panel. Two extra streams fill them out to full cards:
+    --   CARD : per UNIQUE item id — item level, equip level, jobs, and the
+    --          description-derived stat lines (static per id, deduped).
+    --   AUG  : per augmented COPY — the full augment line list (varies by
+    --          (bag, idx); only sent for copies that actually have augs).
+    -- Records are packed many-per-packet, separated by \x1e, with fields
+    -- inside a record separated by \x1f. Neither byte appears in item
+    -- text, so this needs no escaping and the whole snapshot stays a
+    -- handful of packets. Each packet is flushed well under python's
+    -- 16 KB recv buffer.
+    local RS = string.char(30)   -- record separator (between cards/copies)
+    local US = string.char(31)   -- unit separator (between fields)
+    local MAX_PKT = 12000        -- flush threshold, safely under 16 KB
+
+    -- CARD stream: one record per unique id in the pool.
+    do
+        local seen_id = {}
+        local recs, buf_len = {}, 0
+        local function flush()
+            if #recs > 0 then
+                local payload = 'SIM_INV|CARD|' .. table.concat(recs, RS)
+                pcall(function() udp_inv:send(payload) end)
+                recs, buf_len = {}, 0
+            end
+        end
+        for _, item in ipairs(pool) do
+            if not seen_id[item.id] then
+                seen_id[item.id] = true
+                local ilvl, lvl, jobs, stat_lines = _ow_sim_item_card(item.id)
+                if ilvl then
+                    local fields = { tostring(item.id), tostring(ilvl),
+                                     tostring(lvl), jobs }
+                    for _, sl in ipairs(stat_lines) do
+                        fields[#fields + 1] = sl
+                    end
+                    local rec = table.concat(fields, US)
+                    if buf_len + #rec + 1 > MAX_PKT then flush() end
+                    recs[#recs + 1] = rec
+                    buf_len = buf_len + #rec + 1
+                end
+            end
+        end
+        flush()
+    end
+
+    -- AUG stream: one record per augmented copy. Augment strings are the
+    -- same ones the short tag is built from (already extdata-decoded
+    -- above), with any leading marker glyph stripped. "Path: A"-style
+    -- opaque augments are resolved to their real stat lines using the
+    -- same tables the live equipment panel uses (ow_path_augments for
+    -- REMA / Dynamis-D weapons, Unity_rank for Unity Concord gear,
+    -- ow_unity_augments for JSE necks), so non-equipped tooltips show
+    -- the actual stats instead of a bare path letter. Unresolved paths
+    -- fall through as the raw "Path: A" string.
+    do
+        local recs, buf_len = {}, 0
+        local function flush()
+            if #recs > 0 then
+                local payload = 'SIM_INV|AUG|' .. table.concat(recs, RS)
+                pcall(function() udp_inv:send(payload) end)
+                recs, buf_len = {}, 0
+            end
+        end
+        -- Resolve a single cleaned augment string to one-or-more real
+        -- lines (mirrors the equip_rich path-resolution).
+        local function resolve_aug(item_id, s)
+            local pkey = s:lower():match('^(path:%s*%a)')
+            if not pkey then return { s } end
+            local nkey = pkey:gsub('%s+', ' ')
+            local resolved = ow_path_augments[item_id]
+                             and ow_path_augments[item_id][nkey]
+            if not resolved and Unity_rank and Unity_rank[item_id]
+                    and type(Unity_rank[item_id].augments) == 'table' then
+                resolved = Unity_rank[item_id].augments
+            end
+            if not resolved and type(ow_unity_augments[item_id]) == 'table' then
+                resolved = ow_unity_augments[item_id]
+            end
+            if type(resolved) == 'table' and #resolved > 0 then
+                local out = {}
+                for _, rs in ipairs(resolved) do
+                    if rs and rs ~= '' then out[#out + 1] = tostring(rs) end
+                end
+                if #out > 0 then return out end
+            end
+            return { s }   -- unresolved → keep the raw path
+        end
+        for _, item in ipairs(pool) do
+            local al = item.augs
+            if type(al) == 'table' and #al > 0 then
+                local fields = { tostring(item.bag), tostring(item.idx) }
+                for _, a in ipairs(al) do
+                    local s = tostring(a):gsub('^[^%w%+%-]+', '')
+                                         :gsub('^%s+', ''):gsub('%s+$', '')
+                    if s ~= '' and s ~= 'none' then
+                        for _, line in ipairs(resolve_aug(item.id, s)) do
+                            if line ~= '' then fields[#fields + 1] = line end
+                        end
+                    end
+                end
+                if #fields > 2 then
+                    local rec = table.concat(fields, US)
+                    if buf_len + #rec + 1 > MAX_PKT then flush() end
+                    recs[#recs + 1] = rec
+                    buf_len = buf_len + #rec + 1
+                end
+            end
+        end
+        flush()
+    end
+
     -- sim_state["equipment"] when sim activates, so the sim dropdowns
     -- start with the live-equipped items rather than empty. Format:
     --   SIM_INV|EQUIPPED|<slot>:<id>@<bag>:<idx>;<slot>:<id>@<bag>:<idx>;...
@@ -4711,6 +4893,33 @@ local function _ow_drain_inbound()
                 if not ok_imp then
                     windower.add_to_chat(123,
                         '[OmniWatch] sim import error: ' .. tostring(err_imp))
+                elseif err_imp == true and _sim.get_equipment then
+                    -- Import landed in the lua sim state. Echo the resolved
+                    -- equipment back to python so the sim WINDOW (which is
+                    -- rendered from python's sim_state, not the lua state)
+                    -- actually shows the imported set. Without this the
+                    -- import succeeds silently lua-side and the window keeps
+                    -- displaying live gear -- the "it sent but doesn't show"
+                    -- symptom.
+                    --   SIM_INV|IMPORTED|<slot>:<id>;<slot>:<id>;...
+                    -- id 0 = explicit empty slot; augmented items are id-only.
+                    local eq = _sim.get_equipment()
+                    if type(eq) == 'table' then
+                        local parts = {}
+                        for slot, val in pairs(eq) do
+                            local id = 0
+                            if type(val) == 'number' then
+                                id = val
+                            elseif type(val) == 'table' then
+                                id = tonumber(val.id) or 0
+                            end
+                            parts[#parts+1] = string.format('%s:%d',
+                                tostring(slot), id)
+                        end
+                        local body = 'SIM_INV|IMPORTED|' ..
+                            table.concat(parts, ';')
+                        pcall(function() udp_inv:send(body) end)
+                    end
                 end
             end
         elseif head == 'SIM' then
@@ -12326,10 +12535,24 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
     -- NEITHER is you / your party / alliance / their pets, drop it.
     -- Fail OPEN — if we can't extract a name, let the line through so we
     -- never hide your own combat.
+    -- "<Name> learns a new spell!" — emitted when a scroll or Blue Magic
+    -- spell is learned. The game uses this generic phrase verbatim (it does
+    -- NOT name the spell) and ends it with '!'. We match the literal
+    -- "learn(s) a new spell" phrase, which covers both the third-person
+    -- ("<Name> learns …") and self ("You learn …") forms and can't be
+    -- tripped by ordinary text. The System path never carries player chat
+    -- (that's 0x017), so this is doubly safe.
+    local function _ow_is_spell_learn_line(t)
+        if type(t) ~= 'string' or t == '' then return false end
+        return t:match('learns? a new spell') ~= nil
+    end
+
     local _battle_text_modes = {[40]=true}
     if original_mode and _battle_text_modes[original_mode]
        and _ow_battle_text_is_other_party(text) then
         -- other party's battle line; drop from System.
+    elseif _ow_is_spell_learn_line(text) then
+        -- Blue Magic spell-learn notice; drop from System (user opt-out).
     elseif _chat and _chat.emit_chat
             and not _OW_TEXT_PATH_SKIP_MODES[original_mode or -1] then
         local ok_emit, err_emit = pcall(_chat.emit_chat,
@@ -14564,7 +14787,7 @@ function ow_compute_stats()
                 -- main and sub weapons' augment values, while PRIMARY
                 -- (main) receives only the main's. Documented research
                 -- says main-hand augments shouldn't affect the off-hand,
-                -- but Cooper has verified against /checkparam many times
+                -- but BalladOfWorms has verified against /checkparam many times
                 -- over this addon's development that the off-hand DOES
                 -- pick them up — and /checkparam is ground truth here.
                 -- So: primary = main only; auxiliary = main + sub.
@@ -16691,7 +16914,7 @@ function ow_send_stats(stats)
     -- the same way it would in-game (multiple separate sources, all
     -- additive).
     if sim_on and _sim and _sim.get_food_stats then
-        local ok_f, food_stats = pcall(_sim.get_food_stats)
+        local ok_f, food_stats = pcall(_sim.get_food_stats, stats)
         if ok_f and type(food_stats) == 'table' then
             for k, v in pairs(food_stats) do
                 if type(v) == 'number' then
@@ -16725,6 +16948,11 @@ function ow_send_stats(stats)
         end
     end
 
+    -- Captured from the sim buff stats so the percent-defense buff
+    -- (Mighty Guard, +25%) can be applied AFTER the final defense value
+    -- is settled below (the server-stats override is the last plain
+    -- defense writer). Mirrors how 'attack pct' is handled for rolls.
+    local sim_def_pct = 0
     if sim_on and _sim and _sim.compute_active_buff_stats then
         local ok_b, buff_stats = pcall(_sim.compute_active_buff_stats)
         if ok_b and type(buff_stats) == 'table' then
@@ -16782,6 +17010,14 @@ function ow_send_stats(stats)
                 stats['attack2']       = cur_atk2 + math.floor(cur_atk2 * mul)
                 stats['ranged attack'] = cur_rat  + math.floor(cur_rat  * mul)
             end
+
+            -- Percent-based defense buff (Mighty Guard, +25%). Captured
+            -- here but applied AFTER the server-stats defense override
+            -- below so it multiplies the final simulated defense, not an
+            -- intermediate value. The stray 'defense pct' key the generic
+            -- loop above wrote into stats[] has no panel cell, so it's
+            -- harmless (same as 'attack pct').
+            sim_def_pct = buff_stats['defense pct'] or 0
 
             -- Magic/JA haste caps are 43.75% / 25% respectively. Per
             -- user request: show the RAW value in stats[] so the panel
@@ -16990,6 +17226,18 @@ function ow_send_stats(stats)
                         client_pacc, server_pacc))
                 end
             end
+        end
+    end
+
+    -- Percent-based defense buff (Mighty Guard, +25%), applied LAST so it
+    -- multiplies the final simulated defense — gear + VIT + augments, and
+    -- the server-stats override above when a roll is up. Sim-only: in live
+    -- mode the real Mighty Guard buff already moves the game's own defense,
+    -- and sim_def_pct stays 0. Mirrors the 'attack pct' roll handling.
+    if sim_def_pct > 0 then
+        local cur_def = stats['defense'] or 0
+        if cur_def > 0 then
+            stats['defense'] = cur_def + math.floor(cur_def * (sim_def_pct / 100.0))
         end
     end
 

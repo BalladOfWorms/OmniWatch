@@ -757,7 +757,7 @@ return {
         ["Sword skill"]=242, 
         ["en"]="Demersal Degen", 
         ["delay"]=224, 
-        ["Fast Cast"]=3, 
+        ["Fast Cast"]=2, 
         ["slots"]={
             [0]="Main", 
             [1]="Sub"
@@ -773,7 +773,7 @@ return {
             [19]="DNC"
         }, 
         ["id"]=20708, 
-        ["Unity Ranking Bonus Applied"]="Fast Cast + 3", 
+        ["Unity Ranking Bonus Applied"]="Fast Cast + 2", 
         ["damage"]=109
     }, 
     [28]={
@@ -854,9 +854,9 @@ return {
         ["Club skill"]=242, 
         ["item_level"]=119, 
         ["delay"]=334, 
-        ["DEX"]=9, 
+        ["DEX"]=8, 
         ["Accuracy"]=61, 
-        ["Unity Ranking Bonus Applied"]="DEX + 9", 
+        ["Unity Ranking Bonus Applied"]="DEX + 8", 
         ["slots"]={
             [0]="Main", 
             [1]="Sub"
@@ -2170,13 +2170,13 @@ return {
     [79]={
         ["discription"]="Accuracy+13 Attack+13 \"Magic Atk. Bonus\"+7 Unity ranking: STR+1～5", 
         ["category"]="Weapon", 
-        ["STR"]=15, 
+        ["STR"]=14, 
         ["en"]="Seeth. Bomblet +1", 
         ["Magic Atk. Bonus"]=7, 
         ["augments"]={
             [1]="Path: A"
         }, 
-        ["Unity Ranking Bonus Applied"]="STR + 4", 
+        ["Unity Ranking Bonus Applied"]="STR + 3", 
         ["jobs"]={
             [1]="WAR", 
             [6]="THF", 
@@ -2891,7 +2891,7 @@ return {
     }, 
     [105]={
         ["Evasion"]=27, 
-        ["AGI"]=14, 
+        ["AGI"]=13, 
         ["HP"]=45, 
         ["jobs"]={
             [1]="WAR", 
@@ -2920,7 +2920,7 @@ return {
         ["augments"]={
             [1]="Path: A"
         }, 
-        ["Unity Ranking Bonus Applied"]="AGI + 14", 
+        ["Unity Ranking Bonus Applied"]="AGI + 13", 
         ["slots"]={
             [0]="Main", 
             [1]="Sub"
@@ -2937,8 +2937,8 @@ return {
         ["category"]="Weapon", 
         ["en"]="Ghastly Tathlum +1", 
         ["skill"]="(N/A)", 
-        ["Unity Ranking Bonus Applied"]="INT + 5", 
-        ["INT"]=5, 
+        ["Unity Ranking Bonus Applied"]="INT + 4", 
+        ["INT"]=4, 
         ["slots"]={
             [3]="Ammo"
         }, 
@@ -4654,14 +4654,14 @@ return {
         ["discription"]="DEF:111 HP+38 STR+16 DEX+16 VIT+16 AGI+16 INT+16 MND+16 CHR+16 Accuracy+8 Evasion+36 Magic Evasion+53 \"Magic Def. Bonus\"+2 Haste+8% \"Double Attack\"+3% Physical Damage taken-3% Unity Ranking: HP+30～80", 
         ["id"]=25602, 
         ["en"]="Blistering Sallet +1", 
-        ["HP"]=108, 
+        ["HP"]=98, 
         ["augments"]={
             [1]="Path: A"
         }, 
         ["slots"]={
             [4]="Head"
         }, 
-        ["Unity Ranking Bonus Applied"]="HP + 70", 
+        ["Unity Ranking Bonus Applied"]="HP + 60", 
         ["STR"]=41, 
         ["DEF"]=111, 
         ["Accuracy"]=53, 
@@ -4678,7 +4678,7 @@ return {
         ["en"]="Imp. Wing Hairpin", 
         ["Evasion"]=69, 
         ["AGI"]=26, 
-        ["DEX"]=32, 
+        ["DEX"]=31, 
         ["jobs"]={
             [1]="WAR", 
             [2]="MNK", 
@@ -4703,7 +4703,7 @@ return {
             [21]="GEO", 
             [22]="RUN"
         }, 
-        ["Unity Ranking Bonus Applied"]="DEX + 6", 
+        ["Unity Ranking Bonus Applied"]="DEX + 5", 
         ["id"]=26709, 
         ["slots"]={
             [4]="Head"
@@ -5201,8 +5201,8 @@ return {
         ["discription"]="+20 +20 +20 +20 +20 +20 Occasionally absorbs magic damage taken Unity Ranking: Enmity+1～8", 
         ["category"]="Armor", 
         ["en"]="Warder's Charm +1", 
-        ["Unity Ranking Bonus Applied"]="Enmity + 7", 
-        ["Enmity"]=7, 
+        ["Unity Ranking Bonus Applied"]="Enmity + 5", 
+        ["Enmity"]=5, 
         ["slots"]={
             [9]="Neck"
         }, 
@@ -5484,9 +5484,9 @@ return {
         ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
         ["category"]="Armor", 
         ["en"]="Bathy Choker +1", 
-        ["Evasion"]=28, 
+        ["Evasion"]=26, 
         ["HP"]=35, 
-        ["Unity Ranking Bonus Applied"]="Evasion + 13", 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
         ["slots"]={
             [9]="Neck"
         }, 
@@ -7275,7 +7275,7 @@ return {
         ["Store TP"]=10, 
         ["en"]="Agony Jerkin +1", 
         ["HP"]=59, 
-        ["Accuracy"]=14, 
+        ["Accuracy"]=13, 
         ["id"]=26943, 
         ["STR"]=24, 
         ["DEF"]=136, 
@@ -7283,7 +7283,7 @@ return {
         ["slots"]={
             [5]="Body"
         }, 
-        ["Unity Ranking Bonus Applied"]="Accuracy + 14", 
+        ["Unity Ranking Bonus Applied"]="Accuracy + 13", 
         ["CHR"]=23, 
         ["INT"]=23, 
         ["VIT"]=24, 
@@ -7486,12 +7486,12 @@ return {
         ["DEF"]=218, 
         ["MP"]=91, 
         ["en"]="Cohort Cloak +1", 
-        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 18", 
+        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 16", 
         ["CHR"]=48, 
         ["INT"]=56, 
         ["Magic Atk. Bonus"]=100, 
         ["category"]="Armor", 
-        ["Magic Accuracy"]=118
+        ["Magic Accuracy"]=116
     }, 
     [242]={
         ["Evasion"]=41, 
@@ -9494,10 +9494,10 @@ return {
         ["slots"]={
             [6]="Hands"
         }, 
-        ["Unity Ranking Bonus Applied"]="Accuracy + 14", 
+        ["Unity Ranking Bonus Applied"]="Accuracy + 13", 
         ["STR"]=10, 
         ["DEF"]=91, 
-        ["Accuracy"]=95, 
+        ["Accuracy"]=94, 
         ["INT"]=14, 
         ["category"]="Armor", 
         ["CHR"]=19, 
@@ -10911,10 +10911,10 @@ return {
             [1]="Path: A"
         }, 
         ["VIT"]=17, 
-        ["Unity Ranking Bonus Applied"]="Double ttack + 3", 
+        ["Unity Ranking Bonus Applied"]="Double ttack + 2", 
         ["STR"]=30, 
         ["DEF"]=124, 
-        ["Double ttack"]=3, 
+        ["Double ttack"]=2, 
         ["INT"]=33, 
         ["category"]="Armor", 
         ["CHR"]=16, 
@@ -11339,7 +11339,7 @@ return {
     }, 
     [343]={
         ["Evasion"]=55, 
-        ["Enmity"]=6, 
+        ["Enmity"]=5, 
         ["jobs"]={
             [3]="WHM"
         }, 
@@ -11361,7 +11361,7 @@ return {
         ["DEF"]=66, 
         ["MP"]=59, 
         ["AGI"]=33, 
-        ["Unity Ranking Bonus Applied"]="Enmity + 6", 
+        ["Unity Ranking Bonus Applied"]="Enmity + 5", 
         ["CHR"]=34, 
         ["INT"]=17, 
         ["category"]="Armor", 
@@ -11829,7 +11829,7 @@ return {
         ["DEX"]=11, 
         ["AGI"]=33, 
         ["MND"]=19, 
-        ["Fast Cast"]=7, 
+        ["Fast Cast"]=6, 
         ["discription"]="DEF:66 HP+13 MP+39 STR+10 DEX+11 VIT+10 AGI+33 INT+17 MND+19 CHR+34 Evasion+55 Magic Evasion+107 \"Magic Def. Bonus\"+5 Healing magic skill +11 Enhancing magic skill +11 Haste+3% \"Fast Cast\"+4% Unity Ranking: \"Fast Cast\"+1～3%", 
         ["id"]=28274, 
         ["item_level"]=119, 
@@ -11844,7 +11844,7 @@ return {
         ["slots"]={
             [8]="Feet"
         }, 
-        ["Unity Ranking Bonus Applied"]="Fast Cast + 3", 
+        ["Unity Ranking Bonus Applied"]="Fast Cast + 2", 
         ["CHR"]=34, 
         ["INT"]=17, 
         ["category"]="Armor", 
@@ -12114,7 +12114,7 @@ return {
         ["Magic Accuracy"]=7
     }, 
     [365]={
-        ["Evasion"]=90, 
+        ["Evasion"]=89, 
         ["MND"]=19, 
         ["slots"]={
             [8]="Feet"
@@ -12147,7 +12147,7 @@ return {
         ["VIT"]=10, 
         ["STR"]=10, 
         ["INT"]=17, 
-        ["Unity Ranking Bonus Applied"]="Evasion + 19", 
+        ["Unity Ranking Bonus Applied"]="Evasion + 18", 
         ["CHR"]=34, 
         ["en"]="Hippo. Socks +1"
     }, 
@@ -12734,7 +12734,7 @@ return {
         ["Attack"]=15
     }, 
     [381]={
-        ["Evasion"]=63, 
+        ["Evasion"]=61, 
         ["MND"]=19, 
         ["slots"]={
             [8]="Feet"
@@ -12756,7 +12756,7 @@ return {
         ["VIT"]=10, 
         ["STR"]=10, 
         ["INT"]=17, 
-        ["Unity Ranking Bonus Applied"]="Evasion + 8", 
+        ["Unity Ranking Bonus Applied"]="Evasion + 6", 
         ["CHR"]=34, 
         ["en"]="Jute Boots +1"
     }, 
@@ -13711,7 +13711,7 @@ return {
     }, 
     [412]={
         ["discription"]="DEF:8 Magic Damage+4 Converts 100 HP to MP Unity Ranking: Enmity-3～7", 
-        ["Enmity"]=6, 
+        ["Enmity"]=5, 
         ["category"]="Armor", 
         ["en"]="Mephitas's Ring", 
         ["jobs"]={
@@ -13744,10 +13744,10 @@ return {
             [14]="Right Ring"
         }, 
         ["id"]=27558, 
-        ["Unity Ranking Bonus Applied"]="Enmity + 6"
+        ["Unity Ranking Bonus Applied"]="Enmity + 5"
     }, 
     [413]={
-        ["Enmity"]=8, 
+        ["Enmity"]=7, 
         ["en"]="Apeile Ring", 
         ["id"]=27560, 
         ["slots"]={
@@ -13756,7 +13756,7 @@ return {
         }, 
         ["category"]="Armor", 
         ["discription"]="Unity Ranking: Enmity+5～9 Latent effect: \"Regen\"+3 \"Refresh\"+1", 
-        ["Unity Ranking Bonus Applied"]="Enmity + 8", 
+        ["Unity Ranking Bonus Applied"]="Enmity + 7", 
         ["jobs"]={
             [1]="WAR", 
             [7]="PLD"
@@ -13839,7 +13839,7 @@ return {
     [415]={
         ["discription"]="INT+6 MND+6 CHR+6 Converts 60 HP to MP Unity Ranking: Magic Accuracy+1～5", 
         ["category"]="Armor", 
-        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 4", 
+        ["Unity Ranking Bonus Applied"]="Magic Accuracy + 3", 
         ["en"]="Metamor. Ring +1", 
         ["augments"]={
             [1]="Path: A"
@@ -13876,7 +13876,7 @@ return {
             [13]="Left Ring", 
             [14]="Right Ring"
         }, 
-        ["Magic Accuracy"]=14
+        ["Magic Accuracy"]=13
     }, 
     [416]={
         ["discription"]="Right ear: Singing skill +10 Enmity-7", 
@@ -14256,12 +14256,12 @@ return {
         ["augments"]={
             [1]="Path: A"
         }, 
-        ["Unity Ranking Bonus Applied"]="Accuracy + 9", 
+        ["Unity Ranking Bonus Applied"]="Accuracy + 8", 
         ["slots"]={
             [11]="Left Ear", 
             [12]="Right Ear"
         }, 
-        ["Accuracy"]=9, 
+        ["Accuracy"]=8, 
         ["jobs"]={
             [1]="WAR", 
             [2]="MNK", 
@@ -14310,8 +14310,8 @@ return {
         ["DEX"]=7, 
         ["en"]="Lugra Earring", 
         ["STR"]=7, 
-        ["Double Attack"]=3, 
-        ["Unity Ranking Bonus Applied"]="Double Attack + 3", 
+        ["Double Attack"]=2, 
+        ["Unity Ranking Bonus Applied"]="Double Attack + 2", 
         ["jobs"]={
             [1]="WAR", 
             [7]="PLD", 
@@ -14337,13 +14337,13 @@ return {
         ["category"]="Armor", 
         ["DEX"]=16, 
         ["en"]="Lugra Earring +1", 
-        ["Double Attack"]=3, 
+        ["Double Attack"]=2, 
         ["INT"]=16, 
         ["slots"]={
             [11]="Left Ear", 
             [12]="Right Ear"
         }, 
-        ["Unity Ranking Bonus Applied"]="Double Attack + 3", 
+        ["Unity Ranking Bonus Applied"]="Double Attack + 2", 
         ["jobs"]={
             [1]="WAR", 
             [7]="PLD", 
@@ -16458,14 +16458,14 @@ return {
         }, 
         ["category"]="Armor", 
         ["en"]="Kentarch Belt +1", 
-        ["Store TP"]=4, 
+        ["Store TP"]=3, 
         ["slots"]={
             [10]="Waist"
         }, 
         ["id"]=28413, 
         ["DEF"]=14, 
         ["Accuracy"]=14, 
-        ["Unity Ranking Bonus Applied"]="Store TP + 4"
+        ["Unity Ranking Bonus Applied"]="Store TP + 3"
     }, 
     [505]={
         ["discription"]="DEF:7 HP+25 MP+25 Same elemental magic as weather/day: Enhances bonus", 
@@ -16518,7 +16518,7 @@ return {
         ["category"]="Armor", 
         ["STR"]=15, 
         ["en"]="Sailfi Belt +1", 
-        ["Unity Ranking Bonus Applied"]="Attack + 14", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
         ["Double Attack"]=5, 
         ["id"]=28428, 
         ["slots"]={
@@ -16545,7 +16545,7 @@ return {
             [1]="Path: A"
         }, 
         ["Haste"]=9, 
-        ["Attack"]=14
+        ["Attack"]=13
     }, 
     [508]={
         ["discription"]="DEF:13 Capacity point bonus: +25%", 
@@ -17066,6 +17066,39 @@ return {
         ["Evasion"]=44
     }, 
     [526]={
+        ["Evasion"]=41, 
+        ["MND"]=36, 
+        ["Magic Accuracy"]=21, 
+        ["jobs"]={
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [10]="BRD", 
+            [15]="SMN", 
+            [20]="SCH", 
+            [21]="GEO"
+        }, 
+        ["DEX"]=23, 
+        ["discription"]="DEF:127 HP+54 MP+59 STR+23 DEX+23 VIT+23 AGI+23 INT+31 MND+36 CHR+36 Magic Accuracy+21 \"Magic Def. Bonus\"+6 Evasion+41 Magic Evasion+80 Divine magic skill +20 Enfeebling magic skill +20 Haste+3% Damage taken-1%", 
+        ["item_level"]=119, 
+        ["Haste"]=3, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["HP"]=54, 
+        ["AGI"]=23, 
+        ["en"]="Vanya Robe", 
+        ["STR"]=23, 
+        ["DEF"]=127, 
+        ["MP"]=59, 
+        ["id"]=26953, 
+        ["INT"]=31, 
+        ["category"]="Armor", 
+        ["CHR"]=36, 
+        ["VIT"]=23, 
+        ["DT"]=-1
+    }, 
+    [527]={
         ["Evasion"]=70, 
         ["MND"]=17, 
         ["AGI"]=24, 
@@ -17108,7 +17141,7 @@ return {
         ["Haste"]=4, 
         ["en"]="Volte Mittens"
     }, 
-    [527]={
+    [528]={
         ["Evasion"]=52, 
         ["MND"]=26, 
         ["AGI"]=27, 
@@ -17137,7 +17170,21 @@ return {
         ["VIT"]=23, 
         ["Attack"]=15
     }, 
-    [528]={
+    [529]={
+        ["discription"]="Accuracy+4 Wyvern: HP+20", 
+        ["id"]=11716, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Lancer's Earring", 
+        ["Accuracy"]=4, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [14]="DRG"
+        }
+    }, 
+    [530]={
         ["discription"]="DEF:1", 
         ["DEF"]=1, 
         ["slots"]={
@@ -17171,7 +17218,7 @@ return {
             [22]="RUN"
         }
     }, 
-    [529]={
+    [531]={
         ["discription"]="DEF:24 MND+7 \"Magic Atk. Bonus\"+7 Enmity-3 Blue magic recast delay -6%", 
         ["MND"]=7, 
         ["category"]="Armor", 
@@ -17191,5 +17238,11449 @@ return {
             [4]="none"
         }, 
         ["id"]=11219
+    }, 
+    [532]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [533]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [534]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [535]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [536]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [537]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [538]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [539]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [540]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [541]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [542]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [543]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [544]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [545]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [546]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [547]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [548]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [549]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [550]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [551]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [552]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [553]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [554]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [555]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [556]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [557]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [558]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [559]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [560]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [561]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [562]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [563]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [564]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [565]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [566]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [567]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [568]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [569]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [570]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [571]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [572]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [573]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [574]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [575]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [576]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [577]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [578]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [579]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [580]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [581]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [582]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [583]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [584]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [585]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [586]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [587]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [588]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [589]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [590]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [591]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [592]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [593]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [594]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [595]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [596]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [597]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [598]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [599]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [600]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [601]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [602]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [603]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [604]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [605]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [606]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [607]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [608]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [609]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [610]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [611]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [612]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [613]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [614]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [615]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [616]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [617]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [618]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [619]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [620]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [621]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [622]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [623]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [624]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [625]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [626]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [627]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [628]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [629]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [630]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [631]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [632]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [633]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [634]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [635]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [636]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [637]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [638]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [639]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [640]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [641]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [642]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [643]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [644]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [645]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [646]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [647]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [648]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [649]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [650]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [651]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [652]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [653]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [654]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [655]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [656]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [657]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [658]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [659]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [660]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [661]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [662]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [663]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [664]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [665]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [666]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [667]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [668]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [669]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [670]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [671]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [672]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [673]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [674]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [675]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [676]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [677]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [678]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [679]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [680]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [681]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [682]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [683]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [684]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [685]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [686]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [687]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [688]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [689]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [690]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [691]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [692]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [693]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [694]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [695]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [696]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [697]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [698]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [699]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [700]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [701]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [702]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [703]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [704]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [705]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [706]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [707]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [708]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [709]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [710]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [711]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [712]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [713]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [714]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [715]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [716]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [717]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [718]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [719]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [720]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [721]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [722]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [723]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [724]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [725]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [726]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [727]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [728]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [729]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [730]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [731]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [732]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [733]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [734]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [735]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [736]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [737]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [738]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [739]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [740]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [741]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [742]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [743]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [744]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [745]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [746]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [747]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [748]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [749]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [750]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [751]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [752]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [753]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [754]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [755]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [756]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [757]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [758]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [759]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [760]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [761]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [762]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [763]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [764]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [765]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [766]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [767]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [768]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [769]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [770]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [771]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [772]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [773]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [774]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [775]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [776]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [777]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [778]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [779]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [780]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [781]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [782]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [783]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [784]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [785]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [786]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [787]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [788]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [789]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [790]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [791]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [792]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [793]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [794]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [795]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [796]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [797]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [798]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [799]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [800]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [801]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [802]={
+        ["discription"]="DMG:151 Delay:227 HP+75 DEX+15 AGI+15 Accuracy+40 Attack+30 Ranged Accuracy+40 Magic Accuracy+40 \"Magic Atk. Bonus\"+20 Magic Damage+217 Evasion+20 Katana skill +248 Parrying skill +248 Magic Accuracy skill +248 Haste+2% \"Store TP\"+5 Magic burst damage +10 \"Skillchain Bonus\"+5 Weapon skill damage +5%", 
+        ["item_level"]=119, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=15, 
+        ["AGI"]=15, 
+        ["Evasion"]=20, 
+        ["Katana skill"]=248, 
+        ["Ranged Accuracy"]=40, 
+        ["Store TP"]=5, 
+        ["en"]="Kunimitsu", 
+        ["HP"]=75, 
+        ["id"]=21925, 
+        ["delay"]=227, 
+        ["category"]="Weapon", 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["Haste"]=2, 
+        ["Accuracy"]=40, 
+        ["Magic Atk. Bonus"]=20, 
+        ["damage"]=151, 
+        ["skill"]="Katana", 
+        ["Parrying skill"]=248, 
+        ["Attack"]=30, 
+        ["Magic Accuracy"]=40
+    }, 
+    [803]={
+        ["discription"]="AGI+2 Enhances \"Dual Wield\" effect Sword skill +5", 
+        ["en"]="Suppanomimi", 
+        ["Sword skill"]=5, 
+        ["Dual Wield"]=5, 
+        ["category"]="Armor", 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=14739, 
+        ["AGI"]=2
+    }, 
+    [804]={
+        ["Evasion"]=91, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=6, 
+        ["DEX"]=40, 
+        ["AGI"]=33, 
+        ["id"]=23732, 
+        ["MND"]=16, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=8, 
+        ["en"]="Malignance Chapeau", 
+        ["HP"]=45, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [4]="Head"
+        }, 
+        ["STR"]=11, 
+        ["DEF"]=121, 
+        ["MP"]=29, 
+        ["discription"]="DEF:121 HP+45 MP+29 STR+11 DEX+40 VIT+19 AGI+33 INT+25 MND+16 CHR+17 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+91 Magic Evasion+123 \"Magic Def. Bonus\"+5 Haste+6% \"Store TP\"+8 Physical damage limit+3% Damage taken-6%", 
+        ["INT"]=25, 
+        ["category"]="Armor", 
+        ["CHR"]=17, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=19, 
+        ["DT"]=-6
+    }, 
+    [805]={
+        ["discription"]="DEF:10 HP+35 \"Subtle Blow\"+11 \"Regen\"+3 Unity Ranking: Evasion+5～15", 
+        ["category"]="Armor", 
+        ["en"]="Bathy Choker +1", 
+        ["Evasion"]=26, 
+        ["HP"]=35, 
+        ["Unity Ranking Bonus Applied"]="Evasion + 11", 
+        ["slots"]={
+            [9]="Neck"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["id"]=27518, 
+        ["DEF"]=10, 
+        ["augments"]={
+            [1]="Path: A"
+        }
+    }, 
+    [806]={
+        ["skill"]="(N/A)", 
+        ["en"]="Staunch Tathlum +1", 
+        ["id"]=22279, 
+        ["slots"]={
+            [3]="Ammo"
+        }, 
+        ["category"]="Weapon", 
+        ["discription"]="Resistance to all status ailments +11 Spell interruption rate -11% Damage taken -3%", 
+        ["DT"]=-3, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [807]={
+        ["discription"]="Regain+5 Weapon Skill Accuracy+10 Weapon skill damage +4%", 
+        ["id"]=26199, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Karieyh Ring +1", 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [808]={
+        ["Evasion"]=99, 
+        ["MND"]=22, 
+        ["AGI"]=44, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEX"]=25, 
+        ["discription"]="DEF:92 HP+29 STR+24 DEX+25 VIT+21 AGI+44 INT+20 MND+22 CHR+39 Magic Accuracy+52 Evasion+99 Magic Evasion+84 \"Magic Atk. Bonus\"+23 \"Magic Def. Bonus\"+4 Haste+4% Magic burst damage +10 Dusk to dawn: Movement speed +25% Set: Increases Accuracy, Ranged Accuracy, and Magic Accuracy", 
+        ["en"]="Hachiya Kyahan +3", 
+        ["item_level"]=119, 
+        ["Haste"]=4, 
+        ["HP"]=29, 
+        ["slots"]={
+            [8]="Feet"
+        }, 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Magic Accuracy"]=15, 
+                    ["Ranged Accuracy"]=15, 
+                    ["Accuracy"]=15
+                }, 
+                [3]={
+                    ["Magic Accuracy"]=30, 
+                    ["Ranged Accuracy"]=30, 
+                    ["Accuracy"]=30
+                }, 
+                [4]={
+                    ["Magic Accuracy"]=45, 
+                    ["Ranged Accuracy"]=45, 
+                    ["Accuracy"]=45
+                }, 
+                [5]={
+                    ["Magic Accuracy"]=60, 
+                    ["Ranged Accuracy"]=60, 
+                    ["Accuracy"]=60
+                }
+            }, 
+            ["set id"]=84
+        }, 
+        ["INT"]=20, 
+        ["STR"]=24, 
+        ["DEF"]=92, 
+        ["id"]=23655, 
+        ["CHR"]=39, 
+        ["Magic Atk. Bonus"]=23, 
+        ["category"]="Armor", 
+        ["VIT"]=21, 
+        ["Magic Accuracy"]=52
+    }, 
+    [809]={
+        ["Evasion"]=85, 
+        ["STR"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["discription"]="DEF:125 HP+45 MP+29 STR+28 VIT+17 AGI+42 INT+26 MND+19 CHR+12 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+85 Magic Evasion+150 \"Magic Def. Bonus\"+7 Haste+9% \"Store TP\"+10 Physical damage limit+5% Damage taken-7%", 
+        ["AGI"]=42, 
+        ["MND"]=19, 
+        ["Magic Accuracy"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=10, 
+        ["item_level"]=119, 
+        ["HP"]=45, 
+        ["id"]=23735, 
+        ["Haste"]=9, 
+        ["slots"]={
+            [7]="Legs"
+        }, 
+        ["DEF"]=125, 
+        ["MP"]=29, 
+        ["Accuracy"]=50, 
+        ["INT"]=26, 
+        ["category"]="Armor", 
+        ["CHR"]=12, 
+        ["en"]="Malignance Tights", 
+        ["VIT"]=17, 
+        ["DT"]=-7
+    }, 
+    [810]={
+        ["Evasion"]=95, 
+        ["MND"]=17, 
+        ["AGI"]=28, 
+        ["jobs"]={
+            [2]="MNK", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [18]="PUP"
+        }, 
+        ["DEX"]=36, 
+        ["discription"]="DEF:141 HP+100 STR+40 DEX+36 VIT+34 AGI+28 INT+20 MND+17 CHR+28 Accuracy+46 Attack+28 Evasion+95 Magic Evasion+69 \"Magic Def. Bonus\"+6 Haste+4% \"Regen\"+12 Set: Enhances \"Counter\" effect", 
+        ["en"]="Hiza. Haramaki +2", 
+        ["item_level"]=119, 
+        ["DEF"]=141, 
+        ["HP"]=100, 
+        ["slots"]={
+            [5]="Body"
+        }, 
+        ["Accuracy"]=46, 
+        ["INT"]=20, 
+        ["STR"]=40, 
+        ["Haste"]=4, 
+        ["id"]=25792, 
+        ["CHR"]=28, 
+        ["VIT"]=34, 
+        ["category"]="Armor", 
+        ["Set Bonus"]={
+            ["bonus"]={
+                [1]={}, 
+                [2]={
+                    ["Counter"]=4
+                }, 
+                [3]={
+                    ["Counter"]=8
+                }, 
+                [4]={
+                    ["Counter"]=12
+                }, 
+                [5]={
+                    ["Counter"]=16
+                }
+            }, 
+            ["set id"]=281
+        }, 
+        ["Attack"]=28
+    }, 
+    [811]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [812]={
+        ["discription"]="DEF:16 \"Utsusemi\"+1 \"Migawari\"+5", 
+        ["category"]="Armor", 
+        ["en"]="Andartia's Mantle", 
+        ["DEX"]=30, 
+        ["id"]=26258, 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["DEF"]=16, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["Accuracy"]=20, 
+        ["augments"]={
+            [1]="DEX+20", 
+            [2]="Accuracy+20 Attack+20", 
+            [3]="DEX+10", 
+            [4]="Weapon skill damage +10%", 
+            [5]="\"Regen\"+5"
+        }, 
+        ["Attack"]=20
+    }, 
+    [813]={
+        ["Evasion"]=80, 
+        ["jobs"]={
+            [2]="MNK", 
+            [5]="RDM", 
+            [6]="THF", 
+            [9]="BST", 
+            [11]="RNG", 
+            [13]="NIN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC"
+        }, 
+        ["Haste"]=4, 
+        ["DEX"]=56, 
+        ["AGI"]=24, 
+        ["id"]=23734, 
+        ["MND"]=42, 
+        ["item_level"]=119, 
+        ["Ranged Accuracy"]=50, 
+        ["Store TP"]=12, 
+        ["en"]="Malignance Gloves", 
+        ["HP"]=57, 
+        ["Accuracy"]=50, 
+        ["slots"]={
+            [6]="Hands"
+        }, 
+        ["STR"]=25, 
+        ["DEF"]=108, 
+        ["MP"]=36, 
+        ["discription"]="DEF:108 HP+57 MP+36 STR+25 DEX+56 VIT+32 AGI+24 INT+11 MND+42 CHR+21 Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+80 Magic Evasion+112 \"Magic Def. Bonus\"+4 Haste+4% \"Store TP\"+12 Physical damage limit+4% Damage taken-5%", 
+        ["INT"]=11, 
+        ["category"]="Armor", 
+        ["CHR"]=21, 
+        ["Magic Accuracy"]=50, 
+        ["VIT"]=32, 
+        ["DT"]=-5
+    }, 
+    [814]={
+        ["discription"]="Haste+9% \"Triple Attack\"+2% Unity Ranking: Attack+10～15", 
+        ["category"]="Armor", 
+        ["STR"]=15, 
+        ["en"]="Sailfi Belt +1", 
+        ["Unity Ranking Bonus Applied"]="Attack + 13", 
+        ["Double Attack"]=5, 
+        ["id"]=28428, 
+        ["slots"]={
+            [10]="Waist"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [16]="BLU", 
+            [17]="COR", 
+            [19]="DNC", 
+            [22]="RUN"
+        }, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["Haste"]=9, 
+        ["Attack"]=13
+    }, 
+    [815]={
+        ["Accuracy"]=10, 
+        ["en"]="Chirich Ring +1", 
+        ["Store TP"]=6, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["category"]="Armor", 
+        ["discription"]="Accuracy+10 \"Store TP\"+6 \"Subtle Blow\"+10 \"Regen\"+2", 
+        ["id"]=26182, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [816]={
+        ["discription"]="Enhances \"Double Attack\" effect \"Store TP\"+1", 
+        ["Store TP"]=1, 
+        ["slots"]={
+            [11]="Left Ear", 
+            [12]="Right Ear"
+        }, 
+        ["en"]="Brutal Earring", 
+        ["id"]=14813, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [817]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [818]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [819]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [820]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [821]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [822]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [823]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [824]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [825]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [826]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [827]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [828]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [829]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [830]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [831]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [832]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [833]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [834]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [835]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [836]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [837]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [838]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [839]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [840]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [841]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [842]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [843]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [844]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [845]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [846]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
+    }, 
+    [847]={
+        ["discription"]="Accuracy+50 Ranged Accuracy+50 Magic Accuracy+50 Evasion+50 Magic Evasion+50 \"Double Attack\"+7% \"Store TP\"+7", 
+        ["category"]="Armor", 
+        ["en"]="Null Shawl", 
+        ["Store TP"]=7, 
+        ["Evasion"]=50, 
+        ["Ranged Accuracy"]=50, 
+        ["slots"]={
+            [15]="Back"
+        }, 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }, 
+        ["Accuracy"]=50, 
+        ["id"]=26274, 
+        ["Magic Accuracy"]=50
+    }, 
+    [848]={
+        ["discription"]="DMG:159 Delay:227 Magic Damage+186 Katana skill +269 Parrying skill +269 Magic Accuracy skill +242 \"Store TP\"+10 \"TP Bonus\"+500 \"Blade: Shun\" Aftermath: Increases skillchain potency Increases magic burst potency Ultimate Skillchain", 
+        ["Katana skill"]=269, 
+        ["Parrying skill"]=269, 
+        ["category"]="Weapon", 
+        ["Store TP"]=10, 
+        ["en"]="Heishi Shorinken", 
+        ["delay"]=227, 
+        ["augments"]={
+            [1]="Path: A"
+        }, 
+        ["slots"]={
+            [0]="Main", 
+            [1]="Sub"
+        }, 
+        ["skill"]="Katana", 
+        ["jobs"]={
+            [13]="NIN"
+        }, 
+        ["id"]=20977, 
+        ["item_level"]=119, 
+        ["damage"]=159
+    }, 
+    [849]={
+        ["discription"]="Damage taken-10%", 
+        ["id"]=13566, 
+        ["slots"]={
+            [13]="Left Ring", 
+            [14]="Right Ring"
+        }, 
+        ["en"]="Defending Ring", 
+        ["DT"]=-10, 
+        ["category"]="Armor", 
+        ["jobs"]={
+            [1]="WAR", 
+            [2]="MNK", 
+            [3]="WHM", 
+            [4]="BLM", 
+            [5]="RDM", 
+            [6]="THF", 
+            [7]="PLD", 
+            [8]="DRK", 
+            [9]="BST", 
+            [10]="BRD", 
+            [11]="RNG", 
+            [12]="SAM", 
+            [13]="NIN", 
+            [14]="DRG", 
+            [15]="SMN", 
+            [16]="BLU", 
+            [17]="COR", 
+            [18]="PUP", 
+            [19]="DNC", 
+            [20]="SCH", 
+            [21]="GEO", 
+            [22]="RUN"
+        }
     }
 }
