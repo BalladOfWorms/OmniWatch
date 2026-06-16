@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.7] — 2026-06-16
+
+### Fixed
+
+- **Overlay no longer crashes when a UDP port is reserved by Windows** — on some machines a port in OmniWatch's fixed 5000–5015 range is held by the Windows network stack (WinNAT / Hyper-V / WSL / Docker reserve port ranges per boot), and the overlay would die at startup with `PermissionError: [WinError 10013]` the instant it tried to `bind()` that port — most often **port 5004** (mob debuff state), which used a bare bind with no error handling so it surfaced as a raw traceback. The overlay now binds every channel to an **OS-assigned port** (`bind` on port 0), which the OS guarantees is free, so a reserved port in the old range can no longer collide. See *Changed* for how the two halves now find each other.
+
+### Changed
+
+- **Dynamic UDP port discovery (ephemeral binding + discovery files)** — instead of fifteen hard-coded ports, the overlay and addon negotiate their ports at runtime. The overlay binds each channel to an OS-assigned port and publishes the map to `%APPDATA%\OmniWatch\ow_ports_py.txt` (plain `channel port` lines); the addon binds its inbound command socket the same way and publishes its port to `ow_ports_lua.txt`. Each side reads the other's file and re-reads it when the contents change, so the overlay starting after the addon, a `//lua reload`, or either half restarting all re-sync on their own (a ~1 Hz content check on the addon's prerender tick; a re-read on each command send on the overlay side). Every channel keeps its own socket, handler, and wire format — the data path is byte-for-byte unchanged; only how ports are *chosen and discovered* is new. If the discovery files can't be used (e.g. no `%APPDATA%`), both sides fall back to the legacy fixed 5000–5015 ports, matching the old behavior. UDP socket ownership is now centralized in `OmniWatch.lua`: the Skillchains sub-module adopts the main addon's shared socket via `_G._ow_udp_skillchain` instead of opening its own on a fixed port, so future port changes touch one place.
+
 ## [1.7.6] — 2026-06-14
 
 ### Changed

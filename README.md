@@ -657,7 +657,7 @@ The `%APPDATA%\OmniWatch\` folder is created automatically the first time you ru
 
 ## How it works
 
-The lua addon hooks Windower events (`prerender`, `incoming chunk`, `incoming text`, `addon command`, etc.) and broadcasts state over UDP to local ports:
+The lua addon hooks Windower events (`prerender`, `incoming chunk`, `incoming text`, `addon command`, etc.) and broadcasts state over UDP on `127.0.0.1`, one channel per stream:
 
 | Port | Stream |
 |------|--------|
@@ -674,14 +674,16 @@ The lua addon hooks Windower events (`prerender`, `incoming chunk`, `incoming te
 | 5010 | DPS events |
 | 5011 | python → lua commands (inbound to lua) |
 | 5012 | Inventory snapshot |
+| 5013 | Chat panel events (chat text + synthesized battle log) |
+| 5015 | Skillchain state + weaponskill suggestions |
 
-The python overlay binds these ports, accumulates state, and renders each panel using pygame. The two halves are independent — restart either side without restarting the other.
+**Ports are assigned dynamically, not fixed.** The numbers above are the legacy defaults (and the fallback if discovery is unavailable). At startup each side binds its sockets to an **OS-assigned port** — immune to the reserved-port conflicts that some machines have in the 5000–5015 range (Windows WinNAT / Hyper-V / WSL / Docker) — and publishes the resulting port map to a small file under `%APPDATA%\OmniWatch\`: the overlay writes `ow_ports_py.txt`, the addon writes its command port to `ow_ports_lua.txt`, and each reads the other's. The files are re-read when they change, so the two halves find each other no matter which starts first, and re-sync automatically across a `//lua reload` or an overlay restart. The two halves remain independent — restart either side without restarting the other.
 
 ## Known issues and limitations
 
 - **Lanun roll-proc accuracy** — when COR's Lanun gear set procs a bonus on a Phantom Roll's accuracy effect, OmniWatch may not always reflect the boosted value. The server doesn't reliably push the relevant stat packet for this case, and there's no clean way to detect the proc client-side.
 - **BLU spell-trait coverage** handles the major categories (DW, Fast Cast, MAB, Acc Bonus, Atk Bonus, Def Bonus, MDB, Store TP, Conserve MP, Counter, Auto Refresh, Auto Regen, MAcc Bonus, MEv Bonus, Magic Burst Bonus, Skillchain Bonus, Crit Atk Bonus, Inquartata, Tenacity, Max HP, Max MP, Zanshin, Resist Silence/Gravity/Sleep/Slow, Killer traits, DA/TA, Gilfinder/TH, Rapid Shot) sourced from the canonical bluguide tables. JP-category linear bonuses for MAB/MAcc are not yet wired separately.
-- **Running multiple FFXI clients with OmniWatch on the same machine is not supported** (UDP port collision — only one instance per machine can bind the addon's ports). Single-client multi-character config support via the character dropdown in the header works normally — you can pre-tweak layout, settings, and blacklists for any of your characters while logged in on a different one.
+- **Running multiple FFXI clients with OmniWatch on the same machine is not supported** — the two halves rendezvous through a single per-machine port-discovery file in `%APPDATA%\OmniWatch\`, so a second overlay/addon pair would overwrite the first's port handoff. Single-client multi-character config support via the character dropdown in the header works normally — you can pre-tweak layout, settings, and blacklists for any of your characters while logged in on a different one.
 - **Mog Wardrobes 5-8** require an active subscription to populate.
 
 ## Development

@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.7.6'
+_addon.version  = '1.7.7'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2209,6 +2209,84 @@ function _OW_MB_TAG(payload)
     return '@' .. nm .. '@' .. payload
 end
 
+-- ── Dynamic UDP port discovery (lua side) ───────────────────────
+-- The overlay now binds OS-assigned (ephemeral) ports instead of fixed
+-- 5000-5015 to dodge Windows reserved-port collisions, and publishes them
+-- to ow_ports_py.txt. We read that and point each channel socket at the
+-- discovered port. Our own inbound command socket binds ephemerally too and
+-- publishes its port to ow_ports_lua.txt. Both files live under
+-- %APPDATA%/OmniWatch (ow_user_config_dir()), the dir both sides already
+-- use. If discovery is unavailable we fall back to the legacy fixed ports.
+OW_LEGACY_PORTS = {
+    party=5000, equip=5001, target=5002, zone=5003, status=5004,
+    gs=5005, cast=5006, equip_rich=5007, stats=5008, timers=5009,
+    dps=5010, inv=5012, chat=5013, skillchain=5015,
+}
+OW_LEGACY_CMD_PORT = 5011
+OW_PORTS_PY_RAW = nil      -- last-read ow_ports_py.txt content (change detect)
+OW_NEXT_PORT_POLL = 0      -- throttle for the prerender re-resolve poll
+
+function ow_ports_py_path()  return ow_user_config_dir() .. '/ow_ports_py.txt' end
+function ow_ports_lua_path() return ow_user_config_dir() .. '/ow_ports_lua.txt' end
+
+function ow_read_py_ports()
+    -- Parse "<channel> <port>" lines from ow_ports_py.txt into {channel=port},
+    -- or nil if the file is absent/empty. Updates OW_PORTS_PY_RAW.
+    local f = io.open(ow_ports_py_path(), 'r')
+    if not f then OW_PORTS_PY_RAW = nil; return nil end
+    local raw = f:read('*a'); f:close()
+    OW_PORTS_PY_RAW = raw
+    if not raw or raw == '' then return nil end
+    local ports = {}
+    for line in raw:gmatch('[^\r\n]+') do
+        local ch, prt = line:match('^(%S+)%s+(%d+)')
+        if ch and prt then ports[ch] = tonumber(prt) end
+    end
+    return ports
+end
+
+function ow_resolve_peers(ports)
+    -- Point every registered channel socket at its discovered port (or the
+    -- legacy fixed port if discovery is unavailable). Safe to call repeatedly.
+    if not OW_CHANNEL_SOCKETS then return end
+    ports = ports or ow_read_py_ports()
+    for ch, sock in pairs(OW_CHANNEL_SOCKETS) do
+        if sock then
+            local prt = (ports and ports[ch]) or OW_LEGACY_PORTS[ch]
+            if prt then pcall(function() sock:setpeername('127.0.0.1', prt) end) end
+        end
+    end
+end
+
+function ow_write_lua_cmd_port(port)
+    -- Publish our inbound command port so the overlay can find it.
+    local path = ow_ports_lua_path()
+    local tmp = path .. '.tmp'
+    local f = io.open(tmp, 'w')
+    if not f then
+        windower.add_to_chat(123,
+            '[OmniWatch] could not write command-port file: ' .. tostring(path))
+        return
+    end
+    f:write('cmd ' .. tostring(port) .. '\n')
+    f:close()
+    os.remove(path)            -- os.rename won't overwrite on Windows
+    os.rename(tmp, path)
+end
+
+function ow_poll_port_discovery(now)
+    -- Re-resolve channel peers when ow_ports_py.txt changes (overlay started
+    -- after us, or restarted with new ports). Throttled to ~1 Hz.
+    now = now or os.clock()
+    if now < OW_NEXT_PORT_POLL then return end
+    OW_NEXT_PORT_POLL = now + 1.0
+    local prev = OW_PORTS_PY_RAW
+    local ports = ow_read_py_ports()
+    if OW_PORTS_PY_RAW ~= prev then
+        ow_resolve_peers(ports)
+    end
+end
+
 -- Party data  → port 5000
 local udp = socket.udp()
 udp:setpeername("127.0.0.1", 5000)
@@ -2400,6 +2478,26 @@ _G._ow_udp_inv = udp_inv
 -- chat/drain.lua header.
 local udp_chat = socket.udp()
 udp_chat:setpeername("127.0.0.1", 5013)
+
+-- ── Skillchain stream socket (shared with Skillchains.lua) ──────────
+-- Owned here so all UDP port management lives in one place; Skillchains.lua
+-- adopts this via _G._ow_udp_skillchain instead of opening its own socket.
+_G._ow_udp_skillchain = socket.udp()
+_G._ow_udp_skillchain:settimeout(0)
+
+-- Channel registry: name -> socket. Names match the keys the overlay writes
+-- to ow_ports_py.txt. ow_resolve_peers() points each at the discovered port.
+OW_CHANNEL_SOCKETS = {
+    party = udp, equip = udp_equip, equip_rich = udp_equip_rich,
+    stats = udp_stats, target = udp_target, zone = udp_zone,
+    status = udp_status, gs = udp_gs, cast = udp_cast,
+    timers = udp_timers, dps = udp_dps, inv = udp_inv,
+    chat = udp_chat, skillchain = _G._ow_udp_skillchain,
+}
+
+-- Resolve once now (uses the discovery file if the overlay is already up,
+-- else legacy fixed ports; the prerender poll re-resolves on change).
+ow_resolve_peers()
 
 -- ── Bags-at-top inventory snapshot (port 5012) ──────────────────────────
 -- Separate stream from SIM_INV. Walks every bag and emits one packet per
@@ -4731,12 +4829,17 @@ local udp_cmd_in = nil
 do
     local s = socket.udp()
     s:settimeout(0)    -- non-blocking; receive returns nil immediately if empty
-    local ok_bind, err_bind = s:setsockname("127.0.0.1", 5011)
+    -- Bind an OS-assigned (ephemeral) port instead of fixed 5011 so a machine
+    -- with 5011 reserved (WinNAT/Hyper-V/WSL/Docker) can't break inbound
+    -- commands. Publish the actual port for the overlay to read.
+    local ok_bind, err_bind = s:setsockname("127.0.0.1", 0)
     if ok_bind then
         udp_cmd_in = s
+        local _, actual = s:getsockname()
+        if actual then ow_write_lua_cmd_port(tonumber(actual)) end
     else
         windower.add_to_chat(123,
-            '[OmniWatch] could not bind inbound 5011: ' .. tostring(err_bind))
+            '[OmniWatch] could not bind inbound command socket: ' .. tostring(err_bind))
     end
 end
 
@@ -17366,6 +17469,10 @@ end
 -- ── Main prerender loop ──────────────────────────────────────────────────────
 ow_safe_register('prerender', function()
     local now = os.clock()
+
+    -- Re-resolve overlay ports if the discovery file changed (overlay
+    -- started after us, or restarted with new ephemeral ports). ~1 Hz.
+    ow_poll_port_discovery(now)
 
     -- Drain python→lua control channel first thing each frame so sim
     -- mode flips and other settings take effect before any compute.

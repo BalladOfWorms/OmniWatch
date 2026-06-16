@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.7.6 (2026-06-14)"
+OMNIWATCH_BUILD_STAMP = "v1.7.7 (2026-06-16)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.7.6"
+OMNIWATCH_VERSION = "1.7.7"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -782,30 +782,109 @@ font_clock  = pygame.font.SysFont("Consolas", 15, bold=True)
 font_day    = pygame.font.SysFont("Consolas", 13, bold=True)
 font_moon   = pygame.font.SysFont("Consolas", 12)
 
-def _bind_udp(port, label):
-    """Bind a non-blocking UDP socket on 127.0.0.1:port. On collision
-    (another process holds the port — common when two OmniWatch
-    overlays accidentally run side-by-side, or some unrelated tool
-    grabbed it) we print a clear error and re-raise so the user sees
-    the cause in the console instead of a bare OSError stack."""
+# ── Dynamic UDP port discovery ──────────────────────────────────────────
+# Historically every lua→python channel used a hard-coded UDP port
+# (5000-5015). On some machines a port in that range is reserved by
+# Windows (WinNAT / Hyper-V / WSL / Docker) and bind() fails with
+# WinError 10013, crashing the overlay. To make that impossible, each
+# socket now binds to port 0 — the OS hands back a guaranteed-free port —
+# and we publish the assigned ports to a small text file the lua addon
+# reads. The reverse-direction command port (bound on the lua side) is
+# published by lua in a companion file we read here.
+#
+# Files live under %APPDATA%/OmniWatch (the dir both sides already use):
+#   ow_ports_py.txt   — written here, read by lua: "<channel> <port>" lines
+#   ow_ports_lua.txt  — written by lua, read here: "cmd <port>" line
+#
+# Legacy fixed ports are retained as a fallback so that if the data dir
+# isn't writable (no APPDATA, etc.) behaviour matches the historical build
+# rather than failing outright.
+_LEGACY_PORTS = {
+    "party": 5000, "equip": 5001, "target": 5002, "zone": 5003,
+    "status": 5004, "gs": 5005, "cast": 5006, "equip_rich": 5007,
+    "stats": 5008, "timers": 5009, "dps": 5010, "inv": 5012,
+    "chat": 5013, "battle": 5014, "skillchain": 5015,
+}
+_LEGACY_CMD_PORT = 5011
+
+def _ports_dir():
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        d = os.path.join(appdata, "OmniWatch")
+    else:
+        d = os.path.join(os.path.expanduser("~"), ".omniwatch")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+_PORTS_PY_FILE  = os.path.join(_ports_dir(), "ow_ports_py.txt")
+_PORTS_LUA_FILE = os.path.join(_ports_dir(), "ow_ports_lua.txt")
+
+_assigned_ports = {}      # channel -> actual bound port (filled as we bind)
+
+def _bind_udp(label):
+    """Bind a non-blocking UDP socket on 127.0.0.1 with an OS-assigned
+    port (collision-proof). Returns (socket, port). Ephemeral binds
+    essentially never fail; if one does, the machine is out of sockets
+    and nothing can run, so we print a clear line and re-raise."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.bind(("127.0.0.1", port))
+        s.bind(("127.0.0.1", 0))
     except OSError as e:
-        print(f"[OmniWatch] FATAL: could not bind UDP port {port} "
+        print(f"[OmniWatch] FATAL: could not open a UDP socket "
               f"({label}): {e}")
-        print(f"[OmniWatch] Another process is already using this "
-              f"port. The most common cause is a second OmniWatch "
-              f"overlay still running. Close it via Task Manager and "
-              f"relaunch.")
         raise
     s.setblocking(False)
+    return s, s.getsockname()[1]
+
+def _open_channel(label):
+    """Bind a channel ephemerally and record its port for publication."""
+    s, port = _bind_udp(label)
+    _assigned_ports[label] = port
     return s
 
-sock            = _bind_udp(5000, "party")
-sock_equip      = _bind_udp(5001, "equipment")
-sock_equip_rich = _bind_udp(5007, "equipment metadata")
-sock_stats      = _bind_udp(5008, "stats")
+def _publish_py_ports():
+    """Write the assigned channel ports for the lua addon to read.
+    Atomic (temp + replace) so lua never reads a half-written file."""
+    try:
+        tmp = _PORTS_PY_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for ch, p in _assigned_ports.items():
+                f.write(f"{ch} {p}\n")
+        os.replace(tmp, _PORTS_PY_FILE)
+    except OSError as e:
+        print(f"[OmniWatch] WARNING: could not write the port map "
+              f"({_PORTS_PY_FILE}): {e}. The lua addon won't be able to "
+              f"find the overlay's ports — check that %APPDATA%/OmniWatch "
+              f"is writable.")
+
+# Reverse direction: read the lua-bound command port, re-reading whenever
+# the file's contents change so a //lua reload (which re-rolls lua's
+# ephemeral port) is picked up automatically.
+_cmd_port_cache = {"port": None, "raw": None}
+def _get_cmd_port():
+    try:
+        with open(_PORTS_LUA_FILE, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except OSError:
+        return _cmd_port_cache["port"] or _LEGACY_CMD_PORT
+    if raw != _cmd_port_cache["raw"]:
+        _cmd_port_cache["raw"] = raw
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == "cmd":
+                try:
+                    _cmd_port_cache["port"] = int(parts[1])
+                except ValueError:
+                    pass
+    return _cmd_port_cache["port"] or _LEGACY_CMD_PORT
+
+sock            = _open_channel("party")
+sock_equip      = _open_channel("equip")
+sock_equip_rich = _open_channel("equip_rich")
+sock_stats      = _open_channel("stats")
 
 # player_stats[stat_key_lowercase] = int/float value
 player_stats = {}
@@ -827,19 +906,13 @@ equip_rich = {}
 # (pos 2) is populated currently, but the structure allows extension.
 equip_counts = {}
 
-sock_target = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_target.bind(("127.0.0.1", 5002))
-sock_target.setblocking(False)
+sock_target = _open_channel("target")
 
-sock_zone = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_zone.bind(("127.0.0.1", 5003))
-sock_zone.setblocking(False)
+sock_zone = _open_channel("zone")
 
 # Mob status (buffs/debuffs) events from lua addon. See the lua side for the
 # line-based ASCII protocol.
-sock_status = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_status.bind(("127.0.0.1", 5004))
-sock_status.setblocking(False)
+sock_status = _open_channel("status")
 
 # mob_statuses[mob_id] = { effect_id: {spell_id, spell_name, applied_at,
 #                                       duration, actor_id, is_buff} }
@@ -850,9 +923,7 @@ mob_statuses = {}
 #   SET|<literal set path>
 #   STATE|<state string fallback>
 # Most recent wins.
-sock_gs = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_gs.bind(("127.0.0.1", 5005))
-sock_gs.setblocking(False)
+sock_gs = _open_channel("gs")
 
 # Currently displayed gearswap label (string). Empty = show "Equipment".
 # Two channels feed in:
@@ -1660,18 +1731,14 @@ cfgwiz_hit_rects = []
 #     "casting":   {"name": str, "kind": "spell"|"ability", "started": float} | None,
 #     "last_cast": {"name": str, "kind": "spell"|"ability", "done_at": float} | None,
 # }
-sock_cast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_cast.bind(("127.0.0.1", 5006))
-sock_cast.setblocking(False)
+sock_cast = _open_channel("cast")
 
 # ── Timer stream (port 5009) ─────────────────────────────────────────────
 # Recast countdowns + self-buff durations from the lua side. Recasts are
 # polled at 4Hz and arrive as RECAST_BATCH packets listing all currently-
 # cooling-down spells and abilities. We store them in recast_state and
 # render in a horizontal panel.
-sock_timers = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_timers.bind(("127.0.0.1", 5009))
-sock_timers.setblocking(False)
+sock_timers = _open_channel("timers")
 
 # recast_state: { (kind, id): {"name": str, "secs": float, "updated_at": float} }
 # Cleared per-batch on each RECAST_BATCH packet, replaced wholesale.
@@ -1829,9 +1896,7 @@ def _load_buff_state_snapshot():
 #   MOB|<src>|<mob_name>|<total>|<seconds_since_last_hit>
 # Or DPS_EMPTY for nothing-currently-tracked. TOGGLE_PANEL is a control
 # message from //ow dps that flips dps_panel_visible.
-sock_dps = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_dps.bind(("127.0.0.1", 5010))
-sock_dps.setblocking(False)
+sock_dps = _open_channel("dps")
 
 # Outbound command socket: python → lua (port 5011). The button panel
 # sends slash commands here when the user clicks a "windower"-kind
@@ -1839,16 +1904,22 @@ sock_dps.setblocking(False)
 # windower.send_command(). Connectionless UDP, no reply expected.
 sock_cmd_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_cmd_out.setblocking(False)
-CMD_OUT_ADDR = ("127.0.0.1", 5011)
+def _cmd_addr():
+    # python -> lua command destination. Dynamic: reads lua's
+    # bound command port from the discovery file (re-read on
+    # change) so a //lua reload that re-rolls the port is picked
+    # up automatically. Falls back to the legacy fixed port.
+    return ("127.0.0.1", _get_cmd_port())
 
 # ── Sim mode UDP senders ──────────────────────────────────────────────────
-# All sim messages reuse CMD_OUT_ADDR (port 5011). Lua's drain handler
+# All sim messages go to _cmd_addr() (lua's discovered command port).
+# Lua's drain handler
 # multiplexes SIM/SIM_MODE/SETTING prefixes off the same socket.
 def _sim_send_mode(on):
     """Tell lua to enter or leave sim mode."""
     try:
         msg = ("SIM_MODE|on" if on else "SIM_MODE|off").encode("utf-8")
-        sock_cmd_out.sendto(msg, CMD_OUT_ADDR)
+        sock_cmd_out.sendto(msg, _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] sim_send_mode failed: {e!r}")
 
@@ -1860,14 +1931,14 @@ def _sim_send(key, value, sub=None):
             payload = f"SIM|{key}|{value}|{sub}"
         else:
             payload = f"SIM|{key}|{value}"
-        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] sim_send failed: {e!r}")
 
 def _sim_send_reset():
     """Wipe sim state on the lua side. Used by the window's RESET button."""
     try:
-        sock_cmd_out.sendto(b"SIM|reset", CMD_OUT_ADDR)
+        sock_cmd_out.sendto(b"SIM|reset", _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] sim_send_reset failed: {e!r}")
 
@@ -1877,13 +1948,14 @@ def _sim_send_import(filepath, setpath):
     equipment. Wire form: SIM_IMPORT|<filepath>|<setpath>."""
     try:
         payload = f"SIM_IMPORT|{filepath}|{setpath}"
-        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] sim_send_import failed: {e!r}")
 
 
 # ── Inventory item actions (right-click menu) ─────────────────────────────
-# Both reuse CMD_OUT_ADDR (port 5011). The Lua drain routes the INVACT
+# Both go to _cmd_addr() (lua's discovered command port). The Lua
+# drain routes the INVACT
 # header to its inventory-action handler. We tag every action with the
 # character whose inventory the overlay is currently showing (the
 # multibox lock target) so the Lua side can refuse to act if THIS game
@@ -1898,7 +1970,7 @@ def _inv_send_drop(item_id):
     try:
         target = _mb_lock_target() or ""
         payload = f"INVACT|drop|{target}|{int(item_id)}"
-        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] inv drop send failed: {e!r}")
 
@@ -1911,7 +1983,7 @@ def _inv_send_autodrop(item_id):
     try:
         target = _mb_lock_target() or ""
         payload = f"INVACT|autodrop|{target}|{int(item_id)}"
-        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] inv autodrop send failed: {e!r}")
 
@@ -2030,9 +2102,7 @@ def _display_name_for_item(entry):
 #
 # inventory_state: { bag_name: [ {id, count, name}, ... ] }
 # Bag names are lowercase: 'inventory', 'wardrobe', 'wardrobe2', etc.
-sock_inv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_inv.bind(("127.0.0.1", 5012))
-sock_inv.setblocking(False)
+sock_inv = _open_channel("inv")
 
 # ── Chat panel sockets (ports 5013 + 5014) ────────────────────────────────
 # 5013 carries chat-text events (say/party/tell/LS/yell/system) and
@@ -2048,21 +2118,20 @@ sock_inv.setblocking(False)
 # Receive buffer is large (32K) because heavy combat may emit a batch
 # spanning multiple datagrams; we want them all to land before the
 # socket drops anything.
-sock_chat = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_chat.bind(("127.0.0.1", 5013))
-sock_chat.setblocking(False)
+sock_chat = _open_channel("chat")
 
-sock_battle = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_battle.bind(("127.0.0.1", 5014))
-sock_battle.setblocking(False)
+sock_battle = _open_channel("battle")
 
 # Skillchain panel socket (port 5015). Receives SC state lines, WS
 # suggestion lists, settings echoes, and job-change notifications from
 # the Skillchains.lua sub-module. Wire format documented in
 # Skillchains.lua's header.
-sock_skillchain = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_skillchain.bind(("127.0.0.1", 5015))
-sock_skillchain.setblocking(False)
+sock_skillchain = _open_channel("skillchain")
+
+# All channels are bound — publish their OS-assigned ports so the lua
+# addon can discover where to send. (Written once at startup; the ports
+# are stable for the life of the process.)
+_publish_py_ports()
 
 # Chat panel state. Pass 1 of step 3 (receiver only) — pass 2 adds
 # the visible panel that consumes this state.
@@ -7860,7 +7929,7 @@ def dispatch_button(idx):
     try:
         if kind == "windower":
             payload = cmd.lstrip("/").strip()
-            sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+            sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
             print(f"[OmniWatch] button '{label}' -> windower //{payload}")
         elif kind == "url":
             url = cmd if "://" in cmd else "https://" + cmd
@@ -10207,7 +10276,7 @@ def _toggle_setup_mode():
     try:
         _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            _s.sendto(b"SETUP|toggle", ("127.0.0.1", 5005))
+            _s.sendto(b"SETUP|toggle", ("127.0.0.1", _assigned_ports["gs"]))
         finally:
             _s.close()
         print("[OmniWatch] setup mode toggle requested via settings")
@@ -10952,7 +11021,7 @@ def apply_setting_side_effects(key, value):
             # button panel uses the same channel for slash commands;
             # settings use the SETTING| prefix to disambiguate.
             _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            _s.sendto(payload.encode("utf-8"), ("127.0.0.1", 5011))
+            _s.sendto(payload.encode("utf-8"), _cmd_addr())
             _s.close()
         except Exception as e:
             print(f"[OmniWatch] failed to notify lua of "
@@ -11536,7 +11605,7 @@ def _push_lua_lists():
             packet = f"SETTING|{key}|{value}"
             _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
-                _s.sendto(packet.encode("utf-8"), ("127.0.0.1", 5011))
+                _s.sendto(packet.encode("utf-8"), _cmd_addr())
             finally:
                 _s.close()
         print(f"[OmniWatch] pushed timer blacklists to lua "
@@ -19587,7 +19656,7 @@ def _ow_force_lua_sim_off():
             try:
                 _sok = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
-                    _sok.sendto(b"SIM_MODE|off", ("127.0.0.1", 5011))
+                    _sok.sendto(b"SIM_MODE|off", _cmd_addr())
                 finally:
                     _sok.close()
             except Exception:
@@ -21295,7 +21364,7 @@ def _blusets_send_equip(name):
     try:
         payload = (f"BLUSETS|equip|{_blusets_char()}|"
                    f"{name.replace('|', '')}|{';'.join(clean)}")
-        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
         _blusets_set_note(f'Equipping "{name}" — watch game chat.')
     except Exception as e:
         print(f"[OmniWatch] blusets equip send failed: {e!r}")
@@ -23346,7 +23415,7 @@ def _warp_send(command):
     try:
         target = _mb_lock_target() or ""
         payload = f"WARP|{target}|{command}"
-        sock_cmd_out.sendto(payload.encode("utf-8"), CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] warp send failed: {e!r}")
 
@@ -31210,7 +31279,7 @@ def dispatch_sim_window_click(mx, my):
             # Lua handles formatting + filename so the .lua file uses
             # correct item names from the resources lib.
             try:
-                sock_cmd_out.sendto(b"SIM|export", CMD_OUT_ADDR)
+                sock_cmd_out.sendto(b"SIM|export", _cmd_addr())
             except Exception as e:
                 print(f"[OmniWatch] sim export send failed: {e!r}")
             return True
@@ -31760,7 +31829,7 @@ def dispatch_settings_menu_click(mx, my):
                                            socket.SOCK_DGRAM)
                         try:
                             _s.sendto(b"SETUP|toggle",
-                                      ("127.0.0.1", 5005))
+                                      ("127.0.0.1", _assigned_ports["gs"]))
                         finally:
                             _s.close()
                     except Exception as e:
@@ -32534,7 +32603,7 @@ def _cfgwiz_send(packet_str):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _s:
             _s.sendto(packet_str.encode("utf-8"),
-                      ("127.0.0.1", 5011))
+                      _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] cfgwiz send failed: {e}")
 
@@ -33149,7 +33218,7 @@ def _chat_composer_send():
         field, otherwise refuses to send
 
     Dispatch is the same UDP rail that hotbar button commands use:
-      socket.sendto("input <slash command>", ("127.0.0.1", 5011))
+      socket.sendto("input <slash command>", _cmd_addr())
     The lua side translates "input ..." into windower.send_command,
     which feeds FFXI's chat system. We use SETTING|... or other prefix
     schemes for non-FFXI ones; for chat we pass "input <cmd>" directly.
@@ -33186,7 +33255,7 @@ def _chat_composer_send():
     # Dispatch via the same UDP socket buttons use.
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.sendto(payload.encode("utf-8"), ("127.0.0.1", 5011))
+        s.sendto(payload.encode("utf-8"), _cmd_addr())
         s.close()
     except Exception as e:
         print(f"[OmniWatch] chat send failed: {e}")
@@ -33269,7 +33338,7 @@ def _chat_invite_to_party(name):
         return
     try:
         payload = ("input /pcmd add " + name).encode("utf-8")
-        sock_cmd_out.sendto(payload, CMD_OUT_ADDR)
+        sock_cmd_out.sendto(payload, _cmd_addr())
         print(f"[OmniWatch] invite -> {name}")
     except Exception as e:
         print(f"[OmniWatch] invite failed: {e!r}")

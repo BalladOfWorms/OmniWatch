@@ -1277,9 +1277,18 @@ end
 
 function M.init()
     -- Set up the UDP socket.
-    udp = socket.udp()
-    udp:setpeername('127.0.0.1', 5015)
-    udp:settimeout(0)
+    -- Adopt the shared skillchain socket owned by OmniWatch.lua, which keeps
+    -- it pointed at the overlay's (now dynamic) port via port discovery. Fall
+    -- back to a self-made fixed-port socket only if running under an older
+    -- main addon that doesn't expose _G._ow_udp_skillchain.
+    udp = _G._ow_udp_skillchain
+    if udp then
+        pcall(function() udp:settimeout(0) end)
+    else
+        udp = socket.udp()
+        udp:setpeername('127.0.0.1', 5015)
+        udp:settimeout(0)
+    end
 
     local p = windower.ffxi.get_player()
     if p then
