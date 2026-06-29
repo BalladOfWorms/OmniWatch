@@ -1,11 +1,63 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.7.7'
+_addon.version  = '1.8.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
 local socket  = require('socket')
 local packets = require('packets')   -- registers string:unpack(), string:pack(), etc.
+
+-- ── OmniWatch chat output → log file ──────────────────────────────────────
+-- All of OmniWatch's own status/debug lines are routed here instead of the
+-- game chat log. The log lands in the WRITABLE user-config dir
+-- (AppData/Roaming/OmniWatch) — the addon itself often lives under
+-- Program Files, which Windows makes read-only, so writing next to the
+-- addon silently failed. The path is resolved lazily on first write
+-- because ow_user_config_dir() is defined later in this file.
+-- (windower.add_to_chat calls throughout this addon are rewritten to
+-- ow_chat, which keeps the same (color, text) signature but logs instead.)
+_ow_log_path = nil   -- global: resolved on first write; also shown by //ow debug
+local function _ow_log_resolve()
+    if _ow_log_path then return _ow_log_path end
+    local dir = nil
+    if type(ow_user_config_dir) == 'function' then
+        local ok, d = pcall(ow_user_config_dir)
+        if ok and d and d ~= '' then dir = d end
+    end
+    if dir then
+        if type(ow_ensure_user_config_dir) == 'function' then
+            pcall(ow_ensure_user_config_dir)
+        end
+        _ow_log_path = dir .. '/omniwatch.log'
+    else
+        _ow_log_path = (windower.addon_path or '') .. 'data/omniwatch.log'
+    end
+    return _ow_log_path
+end
+local function _ow_log_write(line)
+    pcall(function()
+        local path = _ow_log_resolve()
+        if not path then return end
+        local fh = io.open(path, 'a')
+        if fh then
+            fh:write(line)
+            fh:close()
+        end
+    end)
+end
+local _ow_log_started = false
+function ow_chat(...)
+    local a = { ... }
+    local text = a[2]
+    if text == nil then text = a[1] end
+    text = tostring(text or ''):gsub('[%z\1-\8\11-\31]', '')
+    if not _ow_log_started then
+        _ow_log_started = true
+        _ow_log_write(os.date(
+            '\n===== OmniWatch 1.8.0 log started %Y-%m-%d %H:%M:%S =====\n'))
+    end
+    _ow_log_write(os.date('[%Y-%m-%d %H:%M:%S] ') .. text .. '\n')
+end
 
 -- Porter Slips library. Ships with stock Windower (addons/libs/slips.lua),
 -- but we pcall the require so a missing/non-standard install doesn't kill
@@ -31,7 +83,7 @@ do
         -- Non-fatal: log once on startup so the user knows porter-slip
         -- contents won't surface in the inventory dropdown. The bag
         -- listing itself remains fully functional.
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OmniWatch] slips library not loaded — porter slip ' ..
             'contents will not be shown in the Inventory dropdown.')
     end
@@ -123,12 +175,12 @@ do
             -- Silent on success: the v2.0 "loaded" line below is the
             -- single confirmation we emit on a clean startup.
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] sim module ran but returned no table: %s',
                 tostring(mod)))
         end
     else
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OmniWatch] sim module not loaded (%s)', tostring(load_err)))
     end
 end
@@ -175,7 +227,7 @@ do
             if _gi.prime_inventory then
                 local ok_prime, err = pcall(_gi.prime_inventory)
                 if not ok_prime then
-                    windower.add_to_chat(123, string.format(
+                    ow_chat(123, string.format(
                         '[OmniWatch] GearInfo prime_inventory failed: %s',
                         tostring(err)))
                 end
@@ -192,7 +244,7 @@ do
             if _G.update_party then
                 local ok_up, err_up = pcall(_G.update_party)
                 if not ok_up then
-                    windower.add_to_chat(123, string.format(
+                    ow_chat(123, string.format(
                         '[OmniWatch] update_party() failed at load: %s',
                         tostring(err_up)))
                 end
@@ -206,12 +258,12 @@ do
             -- empty and we want every incoming 0x063 to populate fully.
             seen_0x063_type9 = true
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] GearInfo loader ran but failed: %s',
                 tostring(mod)))
         end
     else
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OmniWatch] GearInfo backend not loaded (%s)', tostring(load_err)))
     end
 end
@@ -244,12 +296,12 @@ do
             -- so the real reason is in the SECOND return value. pcall
             -- failure puts the error in the first. Show whichever we got.
             local why = mod_err2 or mod_or_err
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] chat module failed to initialize: %s',
                 tostring(why)))
         end
     else
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OmniWatch] chat module not loaded (%s)', tostring(load_err)))
     end
 end
@@ -311,7 +363,7 @@ function ow_log_crash(where, err_text, traceback)
         -- Also echo to chat for live awareness, throttled by rate-of-error
         -- not implemented here — just one print per crash. Use a short tag
         -- so it doesn't drown out other output.
-        windower.add_to_chat(167, string.format(
+        ow_chat(167, string.format(
             '[OW][CRASH] %s: %s (logged)', tostring(where), tostring(err_text)))
     end)
     return ok
@@ -548,10 +600,15 @@ end
 -- mkdir directly in stock Lua 5.1, so we use os.execute with mkdir.
 -- Windows mkdir is idempotent if the dir exists (returns nonzero but
 -- the dir is there); silenced via '> nul 2>&1'.
+_ow_user_cfg_dir_ready = false
 function ow_ensure_user_config_dir()
+    -- Run the mkdir (an os.execute, which flashes a console window on
+    -- Windows) at most ONCE per session — never per call.
+    if _ow_user_cfg_dir_ready then return true end
     local dir = ow_user_config_dir()
     -- Skip if it's the addon's own data/ folder — that always exists.
     if dir == windower.addon_path .. 'data' then
+        _ow_user_cfg_dir_ready = true
         return true
     end
     -- Convert forward slashes back to backslashes for Windows mkdir.
@@ -561,6 +618,7 @@ function ow_ensure_user_config_dir()
     -- "already exists" error.
     local win_path = dir:gsub('/', '\\')
     os.execute(string.format('cmd /c mkdir "%s" 2>nul', win_path))
+    _ow_user_cfg_dir_ready = true
     return true
 end
 
@@ -1381,7 +1439,7 @@ do
             if ok and type(data) == 'table' then
                 ow_user_config = data
             else
-                windower.add_to_chat(123,
+                ow_chat(123,
                     '[OmniWatch] user_config.lua exists but didn\'t '
                     .. 'return a table -- keeping defaults. Error: '
                     .. tostring(data))
@@ -1412,7 +1470,7 @@ do
                 if ok and type(legacy_data) == 'table'
                         and legacy_data.bards ~= nil then
                     ow_user_config = legacy_data
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OmniWatch] migrated user_config.lua from '
                         .. 'addon folder to %APPDATA%\\OmniWatch\\. '
                         .. 'You can delete the old file in '
@@ -1585,7 +1643,7 @@ do
     end
 
     if song_count == 0 then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] BardSongs adapter: Bard_Songs global empty -- '
             .. 'gearinfo/_loader may not have loaded gearinfo/res/Bard_Songs.lua.')
     end
@@ -1715,7 +1773,7 @@ local function ow_song_plus_for_family(family)
     if _ow_song_walk_last_key ~= key then
         _ow_song_walk_last_key = key
         if _ow_cast_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] song-gear walk family=%s total=+%d gear=[%s]',
                 family, total, table.concat(hits, ', ')))
             -- Verbose dump of every equipped slot. Lets us see what
@@ -1726,13 +1784,13 @@ local function ow_song_plus_for_family(family)
             for _, line in ipairs(all_slots) do
                 chunk[#chunk+1] = line
                 if #chunk >= 4 then
-                    windower.add_to_chat(207, '[OW] eq: '
+                    ow_chat(207, '[OW] eq: '
                         .. table.concat(chunk, ' | '))
                     chunk = {}
                 end
             end
             if #chunk > 0 then
-                windower.add_to_chat(207, '[OW] eq: '
+                ow_chat(207, '[OW] eq: '
                     .. table.concat(chunk, ' | '))
             end
         end
@@ -1899,6 +1957,7 @@ end
 -- update the in-memory ow_user_config but the user re-saves their
 -- file by hand. This avoids fighting with hand-formatted comments.
 function ow_write_user_config_template_if_missing()
+    ow_write_brd_songgear_template_if_missing()
     -- Make sure %APPDATA%\OmniWatch\ exists before trying to write.
     -- No-ops if it's already there or if we can't run mkdir.
     ow_ensure_user_config_dir()
@@ -2131,9 +2190,9 @@ if ok then
     icon_extractor  = mod_or_err
     icons_available = true
 else
-    windower.add_to_chat(123,
+    ow_chat(123,
         '[OmniWatch] icon_extractor not loaded: ' .. tostring(mod_or_err))
-    windower.add_to_chat(123,
+    ow_chat(123,
         '[OmniWatch] Put icon_extractor.lua in Windower4/addons/OmniWatch/ '
         .. 'to enable icons. Addon will run without them.')
 end
@@ -2143,7 +2202,7 @@ end
 if icons_available and icon_extractor.ffxi_path then
     local ok2, err2 = pcall(icon_extractor.ffxi_path, windower.ffxi_path)
     if not ok2 then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] icon_extractor ffxi_path error: ' .. tostring(err2))
     end
 end
@@ -2264,7 +2323,7 @@ function ow_write_lua_cmd_port(port)
     local tmp = path .. '.tmp'
     local f = io.open(tmp, 'w')
     if not f then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] could not write command-port file: ' .. tostring(path))
         return
     end
@@ -2349,7 +2408,7 @@ udp_cast:setpeername("127.0.0.1", 5006)
 -- it's called).
 function _ow_cfgwiz_open()
     if not udp_gs then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OW Setup] internal error: udp_gs not initialized')
         return
     end
@@ -3243,7 +3302,7 @@ do
         local ok, parsed = pcall(packets.parse, 'incoming', data)
         if not ok or type(parsed) ~= 'table' then
             if _G._ow_currency_debug then
-                windower.add_to_chat(123, string.format(
+                ow_chat(123, string.format(
                     '[OW currency] 0x%03X parse FAILED: %s',
                     id, tostring(parsed)))
             end
@@ -3269,7 +3328,7 @@ do
             end
             -- Sort for stable output.
             table.sort(field_lines)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW currency] 0x%03X fields (%d nonzero numeric): %s',
                 id, #field_lines, table.concat(field_lines, ', ')))
         end
@@ -3286,7 +3345,7 @@ do
             end
         end
         if _G._ow_currency_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW currency] 0x%03X matched %d of our known labels',
                 id, matched))
         end
@@ -3336,7 +3395,7 @@ do
             packets.inject(p)
         end)
         if _G._ow_currency_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW currency] request 0x10F: %s | 0x115: %s',
                 (r1_ok and 'OK' or ('FAIL ' .. tostring(r1_err))),
                 (r2_ok and 'OK' or ('FAIL ' .. tostring(r2_err)))))
@@ -3388,7 +3447,7 @@ do
         local ok, parsed = pcall(packets.parse, 'incoming', data)
         if not ok or type(parsed) ~= 'table' then
             if _G._ow_points_debug then
-                windower.add_to_chat(123, string.format(
+                ow_chat(123, string.format(
                     '[OW points] 0x061 parse FAILED: %s',
                     tostring(parsed)))
             end
@@ -3411,7 +3470,7 @@ do
                 end
             end
             table.sort(field_lines)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW points] 0x061 fields (%d nonzero numeric): %s',
                 #field_lines, table.concat(field_lines, ', ')))
         end
@@ -3428,7 +3487,7 @@ do
             end
         end
         if _G._ow_points_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW points] 0x061 matched %d of our known labels',
                 matched))
         end
@@ -3470,7 +3529,7 @@ do
             packets.inject(p)
         end)
         if _G._ow_points_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW points] request 0x061: %s',
                 (req_ok and 'OK' or ('FAIL ' .. tostring(req_err)))))
         end
@@ -3649,7 +3708,7 @@ do
         if act.actor_id ~= player.id then return end
 
         if _G._ow_warp_ring_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OmniWatch] ring hook saw action cat=%s param=%s',
                 tostring(act.category), tostring(act.param)))
         end
@@ -3658,7 +3717,7 @@ do
         if ring then
             _last_use_at[ring.key] = os.time()
             if _G._ow_warp_ring_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OmniWatch] %s used (id=%d cat=%s); '
                     .. 'cooldown started (%ds)',
                     ring.name, ring.id, tostring(act.category),
@@ -3690,7 +3749,7 @@ do
     _G._ow_warp_ring_diag = function()
         local hook_ok = (_G._ow_warp_ring_check ~= nil)
         local poll_ok = (_G._ow_warp_ring_poll ~= nil)
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OmniWatch] Teleport Rings: hook=%s poll=%s',
             hook_ok and 'installed' or 'MISSING',
             poll_ok and 'installed' or 'MISSING'))
@@ -3699,12 +3758,12 @@ do
             local last = _last_use_at[ring.key]
             local age  = last and (tostring(os.time() - last) .. 's ago')
                               or 'never'
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OmniWatch]   %-10s id=%d cd=%ds  last=%s  remaining=%ds',
                 ring.name, ring.id, ring.cooldown, age, rem))
         end
         _G._ow_warp_ring_debug = not _G._ow_warp_ring_debug
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OmniWatch] ring debug = '
             .. tostring(_G._ow_warp_ring_debug)
             .. ' (when on: prints every player action received)')
@@ -3716,7 +3775,7 @@ do
             _last_use_at[ring.key] = nil
         end
         _last_poll = 0
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OmniWatch] Teleport Rings: cleared all cooldowns')
     end
 end
@@ -3859,7 +3918,7 @@ do
             end
             local f, err = io.open(path, 'a')
             if not f then
-                windower.add_to_chat(123,
+                ow_chat(123,
                     '[OW HP] file open failed (' .. tostring(err)
                     .. '). File log disabled.')
                 return
@@ -3879,7 +3938,7 @@ do
     local function _ow_hp_log(fmt, ...)
         if _G._ow_hp_debug then
             local line = string.format('[OW HP] ' .. fmt, ...)
-            windower.add_to_chat(207, line)
+            ow_chat(207, line)
             _ow_hp_filelog(line)
         end
     end
@@ -4062,7 +4121,7 @@ do
             end
             local f, err = io.open(path, 'a')
             if not f then
-                windower.add_to_chat(123,
+                ow_chat(123,
                     '[OW SG] file open failed (' .. tostring(err)
                     .. '). File log disabled.')
                 return
@@ -4082,7 +4141,7 @@ do
     local function _ow_sg_log(fmt, ...)
         if _G._ow_sg_debug then
             local line = string.format('[OW SG] ' .. fmt, ...)
-            windower.add_to_chat(207, line)
+            ow_chat(207, line)
             _ow_sg_filelog(line)
         end
     end
@@ -4442,7 +4501,7 @@ local function _ow_send_sim_inventory()
         udp_inv:send('SIM_INV|MAIN_JOB|' .. job)
     end)
     if not ok then
-        windower.add_to_chat(123, '[OmniWatch] sim inv send failed: ' .. tostring(err))
+        ow_chat(123, '[OmniWatch] sim inv send failed: ' .. tostring(err))
         return
     end
 
@@ -4669,6 +4728,18 @@ function _ow_mark_inv_dirty()
     _ow_inv_id_to_loc  = nil
 end
 
+-- Force the next inventory snapshot to send immediately, bypassing the
+-- 1 Hz rate-limit gate. Used on sim activation and by the sim REFRESH
+-- button so the EQUIPPED seed (and tooltip CARD/AUG data) resend on the
+-- very next tick instead of waiting up to a second or for the next
+-- inventory change — the cause of "sim opened but current gear didn't
+-- load until I closed and reopened it."
+function _ow_force_inv_resend()
+    _ow_inv_snap_last_sent = 0
+    _ow_inv_snap_dirty     = true
+    _ow_inv_id_to_loc      = nil
+end
+
 -- ── BLU Spellsets engine ───────────────────────────────────────────────────
 -- Equips a named Blue Magic loadout sent by the overlay's BLU Spellsets
 -- panel (BLUSETS|equip rail message below). Preserve-traits algorithm,
@@ -4686,7 +4757,7 @@ function _ow_blusets_step()
     if not st then return end
     local p = windower.ffxi.get_player()
     if not p or p.main_job ~= 'BLU' then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] BLU spellset change aborted - main job is no longer BLU.')
         _ow_blusets_active = nil
         return
@@ -4742,11 +4813,11 @@ function _ow_blusets_step()
         end
     end
     if #missing > 0 then
-        windower.add_to_chat(123, '[OmniWatch] Spellset "' .. st.name
+        ow_chat(123, '[OmniWatch] Spellset "' .. st.name
             .. '" set with ' .. #missing .. ' spell(s) skipped: '
             .. table.concat(missing, ', '))
     else
-        windower.add_to_chat(207, '[OmniWatch] Spellset "' .. st.name
+        ow_chat(207, '[OmniWatch] Spellset "' .. st.name
             .. '" equipped.')
     end
     _ow_blusets_active = nil
@@ -4754,14 +4825,14 @@ end
 
 function _ow_blusets_start(setname, names_str)
     if _ow_blusets_active then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] A BLU spellset change is already running ("'
             .. _ow_blusets_active.name .. '").')
         return
     end
     local p = windower.ffxi.get_player()
     if not p or p.main_job ~= 'BLU' then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] Cannot equip a spellset - main job is not BLU.')
         return
     end
@@ -4789,26 +4860,290 @@ function _ow_blusets_start(setname, names_str)
         end
     end
     if #unknown > 0 then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] Unknown spell name(s) skipped: '
             .. table.concat(unknown, ', '))
     end
     if count == 0 then
-        windower.add_to_chat(123, '[OmniWatch] Spellset "'
+        ow_chat(123, '[OmniWatch] Spellset "'
             .. tostring(setname) .. '" resolved to no spells - nothing to do.')
         return
     end
     if count > 20 then
-        windower.add_to_chat(123, '[OmniWatch] Spellset "'
+        ow_chat(123, '[OmniWatch] Spellset "'
             .. tostring(setname) .. '" has ' .. count
             .. ' spells (max 20). Trim it first.')
         return
     end
-    windower.add_to_chat(207, '[OmniWatch] Equipping BLU spellset "'
+    ow_chat(207, '[OmniWatch] Equipping BLU spellset "'
         .. tostring(setname) .. '" (' .. count .. ' spells)...')
     _ow_blusets_active = { want = want, name = tostring(setname), tried = {} }
     _ow_blusets_step()
 end
+
+-- ── Call Trust: reconcile the party to a saved trust set ───────────────────
+-- The robust approach is modelled on the Trusts addon by from20020516
+-- (BSD-licensed): cast each trust with /ma, but PACE off the real `action`
+-- event (a trust is only de-queued when its cast-complete packet fires),
+-- read the trust LIMIT from key items, skip trusts on recast or unlearned,
+-- and RECONCILE — release (/retr) any party trust that isn't in the set so
+-- the party ends up matching the set exactly.
+--
+-- We resolve names against res.spells (type='Trust') for the spell id, so no
+-- static roster is vendored and new trusts work automatically. Identity is
+-- by spell id (not name), so reconcile is reliable. Names that don't resolve
+-- are reported and skipped rather than mis-cast. The wire form is
+-- CALLTRUST|<char>|<set name>|<Name;Name;...> (names in call order).
+_OW_CALLTRUST_AFTERCAST = 3.0    -- pause after a cast completes, before next
+_OW_CALLTRUST_RETR      = 1.25   -- between individual /retr releases
+_OW_CALLTRUST_RETRALL   = 3.0    -- after /retr all, before the first call
+
+_ow_calltrust_state = nil
+-- { name=str, queue={ {id,english}, ... }, retr={names}, phase='retr'|'cast' }
+
+function _ow_trust_norm(s)
+    return (tostring(s or ''):lower():gsub('[^%a%d]', ''))
+end
+
+function _ow_trust_name_index()
+    -- normalized english name -> { id, english } for every Trust-type spell.
+    local idx = {}
+    if res and res.spells then
+        for sid, sp in pairs(res.spells) do
+            if sp and sp.type == 'Trust' then
+                local en = sp.english or sp.en
+                if en and en ~= '' then
+                    idx[_ow_trust_norm(en)] = { id = sp.id or sid, english = en }
+                end
+            end
+        end
+    end
+    return idx
+end
+
+function _ow_trust_resolve(idx, nm)
+    -- Exact normalized match first; then a '+uc' fallback so a DB display
+    -- name that dropped the "(UC)" suffix still finds the res.spells entry.
+    local n = _ow_trust_norm(nm)
+    return idx[n] or idx[n .. 'uc']
+end
+
+function _ow_calltrust_party_trusts()
+    -- list of { name } for trust party members (mob spawn_type 14).
+    local out = {}
+    local party = windower.ffxi.get_party and windower.ffxi.get_party()
+    if party then
+        for i = 1, 5 do
+            local m = party['p' .. i]
+            if m and m.mob and m.mob.spawn_type == 14 and m.name then
+                out[#out + 1] = { name = m.name }
+            end
+        end
+    end
+    return out
+end
+
+function _ow_calltrust_limit()
+    -- Trust call cap from key items: Magicite permit = 3, Rhapsody key items
+    -- raise it to 4 / 5. Default 5 if key items can't be read (don't wrongly
+    -- truncate; the game rejects any genuine over-call harmlessly).
+    local limit = 0
+    local ok, kis = pcall(windower.ffxi.get_key_items)
+    if ok and type(kis) == 'table' then
+        for _, v in pairs(kis) do
+            if v == 2886 then limit = math.max(limit, 5)
+            elseif v == 2884 then limit = math.max(limit, 4)
+            elseif v == 2497 or v == 2499 or v == 2501 then
+                limit = math.max(limit, 3)
+            end
+        end
+    end
+    if limit == 0 then limit = 5 end
+    return limit
+end
+
+function _ow_calltrust_finish(word)
+    local st = _ow_calltrust_state
+    if st then
+        ow_chat(207, '[OmniWatch] Trust set "'
+            .. tostring(st.name) .. '" ' .. (word or 'done') .. '.')
+    end
+    _ow_calltrust_state = nil
+end
+
+function _ow_calltrust_cast()
+    local st = _ow_calltrust_state
+    if not st or st.phase ~= 'cast' then return end
+    local q = st.queue
+    if not q or #q == 0 then return end
+    local nm = q[1].english
+    local cast_name = nm
+    if windower.to_shift_jis then
+        local ok, s = pcall(windower.to_shift_jis, nm)
+        if ok and s then cast_name = s end
+    end
+    windower.send_command('input /ma "' .. cast_name .. '" <me>')
+    if _ow_cast_debug then
+        ow_chat(207, '[OW] calltrust /ma "' .. nm .. '"')
+    end
+end
+
+function _ow_calltrust_retr_step()
+    local st = _ow_calltrust_state
+    if not st or st.phase ~= 'retr' then return end
+    local r = st.retr
+    if r and #r > 0 then
+        local nm = table.remove(r, 1)
+        windower.send_command('input /retr ' .. nm)
+        if _ow_cast_debug then
+            ow_chat(207, '[OW] calltrust /retr ' .. nm)
+        end
+        coroutine.schedule(_ow_calltrust_retr_step, _OW_CALLTRUST_RETR)
+    else
+        st.phase = 'cast'
+        if #st.queue > 0 then
+            coroutine.schedule(_ow_calltrust_cast, _OW_CALLTRUST_RETR)
+        else
+            _ow_calltrust_finish('reconciled')
+        end
+    end
+end
+
+function _ow_calltrust_start(setname, names_str)
+    if _ow_calltrust_state then
+        ow_chat(123,
+            '[OmniWatch] A trust call is already running.')
+        return
+    end
+    local p = windower.ffxi.get_player and windower.ffxi.get_player()
+    if not p then return end
+    local idx = _ow_trust_name_index()
+    local limit = _ow_calltrust_limit()
+    local learned, recasts = nil, nil
+    pcall(function() learned = windower.ffxi.get_spells() end)
+    pcall(function() recasts = windower.ffxi.get_spell_recasts() end)
+
+    -- Resolve the set's names → trust records, in call order, capped to limit.
+    local desired, desired_ids, unknown = {}, {}, {}
+    for nm in (tostring(names_str) .. ';'):gmatch('([^;]*);') do
+        nm = nm:match('^%s*(.-)%s*$')
+        if nm and nm ~= '' and #desired < limit then
+            local rec = _ow_trust_resolve(idx, nm)
+            if rec then
+                desired[#desired + 1] = rec
+                desired_ids[rec.id] = true
+            else
+                unknown[#unknown + 1] = nm
+            end
+        end
+    end
+    if #unknown > 0 then
+        ow_chat(207, '[OmniWatch] Unknown trust(s) skipped: '
+            .. table.concat(unknown, ', '))
+    end
+    if #desired == 0 then
+        ow_chat(123, '[OmniWatch] Trust set "'
+            .. tostring(setname) .. '" resolved to no trusts.')
+        return
+    end
+
+    -- Reconcile: identify present trusts (by resolved spell id). Release the
+    -- ones not in the set; keep the ones that are. Unresolvable present
+    -- trusts are left alone (we can't safely identify them).
+    local present = _ow_calltrust_party_trusts()
+    local present_ids, retr = {}, {}
+    for _, t in ipairs(present) do
+        local rec = _ow_trust_resolve(idx, t.name)
+        if rec then
+            present_ids[rec.id] = true
+            if not desired_ids[rec.id] then
+                retr[#retr + 1] = t.name
+            end
+        end
+    end
+
+    -- Build the cast queue: desired trusts not already present, that are
+    -- learned and off recast.
+    local queue, skipped = {}, {}
+    for _, rec in ipairs(desired) do
+        if not present_ids[rec.id] then
+            if learned and learned[rec.id] == false then
+                skipped[#skipped + 1] = rec.english .. ' (not unlocked)'
+            elseif recasts and (recasts[rec.id] or 0) > 0 then
+                local secs = math.floor((recasts[rec.id] or 0) / 60)
+                skipped[#skipped + 1] = rec.english .. ' (' .. secs .. 's)'
+            else
+                queue[#queue + 1] = rec
+            end
+        end
+    end
+    if #skipped > 0 then
+        ow_chat(207, '[OmniWatch] Skipped: '
+            .. table.concat(skipped, ', '))
+    end
+
+    _ow_calltrust_state = { name = tostring(setname), queue = queue,
+                            retr = retr, phase = 'retr' }
+    ow_chat(207, '[OmniWatch] Trust set "' .. tostring(setname)
+        .. '": releasing ' .. #retr .. ', calling ' .. #queue .. '...')
+
+    -- Release phase. If EVERY present trust is being released, use the single
+    -- '/retr all'; otherwise release the unwanted ones one at a time so the
+    -- wanted present trusts survive.
+    if #retr > 0 and #retr == #present then
+        windower.send_command('input /retr all')
+        if _ow_cast_debug then
+            ow_chat(207, '[OW] calltrust /retr all')
+        end
+        coroutine.schedule(function()
+            local st = _ow_calltrust_state
+            if not st then return end
+            st.phase = 'cast'
+            if #st.queue > 0 then
+                _ow_calltrust_cast()
+            else
+                _ow_calltrust_finish('reconciled')
+            end
+        end, _OW_CALLTRUST_RETRALL)
+    elseif #retr > 0 then
+        _ow_calltrust_retr_step()
+    else
+        _ow_calltrust_state.phase = 'cast'
+        if #queue > 0 then
+            coroutine.schedule(_ow_calltrust_cast, 0.1)
+        else
+            _ow_calltrust_finish('already matches')
+        end
+    end
+end
+
+-- Cast pacing: de-queue a trust only when its cast actually completes, then
+-- schedule the next call. Mirrors the Trusts addon's action conditions
+-- (category 4 + matching spell id = done; category 8 / param 28787 with the
+-- matching sub-param = interrupted/charging, so retry the same head).
+windower.register_event('action', function(act)
+    local st = _ow_calltrust_state
+    if not st or st.phase ~= 'cast' then return end
+    if not act or not act.actor_id then return end
+    local p = windower.ffxi.get_player and windower.ffxi.get_player()
+    if not p or act.actor_id ~= p.id then return end
+    local q = st.queue
+    if not q or #q == 0 then return end
+    local head = q[1]
+    if act.category == 4 and act.param == head.id then
+        table.remove(q, 1)
+        if #q > 0 then
+            coroutine.schedule(_ow_calltrust_cast, _OW_CALLTRUST_AFTERCAST)
+        else
+            _ow_calltrust_finish('called')
+        end
+    elseif act.category == 8 and act.param == 28787
+            and act.targets and act.targets[1]
+            and act.targets[1].actions and act.targets[1].actions[1]
+            and act.targets[1].actions[1].param == head.id then
+        coroutine.schedule(_ow_calltrust_cast, _OW_CALLTRUST_AFTERCAST)
+    end
+end)
 
 -- ── Inbound command socket (port 5011) ─────────────────────────────────────
 -- Listens for python→lua messages. Drained on every prerender by
@@ -4838,7 +5173,7 @@ do
         local _, actual = s:getsockname()
         if actual then ow_write_lua_cmd_port(tonumber(actual)) end
     else
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] could not bind inbound command socket: ' .. tostring(err_bind))
     end
 end
@@ -4872,12 +5207,12 @@ local function _ow_inv_drop_item_by_id(item_id)
                              or res.items[item_id].english
                              or res.items[item_id].en))
                        or ('#' .. tostring(item_id))
-            windower.add_to_chat(207, '[OmniWatch] Dropped ' .. tostring(nm)
+            ow_chat(207, '[OmniWatch] Dropped ' .. tostring(nm)
                 .. (cnt > 1 and (' x' .. cnt) or ''))
             return
         end
     end
-    windower.add_to_chat(123,
+    ow_chat(123,
         '[OmniWatch] Drop: that item is not in your main inventory.')
 end
 
@@ -4895,7 +5230,7 @@ local function _ow_inv_autodrop_by_id(item_id)
              or res.items[item_id].en
     end
     if not nm or nm == '' then
-        windower.add_to_chat(123,
+        ow_chat(123,
             '[OmniWatch] Auto-drop: unknown item id ' .. tostring(item_id))
         return
     end
@@ -4903,7 +5238,7 @@ local function _ow_inv_autodrop_by_id(item_id)
     -- so no leading '/'): 'tr drop add <name>'. Treasury resolves the
     -- name to item ids and saves it to this character's Drop list.
     windower.send_command('tr drop add ' .. nm)
-    windower.add_to_chat(207, '[OmniWatch] Auto-drop -> Treasury: ' .. nm)
+    ow_chat(207, '[OmniWatch] Auto-drop -> Treasury: ' .. nm)
 end
 
 -- Drain helper: pulls all queued packets off udp_cmd_in and routes each
@@ -4934,6 +5269,3614 @@ function _ow_poll_cs_state()
     end
 end
 
+-- ════════════════════════════════════════════════════════════════════
+--  AutoRA — automated ranged attack  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Ported from AutoRA v3.0.0 (Banggugyangu). While ON, re-fires /shoot on
+-- the current target after each ranged-attack action resolves, as long as
+-- you're Engaged; halts automatically at 1000 TP. Driven entirely by the
+-- hidden Developer settings toggle: Python pushes
+-- SETTING|autora_enabled|true/false (see the SETTING handler in the
+-- inbound drain), which calls _ow_autora_start / _ow_autora_stop. Acts
+-- only on your own character. Globals (not locals) to stay clear of the
+-- 200-local chunk cap.
+_ow_autora_on        = false
+_ow_autora_halt_tp   = true     -- stop automatically when TP >= stop_tp
+_ow_autora_stop_tp   = 1000     -- TP threshold to halt at (1000..3000)
+_ow_autora_delay     = 1.5      -- seconds between shots (after each RA)
+_ow_autora_player_id = nil
+
+function _ow_autora_shoot()
+    windower.send_command('input /shoot <t>')
+end
+
+function _ow_autora_check()
+    if not _ow_autora_on then return end
+    local player = windower.ffxi.get_player()
+    if not player or not player.target_index then return end
+    if _ow_autora_halt_tp and player.vitals
+            and player.vitals.tp >= _ow_autora_stop_tp then
+        _ow_autora_on = false
+        ow_chat(17, '[OmniWatch] AutoRA halted at '
+            .. _ow_autora_stop_tp .. ' TP')
+        return
+    end
+    if player.status == 1 then          -- 1 = Engaged
+        _ow_autora_shoot()
+    end
+end
+
+function _ow_autora_start()
+    if _ow_autora_on then return end
+    local player = windower.ffxi.get_player()
+    _ow_autora_player_id = (player and player.id) or _ow_autora_player_id
+    _ow_autora_on = true
+    ow_chat(17, '[OmniWatch] AutoRA ON')
+    _ow_autora_shoot()
+end
+
+function _ow_autora_stop()
+    if not _ow_autora_on then return end
+    _ow_autora_on = false
+    ow_chat(17, '[OmniWatch] AutoRA OFF')
+end
+
+-- After one of OUR ranged attacks resolves (category 2), queue the next
+-- shot. coroutine.schedule is OmniWatch's native delay primitive (no
+-- dependency on the functions-lib :schedule method the original used).
+ow_safe_register('action', function(act)
+    if not _ow_autora_on then return end
+    if not act or act.category ~= 2 then return end
+    local pid = _ow_autora_player_id
+    if not pid then
+        local p = windower.ffxi.get_player()
+        pid = p and p.id
+        _ow_autora_player_id = pid
+    end
+    if pid and act.actor_id == pid then
+        coroutine.schedule(_ow_autora_check, _ow_autora_delay)
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════════
+--  AllSeeingEye — reveal hidden entities  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Rewrites incoming 0x0E (NPC Update) packets whose status byte marks an
+-- entity the server is hiding (2 dead/corpse, 6 appearing, 7 fading) so
+-- the client renders it. Same byte rewrite as AllSeeingEye (Project Tako).
+-- Uses a DIRECT register_event (not ow_safe_register): the modified packet
+-- is returned to replace the original, and the safe wrapper discards return
+-- values. Driven by SETTING|ase_* from the dev-menu box (default off).
+_ow_ase_enabled   = false
+_ow_ase_dead      = true
+_ow_ase_appearing = true
+_ow_ase_fading    = true
+
+function _ow_ase_reveal(data)
+    if #data < 43 then return nil end
+    local status = data:byte(0x21)
+    local on = (status == 2 and _ow_ase_dead)
+            or (status == 6 and _ow_ase_appearing)
+            or (status == 7 and _ow_ase_fading)
+    if on then
+        return data:sub(1, 32) .. '0' .. data:sub(34, 34)
+               .. '0' .. data:sub(36, 41) .. '0' .. data:sub(43)
+    end
+    return nil
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x0E or not _ow_ase_enabled then return end
+    local ok, res = pcall(_ow_ase_reveal, data)
+    if ok then return res end
+end)
+
+-- ════════════════════════════════════════════════════════════════════
+--  Scan Zone — packet scan  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Live half of ScanZone: inject an outgoing 0x16 entity-update request
+-- for a target index, read the 0x0E reply, and forward the entity's
+-- id / name / position / HP% / status to the overlay panel (SZSCAN| on
+-- the gs channel). Driven by SCANZONE|scan|<index> from the overlay
+-- (see the inbound drain). Ported from ScanZone (Project Tako); the
+-- 0x0E field offsets are unchanged. Globals (not locals) to stay clear
+-- of the 200-local chunk cap.
+_ow_sz_scanning   = false
+_ow_sz_scan_index = -1
+
+function _ow_sz_hasbit(mask, b)     -- mask: unsigned byte; b: 1 / 4 / 8 ...
+    return (math.floor((mask or 0) / b) % 2) == 1
+end
+
+function _ow_sz_u32(data, p)        -- read unsigned 32-bit LE at 1-indexed p
+    local b1 = data:byte(p)     or 0
+    local b2 = data:byte(p + 1) or 0
+    local b3 = data:byte(p + 2) or 0
+    local b4 = data:byte(p + 3) or 0
+    return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+end
+
+function _ow_scanzone_scan(index)
+    index = tonumber(index)
+    if not index then return end
+    _ow_sz_scan_index = index
+    _ow_sz_scanning   = true
+    local lo = index % 256
+    local hi = math.floor(index / 256)
+    pcall(function()
+        windower.packets.inject_outgoing(0x16,
+            string.char(0x16, 0x08, 0x00, 0x00, lo, hi, 0x00, 0x00))
+    end)
+end
+
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x0E then return end
+    if not _ow_sz_scanning then return end
+    local tindex = data:unpack('h', 0x08 + 1)
+    if tindex ~= _ow_sz_scan_index then return end
+    _ow_sz_scanning   = false
+    _ow_sz_scan_index = -1
+
+    local mask = data:byte(0x0A + 1) or 0
+    local sid  = _ow_sz_u32(data, 0x04 + 1)
+    local nm   = ''
+    local x, y, z, hpp, status = nil, nil, nil, nil, nil
+
+    if _ow_sz_hasbit(mask, 8) then              -- name present
+        local maxn = #data - 0x34
+        for i = 1, maxn do
+            local b = data:byte(0x34 + i)
+            if not b or b == 0 then break end
+            nm = nm .. string.char(b)
+        end
+    end
+    if _ow_sz_hasbit(mask, 1) then              -- position present
+        local px, pz, py = data:unpack('fff', 0x0C + 1)
+        x, z, y = px, pz, py                     -- packet order X, Z(h), Y
+    end
+    if _ow_sz_hasbit(mask, 4) then              -- vitals present
+        hpp    = data:byte(0x1E + 1)             -- HP%
+        status = data:byte(0x1E + 3)             -- status (skip anim byte)
+    end
+
+    -- SZSCAN|<index>|<id>|<name>|<x>|<y>|<z>|<hpp>|<status>
+    local payload = string.format('SZSCAN|%d|%d|%s|%s|%s|%s|%s|%s',
+        tindex, sid, nm,
+        x   and string.format('%.1f', x) or '',
+        y   and string.format('%.1f', y) or '',
+        z   and string.format('%.1f', z) or '',
+        hpp and tostring(hpp) or '',
+        status and tostring(status) or '')
+    if udp_gs then udp_gs:send(payload) end
+end)
+
+-- ════════════════════════════════════════════════════════════════════
+--  Scan Zone — widescan radar  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Request a widescan (outgoing 0x0F4, Flags=1). The server streams a
+-- 0x0F6 Mark Start, one 0x0F4 mob packet per spawned scannable entity
+-- (Index/Level/Type/X-Y map offsets/Name), then a 0x0F6 Mark End. We
+-- collect the mobs between the marks and stream them to the overlay
+-- panel (SZWIDE| on the gs channel) for the radar. Server-authoritative:
+-- only returns spawned entities within the char's widescan range.
+_ow_sz_wide_capturing = false
+
+function _ow_scanzone_widescan()
+    pcall(function()
+        local p = packets.new('outgoing', 0x0F4, {['Flags'] = 1})
+        packets.inject(p)
+    end)
+end
+
+ow_safe_register('incoming chunk', function(id, data)
+    if id == 0x0F6 then                          -- widescan Mark
+        local t = _ow_sz_u32(data, 0x04 + 1)     -- 1 = Start, 2 = End
+        if t == 1 then
+            _ow_sz_wide_capturing = true
+            if udp_gs then udp_gs:send('SZWIDE|start') end
+        elseif t == 2 then
+            _ow_sz_wide_capturing = false
+            if udp_gs then udp_gs:send('SZWIDE|end') end
+        end
+        return
+    end
+    if id ~= 0x0F4 then return end               -- widescan Mob
+    if not _ow_sz_wide_capturing then return end
+    local index = (data:byte(0x04 + 1) or 0)
+                  + (data:byte(0x05 + 1) or 0) * 256
+    local level = data:byte(0x06 + 1) or 0
+    local mtype = data:byte(0x07 + 1) or 0       -- 0 Other / 1 Friendly / 2 Enemy
+    local xoff  = data:unpack('h', 0x08 + 1)     -- signed map offsets
+    local yoff  = data:unpack('h', 0x0A + 1)
+    local nm = ''
+    for i = 1, 16 do
+        local b = data:byte(0x0C + i)
+        if not b or b == 0 then break end
+        nm = nm .. string.char(b)
+    end
+    if udp_gs then
+        udp_gs:send(string.format('SZWIDE|m|%d|%d|%d|%d|%d|%s',
+            index, mtype, level, xoff, yoff, nm))
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════════
+--  Scan Zone — track  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Widescan track: inject outgoing 0x0F5 with a target index and the
+-- server streams 0x0F5 updates (world X/Z/Y floats, level, index,
+-- status) until we send index 0. We forward each update to the overlay
+-- (SZTRACK| on the gs channel) so the panel can show a live position +
+-- distance. Driven by SCANZONE|track|<index> (0 = stop).
+_ow_sz_track_index = 0
+
+function _ow_scanzone_track(index)
+    index = tonumber(index) or 0
+    _ow_sz_track_index = index
+    pcall(function()
+        local p = packets.new('outgoing', 0x0F5, {['Index'] = index})
+        packets.inject(p)
+    end)
+end
+
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x0F5 then return end
+    local x = data:unpack('f', 0x04 + 1)
+    local z = data:unpack('f', 0x08 + 1)
+    local y = data:unpack('f', 0x0C + 1)
+    local level  = data:byte(0x10 + 1) or 0
+    local tindex = (data:byte(0x12 + 1) or 0) + (data:byte(0x13 + 1) or 0) * 256
+    local status = _ow_sz_u32(data, 0x14 + 1)   -- 1 Update / 2,3 Reset
+    if udp_gs then
+        udp_gs:send(string.format('SZTRACK|%d|%.1f|%.1f|%.1f|%d|%d',
+            tindex, x, y, z, status, level))
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════════
+--  Scan Zone — live radar  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Player-centred situational radar built from the live mob array (world
+-- coords, no calibration). While active we stream a throttled snapshot
+-- of nearby entities (player-relative dx/dy in yalms) plus the player's
+-- heading. The overlay draws us at centre with a facing arrow + compass.
+-- Range-limited to the client's awareness (~50y) by nature of the array.
+-- Toggled by SCANZONE|radar|on / off from the overlay (radar view).
+_ow_sz_radar_on   = false
+_ow_sz_radar_last = 0
+local _OW_SZ_RADAR_HZ      = 5
+local _OW_SZ_RADAR_RANGE   = 10000   -- yalms: effectively the whole zone --
+                                     -- report everything the client has loaded
+                                     -- (Mappy-style), not just a 50y bubble
+local _OW_SZ_RADAR_MAX     = 1000    -- entity cap (keeps the datagram bounded;
+                                     -- ~46 B each stays well under the 64 KB recv)
+
+function _ow_scanzone_radar_set(on)
+    _ow_sz_radar_on = on and true or false
+end
+
+function _ow_scanzone_radar_tick(now)
+    if not _ow_sz_radar_on then return end
+    if not udp_gs then return end
+    now = now or os.clock()
+    if (now - _ow_sz_radar_last) < (1.0 / _OW_SZ_RADAR_HZ) then return end
+    _ow_sz_radar_last = now
+    if not (windower.ffxi and windower.ffxi.get_mob_array) then return end
+    local me = windower.ffxi.get_mob_by_target
+               and windower.ffxi.get_mob_by_target('me')
+    if not (me and me.x and me.y) then return end
+    local heading = me.heading or 0
+    local rng2 = _OW_SZ_RADAR_RANGE * _OW_SZ_RADAR_RANGE
+    local parts, n = {}, 0
+    for _, v in pairs(windower.ffxi.get_mob_array()) do
+        if type(v) == 'table' and v.valid_target and v.x and v.y
+                and v.name and v.name ~= ''
+                and v.index and (not me.index or v.index ~= me.index) then
+            local dx, dy = v.x - me.x, v.y - me.y
+            if (dx * dx + dy * dy) <= rng2 then
+                -- Classify: is_npc is the reliable PC flag (players are the
+                -- only non-NPC entities). Among server entities, split by
+                -- spawn_type -- 2 = static NPC, 16 = standard monster, 14 =
+                -- trust; anything else (lamps, doors, clickable objects) is
+                -- left in the catch-all "object" bucket (t = 0).
+                local t = 0                       -- 0 = object / other
+                if not v.is_npc then
+                    t = 2                         -- PC (player)
+                elseif v.spawn_type == 2 then
+                    t = 1                         -- NPC (static / friendly)
+                elseif v.spawn_type == 16 then
+                    t = 3                         -- monster
+                end
+                local hpp = v.hpp or 0
+                local nm  = v.name:gsub('[|;,]', ' ')
+                if #nm > 24 then nm = nm:sub(1, 24) end
+                n = n + 1
+                parts[n] = string.format('%d,%d,%.1f,%.1f,%d,%s',
+                    v.index, t, dx, dy, hpp, nm)
+                if n >= _OW_SZ_RADAR_MAX then break end
+            end
+        end
+    end
+    udp_gs:send(string.format('SZRADAR|%.3f|%d|%s',
+        heading, n, table.concat(parts, ';')))
+end
+
+ow_safe_register('prerender', function()
+    _ow_scanzone_radar_tick(os.clock())
+end)
+
+-- Sortie Gallimaufry tracker: any chat-log line that awards "<n> gallimaufry"
+-- is forwarded to the overlay, which sums it for the run. Robust to the exact
+-- wording -- it just needs the amount immediately before the word.
+ow_safe_register('incoming text', function(original, modified)
+    local txt = modified or original
+    if not txt or txt == '' then return end
+    if txt:lower():find('gallimaufry', 1, true) then
+        local num = txt:match('([%d,]+)%s*[Gg]allimaufry')
+        if num then
+            local n = tonumber((num:gsub(',', '')))
+            if n and n > 0 and udp_gs then
+                udp_gs:send('SORTIEGIL|' .. n)
+            end
+        end
+    end
+end)
+
+-- âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+--  Scan Zone â Nyzul lamps  (dev-mode feature)
+-- âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+-- Poll the five fixed Nyzul lamp indexes (0x2D4..0x2D8) with 0x16 entity
+-- requests and read each lamp's lit bit + position from the 0x0E reply,
+-- forwarding SZLAMP|<index>|<x>|<y>|<z>|<lit>|<name> to the overlay roster.
+-- The lit bit is the (>>16)&1 of the entity flag word â the same field
+-- NyzulBuddy2 (Uwu/Darkdoom) reads for runes/lamps. Driven by
+-- SCANZONE|lamps|on / off from the overlay. Globals to stay clear of the
+-- 200-local chunk cap.
+_ow_sz_lamps_on   = false
+_ow_sz_lamps_last = 0
+_ow_sz_lamp_floor   = -1     -- last Nyzul floor we reset lamps for
+_ow_sz_lamp_floor_t = 0      -- os.clock() of last reset (debounce fallback)
+_OW_SZ_RUNE_LO = 0x2D2      -- Rune of Transfer (0x2D2 even / 0x2D3 odd floor)
+_OW_SZ_LAMP_LO = 0x2D4
+_OW_SZ_LAMP_HI = 0x2D8
+_OW_SZ_LAMP_HZ = 2          -- passive get_mob_by_index reads per second
+
+function _ow_scanzone_lamps_set(on)
+    _ow_sz_lamps_on = on and true or false
+    _ow_sz_lamp_floor = -1              -- force a fresh scan on the next floor msg
+    if udp_gs then pcall(function() udp_gs:send('SZLAMP|clear') end) end
+end
+
+-- Passive discovery: read each lamp index straight from the client's entity
+-- table (get_mob_by_index -- NO packet) and forward its position so the overlay
+-- can pin it. Lit is sent as "-" here, meaning "position only, keep whatever
+-- lit state you already have" -- the lit bit only rides the 0x0E flag word
+-- (handled below, or on a manual Refresh). A lamp that isn't loaded yet (far
+-- side of the floor) just returns nil until you get near it, so the set fills
+-- in as you go through the floor once and then persists overlay-side.
+function _ow_scanzone_lamps_tick(now)
+    if not _ow_sz_lamps_on then return end
+    now = now or os.clock()
+    if (now - _ow_sz_lamps_last) < (1.0 / _OW_SZ_LAMP_HZ) then return end
+    _ow_sz_lamps_last = now
+    if not (windower.ffxi and windower.ffxi.get_mob_by_index) then return end
+    for idx = _OW_SZ_RUNE_LO, _OW_SZ_LAMP_HI do
+        local mob = windower.ffxi.get_mob_by_index(idx)
+        if mob and mob.x and mob.y and udp_gs then
+            local nm = (mob.name or ''):gsub('[|;,]', ' ')
+            udp_gs:send(string.format('SZLAMP|%d|%.1f|%.1f|%s|-|%s',
+                idx, mob.x, mob.y,
+                mob.z and string.format('%.1f', mob.z) or '', nm))
+        end
+    end
+end
+
+-- Manual reconcile: a one-shot 0x16 entity-update request for the five lamp
+-- indices, driven by the overlay's "Refresh Lamps" button (SCANZONE|lamps|
+-- refresh). It pulls the current lit state for every lamp -- the way to catch
+-- one a party member activated while you were out of range. This is the ONLY
+-- injection left in the lamp path, and only when you press the button.
+function _ow_scanzone_lamps_refresh()
+    if not (windower.packets and windower.packets.inject_outgoing) then
+        return
+    end
+    for idx = _OW_SZ_RUNE_LO, _OW_SZ_LAMP_HI do
+        local lo = idx % 256
+        local hi = math.floor(idx / 256)
+        pcall(function()
+            windower.packets.inject_outgoing(0x16,
+                string.char(0x16, 0x08, 0x00, 0x00, lo, hi, 0x00, 0x00))
+        end)
+    end
+end
+
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x0E then return end
+    if not _ow_sz_lamps_on then return end
+    local tindex = data:unpack('h', 0x08 + 1)
+    if tindex < _OW_SZ_RUNE_LO or tindex > _OW_SZ_LAMP_HI then return end
+    local lit_field = '-'               -- '-' = flag word absent -> keep prior
+    pcall(function()
+        local pk = packets.parse('incoming', data)
+        local f = pk and pk['_unknown4']
+        if f and f > 0 then             -- flag word present -> trust this update
+            lit_field = ((math.floor(f / 65536) % 2) == 1) and '1' or '0'
+        end
+    end)
+    local mob = windower.ffxi.get_mob_by_index
+                and windower.ffxi.get_mob_by_index(tindex)
+    if not mob then return end          -- index empty on this floor -> no lamp here
+    local nm = (mob.name or ''):gsub('[|;,]', ' ')
+    local x, y, z = mob.x, mob.y, mob.z
+    if udp_gs then
+        udp_gs:send(string.format('SZLAMP|%d|%s|%s|%s|%s|%s',
+            tindex,
+            x and string.format('%.1f', x) or '',
+            y and string.format('%.1f', y) or '',
+            z and string.format('%.1f', z) or '',
+            lit_field, nm))
+    end
+end)
+
+-- New-floor detector. The 0x02A floor message carries the floor number in
+-- param1 (the same signal NyzulBuddy2 keys off). On a floor change while lamp
+-- mode is on, wipe the previous floor's lamps from the overlay and fire an
+-- immediate re-scan so the roster reflects the lamps on THIS floor. Non-lamp
+-- floors leave the 0x2D4..0x2D8 indexes unresolved, so the roster stays empty.
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x02A then return end
+    if not _ow_sz_lamps_on then return end
+    if (windower.ffxi.get_info().zone or 0) ~= 77 then return end   -- Nyzul Isle
+    local floor = nil
+    pcall(function()
+        local pk = packets.parse('incoming', data)
+        if pk then floor = pk['param1'] or pk['Param 1'] or pk['_param1'] end
+    end)
+    local nowc = os.clock()
+    if floor ~= nil then
+        if floor == _ow_sz_lamp_floor then return end   -- same floor, ignore
+        _ow_sz_lamp_floor = floor
+    else
+        -- floor number unreadable: debounce so stray 0x02A msgs don't thrash
+        if (nowc - _ow_sz_lamp_floor_t) < 1.5 then return end
+    end
+    _ow_sz_lamp_floor_t = nowc
+    if udp_gs then pcall(function() udp_gs:send('SZLAMP|clear') end) end
+    _ow_sz_lamps_last = 0                 -- allow the tick to fire right now
+    _ow_scanzone_lamps_tick(nowc)
+end)
+
+ow_safe_register('prerender', function()
+    _ow_scanzone_lamps_tick(os.clock())
+end)
+
+-- ════════════════════════════════════════════════════════════════════════
+-- Nyzul progress tracker. Adapted from NyzulHelper by Glarin of Asura
+-- (BSD-3-Clause) — copyright/credit retained. Parses Nyzul Isle's text
+-- messages to track floor, time remaining, objective, restriction, floors
+-- completed and potential tokens, and streams them to the overlay as
+-- NYZUL|... for the Scan Zone panel's Nyzul section. Display/box code from
+-- the original is dropped; the overlay renders the state.
+--   Copyright © 2020, Glarin of Asura. Redistribution permitted under the
+--   BSD 3-Clause terms shipped with NyzulHelper.
+-- ════════════════════════════════════════════════════════════════════════
+function _ow_nyzul_boot()
+    pcall(require, 'strings')                 -- string.strip_format
+    local function stripf(s)
+        s = s or ''
+        if s.strip_format then
+            local ok, r = pcall(function() return s:strip_format() end)
+            if ok and r then s = r end
+        end
+        return (s:gsub('[\x00-\x1F]', ''))
+    end
+    local function rnd(n) return math.floor((n or 0) + 0.5) end
+    local function pfind(s, lit) return s:find(lit, 1, true) ~= nil end
+
+    local zone_timer = 0
+    local end_time = nil
+    local has_armband = false
+    local party_size = 1
+    local objective = ''
+    local obj_state = 'p'          -- p = pending, g = complete
+    local restriction = ''
+    local restr_state = 'w'        -- w = warn, b = failed
+    local starting_floor = 0
+    local current_floor = 0
+    local completed = 0
+    local floor_penalities = 0
+    local potential_tokens = 0
+    local last_send = 0
+
+    local function reset()
+        zone_timer = 0; end_time = nil; objective = ''; obj_state = 'p'
+        restriction = ''; restr_state = 'w'; starting_floor = 0
+        current_floor = 0; completed = 0; floor_penalities = 0
+        potential_tokens = 0
+    end
+    local function set_timer(remaining)
+        zone_timer = remaining
+        end_time = os.time() + zone_timer
+    end
+    local function get_relative_floor()
+        if current_floor < starting_floor then return current_floor + 100 end
+        return current_floor
+    end
+    local function get_token_rate()
+        local rate = 1
+        if has_armband then rate = rate + .1 end
+        if party_size > 3 then rate = rate - ((party_size - 3) * .1) end
+        return rate
+    end
+    local function resync_values()
+        if starting_floor == 0 then
+            starting_floor = current_floor
+            if zone_timer == 0 then set_timer(1800) end
+        end
+        local relative_floor = get_relative_floor()
+        if (relative_floor - starting_floor) > completed then
+            completed = relative_floor - starting_floor
+        end
+        floor_penalities = 0
+    end
+    local function get_token_penalty(rate)
+        return rnd(117 * rate) * floor_penalities
+    end
+    local function calculate_tokens()
+        local relative_floor = get_relative_floor()
+        local rate = get_token_rate()
+        local floor_bonus = 0
+        if relative_floor > 1 then
+            floor_bonus = (10 * math.floor((relative_floor - 1) / 5))
+        end
+        potential_tokens = potential_tokens
+            + ((200 + floor_bonus) * rate) - get_token_penalty(rate)
+    end
+
+    local function send_state()
+        if not udp_gs then return end
+        local rem = zone_timer
+        if end_time ~= nil then rem = end_time - os.time() end
+        if rem < 0 then rem = 0 end
+        -- The objective phrase is already cut clean at parse time (the
+        -- trailing 0x7F formatting code is removed there). Do NOT run it back
+        -- through stripf here: strip_format re-interprets that phrase and
+        -- collapses it to a fragment like "." / "y ." -- which is exactly the
+        -- corruption that survived the parse-side fix. Cut at any stray 0x7F
+        -- and drop control bytes, but never strip_format the objective.
+        local obj = objective
+        local _oc = obj:find(string.char(0x7F), 1, true)
+        if _oc then obj = obj:sub(1, _oc - 1) end
+        obj = obj:gsub('%c', ''):gsub('[|]', ' ')
+        local rst = stripf(restriction):gsub('[|]', ' ')
+        pcall(function()
+            udp_gs:send(string.format('NYZUL|%d|%d|%d|%d|%d|%s|%s|%s|%s',
+                current_floor, math.floor(rem), completed,
+                rnd(get_token_rate() * 100), rnd(potential_tokens),
+                obj_state, restr_state, obj, rst))
+        end)
+    end
+
+    ow_safe_register('zone change', function(new, old)
+        if new == 72 and old == 77 then
+            zone_timer = 0; has_armband = false
+        else
+            reset()
+        end
+        if new == 77 then
+            local ok, pi = pcall(windower.ffxi.get_party_info)
+            party_size = (ok and pi and pi.party1_count) or 1
+        end
+    end)
+
+    ow_safe_register('incoming chunk', function(id, data)
+        if id == 0x55 and (windower.ffxi.get_info().zone or 0) == 72 then
+            local ki = windower.ffxi.get_key_items()
+            if ki then
+                for _, v in pairs(ki) do
+                    if v == 797 then has_armband = true break end
+                end
+            end
+        end
+    end)
+
+    ow_safe_register('incoming text', function(original, modified, mode)
+        local info = windower.ffxi.get_info()
+        if not info.logged_in or info.zone ~= 77 or original == '' then
+            return
+        end
+        if mode == 123 then
+            if pfind(original, 'Security field malfunction') then
+                restriction = stripf(original); restr_state = 'b'
+            elseif pfind(original, 'Time limit has been reduced') then
+                set_timer(zone_timer - (tonumber(original:match('%d+')) or 0) * 60)
+            elseif pfind(original, 'Potential token reward reduced') then
+                floor_penalities = floor_penalities + 1
+            end
+        elseif (mode == 146 or mode == 148) and pfind(original, 'Earth time') then
+            local multiplier = 1
+            if pfind(original, 'minute') then multiplier = 60 end
+            set_timer((tonumber(original:match('%d+')) or 0) * multiplier)
+        elseif mode == 146 then
+            if original:find('Floor %d+ objective complete. Rune of Transfer activated.') then
+                completed = completed + 1
+                obj_state = 'g'; restriction = ''; restr_state = 'w'
+                calculate_tokens()
+            end
+        elseif mode == 148 then
+            if pfind(original, 'Objective:') then
+                if pfind(original, 'Commencing') then
+                    objective = 'Complete on-site objectives'
+                else
+                    -- Capture everything after "Objective:". The phrase is
+                    -- plain ASCII terminated by a 0x7F formatting code (cut
+                    -- below); a fixed byte offset (old original:sub(11)) could
+                    -- slice it wrong, so match the text instead.
+                    local body = original:match('Objective:%s*(.+)')
+                                 or original:sub(11)
+                    -- A trailing FFXI formatting code (0x7F + a parameter
+                    -- byte) terminates the readable phrase. strip_format
+                    -- mangles it (collapsing the line to a fragment like
+                    -- "y ."), so cut at the first 0x7F before anything else.
+                    local _cut = body:find(string.char(0x7F), 1, true)
+                    if _cut then body = body:sub(1, _cut - 1) end
+                    -- These objective strings are plain ASCII followed by a
+                    -- trailing 0x7F formatting code (cut above). Running
+                    -- strip_format or auto-translate resolution over the plain
+                    -- phrase mangled it (the ".", "y ." corruption captured in
+                    -- nyzul_obj.log), so only resolve auto-translate when a real
+                    -- AT marker (0xFD) is present, and never strip_format the
+                    -- phrase -- just drop control bytes/braces and trim.
+                    if _ow_resolve_outgoing_at
+                            and body:find('\253', 1, true) then
+                        local ok_at, r = pcall(_ow_resolve_outgoing_at, body)
+                        if ok_at and r then body = r end
+                    end
+                    body = body:gsub('%c', ''):gsub('[{}]', '')
+                    objective = (body:gsub('^%s*(.-)%s*$', '%1'))
+                end
+                obj_state = 'p'
+            elseif pfind(original, 'archaic') then
+                restriction = stripf(original)
+            elseif original:find('Transfer complete. Welcome to Floor %d+.') then
+                current_floor = tonumber(original:match('%d+')) or current_floor
+                resync_values()
+            end
+        end
+    end)
+
+    ow_safe_register('prerender', function()
+        local info = windower.ffxi.get_info()
+        if not info.logged_in or info.zone ~= 77 then return end
+        local now = os.clock()
+        if (now - last_send) < 0.25 then return end
+        last_send = now
+        send_state()
+    end)
+end
+_ow_nyzul_boot()
+
+-- ════════════════════════════════════════════════════════════════════════
+-- Omen progress tracker. Adapted from Omen by Braden, Sechs (BSD-3-Clause) —
+-- copyright/credit retained. Parses Reisenjima Henge (zone 292) text mode 161
+-- to track the floor objective, omen count, bonus-objective timer and the per-
+-- slot bonus objectives, streaming them to the overlay as OMEN|... for the
+-- Scan Zone panel's Omen section. Display/box and sound code from the original
+-- is dropped; the overlay renders the state.
+--   Copyright © 2017, Braden, Sechs. Redistribution permitted under the BSD
+--   3-Clause terms shipped with Omen.
+-- ════════════════════════════════════════════════════════════════════════
+function _ow_omen_boot()
+    local omens = "0"
+    local obj_time = 0
+    local end_time = nil
+    local floor_obj = "Waiting for objectives..."
+    local floor_clear = false
+    local last_send = 0
+    local objectives = {}
+
+    local function reset_objectives()
+        for i = 1, 10 do objectives[i] = {mes = 0, amt = 0, req = 0} end
+        obj_time = 0
+        floor_clear = false
+    end
+    reset_objectives()
+
+    local messages = {
+        [1]  = {id=1,  short="WS Damage",     check="%d+%su",
+                init="%d: Reduce your foe's HP by %a*%s*%a*%s*%d+ using a single weapon skill.",
+                eval="%d: You have reduced your foe's HP by %a*%s*%a*%s*%d+ using a single weapon skill."},
+        [2]  = {id=2,  short="MB Damage",     check="%d+%su",
+                init="%d: Reduce your foe's HP by %a*%s*%a*%s*%d+ using a single magic burst.",
+                eval="%d: You have reduced your foe's HP by %a*%s*%a*%s*%d+ using a single magic burst."},
+        [3]  = {id=3,  short="Non-MB Nuke",   check="%d+%su",
+                init="%d: Reduce your foe's HP by %a*%s*%a*%s*%d+ using a single magic attack without performing a magic burst.",
+                eval="%d: You have reduced your foe's HP by %a*%s*%a*%s*%d+ using a single magic attack without performing a magic burst."},
+        [4]  = {id=4,  short="Melee Round",   check="%d+%si",
+                init="%d: Reduce your foe's HP by %a*%s*%a*%s*%d+ in a single auto%-attack.",
+                eval="%d: You have reduced your foe's HP by %a*%s*%a*%s*%d+ in a single auto%-attack."},
+        [5]  = {id=5,  short="Kills",         check="%d+%sf",
+                init="%d: Vanquish %d+ %a+.",
+                eval="%d: You have vanquished %d+ %a+."},
+        [6]  = {id=6,  short="Critical Hits", check="%d+%sc",
+                init="%d: Deal %d+ critical %a+ to your foes.",
+                eval="%d: You have dealt %d+ critical %a+ to your foes."},
+        [7]  = {id=7,  short="Abilities",     check="%d+%sa",
+                init="%d: Use %d+ %a+ on your foes.",
+                eval="%d: You have used %d+ %a+ on your foes."},
+        [8]  = {id=8,  short="Spells",        check="%d+%ss",
+                init="%d: Cast %d+ %a+ on your foes.",
+                eval="%d: You have cast %d+ %a+ on your foes."},
+        [9]  = {id=9,  short="Magic Bursts",  check="%d+%sm",
+                init="%d: Perform %d+ magic %a+ on your foes.",
+                eval="%d: You have performed %d+ magic %a+ on your foes."},
+        [10] = {id=10, short="Skillchains",   check="%d+%ss",
+                init="%d: Execute %d+ %a+ using weapon %a+ on your foes!",
+                eval="%d: You have executed %d+ %a+ using weapon %a+ on your foes!"},
+        [11] = {id=11, short="All WS",        check="%d+%sw",
+                init="%d: Use %d+ weapon %a+ on your foes.",
+                eval="%d: You have used %d+ weapon %a+ on your foes."},
+        [12] = {id=12, short="Physical WS",   check="%d+%sp",
+                init="%d: Use %d+ physical weapon %a+ on your foes.",
+                eval="%d: You have used %d+ physical weapon %a+ on your foes."},
+        [13] = {id=13, short="Magic WS",      check="%d+%se",
+                init="%d: Use %d+ elemental weapon %a+ on your foes.",
+                eval="%d: You have used %d+ elemental weapon %a+ on your foes."},
+        [14] = {id=14, short="500 HP Cures",  check="%d+%st",
+                init="%d: Restore at least 500 HP %d+ %a+.",
+                eval="%d: You have restored at least 500 HP %d+ %a+."},
+    }
+    local hide_words = {"Kin","Gin","Kei","Kyou","Fu","Ou","Craver",
+                        "Gorger","Thinker","Treasure","Waiting"}
+
+    local function sanitize(s) return (s or ''):gsub('[|;~]', ' ') end
+
+    local function send_omen()
+        if not udp_gs then return end
+        local rem = obj_time
+        if end_time ~= nil and obj_time >= 1 then rem = end_time - os.time() end
+        if rem < 0 then rem = 0 end
+        local hide = 0
+        for _, wd in ipairs(hide_words) do
+            if floor_obj:find(wd, 1, true) then hide = 1 break end
+        end
+        local parts = {}
+        for i = 1, 10 do
+            local o = objectives[i]
+            if o and o.mes ~= 0 then
+                local m = messages[o.mes]
+                local short = (m and m.short) or ('Obj' .. i)
+                local st = 'n'
+                if o.amt == o.req then st = 'g'
+                elseif rem < 1 and o.amt < o.req then st = 'b' end
+                parts[#parts + 1] = string.format('%s~%d~%d~%s',
+                    short, o.amt, o.req, st)
+            end
+        end
+        pcall(function()
+            udp_gs:send(string.format('OMEN|%s|%s|%d|%d|%d|%s',
+                sanitize(floor_obj), tostring(omens), math.floor(rem),
+                floor_clear and 1 or 0, hide, table.concat(parts, ';')))
+        end)
+    end
+
+    ow_safe_register('zone change', function(zone)
+        floor_obj = "Waiting for objectives..."
+        reset_objectives()
+    end)
+
+    ow_safe_register('incoming text', function(original, modified, mode)
+        if (windower.ffxi.get_info().zone or 0) ~= 292 then return end
+        if mode ~= 161 then return end
+        local slot = tonumber(original:match('^%d+'))
+        local objective = slot and objectives[slot]
+        if original:match('^%d') and objective then
+            for _, v in pairs(messages) do
+                if original:find(v.init) then
+                    if objective.mes ~= v.id then objective.amt = 0 end
+                    objective.mes = v.id
+                    local mm = original:match(v.check)
+                    if mm then objective.req = tonumber(mm:sub(1, -2)) or objective.req end
+                elseif original:find(v.eval) then
+                    local mm = original:match(v.check)
+                    if mm then objective.amt = tonumber(mm:sub(1, -2)) or objective.amt end
+                    if objective.mes == 0 then
+                        objective.mes = v.id
+                        objective.req = -1
+                    end
+                end
+            end
+            send_omen()
+        elseif original:find('%d+ omen') then
+            omens = original:match('%d+')
+            send_omen()
+        elseif original:find('You have %d+ seconds remaining.') then
+            if obj_time == 0 then
+                obj_time = tonumber(original:match('%d+')) or 0
+                end_time = os.time() + obj_time
+                send_omen()
+            end
+        elseif original:find('A spectral light flares up.', 1, true) then
+            floor_clear = true
+            send_omen()
+        elseif original:find('A faint light twinkles into existence.', 1, true) then
+            -- floor sub-clear chime in the original; sound omitted here
+        elseif original:find('Vanquish', 1, true) or original:find('Open %d treasure portent') then
+            local s1 = original:gsub(string.char(0x7f) .. '1', '')
+            s1 = s1:gsub('%p', '')
+            s1 = s1:gsub('(%s%a)', string.upper)
+            floor_obj = s1:gsub('The', 'the')
+            if floor_clear then reset_objectives() end
+            send_omen()
+        elseif original:find('The light shall come even if you fail to obey.', 1, true) then
+            floor_obj = "Free Floor!"
+            if floor_clear then reset_objectives() end
+            send_omen()
+        end
+    end)
+
+    ow_safe_register('prerender', function()
+        if (windower.ffxi.get_info().zone or 0) ~= 292 then return end
+        if obj_time < 1 then return end
+        local now = os.clock()
+        if (now - last_send) < 0.25 then return end
+        last_send = now
+        send_omen()
+    end)
+end
+_ow_omen_boot()
+
+-- ════════════════════════════════════════════════════════════════════
+--  Synergy  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Packet engine for the Synergy furnace minigame, driven by the overlay's
+-- DEV · Synergy panel. Detects a furnace session (trade 0x036 + the 0x05B
+-- "begin" option), reads recipe / current / fewell / pressure / impurity /
+-- leak / overload / furnace-HP state and streams it to the overlay
+-- (SYNERGY| on the gs channel); feeds elements and runs furnace functions
+-- on command (SYNERGY|feed|<elem> / SYNERGY|func|<name> from the inbound
+-- drain) by injecting the same 0x01A poke + scripted 0x05B menu navigation
+-- the standalone tool used.
+--
+-- Ported from the 'Synergy' addon (BSD-3-Clause, Copyright (c) 2016
+-- Sebastien Gomez / "Colway"); the option-index map, poke + 0x05B menu-nav
+-- sequence, and packet offsets are unchanged. Globals (not locals) to stay
+-- clear of the 200-local chunk cap. Single-overlay build: the IPC mirroring
+-- of the original is intentionally dropped.
+
+_OW_SYN_ELEMENTS = {fire = 100, ice = 101, wind = 102, earth = 103,
+                    thunder = 104, water = 105, light = 106, dark = 107}
+_OW_SYN_FUNCS    = {thwack = 120, pressure = 121, repair_furnace = 122,
+                    safety_lever = 123, recycle = 124, ['end'] = 110}
+_OW_SYN_EQUIP    = {smock = 131}        -- Engraver's Touch (Goldsmith's Smock)
+-- canonical element order for the pipe-packed payloads to the overlay
+_OW_SYN_ORDER    = {'fire', 'ice', 'wind', 'earth',
+                    'thunder', 'water', 'light', 'dark'}
+
+_ow_syn_in        = false   -- in an active furnace session
+_ow_syn_target    = {}      -- {Target id, Target Index, Zone id, Menu ID, Option Index}
+_ow_syn_firstrun  = true    -- send the one-shot 0x016 on the first poke of a session
+_ow_syn_armed     = false   -- a feed/func is mid-flight (waiting on the 0x034 reply)
+_ow_syn_armed_ref = false   -- a re-fewell is mid-flight (waiting on the 0x034 reply)
+_ow_syn_part1     = false   -- saw the trade (0x036) to a Synergy Furnace
+_ow_syn_engineer  = false   -- resolved Synergy Engineer id (for re-fewell)
+_ow_syn_overload  = false
+_ow_syn_hp_last   = 0
+
+function _ow_syn_send(payload)
+    if udp_gs then pcall(function() udp_gs:send(payload) end) end
+end
+
+function _ow_syn_my_index()
+    local me = windower.ffxi.get_player()
+    if not me then return nil end
+    for i, v in pairs(windower.ffxi.get_mob_array()) do
+        if v and v.name == me.name then return i end
+    end
+    return nil
+end
+
+function _ow_synergy_inject_0x10f()
+    pcall(function()
+        local p = packets.new('outgoing', 0x10F)
+        packets.inject(p)
+    end)
+end
+
+function _ow_synergy_create_0x05B(target_id, target_index, option_index,
+                                  zone_number, message, menu_id, unk1, unk2)
+    pcall(function()
+        local p = packets.new('outgoing', 0x05B)
+        p['Target']            = target_id
+        p['Option Index']      = option_index
+        p['_unknown1']         = unk1
+        p['Target Index']      = target_index
+        p['Menu ID']           = menu_id
+        p['Zone']              = zone_number
+        p['Automated Message'] = message
+        p['_unknown2']         = unk2
+        packets.inject(p)
+    end)
+end
+
+function _ow_synergy_poke(option_index)
+    -- Feed / func: latch the option index, then poke the furnace (0x01A)
+    -- when within 2 yalms. The 0x034 reply drives the 0x05B menu-nav.
+    local ti = _ow_syn_target['Target Index']
+    if not ti then return end
+    local mob = windower.ffxi.get_mob_by_index(ti)
+    if not mob or not mob.distance then return end
+    local dist = math.sqrt(mob.distance)
+    if dist <= 0 or dist >= 2 then
+        ow_chat(123, '[OmniWatch] Synergy: furnace too far away')
+        return
+    end
+    _ow_syn_target['Option Index'] = option_index
+    _ow_syn_armed = true
+    pcall(function()
+        local p = packets.new('outgoing', 0x01A, {
+            ['Target']       = _ow_syn_target['Target id'],
+            ['Target Index'] = ti,
+            ['Category']     = 0,
+            ['Param']        = 0,
+            ['_unknown1']    = 0})
+        packets.inject(p)
+    end)
+    if _ow_syn_firstrun then
+        local me = _ow_syn_my_index()
+        if me then
+            pcall(function()
+                local p = packets.new('outgoing', 0x016,
+                                      {['Target Index'] = me})
+                packets.inject(p)
+            end)
+        end
+        _ow_syn_firstrun = false
+    end
+end
+
+function _ow_synergy_resolve_engineer()
+    for _, v in pairs(windower.ffxi.get_mob_array()) do
+        if v and v.name == 'Synergy Engineer' and v.distance
+                and math.sqrt(v.distance) < 6 then
+            _ow_syn_engineer = v.id
+            return v
+        end
+    end
+    return nil
+end
+
+function _ow_synergy_poke_engineer()
+    local eng
+    if _ow_syn_engineer then
+        eng = windower.ffxi.get_mob_by_id(_ow_syn_engineer)
+    end
+    if not eng then eng = _ow_synergy_resolve_engineer() end
+    if not eng then
+        ow_chat(123, '[OmniWatch] Synergy: no engineer nearby')
+        return
+    end
+    local dist = (eng.distance and math.sqrt(eng.distance)) or 999
+    if dist <= 0 or dist >= 6 then
+        ow_chat(123, '[OmniWatch] Synergy: engineer too far away')
+        return
+    end
+    _ow_syn_armed_ref = true
+    pcall(function()
+        local p = packets.new('outgoing', 0x01A, {
+            ['Target']       = eng.id,
+            ['Target Index'] = eng.index,
+            ['Category']     = 0,
+            ['Param']        = 0,
+            ['_unknown1']    = 0})
+        packets.inject(p)
+    end)
+end
+
+function _ow_synergy_clear()
+    _ow_syn_in        = false
+    _ow_syn_target    = {}
+    _ow_syn_armed     = false
+    _ow_syn_armed_ref = false
+    _ow_syn_part1     = false
+    _ow_syn_engineer  = false
+    _ow_syn_overload  = false
+    _ow_syn_send('SYNERGY|end')
+end
+
+-- Command entrypoints (called from the inbound drain) ------------------
+function _ow_synergy_cmd_feed(name)
+    local oi = _OW_SYN_ELEMENTS[name]
+    if oi and _ow_syn_in then _ow_synergy_poke(oi) end
+end
+
+function _ow_synergy_cmd_func(name)
+    if not _ow_syn_in then return end
+    if name == 'smock' then
+        _ow_synergy_poke(_OW_SYN_EQUIP.smock)
+    else
+        local oi = _OW_SYN_FUNCS[name]
+        if oi then _ow_synergy_poke(oi) end
+    end
+end
+
+function _ow_synergy_cmd_refewell()
+    if _ow_syn_in then return end       -- re-fewell is a pre-session action
+    _ow_synergy_inject_0x10f()
+    _ow_synergy_poke_engineer()
+end
+
+function _ow_synergy_cmd_refresh()
+    _ow_synergy_inject_0x10f()
+end
+
+-- Detection: trade to the furnace, then the 0x05B "begin" option (150)
+-- latches the session target and flips us into in_synergy. ------------
+ow_safe_register('outgoing chunk', function(id, data)
+    if id == 0x036 then
+        local ok, p = pcall(packets.parse, 'outgoing', data)
+        if ok and p and windower.ffxi.get_mob_name then
+            local nm = windower.ffxi.get_mob_name(p['Target'])
+            if nm == 'Synergy Furnace' then
+                _ow_syn_part1 = true
+            end
+        end
+    elseif id == 0x05B and _ow_syn_part1 then
+        local ok, p = pcall(packets.parse, 'outgoing', data)
+        if ok and p and p['Option Index'] == 150 then
+            _ow_syn_target['Target id']    = p['Target']
+            _ow_syn_target['Target Index'] = p['Target Index']
+            _ow_syn_target['Zone id']      = p['Zone']
+            _ow_syn_target['Menu ID']      = (p['Menu ID'] or 0) - 3
+            _ow_syn_part1    = false
+            _ow_syn_in       = true
+            _ow_syn_firstrun = true
+            _ow_synergy_inject_0x10f()
+            _ow_syn_send(string.format('SYNERGY|start|%s|%s|%s|%s',
+                tostring(_ow_syn_target['Target id'] or 0),
+                tostring(_ow_syn_target['Target Index'] or 0),
+                tostring(_ow_syn_target['Zone id'] or 0),
+                tostring(_ow_syn_target['Menu ID'] or 0)))
+        end
+    end
+end)
+
+-- 0x034: the furnace's menu-open reply. We BLOCK it (so the real menu UI
+-- doesn't pop) and inject the scripted 0x05B nav that performs the latched
+-- action. ow_safe_register swallows handler returns, so this one is a raw
+-- register_event with its own pcall + a true return to block the packet.
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x034 then return end
+    local blocked = false
+    pcall(function()
+        if _ow_syn_in and _ow_syn_armed then
+            local t   = _ow_syn_target
+            local tid, tix = t['Target id'], t['Target Index']
+            local zone, menu = t['Zone id'], t['Menu ID']
+            local oi  = t['Option Index']
+            _ow_synergy_create_0x05B(tid, tix, 147, zone, true,  menu, 0, 0)
+            _ow_synergy_create_0x05B(tid, tix, 143, zone, true,  menu, 0, 0)
+            _ow_synergy_create_0x05B(tid, tix, 143, zone, true,  menu, 0, 0)
+            _ow_synergy_create_0x05B(tid, tix, oi,  zone, true,  menu, 0, 0)
+            _ow_synergy_create_0x05B(tid, tix, 143, zone, true,  menu, 0, 0)
+            _ow_synergy_create_0x05B(tid, tix, 0,   zone, false, menu, 0, 0)
+            _ow_syn_armed = false
+            blocked = true
+        elseif (not _ow_syn_in) and _ow_syn_armed_ref then
+            local eng = _ow_syn_engineer
+                        and windower.ffxi.get_mob_by_id(_ow_syn_engineer)
+            if eng then
+                local zone = windower.ffxi.get_info().zone
+                _ow_synergy_create_0x05B(eng.id, eng.index, 3, zone, true,
+                                         11001, 0, 0)
+                _ow_synergy_create_0x05B(eng.id, eng.index, 8, zone, false,
+                                         11001, 0, 0)
+            end
+            _ow_syn_armed_ref = false
+            _ow_synergy_inject_0x10f()
+            blocked = true
+        end
+    end)
+    if blocked then return true end
+end)
+
+-- 0x05C: current fewell in the furnace + the player's fewell inventory.
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x05C or not _ow_syn_in or #data < 33 then return end
+    local b33 = data:byte(33)
+    if b33 == 0 and (data:byte(18) or 0) ~= 0 and (data:byte(19) or 0) ~= 0
+            and (data:byte(20) or 0) ~= 0 then
+        local off = {5, 7, 9, 11, 13, 15, 17, 19}      -- current (byte - 100)
+        local c = {}
+        for k = 1, 8 do c[k] = (data:byte(off[k]) or 100) - 100 end
+        _ow_syn_send('SYNERGY|current|' .. table.concat(c, '|'))
+    elseif (data:byte(6) or 0) == 0 and (data:byte(7) or 0) == 0
+            and (data:byte(8) or 0) == 0 and b33 < 100 then
+        local off = {5, 9, 13, 17, 21, 25, 29, 33}     -- fewell inv (byte % 128)
+        local f = {}
+        for k = 1, 8 do f[k] = (data:byte(off[k]) or 0) % 128 end
+        _ow_syn_send('SYNERGY|fewell|' .. table.concat(f, '|'))
+    end
+end)
+
+-- 0x113: fewell inventory via named packet fields (redundant with the 0x05C
+-- inventory branch but more direct; pcall-guarded against res drift).
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x113 then return end
+    local ok, p = pcall(packets.parse, 'incoming', data)
+    if not ok or not p then return end
+    local f = {p['Syngery Fewell (Fire)'],      p['Syngery Fewell (Ice)'],
+               p['Syngery Fewell (Wind)'],      p['Syngery Fewell (Earth)'],
+               p['Syngery Fewell (Lightning)'], p['Syngery Fewell (Water)'],
+               p['Syngery Fewell (Light)'],     p['Syngery Fewell (Dark)']}
+    for k = 1, 8 do f[k] = tonumber(f[k]) or 0 end
+    _ow_syn_send('SYNERGY|fewell|' .. table.concat(f, '|'))
+end)
+
+-- 0x038: elemental leak (toggle). Type ef81..ef88 -> leaking element + the
+-- element that fixes it. The "no longer leaking" text clears it.
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x038 then return end
+    local ok, p = pcall(packets.parse, 'incoming', data)
+    if not ok or not p then return end
+    local v = p['Type']
+    local leak, fix = '', ''
+    if     v == 'ef81' then leak, fix = 'fire',    'ice'
+    elseif v == 'ef82' then leak, fix = 'ice',     'wind'
+    elseif v == 'ef83' then leak, fix = 'wind',    'earth'
+    elseif v == 'ef84' then leak, fix = 'earth',   'thunder'
+    elseif v == 'ef85' then leak, fix = 'thunder', 'water'
+    elseif v == 'ef86' then leak, fix = 'water',   'fire'
+    elseif v == 'ef87' then leak, fix = 'light',   'dark'
+    elseif v == 'ef88' then leak, fix = 'dark',    'light'
+    end
+    if leak ~= '' then
+        _ow_syn_send('SYNERGY|leak|' .. leak .. '|' .. fix)
+    end
+end)
+
+-- 0x028: action packet. Category 7 by the furnace toggles overload; 3 / 11
+-- clear it.
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x028 or not _ow_syn_in then return end
+    local ok, p = pcall(packets.parse, 'incoming', data)
+    if not ok or not p then return end
+    if p['Actor'] ~= _ow_syn_target['Target id'] then return end
+    local cat = p['Category']
+    if cat == 7 then
+        _ow_syn_overload = not _ow_syn_overload
+    elseif cat == 3 or cat == 11 then
+        _ow_syn_overload = false
+    end
+    _ow_syn_send('SYNERGY|overload|' .. (_ow_syn_overload and '1' or '0'))
+end)
+
+-- 0x04F: synergy session ended.
+ow_safe_register('incoming chunk', function(id, data)
+    if id == 0x04F and _ow_syn_in then
+        _ow_synergy_clear()
+    end
+end)
+
+-- Incoming text: recipe ("Difficulty:" line), pressure / impurity, leak
+-- clear, and claim expiry. The recipe symbols are encoded as the two bytes
+-- 0xEF 0x1F..0x26 (fire..dark) followed by the needed amount in ASCII; we
+-- scan for them directly so we don't depend on Windower's string library
+-- (which OmniWatch deliberately doesn't load).
+ow_safe_register('incoming text', function(original, modified)
+    local new = modified or original or ''
+    if new:find('Difficulty:') then
+        local map = {[0x1F] = 'fire', [0x20] = 'ice',  [0x21] = 'wind',
+                     [0x22] = 'earth', [0x23] = 'thunder', [0x24] = 'water',
+                     [0x25] = 'light', [0x26] = 'dark'}
+        local need = {fire = 0, ice = 0, wind = 0, earth = 0,
+                      thunder = 0, water = 0, light = 0, dark = 0}
+        local i, n = 1, #new
+        while i < n do
+            if new:byte(i) == 0xEF and map[new:byte(i + 1)] then
+                local elem = map[new:byte(i + 1)]
+                local j = i + 2
+                while j <= n and new:byte(j) == 0x20 do j = j + 1 end
+                local sign = ''
+                if j <= n and (new:byte(j) == 0x2D or new:byte(j) == 0x2B) then
+                    if new:byte(j) == 0x2D then sign = '-' end
+                    j = j + 1
+                end
+                local num = ''
+                while j <= n do
+                    local b = new:byte(j)
+                    if b >= 0x30 and b <= 0x39 then
+                        num = num .. string.char(b); j = j + 1
+                    else break end
+                end
+                need[elem] = tonumber(sign .. num) or 0
+                i = j
+            else
+                i = i + 1
+            end
+        end
+        local out = {}
+        for _, e in ipairs(_OW_SYN_ORDER) do out[#out + 1] = need[e] end
+        _ow_syn_send('SYNERGY|recipe|' .. table.concat(out, '|'))
+    end
+    if new:find('Internal pressure:') then
+        local _, _, pres  = new:find('Internal pressure: (%d+) Pz/Im')
+        local _, _, ratio = new:find('Impurity ratio: (%d+)%%')
+        _ow_syn_send('SYNERGY|data|' .. (pres or '0') .. '|' .. (ratio or '0'))
+    end
+    if new:find('elemental power is no longer leaking') then
+        _ow_syn_send('SYNERGY|leak||')
+    end
+    if new:find('Your claim over the synergy furnace has expired')
+            or new:find('Your claim to the synergy furnace has been relinquished') then
+        if _ow_syn_in then _ow_synergy_clear() end
+    end
+end)
+
+-- Furnace HP%: streamed ~2 Hz while in a session (the panel draws a bar).
+ow_safe_register('prerender', function()
+    if not _ow_syn_in then return end
+    local now = os.clock()
+    if now - (_ow_syn_hp_last or 0) < 0.5 then return end
+    _ow_syn_hp_last = now
+    local ti  = _ow_syn_target['Target Index']
+    local hpp = 0
+    if ti then
+        local mob = windower.ffxi.get_mob_by_index(ti)
+        if mob and mob.hpp then hpp = mob.hpp end
+    end
+    _ow_syn_send('SYNERGY|hp|' .. tostring(hpp))
+end)
+
+-- ════════════════════════════════════════════════════════════════════
+--  Craft  (dev-mode feature)
+-- ════════════════════════════════════════════════════════════════════
+-- Embedded auto-synthesis engine driven by the overlay's DEV · Craft panel.
+-- The panel owns the recipe database (recipes.json) and hands us a recipe's
+-- crystal + ingredient short-names per Make; we resolve them to item ids via
+-- `res`, auto-pull the crystal and every ingredient out of any enabled bag
+-- into inventory, build the 0x096 synthesis packet (incl. the obfuscation
+-- hash the server requires) and inject it on a coroutine-scheduled delay
+-- loop. Food auto-eat, Ionis/imagery support, a jiggle keypress, HQ-crystal
+-- substitution and put-to-bag are all included. Driven by CRAFT|... from the
+-- inbound drain; emits CRAFT|status / queue / result / msg back on the gs
+-- channel.
+--
+-- Ported from the 'craft' addon (BSD-3-Clause, Copyright (c) 2017 Mojo;
+-- recipes provided by BG-Wiki). The hash, the 0x096 build, the bag-pull /
+-- sort-block sequence and the support-NPC menu nav are unchanged; the
+-- Windower-library helpers it used (strings :format, Q queues, S sets,
+-- res:name()/res:filter()) are rewritten to plain Lua since OmniWatch
+-- doesn't load those libs. coroutine.schedule/sleep is OmniWatch's native
+-- delay primitive (same as autora / blusets / calltrust).
+
+_OW_CRAFT_EXCEPTIONS = {
+    ['Geo Crystal'] = 6509,
+    ['Fire Card'] = 9764, ['Ice Card'] = 9765, ['Wind Card'] = 9766,
+    ['Earth Card'] = 9767, ['Lightning Card'] = 9768, ['Water Card'] = 9769,
+    ['Light Card'] = 9770, ['Dark Card'] = 9771,
+}
+_OW_CRAFT_CLUSTERS = {
+    ['Fire Crystal'] = 'Fire Cluster', ['Ice Crystal'] = 'Ice Cluster',
+    ['Wind Crystal'] = 'Wind Cluster', ['Earth Crystal'] = 'Earth Cluster',
+    ['Lightng. Crystal'] = 'Lightning Cluster', ['Water Crystal'] = 'Water Cluster',
+    ['Light Crystal'] = 'Light Cluster', ['Dark Crystal'] = 'Dark Cluster',
+}
+_OW_CRAFT_HQCRYSTAL = {
+    ['Fire Crystal'] = 'Inferno Crystal', ['Ice Crystal'] = 'Glacier Crystal',
+    ['Wind Crystal'] = 'Cyclone Crystal', ['Earth Crystal'] = 'Terra Crystal',
+    ['Lightng. Crystal'] = 'Plasma Crystal', ['Water Crystal'] = 'Torrent Crystal',
+    ['Light Crystal'] = 'Aurora Crystal', ['Dark Crystal'] = 'Twilight Crystal',
+}
+_OW_CRAFT_SUPPORT_NPCS = {
+    {name = "Orechiniel", zone = 230, menu = 650, buff = 240},
+    {name = "Greubaque", zone = 231, menu = 628, buff = 237},
+    {name = "Ulycille", zone = 231, menu = 623, buff = 236},
+    {name = "Azima", zone = 234, menu = 122, buff = 242},
+    {name = "Fatimah", zone = 235, menu = 302, buff = 238},
+    {name = "Wise Owl", zone = 237, menu = 103, buff = 237},
+    {name = "Kipo-Opo", zone = 238, menu = 10015, buff = 243},
+    {name = "Lih Pituu", zone = 241, menu = 10018, buff = 241},
+    {name = "Terude-Harude", zone = 241, menu = 10013, buff = 239},
+    {name = "Fleuricette", zone = 256, menu = 1201, buff = 512},
+    {name = "Quiri-Aliri", zone = 257, menu = 1201, buff = 512},
+}
+
+_ow_craft_queue    = {}
+_ow_craft_busy     = false
+_ow_craft_paused   = false
+_ow_craft_delay    = 24
+_ow_craft_skipdel  = false
+_ow_craft_cond     = {move = false, sort = false, crystal = false,
+                      support = false, item = false}
+_ow_craft_appr     = {}
+_ow_craft_inv      = {}
+_ow_craft_food     = false
+_ow_craft_support  = false
+_ow_craft_jiggle   = false
+_ow_craft_hqsynth  = false
+_ow_craft_display  = false
+_ow_craft_injected = false
+_ow_craft_delta    = false
+_ow_craft_name2id  = nil
+_ow_craft_bags     = nil
+
+function _ow_craft_emit(payload)
+    if udp_gs then pcall(function() udp_gs:send(payload) end) end
+end
+
+function _ow_craft_notice(msg)
+    ow_chat(100, '[craft] ' .. tostring(msg))
+    _ow_craft_emit('CRAFT|msg|' .. tostring(msg))
+end
+
+function _ow_craft_emit_status()
+    _ow_craft_emit(string.format('CRAFT|status|%d|%s|%s|%s|%s|%s|%d|%s|%s',
+        _ow_craft_delay,
+        _ow_craft_paused and '1' or '0',
+        _ow_craft_display and '1' or '0',
+        _ow_craft_food and tostring(_ow_craft_food) or '',
+        _ow_craft_support and '1' or '0',
+        _ow_craft_jiggle and tostring(_ow_craft_jiggle) or '',
+        #_ow_craft_queue,
+        _ow_craft_hqsynth and '1' or '0',
+        _ow_craft_busy and '1' or '0'))
+end
+
+function _ow_craft_emit_queue()
+    _ow_craft_emit('CRAFT|queue|' .. tostring(#_ow_craft_queue))
+end
+
+function _ow_craft_split(s, sep)
+    local out = {}
+    if not s then return out end
+    local start = 1
+    while true do
+        local i = s:find(sep, start, true)
+        if not i then out[#out + 1] = s:sub(start); break end
+        out[#out + 1] = s:sub(start, i - 1)
+        start = i + #sep
+    end
+    return out
+end
+
+function _ow_craft_build_maps()
+    if _ow_craft_name2id and _ow_craft_bags then return end
+    local m = {}
+    for id, v in pairs(res.items) do
+        if type(v) == 'table' then
+            if v.en  and m[v.en:lower()]  == nil then m[v.en:lower()]  = id end
+            if v.enl and m[v.enl:lower()] == nil then m[v.enl:lower()] = id end
+        end
+    end
+    _ow_craft_name2id = m
+    local b = {}
+    for _, v in pairs(res.bags) do
+        if type(v) == 'table' and v.command and v.id ~= nil then
+            local nm = (v.en or v.name or v.command or '')
+            local cmd = v.command or ''
+            local excl = nm:match('Inventory') or nm:match('Temporary')
+                or nm:match('Wardrobe') or cmd:match('inventory')
+                or cmd:match('temporary') or cmd:match('wardrobe')
+            if not excl then b[cmd] = v.id end
+        end
+    end
+    _ow_craft_bags = b
+end
+
+function _ow_craft_item_id(name)
+    if not name then return nil end
+    if _OW_CRAFT_EXCEPTIONS[name] then return _OW_CRAFT_EXCEPTIONS[name] end
+    _ow_craft_build_maps()
+    return _ow_craft_name2id[name:lower()]
+end
+
+function _ow_craft_has_buff(player, buff_id)
+    if not (player and player.buffs) then return false end
+    for _, b in pairs(player.buffs) do
+        if b == buff_id then return true end
+    end
+    return false
+end
+
+function _ow_craft_hash(crystal, item, count)
+    local c = ((crystal % 6506) % 4238) % 4096
+    local m = (c + 1) * 6 + 77
+    local b = (c + 1) * 42 + 31
+    local m2 = (8 * c + 26) + (item - 1) * (c + 35)
+    return (m * item + b + m2 * (count - 1)) % 127
+end
+
+function _ow_craft_busy_wait(block, timeout, message)
+    local start = os.time()
+    while _ow_craft_cond[block] and ((os.time() - start) < timeout) do
+        coroutine.sleep(0.1)
+    end
+    if os.time() - start >= timeout then
+        _ow_craft_cond[block] = false
+        return string.format("Timed out - %s", message)
+    else
+        _ow_craft_inv = windower.ffxi.get_items()
+    end
+end
+
+function _ow_craft_check_bag(bag, id)
+    if not _ow_craft_inv['enabled_' .. bag] then return false end
+    local contents = _ow_craft_inv[bag]
+    local maxb = _ow_craft_inv['max_' .. bag] or 0
+    for index = 1, maxb do
+        local c = contents and contents[index]
+        if c and c.id == id then
+            _ow_craft_cond['sort'] = true
+            _ow_craft_cond['move'] = true
+            windower.ffxi.get_item(_ow_craft_bags[bag], index, c.count)
+            return true
+        end
+    end
+    return false
+end
+
+function _ow_craft_check_bags(id)
+    if (_ow_craft_inv['count_inventory'] or 0)
+            == (_ow_craft_inv['max_inventory'] or 0) then
+        return false
+    end
+    _ow_craft_build_maps()
+    for bag, _ in pairs(_ow_craft_bags) do
+        if _ow_craft_check_bag(bag, id) then return true end
+    end
+    return false
+end
+
+function _ow_craft_fetch_ingredient(ingredient)
+    local id = _ow_craft_item_id(ingredient)
+    if not id then return string.format("Unknown item %s", ingredient) end
+    local contents = _ow_craft_inv['inventory']
+    local maxi = _ow_craft_inv['max_inventory'] or 0
+    for index = 1, maxi do
+        if _ow_craft_appr[index] == nil then _ow_craft_appr[index] = 0 end
+        local c = contents and contents[index]
+        if c and c.id == id and c.count > _ow_craft_appr[index] then
+            _ow_craft_appr[index] = _ow_craft_appr[index] + 1
+            return id, index
+        end
+    end
+    if _ow_craft_check_bags(id) then
+        local status = _ow_craft_busy_wait('move', 10,
+            string.format('moving %s', ingredient))
+        if status then return status
+        else return _ow_craft_fetch_ingredient(ingredient) end
+    end
+    if _OW_CRAFT_CLUSTERS[ingredient] then
+        local cluster = _OW_CRAFT_CLUSTERS[ingredient]
+        local _, cindex = _ow_craft_fetch_ingredient(cluster)
+        if cindex then
+            _ow_craft_cond['sort'] = true
+            _ow_craft_cond['item'] = id
+            local start = os.time()
+            windower.chat.input(string.format('/item "%s" <me>', cluster))
+            local status = _ow_craft_busy_wait('item', 10,
+                string.format('using %s', cluster))
+            if status then return status end
+            local rem = 4 - (os.time() - start)
+            if rem > 0 then coroutine.sleep(rem) end
+            _ow_craft_inv = windower.ffxi.get_items()
+            return _ow_craft_fetch_ingredient(ingredient)
+        end
+    end
+    return string.format("Unable to locate %s", ingredient)
+end
+
+function _ow_craft_build_synth(crystal_name, ingredients)
+    local pl = windower.ffxi.get_player()
+    if not pl or pl.status ~= 0 then return "You can't craft at the moment" end
+    _ow_craft_inv = windower.ffxi.get_items()
+    _ow_craft_appr = {}
+    local p = packets.new('outgoing', 0x096)
+    local crystal = crystal_name
+    if _ow_craft_hqsynth and _OW_CRAFT_HQCRYSTAL[crystal] then
+        crystal = _OW_CRAFT_HQCRYSTAL[crystal]
+    end
+    local cid, cindex = _ow_craft_fetch_ingredient(crystal)
+    if not cindex then return cid end
+    p['Crystal'] = cid
+    p['Crystal Index'] = cindex
+    p['Ingredient count'] = #ingredients
+    for i, ing in ipairs(ingredients) do
+        local iid, iindex = _ow_craft_fetch_ingredient(ing)
+        if not iindex then return iid end
+        p[string.format('Ingredient %d', i)] = iid
+        p[string.format('Ingredient Index %d', i)] = iindex
+    end
+    p['_unknown1'] = _ow_craft_hash(p['Crystal'], p['Ingredient 1'],
+                                    p['Ingredient count'])
+    return p
+end
+
+function _ow_craft_issue_synth(item)
+    local p = _ow_craft_build_synth(item.crystal, item.ingredients)
+    if type(p) == 'string' then
+        _ow_craft_skipdel = true
+        _ow_craft_cond['sort'] = false
+        return string.format("%s - %s", item.name or '?', p)
+    else
+        packets.inject(p)
+        _ow_craft_cond['sort'] = false
+    end
+end
+
+function _ow_craft_repeat()
+    windower.chat.input('/lastsynth')
+end
+
+function _ow_craft_put_items(bag, id)
+    local src = _ow_craft_inv['inventory']
+    local dst = _ow_craft_inv[bag]
+    local empty = {}
+    for index = 1, (_ow_craft_inv['max_' .. bag] or 0) do
+        if dst[index] and dst[index].count == 0 then empty[index] = true end
+    end
+    local idx = next(empty, nil)
+    for index = 1, (_ow_craft_inv['max_inventory'] or 0) do
+        if src[index] and src[index].id == id and idx then
+            windower.ffxi.put_item(_ow_craft_bags[bag], index, src[index].count)
+            dst[idx].id = id
+            dst[idx].count = src[index].count
+            src[index].id = 0
+            src[index].count = 0
+            idx = next(empty, idx)
+            _ow_craft_delta = true
+        end
+    end
+end
+
+function _ow_craft_put(item)
+    _ow_craft_cond['sort'] = true
+    _ow_craft_delta = false
+    _ow_craft_inv = windower.ffxi.get_items()
+    if item.bag and item.bag ~= '' then
+        local bag = item.bag
+        if not _ow_craft_inv['enabled_' .. bag] then
+            _ow_craft_cond['sort'] = false
+            return string.format("bag %s disabled", bag)
+        end
+        _ow_craft_put_items(bag, item.id)
+    else
+        _ow_craft_build_maps()
+        for bag, _ in pairs(_ow_craft_bags) do
+            if _ow_craft_inv['enabled_' .. bag] then
+                _ow_craft_put_items(bag, item.id)
+            end
+        end
+    end
+    if _ow_craft_delta then
+        _ow_craft_delta = false
+        _ow_craft_busy_wait('move', 10,
+            string.format('moving %s', item.name or '?'))
+    end
+    _ow_craft_cond['sort'] = false
+    coroutine.sleep(3.5)
+    _ow_craft_skipdel = true
+end
+
+function _ow_craft_validate(npcs)
+    local zone = windower.ffxi.get_info()['zone']
+    local valid = false
+    for _, npc in pairs(npcs) do
+        if zone == npc.zone then
+            valid = true
+            local mob = windower.ffxi.get_mob_by_name(npc.name)
+            if mob and mob.distance and math.sqrt(mob.distance) < 6 then
+                return mob, npc
+            end
+        end
+    end
+    if valid then _ow_craft_notice("Too far away from NPC") end
+end
+
+function _ow_craft_poke_npc()
+    local mob, npc = _ow_craft_validate(_OW_CRAFT_SUPPORT_NPCS)
+    if npc and mob then
+        local pl = windower.ffxi.get_player()
+        if _ow_craft_has_buff(pl, npc.buff) then return end
+        _ow_craft_cond['support'] = true
+        local p = packets.new('outgoing', 0x01A, {
+            ['Target'] = mob.id, ['Target Index'] = mob.index,
+            ['Category'] = 0, ['Param'] = 0, ['_unknown1'] = 0})
+        packets.inject(p)
+        return _ow_craft_busy_wait('support', 10, "getting crafting buff")
+    end
+end
+
+function _ow_craft_jiggle_now()
+    windower.send_command(string.format('setkey %s down', _ow_craft_jiggle))
+    coroutine.sleep(0.25)
+    windower.send_command(string.format('setkey %s up', _ow_craft_jiggle))
+end
+
+function _ow_craft_consume_food()
+    local pl = windower.ffxi.get_player()
+    if _ow_craft_has_buff(pl, 251) then return end
+    _ow_craft_inv = windower.ffxi.get_items()
+    local _, index = _ow_craft_fetch_ingredient(_ow_craft_food)
+    if index then
+        windower.chat.input(string.format('/item "%s" <me>', _ow_craft_food))
+        coroutine.sleep(3.5)
+    else
+        _ow_craft_notice(string.format("Unable to consume %s", _ow_craft_food))
+    end
+end
+
+function _ow_craft_check_queue()
+    if #_ow_craft_queue > 0 then
+        if not _ow_craft_paused then
+            if _ow_craft_jiggle then _ow_craft_jiggle_now() end
+            if _ow_craft_support then
+                _ow_craft_poke_npc()
+                coroutine.sleep(2)
+            end
+            if _ow_craft_food then _ow_craft_consume_food() end
+            local item = table.remove(_ow_craft_queue, 1)
+            _ow_craft_emit_queue()
+            local msg
+            if item.kind == 'make' then
+                msg = _ow_craft_issue_synth(item)
+            elseif item.kind == 'repeat' then
+                msg = _ow_craft_repeat()
+            elseif item.kind == 'put' then
+                msg = _ow_craft_put(item)
+            end
+            if msg then _ow_craft_notice(msg) end
+            if _ow_craft_skipdel then
+                coroutine.schedule(_ow_craft_check_queue, 0)
+                _ow_craft_skipdel = false
+            else
+                coroutine.schedule(_ow_craft_check_queue, _ow_craft_delay)
+            end
+        end
+    else
+        _ow_craft_busy = false
+        _ow_craft_emit_status()
+    end
+end
+
+function _ow_craft_process_queue()
+    if not _ow_craft_busy then
+        _ow_craft_busy = true
+        coroutine.schedule(_ow_craft_check_queue, 0)
+    end
+    _ow_craft_emit_status()
+end
+
+function _ow_craft_command(sub, arg)
+    if sub == 'make' then
+        local parts = _ow_craft_split(arg, '|')
+        local count = tonumber(parts[1]) or 1
+        local name = parts[2] or '?'
+        local crystal = parts[3] or ''
+        local ings = _ow_craft_split(parts[4] or '', ';')
+        while #ings > 0 and ings[#ings] == '' do ings[#ings] = nil end
+        for _ = 1, count do
+            _ow_craft_queue[#_ow_craft_queue + 1] =
+                {kind = 'make', name = name, crystal = crystal, ingredients = ings}
+        end
+        _ow_craft_notice(string.format('Queued %d x %s', count, name))
+        _ow_craft_process_queue()
+    elseif sub == 'repeat' then
+        local count = tonumber(arg) or 1
+        for _ = 1, count do
+            _ow_craft_queue[#_ow_craft_queue + 1] = {kind = 'repeat'}
+        end
+        _ow_craft_notice(string.format('Queued %d repeat(s)', count))
+        _ow_craft_process_queue()
+    elseif sub == 'put' then
+        local parts = _ow_craft_split(arg, '|')
+        local name = parts[1] or ''
+        local bag = parts[2]
+        local id = _ow_craft_item_id(name)
+        if not id then
+            _ow_craft_notice(string.format('Unknown item %s', name))
+            return
+        end
+        if bag and bag ~= '' then
+            bag = bag:lower()
+            _ow_craft_build_maps()
+            if not _ow_craft_bags[bag] then
+                _ow_craft_notice(string.format('Unknown bag %s', bag))
+                return
+            end
+        end
+        _ow_craft_queue[#_ow_craft_queue + 1] =
+            {kind = 'put', id = id, name = name, bag = bag}
+        _ow_craft_notice(string.format('Queued put %s', name))
+        _ow_craft_process_queue()
+    elseif sub == 'stop' or sub == 'clear' then
+        _ow_craft_queue = {}
+        _ow_craft_notice('Cleared queue')
+        _ow_craft_emit_status()
+    elseif sub == 'pause' then
+        _ow_craft_paused = true
+        _ow_craft_notice('Paused')
+        _ow_craft_emit_status()
+    elseif sub == 'resume' then
+        if _ow_craft_paused then
+            _ow_craft_paused = false
+            _ow_craft_busy = false
+            _ow_craft_process_queue()
+        end
+        _ow_craft_notice('Resumed')
+        _ow_craft_emit_status()
+    elseif sub == 'delay' then
+        local n = tonumber(arg)
+        if n then
+            _ow_craft_delay = math.max(17, n)
+            _ow_craft_notice(string.format('Delay %d', _ow_craft_delay))
+        end
+        _ow_craft_emit_status()
+    elseif sub == 'food' then
+        if arg == '' then
+            _ow_craft_food = false
+        else
+            local id = _ow_craft_item_id(arg)
+            if id and res.items[id] then
+                _ow_craft_food = res.items[id].en or arg
+            else
+                _ow_craft_food = arg
+            end
+        end
+        _ow_craft_emit_status()
+    elseif sub == 'support' then
+        _ow_craft_support = (arg == '1')
+        _ow_craft_emit_status()
+    elseif sub == 'jiggle' then
+        _ow_craft_jiggle = (arg ~= '' and arg) or false
+        _ow_craft_emit_status()
+    elseif sub == 'hq' then
+        _ow_craft_hqsynth = (arg == '1')
+        _ow_craft_emit_status()
+    elseif sub == 'display' then
+        _ow_craft_display = (arg == '1')
+        _ow_craft_emit_status()
+    elseif sub == 'status' then
+        _ow_craft_emit_status()
+    end
+end
+
+-- block the outgoing 0x3A bag-sort while we're moving items (raw register
+-- + return true to actually block; ow_safe_register swallows returns).
+windower.register_event('outgoing chunk', function(id, data)
+    if id == 0x3A and _ow_craft_cond['sort'] then
+        return true
+    end
+end)
+
+-- support buff: when we poked a support NPC, answer its 0x34 menu-open with
+-- the support option and block the menu (raw register for the same reason).
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x34 or not _ow_craft_cond['support'] then return end
+    local blocked = false
+    pcall(function()
+        local mob, npc = _ow_craft_validate(_OW_CRAFT_SUPPORT_NPCS)
+        if mob and npc then
+            local p = packets.new('outgoing', 0x5B, {
+                ['Target'] = mob.id, ['Option Index'] = 1,
+                ['Target Index'] = mob.index, ['Automated Message'] = false,
+                ['Zone'] = windower.ffxi.get_info()['zone'],
+                ['Menu ID'] = npc.menu})
+            packets.inject(p)
+            _ow_craft_cond['support'] = false
+            blocked = true
+        end
+    end)
+    if blocked then return true end
+end)
+
+-- non-blocking observers: 0x1D clears the move gate, 0x20 clears the
+-- cluster-use item gate.
+ow_safe_register('incoming chunk', function(id, data)
+    if id == 0x1D then _ow_craft_cond['move'] = false end
+end)
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x20 then return end
+    local ok, p = pcall(packets.parse, 'incoming', data)
+    if ok and p and p['Item'] == _ow_craft_cond['item'] then
+        _ow_craft_cond['item'] = false
+    end
+end)
+
+-- mark our own injected synths so the result hook only fires for them; also
+-- the optional packet display.
+ow_safe_register('outgoing chunk', function(id, data, modified, injected)
+    if id == 0x096 and injected then
+        _ow_craft_injected = true
+    end
+    if id == 0x096 and _ow_craft_display then
+        local ok, p = pcall(packets.parse, 'outgoing', data)
+        if ok and p then
+            ow_chat(100, string.format(
+                '[craft] synth: crystal=%s ing#=%s',
+                tostring(p['Crystal']), tostring(p['Ingredient count'])))
+        end
+    end
+end)
+
+-- synthesis result (0x06F) for our injected synths -> chat + overlay.
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x06F or not _ow_craft_injected then return end
+    local ok, p = pcall(packets.parse, 'incoming', data)
+    if not ok or not p then return end
+    local r = p['Result']
+    if r == 0 or r == 2 then
+        local ent = res.items[p['Item']]
+        local item = ent and (ent.english or ent.en) or '?'
+        local count = p['Count'] or 1
+        _ow_craft_emit(string.format('CRAFT|result|ok|%s|%s',
+            tostring(item), tostring(count)))
+        if count > 1 then
+            ow_chat(121, string.format(
+                'You synthesized: %s x%d.', item, count))
+        else
+            ow_chat(121, string.format(
+                'You synthesized: %s.', item))
+        end
+        _ow_craft_injected = false
+    elseif r == 1 or r == 5 then
+        _ow_craft_emit('CRAFT|result|fail||')
+        ow_chat(121,
+            'Your synthesis has failed and your crystal is lost.')
+        _ow_craft_injected = false
+    end
+end)
+
+do  -- scope SkillUp+AH engine locals out of the main chunk
+-- ════════════════════════════════════════════════════════════════════════
+--  SkillUp engine  (standalone port of smd111's GearSwap "skillup.lua";
+--  original by Arcon / Byrth / Mote et al.)
+--
+--  SkillUp is a GearSwap data file; its cast loop runs through GearSwap's
+--  precast/filtered_action/aftercast hooks (cancel_spell / equip). OmniWatch
+--  is a standalone Windower addon, so that pipeline is reimplemented here:
+--  every cast goes out as `input /ma` (or `/ja`/`/item`), completion /
+--  interruption is detected via the `action` event (category 4 = done,
+--  category 8 / param 28787 = interrupted), and all the precast decisions
+--  (low-MP skip+rest, Blue Unbridled Learning/Wisdom, wind/string instrument
+--  swap, Summoning call→Favor/Siphon→Release, Ninjutsu tool unpack, optional
+--  Trust / skill-up Item / Geo-Refresh) are applied BEFORE each cast.
+--
+--  Hardened against the original's two "random stop" bugs:
+--    1. `(count % #spells)+1` divides by zero the instant the spell list
+--       empties (Ninjutsu tools depleting, deleted spells) -> Lua error ->
+--       chain dies. Here every advance guards #spells > 0.
+--    2. Resting forever when the MP-full check never matches. Here we wake on
+--       vitals.mpp >= 100, and a watchdog re-kicks the loop if it ever stalls.
+--
+--  Driven by SKILLUP|... (inbound drain) and //ow su ... ; emits
+--  SKILLUP|status|... back to the panel. Skillups counted from action
+--  message 38; skill levels / caps from the 0x062 packet.
+-- ════════════════════════════════════════════════════════════════════════
+
+_ow_su = {
+    running=false, type='None', spells={}, idx=1,
+    shutdown=false, logoff=false, stoptype='Stop',
+    use_trust=false, use_item=false, use_geo=false,
+    total=0, ups={}, skill={}, skipped={},
+    pending=nil,            -- spell id currently in flight
+    phase='idle',           -- 'idle' | 'cast' | 'smn'  (summoning sub-dance)
+    resting=false,
+    last_action=0,          -- os.clock() of last progress (watchdog)
+    epoch=0,                -- bumped on every start/stop to invalidate stale schedules
+}
+
+_OW_SU_BLU_UL  = { ['Harden Shell']=true, ['Pyric Bulwark']=true, ['Carcharian Verve']=true }
+_OW_SU_ITEMS   = { 5889, 5890, 5891, 5892 }
+_OW_SU_SKILLID = { Healing=33, Enhancing=34, Summoning=38, Ninjutsu=39,
+                   Singing=40, Blue=43, Geomancy=44 }
+_OW_SU_AFTERCAST = 3.0
+_OW_SU_WATCHDOG  = 18.0     -- if no progress in this many seconds, re-kick
+
+_ow_su_wind_inst   = 'Cornette'
+_ow_su_string_inst = 'Lamia Harp'
+
+-- Ninja tool -> packed-tool item id (used to /item-unpack when out).
+_OW_SU_NIN_TOOLS = {
+    ['Shihei']=5314, ['Uchitake']=5308, ['Tsurara']=5309, ['Kawahori-Ogi']=5310,
+    ['Makibishi']=5311, ['Hiraishin']=5312, ['Mizu-Deppo']=5313, ['Jusatsu']=5315,
+    ['Kaginawa']=5316, ['Sairui-Ran']=5317, ['Kodoku']=5318, ['Shinobi-Tabi']=5319,
+    ['Sanjaku-Tenugui']=5417, ['Soshi']=5734, ['Ranka']=6265, ['Furusumi']=6266,
+    ['Kabenro']=5863, ['Jinko']=5864, ['Ryuno']=5865, ['Mokujin']=5866,
+    ['Chonofuda']=5869, ['Inoshishinofuda']=5867, ['Shikanofuda']=5868,
+}
+
+local function _ow_su_player() return windower.ffxi.get_player and windower.ffxi.get_player() or nil end
+local function _ow_su_pet()    return windower.ffxi.get_mob_by_target and windower.ffxi.get_mob_by_target('pet') or nil end
+local function _ow_su_buffs(p) local s={} if p and p.buffs then for _,b in ipairs(p.buffs) do s[b]=true end end return s end
+local function _ow_su_emit(payload) if udp_gs then pcall(function() udp_gs:send(payload) end) end end
+
+local function _ow_su_rate()
+    local now, total = os.clock(), 0
+    for ts, pts in pairs(_ow_su.ups) do
+        if now - ts > 3600 then _ow_su.ups[ts] = nil else total = total + pts end
+    end
+    return total
+end
+
+function _ow_su_emit_status()
+    local s = _ow_su
+    _ow_su_emit(string.format('SKILLUP|status|%s|%d|%.1f|%.1f|%s|%s|%s|%s',
+        s.type, s.running and 1 or 0, _ow_su_rate()/10, (s.total or 0)/10,
+        s.use_trust and '1' or '0', s.use_geo and '1' or '0',
+        s.use_item and '1' or '0', s.stoptype))
+end
+
+-- ── spell helpers ─────────────────────────────────────────────────────────
+local function _ow_su_spell_valid(v, p)
+    if not (v and v.levels and v.targets) then return false end
+    local lvl_ok = (v.levels[p.main_job_id] and v.levels[p.main_job_id] <= p.main_job_level)
+                or (v.levels[p.sub_job_id]  and v.levels[p.sub_job_id]  <= p.main_job_level)
+    if not lvl_ok or not v.targets.Self then return false end
+    local nm = v.en or ''
+    if nm:match('^Teleport') or nm:match('^Warp') or nm:match('^Tractor')
+        or nm == 'Retrace' or nm == 'Escape' or nm:match('^Geo%-')
+        or nm == 'Sacrifice' or nm == 'Odin' or nm == 'Alexander'
+        or nm:match('^Recall') then return false end
+    return true
+end
+
+local function _ow_su_rec(name) return res.spells:with('en', name) end
+
+local function _ow_su_spell_usable(name)
+    local rec = _ow_su_rec(name); if not rec then return false end
+    local known = windower.ffxi.get_spells()[rec.id]
+    local rc = windower.ffxi.get_spell_recasts()
+    return known and (not rc or (rc[rec.recast_id] or 0) == 0)
+end
+
+local function _ow_su_ja_ready(id)
+    local ar = windower.ffxi.get_ability_recasts()
+    return ar and (ar[id] or 1) == 0
+end
+
+function _ow_su_check_cap()
+    local sk, t = _ow_su.skill, _ow_su.type
+    if t=='Healing' or t=='Enhancing' or t=='Blue' or t=='Summoning' then
+        return sk[t..' Magic Capped'] == true
+    elseif t=='Ninjutsu' then return sk['Ninjutsu Capped'] == true
+    elseif t=='Geomancy' then return sk['Geomancy Capped']==true and sk['Handbell Capped']==true
+    elseif t=='Singing' then
+        return sk['Singing Capped']==true and sk['Stringed Instrument Capped']==true
+           and sk['Wind Instrument Capped']==true
+    end
+    return false
+end
+
+-- ── lifecycle ─────────────────────────────────────────────────────────────
+function _ow_su_stop(reason)
+    _ow_su.running = false
+    _ow_su.pending = nil
+    _ow_su.phase   = 'idle'
+    _ow_su.epoch   = (_ow_su.epoch or 0) + 1     -- invalidate any pending schedules
+    ow_chat(207, '[skillup] ' .. tostring(reason or 'stopped'))
+    if _ow_su.logoff then windower.send_command('wait 3.0;input /logout')
+    elseif _ow_su.shutdown then windower.send_command('wait 3.0;input /shutdown') end
+    _ow_su_emit_status()
+end
+
+-- guarded advance: empties never cause `% 0`; an empty list stops cleanly.
+local function _ow_su_advance()
+    local n = #_ow_su.spells
+    if n == 0 then _ow_su_stop('spell list empty'); return false end
+    _ow_su.idx = (_ow_su.idx % n) + 1
+    return true
+end
+
+local function _ow_su_progress() _ow_su.last_action = os.clock() end
+
+-- safe scheduler that no-ops if the run has moved on (epoch changed)
+local function _ow_su_sched(fn, delay)
+    local e = _ow_su.epoch
+    coroutine.schedule(function()
+        if _ow_su.running and _ow_su.epoch == e then pcall(fn) end
+    end, delay)
+end
+
+-- ── ninja tools: return a tool item name to /item-unpack, or nil ──────────
+local function _ow_su_nin_unpack(name)
+    local tmap = gearswap and gearswap.tool_map
+    if not tmap or not tmap[name] then return nil end
+    local tool = tmap[name].en
+    local id = _OW_SU_NIN_TOOLS[tool]
+    if not id then return nil end
+    local item = res.items[id] and res.items[id].en
+    if not item then return nil end
+    local inv = windower.ffxi.get_items and windower.ffxi.get_items('inventory')
+    -- if a packed tool is on hand, /item it to unpack
+    if inv then
+        for _, it in ipairs(inv) do
+            if it.id == id and (it.count or 0) > 0 then return item end
+        end
+    end
+    return nil
+end
+
+-- ── the cast step ─────────────────────────────────────────────────────────
+function _ow_su_cast_current()
+    if not _ow_su.running then return end
+    local ok, err = pcall(_ow_su_cast_current_impl)
+    if not ok then
+        ow_chat(123, '[skillup] cast error: ' .. tostring(err))
+        -- don't die: let the watchdog re-kick
+    end
+end
+
+function _ow_su_cast_current_impl()
+    if _ow_su_check_cap() then _ow_su_stop('skill capped') return end
+    if #_ow_su.spells == 0 then _ow_su_stop('no spells') return end
+    local p = _ow_su_player(); if not p then _ow_su_sched(_ow_su_cast_current, 2.0) return end
+    _ow_su.phase = 'cast'
+
+    local name = _ow_su.spells[_ow_su.idx]
+    local rec  = _ow_su_rec(name)
+    if not rec then if _ow_su_advance() then _ow_su_sched(_ow_su_cast_current, 0.5) end return end
+    local buffs = _ow_su_buffs(p)
+    local mp    = (p.vitals and p.vitals.mp) or 0
+
+    -- Singing: equip the instrument for whichever skill still isn't capped.
+    if _ow_su.type == 'Singing' then
+        if not _ow_su.skill['Stringed Instrument Capped'] then
+            windower.send_command('input /equip range "'.._ow_su_string_inst..'"')
+        elseif not _ow_su.skill['Wind Instrument Capped'] then
+            windower.send_command('input /equip range "'.._ow_su_wind_inst..'"')
+        end
+    end
+
+    -- Ninjutsu: unpack a tool if we're out, then retry.
+    if _ow_su.type == 'Ninjutsu' then
+        local item = _ow_su_nin_unpack(name)
+        if item then
+            windower.send_command('input /item "'..item..'" <me>')
+            _ow_su_progress(); _ow_su_sched(_ow_su_cast_current, 2.0); return
+        end
+    end
+
+    -- Blue: Unbridled Learning(81)/Wisdom(254) for UL-only spells.
+    if _OW_SU_BLU_UL[name] and not buffs[491] and not buffs[492] then
+        if _ow_su_ja_ready(81) then
+            windower.send_command('input /ja "Unbridled Learning" <me>')
+            _ow_su_progress(); _ow_su_sched(_ow_su_cast_current, 2.0); return
+        elseif _ow_su_ja_ready(254) then
+            windower.send_command('input /ja "Unbridled Wisdom" <me>')
+            _ow_su_progress(); _ow_su_sched(_ow_su_cast_current, 2.0); return
+        end
+    end
+
+    -- Low MP: skip; if everything's been skipped, rest until full.
+    if (rec.mp_cost or 0) + 25 > mp then
+        if _ow_su.skipped[name] then
+            _ow_su.skipped = {}; _ow_su.resting = true
+            windower.send_command('input /heal on')
+            _ow_su_progress(); _ow_su_sched(_ow_su_rest_check, 3.0); return
+        end
+        _ow_su.skipped[name] = true
+        if _ow_su_advance() then _ow_su_sched(_ow_su_cast_current, 0.3) end
+        return
+    end
+
+    -- Optional helpers (between casts): Moogle trust / skill-up item / Geo-Refresh.
+    if _ow_su.use_trust and (p.in_combat == false or true) then
+        local moogle = res.spells[931]
+        if moogle and _ow_su_spell_usable(moogle.en) and name ~= moogle.en then
+            local party = windower.ffxi.get_party()
+            if party and (party.party1_count or 1) == 1 then
+                windower.send_command('input /ma "'..moogle.en..'" <me>')
+                _ow_su.pending = moogle.id; _ow_su_progress(); return
+            end
+        end
+    end
+    if _ow_su.use_item and not buffs[251] then
+        local inv = windower.ffxi.get_items and windower.ffxi.get_items('inventory')
+        if inv then
+            for _, id in ipairs(_OW_SU_ITEMS) do
+                local has=false
+                for _, it in ipairs(inv) do if it.id==id and (it.count or 0)>0 then has=true break end end
+                if has and res.items[id] then
+                    windower.send_command('input /item "'..res.items[id].en..'" <me>')
+                    _ow_su_progress(); _ow_su_sched(_ow_su_cast_current, 4.0); return
+                end
+            end
+        end
+    end
+
+    if not _ow_su_spell_usable(name) then
+        if _ow_su_advance() then _ow_su_sched(_ow_su_cast_current, 0.5) end
+        return
+    end
+
+    local cast_name = name
+    if windower.to_shift_jis then
+        local ok, sj = pcall(windower.to_shift_jis, name); if ok and sj then cast_name = sj end
+    end
+    _ow_su.pending = rec.id
+    _ow_su_progress()
+    windower.send_command('input /ma "'..cast_name..'" <me>')
+end
+
+-- Summoning sub-dance: after the avatar/spirit lands, Favor/Siphon then Release.
+function _ow_su_smn_after(spell_en)
+    _ow_su.phase = 'smn'
+    local is_spirit = spell_en:find('Spirit') ~= nil
+    if is_spirit and _ow_su_ja_ready(232) then
+        windower.send_command('input /ja "Elemental Siphon" <me>')
+    elseif (not is_spirit) and _ow_su_ja_ready(250) then
+        windower.send_command('input /ja "Avatar\'s Favor" <me>')
+    end
+    _ow_su_progress()
+    _ow_su_sched(_ow_su_smn_release, 4.0)
+end
+
+function _ow_su_smn_release()
+    if _ow_su_pet() then windower.send_command('input /ja "Release" <me>') end
+    _ow_su.phase = 'cast'
+    _ow_su_progress()
+    if _ow_su_advance() then _ow_su_sched(_ow_su_cast_current, _OW_SU_AFTERCAST) end
+end
+
+-- ── cast pacing via the action event ──────────────────────────────────────
+windower.register_event('action', function(act)
+    if not _ow_su.running or not _ow_su.pending then return end
+    if not act or not act.actor_id then return end
+    local p = _ow_su_player(); if not p or act.actor_id ~= p.id then return end
+    if act.category == 4 and act.param == _ow_su.pending then
+        local done = _ow_su.spells[_ow_su.idx]
+        _ow_su.pending = nil; _ow_su.skipped = {}; _ow_su_progress()
+        if _ow_su.type == 'Summoning' then
+            _ow_su_smn_after(done or '')
+        else
+            if _ow_su_advance() then _ow_su_sched(_ow_su_cast_current, _OW_SU_AFTERCAST) end
+        end
+    elseif act.category == 8 and act.param == 28787
+            and act.targets and act.targets[1] and act.targets[1].actions
+            and act.targets[1].actions[1]
+            and act.targets[1].actions[1].param == _ow_su.pending then
+        _ow_su_progress(); _ow_su_sched(_ow_su_cast_current, _OW_SU_AFTERCAST)
+    end
+end)
+
+-- ── skill levels (0x062) ──────────────────────────────────────────────────
+windower.register_event('incoming chunk', function(id, data)
+    if id == 0x062 then
+        local ok, pkt = pcall(function() return packets.parse('incoming', data) end)
+        if ok and pkt then
+            _ow_su.skill = pkt
+            if _ow_su.running and _ow_su_check_cap() then _ow_su_stop('skill capped') end
+            _ow_su_emit_status()
+        end
+    end
+end)
+
+-- ── resting: wake on full MP (mpp) ────────────────────────────────────────
+function _ow_su_rest_check()
+    if not (_ow_su.running and _ow_su.resting) then return end
+    local p = _ow_su_player()
+    local mpp = p and p.vitals and p.vitals.mpp or 0
+    if mpp >= 100 then
+        _ow_su.resting = false
+        windower.send_command('input /heal off')
+        _ow_su_progress(); _ow_su_sched(_ow_su_cast_current, 1.0)
+    else
+        _ow_su_sched(_ow_su_rest_check, 3.0)
+    end
+end
+
+-- ── skillup counter (action message id 38 on you) ─────────────────────────
+windower.register_event('action message',
+    function(actor_id, target_id, ai, ti, message_id, p1, p2, p3)
+        local p = _ow_su_player()
+        if message_id == 38 and p and target_id == p.id then
+            _ow_su.total = (_ow_su.total or 0) + (p2 or 0)
+            _ow_su.ups[os.clock()] = (p2 or 0)
+            _ow_su_progress()
+            _ow_su_emit_status()
+        end
+    end)
+
+-- ── watchdog: if running but no progress for a while, re-kick the loop ─────
+windower.register_event('prerender', function()
+    if not _ow_su.running or _ow_su.resting then return end
+    if (os.clock() - (_ow_su.last_action or 0)) > _OW_SU_WATCHDOG then
+        _ow_su.pending = nil
+        _ow_su_progress()
+        _ow_su_sched(_ow_su_cast_current, 0.1)
+    end
+end)
+
+-- ── start / commands ──────────────────────────────────────────────────────
+function _ow_su_start(skilltype)
+    local norm
+    for _, v in ipairs({'Healing','Geomancy','Enhancing','Ninjutsu','Singing','Blue','Summoning'}) do
+        if v:lower() == tostring(skilltype):lower() then norm = v end
+    end
+    if not norm then ow_chat(123,'[skillup] unknown skill: '..tostring(skilltype)) return end
+    local p = _ow_su_player(); if not p then return end
+    local sid = _OW_SU_SKILLID[norm]
+    local known = windower.ffxi.get_spells()
+    local list = {}
+    for _, v in pairs(res.spells) do
+        if v.skill == sid and known[v.id] and _ow_su_spell_valid(v, p) then list[#list+1] = v.en end
+    end
+    if #list == 0 then ow_chat(123,'[skillup] current job can not use '..norm..' spells') return end
+    _ow_su.type=norm; _ow_su.spells=list; _ow_su.idx=1; _ow_su.skipped={}
+    _ow_su.resting=false; _ow_su.phase='cast'; _ow_su.pending=nil
+    _ow_su.running=true; _ow_su.epoch=(_ow_su.epoch or 0)+1; _ow_su_progress()
+    ow_chat(207,'[skillup] '..norm..': '..#list..' spells')
+    _ow_su_emit_status()
+    _ow_su_sched(_ow_su_cast_current, 0.5)
+end
+
+function _ow_su_command(rest)
+    local a = {}
+    for tok in (tostring(rest)..'|'):gmatch('([^|]*)|') do a[#a+1] = tok end
+    local cmd = (a[1] or ''):lower()
+    if cmd == 'start' then _ow_su_start(a[2] or '')
+    elseif cmd == 'stop' or cmd == 'skillstop' then _ow_su_stop('stopped')
+    elseif cmd == 'after' then
+        local m = (a[2] or 'stop'):lower()
+        _ow_su.shutdown=(m=='shutdown'); _ow_su.logoff=(m=='logoff')
+        _ow_su.stoptype=(m=='shutdown' and 'Shutdown') or (m=='logoff' and 'Logoff') or 'Stop'
+        _ow_su_emit_status()
+    elseif cmd == 'toggle' then
+        local w=(a[2] or ''):lower()
+        if w=='trust' then _ow_su.use_trust=not _ow_su.use_trust
+        elseif w=='geo' then _ow_su.use_geo=not _ow_su.use_geo
+        elseif w=='item' then _ow_su.use_item=not _ow_su.use_item end
+        _ow_su_emit_status()
+    elseif cmd == 'inst' then
+        local which=(a[2] or ''):lower()
+        if which=='wind' and a[3] and a[3]~='' then _ow_su_wind_inst=a[3]
+        elseif which=='string' and a[3] and a[3]~='' then _ow_su_string_inst=a[3] end
+        _ow_su_emit_status()
+    elseif cmd == 'status' then _ow_su_emit_status() end
+end
+
+-- ════════════════════════════════════════════════════════════════════════
+--  Auction House engine
+--  Owns the item DB (res.items) for the panel's Buy search, builds the bid
+--  packet (outgoing 0x04E, Type 0x0E) and reads the result (incoming 0x04C,
+--  Type 0x0E -> Buy Status). Buy loop per queued item: bid at `start`; on a
+--  win count it and re-bid at the same price; on a loss raise by `inc`; stop
+--  the item once it would exceed `max`; advance through the queue; all bids
+--  spaced by `throttle` to respect the server. A pending-timeout watchdog
+--  keeps it from hanging if the server never answers.
+--
+--  Requires being in an Auction House zone (the menu is opened for you via
+--  an injected incoming 0x04C). Driven by AH|... (drain) and //ow ah ;
+--  Buy Status: 0x01 Success | 0x02 Placing(pending) | 0xC5 Failed | 0xE5 Cannot Bid
+-- ════════════════════════════════════════════════════════════════════════
+_ow_ah = {
+    running=false, throttle=8.0, queue={}, qi=1,
+    pending=false, pend_time=0, epoch=0, spoof_menu=true,
+}
+
+local function _ow_ah_emit(payload)
+    if udp_gs then pcall(function() udp_gs:send(payload) end) end
+end
+
+-- AH city zones; bids only go out from one of these (Ivaar's AuctionHelper).
+local _OW_AH_ZONES = {}
+for _, _z in ipairs({'Bastok Mines','Bastok Markets','Norg',"Southern San d'Oria",
+        "Port San d'Oria",'Rabao','Windurst Woods','Windurst Walls','Kazham',
+        'Lower Jeuno',"Ru'Lude Gardens",'Port Jeuno','Upper Jeuno',
+        'Aht Urhgan Whitegate','Al Zahbi','Nashmau','Tavnazian Safehold',
+        'Western Adoulin','Eastern Adoulin'}) do _OW_AH_ZONES[_z] = true end
+
+local function _ow_ah_in_zone()
+    local info = windower.ffxi.get_info and windower.ffxi.get_info()
+    if not (info and info.zone) then return false end
+    local z = res.zones[info.zone]
+    return (z and _OW_AH_ZONES[z.en]) and true or false
+end
+
+-- Spoof the AH menu open so bids work without clicking the counter NPC
+-- (inject an incoming 0x04C Type 0x02, exactly as AuctionHelper does).
+local function _ow_ah_open_menu()
+    -- Spoof the AH menu-open (inject an incoming 0x04C Type 0x02) so buy/sell
+    -- work without clicking the counter NPC -- you only need to be standing in
+    -- an AH city. GATED to AH-city zones and throttled to once / 3s, exactly
+    -- like Ivaar's Auctioneer: faking the menu OUTSIDE an AH city is what
+    -- desyncs the client ('search failed'); inside one the server accepts the
+    -- AH packets with no NPC. Use OmniWatch's own search (not the game AH
+    -- menu) while this is on. Disable with //ow ah spoofmenu off.
+    if not _ow_ah.spoof_menu then return end
+    if not _ow_ah_in_zone() then return end
+    local now = os.clock()
+    if _ow_ah.menu_t and now - _ow_ah.menu_t < 3 then return end
+    _ow_ah.menu_t = now
+    local o = string.char(0x4C, 0x1E, 0, 0, 0x02, 0, 0x01) .. string.rep('\0', 53)
+    pcall(function() windower.packets.inject_incoming(0x4C, o) end)
+end
+
+-- Ask the server for our sale slots WITHOUT opening the AH NPC: spoof the
+-- menu, then send the WORK_CHECK (0x04E Cmd 0x0A, AucWorkIndex 0xFF = all
+-- slots). The server replies with the 0x04C Cmd 0x0A boxes our existing
+-- handler already parses. Throttled so a chatty UI can't spam the server.
+local function _ow_ah_check_sales()
+    if not (_ow_ah.spoof_menu and _ow_ah_in_zone()) then return end
+    local now = os.clock()
+    if _ow_ah.sales_t and now - _ow_ah.sales_t < 1.5 then return end
+    _ow_ah.sales_t = now
+    _ow_ah_open_menu()
+    local req = string.char(0x4E, 0x1E, 0, 0, 0x0A, 0xFF, 0, 0) .. string.rep('\0', 52)
+    pcall(function() windower.packets.inject_outgoing(0x4E, req) end)
+end
+
+function _ow_ah_emit_status()
+    _ow_ah_emit('AH|status|' .. (_ow_ah.running and '1' or '0'))
+end
+
+-- epoch-guarded scheduler: stale callbacks from a prior run no-op.
+local function _ow_ah_sched(fn, delay)
+    local e = _ow_ah.epoch
+    coroutine.schedule(function()
+        if _ow_ah.running and _ow_ah.epoch == e then pcall(fn) end
+    end, delay)
+end
+
+-- build + inject a bid (single by default; stack flag reserved for later).
+local function _ow_ah_send_bid(item_id, price, stack)
+    -- Raw byte build + inject_outgoing (the same proven mechanism as the
+    -- working sell path) so a Windower packet-lib field rename can't silently
+    -- zero the bid the way it just blanked the sale-slot names. Layout matches
+    -- live 0x04E captures + Ivaar's Auctioneer: Type@0x04, work-index@0x05,
+    -- Price(u32)@0x08, Item(u16)@0x0C, single@0x10. The work-index is the
+    -- first empty sale slot (what the live client and Auctioneer send),
+    -- falling back to 0x07 only when all 7 slots are in use.
+    local slot = 0x07
+    for i = 0, 6 do
+        local sl = _ow_ah.sales and _ow_ah.sales[i]
+        if not sl or not sl.status or sl.status == 'Empty' then slot = i; break end
+    end
+    local pr = math.floor(tonumber(price) or 0)
+    local it = math.floor(tonumber(item_id) or 0)
+    local single = stack and 0 or 1
+    local trans = string.char(0x4E, 0x1E, 0, 0)
+              .. string.char(0x0E, slot, 0, 0)
+              .. string.char(pr % 256, math.floor(pr / 256) % 256,
+                             math.floor(pr / 65536) % 256,
+                             math.floor(pr / 16777216) % 256)
+              .. string.char(it % 256, math.floor(it / 256) % 256)
+              .. string.char(0, 0)
+              .. string.char(single)
+              .. string.rep('\0', 43)
+    local ok, err = pcall(function()
+        windower.packets.inject_outgoing(0x4E, trans)
+    end)
+    if not ok then
+        _ow_ah_emit('AH|result|bid packet error: ' .. tostring(err))
+    end
+end
+
+-- Map the panel's AH-style subcategories onto Windower res fields so a picked
+-- category returns real items: weapon subcats -> res.skills (it.skill), armor
+-- subcats -> equip slots (it.slots), Shield -> shield_size, else loose match.
+local _OW_AH_SKILLCAT = {
+    Archery=true, Axe=true, Club=true, Dagger=true, ['Great Axe']=true,
+    ['Great Katana']=true, ['Great Sword']=true, Katana=true, Marksmanship=true,
+    Polearm=true, Scythe=true, Staff=true, Sword=true, ['Hand-to-Hand']=true,
+    Throwing=true,
+}
+local _OW_AH_SLOTCAT = {
+    Head={'Head'}, Neck={'Neck'}, Body={'Body'}, Hands={'Hands'},
+    Waist={'Waist'}, Legs={'Legs'}, Feet={'Feet'}, Back={'Back'},
+    Earring={'Left Ear', 'Right Ear'}, Ring={'Left Ring', 'Right Ring'},
+    Ammo={'Ammo'}, Instruments={'Range'},
+}
+
+-- test slot `slot_id` against it.slots, whether it's a numeric bitmask or a set
+local function _ow_ah_has_slot(slots, slot_id)
+    if type(slots) == 'number' then
+        return math.floor(slots / (2 ^ slot_id)) % 2 >= 1
+    elseif type(slots) == 'table' then
+        for k, v in pairs(slots) do
+            if k == slot_id or v == slot_id then return true end
+        end
+    end
+    return false
+end
+
+-- resolve a category once into a fast per-item predicate (or nil = no filter)
+-- Categories were removed from the panel; AH search is by item name only.
+local function _ow_ah_make_filter(category)
+    if not category or category == '' then return nil end
+    local c = category:lower()
+    return function(it)
+        return it.en ~= nil and it.en:lower():find(c, 1, true) ~= nil
+    end
+end
+
+function _ow_ah_search(query, category)
+    query = (query or ''):lower()
+    category = category or ''
+    if query == '' and category == '' then
+        _ow_ah_emit('AH|items||'); return
+    end
+    local catf = _ow_ah_make_filter(category)
+    local out = {}
+    for _, it in pairs(res.items) do
+        local en = it.en
+        if en and en ~= '' then
+            local m = (query == '' or en:lower():find(query, 1, true) ~= nil)
+            if m and (not catf or catf(it))
+               and not (it.flags and it.flags['No Auction']) then
+                out[#out + 1] = tostring(it.id) .. '~' .. en .. '~'
+                    .. tostring(it.level or 0) .. '~' .. tostring(it.stack or 1)
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        return (a:match('~([^~]*)') or '') < (b:match('~([^~]*)') or '')
+    end)
+    -- No fixed count cap; trim only to keep the datagram under the
+    -- receiver's 64 KB buffer (rows are ~25 bytes each).
+    local used, keep = #query + 16, #out
+    for i = 1, #out do
+        used = used + #out[i] + 1
+        if used > 60000 then keep = i - 1; break end
+    end
+    for i = #out, keep + 1, -1 do out[i] = nil end
+    _ow_ah_emit('AH|items|' .. query .. '|' .. table.concat(out, '|'))
+end
+
+-- resolve a bid response (called from the 0x04C handler with the raw status)
+function _ow_ah_on_result(status)
+    if status == 0x02 then return end          -- Placing: wait for the real result
+    local q = _ow_ah.queue[_ow_ah.qi]
+    _ow_ah.pending = false
+    if status == 0x01 then                      -- Success
+        if q then
+            q.bought = (q.bought or 0) + 1
+            q.status = string.format('%d/%d', q.bought, q.qty or 0)
+            _ow_ah_emit(string.format('AH|result|BOUGHT %s  (%d/%d) at %d gil',
+                q.name, q.bought, q.qty or 0, q.bid or 0))
+            _ow_ah_emit(string.format('AH|txn|%s|%d|%d',
+                q.name, q.bid or 0, os.time()))
+        end
+        _ow_ah_sched(_ow_ah_step, _ow_ah.throttle + math.random())
+    elseif status == 0xC5 then                  -- Failed / outbid
+        if q then
+            q.bid = (q.bid or 0) + (q.inc or 0)
+            if q.bid > (q.max or 0) then
+                _ow_ah_emit(string.format('AH|result|%s hit max %d gil, moving on',
+                    q.name, q.max or 0))
+            else
+                _ow_ah_emit(string.format('AH|result|%s outbid, raising to %d gil',
+                    q.name, q.bid))
+            end
+        end
+        _ow_ah_sched(_ow_ah_step, _ow_ah.throttle + math.random())
+    elseif status == 0xE5 then                  -- Cannot Bid
+        _ow_ah_emit('AH|result|cannot bid - at an AH with the menu open? gil? (stopped)')
+        _ow_ah_stop()
+    else
+        _ow_ah_emit(string.format('AH|result|unexpected bid status 0x%02X (stopped)',
+            status or 0))
+        _ow_ah_stop()
+    end
+end
+
+-- drive the next bid (skips finished / maxed-out items, ends when queue done)
+function _ow_ah_step()
+    if not _ow_ah.running or _ow_ah.pending then return end
+    local q = _ow_ah.queue[_ow_ah.qi]
+    while q and ((q.bought or 0) >= (q.qty or 0) or (q.bid or 0) > (q.max or 0)) do
+        if (q.bought or 0) >= (q.qty or 0) then
+            _ow_ah_emit(string.format('AH|result|done %s (%d/%d)',
+                q.name, q.bought or 0, q.qty or 0))
+        end
+        _ow_ah.qi = _ow_ah.qi + 1
+        q = _ow_ah.queue[_ow_ah.qi]
+    end
+    if not q then
+        _ow_ah_emit('AH|result|queue complete')
+        _ow_ah_stop(); return
+    end
+    _ow_ah.pending = true
+    _ow_ah.pend_time = os.clock()
+    _ow_ah_emit(string.format('AH|result|bidding %s at %d gil...', q.name, q.bid or 0))
+    _ow_ah_send_bid(q.id, q.bid or 0, q.stack)
+end
+
+function _ow_ah_buy(throttle, itemstr)
+    _ow_ah.throttle = math.max(3.0, tonumber(throttle) or 8.0)
+    _ow_ah.queue = {}
+    for entry in (tostring(itemstr) .. ';'):gmatch('([^;]*);') do
+        if entry ~= '' then
+            local f = {}
+            for v in (entry .. '~'):gmatch('([^~]*)~') do f[#f+1] = v end
+            local id = tonumber(f[1])
+            if id then
+                local nm = (res.items[id] and res.items[id].en)
+                           or ('item ' .. tostring(id))
+                _ow_ah.queue[#_ow_ah.queue + 1] = {
+                    id = id, name = nm, qty = tonumber(f[2]) or 1,
+                    start = tonumber(f[3]) or 0, max = tonumber(f[4]) or 0,
+                    inc = tonumber(f[5]) or 0, bid = tonumber(f[3]) or 0,
+                    bought = 0, stack = (tonumber(f[6]) == 1), status = '',
+                }
+            end
+        end
+    end
+    if #_ow_ah.queue == 0 then _ow_ah_emit('AH|result|nothing queued') return end
+    if not _ow_ah_in_zone() then
+        _ow_ah_emit('AH|result|not in an Auction House city - move to an AH and retry')
+        return
+    end
+    _ow_ah_open_menu()
+    _ow_ah.running = true
+    _ow_ah.qi = 1
+    _ow_ah.pending = false
+    _ow_ah.epoch = (_ow_ah.epoch or 0) + 1
+    _ow_ah_emit_status()
+    _ow_ah_emit('AH|result|** stand in an AH city -- the counter is auto-opened **')
+    _ow_ah_emit(string.format('AH|result|starting %d item(s), throttle %.1fs',
+        #_ow_ah.queue, _ow_ah.throttle))
+    _ow_ah_sched(_ow_ah_step, 1.0)
+end
+
+function _ow_ah_stop()
+    _ow_ah.running = false
+    _ow_ah.pending = false
+    _ow_ah.sell = nil
+    _ow_ah.epoch = (_ow_ah.epoch or 0) + 1
+    _ow_ah_emit_status()
+    _ow_ah_emit('AH|result|stopped')
+end
+
+-- bid result: incoming 0x04C, Type 0x0E (offset 0x04 = Type, 0x06 = Buy Status)
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x04C then return end
+    if not (_ow_ah.running and _ow_ah.pending) then return end
+    if data:byte(5) ~= 0x0E then return end
+    _ow_ah_on_result(data:byte(7))
+end)
+
+-- pending-timeout watchdog: never hang waiting on a missing response.
+windower.register_event('prerender', function()
+    if _ow_ah.running and _ow_ah.pending and _ow_ah.pend_time then
+        if (os.clock() - _ow_ah.pend_time) > math.max(12, _ow_ah.throttle + 8) then
+            _ow_ah_emit('AH|result|no AH response (timeout) - stopped')
+            _ow_ah_stop()
+        end
+    end
+end)
+
+-- ── selling (2-step handshake) + sale box + sellable inventory ────────────
+-- sale-stat (AuctionHelper): 0=Empty, 0x03=On auction,
+-- 0x0A/0x0C/0x15=Sold, 0x0B/0x0D/0x16=Not Sold.
+_ow_ah.sales = {}        -- [0..6] -> {status, item, count, price, ts}
+_ow_ah.sell  = nil       -- pending sell -> {item_id, single, price, index}
+
+local _OW_AH_SALESTAT = {
+    [0x03]='On auction', [0x0A]='Sold', [0x0C]='Sold', [0x15]='Sold',
+    [0x0B]='Not Sold', [0x0D]='Not Sold', [0x16]='Not Sold',
+}
+
+local function _ow_ah_u16(v)
+    return string.char(v % 256, math.floor(v / 256) % 256)
+end
+local function _ow_ah_u32(v)
+    return string.char(v % 256, math.floor(v / 256) % 256,
+                       math.floor(v / 65536) % 256, math.floor(v / 16777216) % 256)
+end
+
+local function _ow_ah_emit_sales()
+    local parts = {}
+    for slot = 0, 6 do
+        local s = _ow_ah.sales[slot]
+        if s and s.status and s.status ~= 'Empty' then
+            local nm = (s.item and res.items[s.item] and res.items[s.item].en) or ''
+            parts[#parts + 1] = string.format('%d~%s~%s~%d~%d~%d',
+                slot, s.status, nm, s.count or 0, s.price or 0, s.ts or 0)
+        else
+            parts[#parts + 1] = string.format('%d~Empty~~0~0~0', slot)
+        end
+    end
+    _ow_ah_emit('AH|sales|' .. table.concat(parts, '|'))
+end
+
+local function _ow_ah_empty_slot()
+    for slot = 0, 6 do
+        local s = _ow_ah.sales[slot]
+        if not s or s.status == 'Empty' then return slot end
+    end
+    return nil
+end
+
+local function _ow_ah_find_index(item_id, want)
+    local inv = windower.ffxi.get_items(0)
+    if not inv then return nil end
+    for ind, it in ipairs(inv) do
+        if it and it.id == item_id and (it.count or 0) >= want
+           and (it.status == 0 or it.status == nil) then
+            return ind
+        end
+    end
+    return nil
+end
+
+-- emit the sellable inventory (distinct ids, summed counts) for the panel
+function _ow_ah_inv()
+    local inv = windower.ffxi.get_items(0)
+    if not inv then _ow_ah_emit('AH|inv|') return end
+    local totals = {}
+    for _, it in ipairs(inv) do
+        if it and it.id and it.id > 0 and (it.status == 0 or it.status == nil) then
+            local r = res.items[it.id]
+            local noah = r and r.flags
+                and (r.flags['No Auction'] or r.flags['No auction'])
+            if r and r.en and r.en ~= '' and not noah then
+                totals[it.id] = (totals[it.id] or 0) + (it.count or 0)
+            end
+        end
+    end
+    local parts = {}
+    for id, cnt in pairs(totals) do
+        local r = res.items[id]
+        parts[#parts + 1] = string.format('%d~%s~%d~%d', id, r.en, cnt, r.stack or 1)
+    end
+    table.sort(parts, function(a, b)
+        return (a:match('~([^~]*)') or '') < (b:match('~([^~]*)') or '')
+    end)
+    _ow_ah_emit('AH|inv|' .. table.concat(parts, '|'))
+end
+
+-- send the sell request (0x04E Type 0x04)
+function _ow_ah_sell(item_id, single, price)
+    if not _ow_ah_in_zone() then
+        _ow_ah_emit('AH|result|not in an Auction House city'); return
+    end
+    _ow_ah_open_menu()
+    local r = res.items[item_id]
+    if not r then _ow_ah_emit('AH|result|unknown item'); return end
+    local want = (single == 1) and 1 or (r.stack or 1)
+    local index = _ow_ah_find_index(item_id, want)
+    if not index then
+        _ow_ah_emit(string.format('AH|result|no %s of %s in inventory',
+            single == 1 and 'single' or 'stack', r.en)); return
+    end
+    _ow_ah.sell = {item_id = item_id, single = single, price = price, index = index}
+    local trans = string.char(0x4E, 0x1E, 0, 0)
+              .. string.char(0x04, 0, 0, 0)
+              .. _ow_ah_u32(price)
+              .. _ow_ah_u16(index)
+              .. _ow_ah_u16(item_id)
+              .. string.char(single)
+              .. string.rep('\0', 43)
+    pcall(function() windower.packets.inject_outgoing(0x4E, trans) end)
+    _ow_ah_emit(string.format('AH|result|listing %s %s at %d gil...',
+        single == 1 and 'single' or 'stack', r.en, price))
+end
+
+-- confirm a successful sell (0x04E Type 0x0B) into an empty slot
+local function _ow_ah_sell_confirm(slot)
+    local sl = _ow_ah.sell
+    if not sl then return end
+    local trans = string.char(0x4E, 0x1E, 0, 0)
+              .. string.char(0x0B, slot, 0, 0)
+              .. _ow_ah_u32(sl.price)
+              .. _ow_ah_u16(sl.index)
+              .. string.char(0, 0)
+              .. string.char(sl.single)
+              .. string.rep('\0', 43)
+    pcall(function() windower.packets.inject_outgoing(0x4E, trans) end)
+end
+
+-- sell response (Type 0x04) + sale-slot updates (Types 0x0A/0x0B/0x0C/0x0D/0x10)
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x04C then return end
+    local t = data:byte(5)                       -- Type at offset 0x04
+    if t == 0x04 then
+        if not _ow_ah.sell then return end
+        if data:byte(7) == 1 then                -- Success at offset 0x06
+            local slot = _ow_ah_empty_slot()
+            local fee = data:byte(9) + data:byte(10) * 256
+                      + data:byte(11) * 65536 + data:byte(12) * 16777216
+            local items = windower.ffxi.get_items()
+            local gil = (items and items.gil) or 0
+            local r = res.items[_ow_ah.sell.item_id]
+            if slot and gil >= fee then
+                _ow_ah_sell_confirm(slot)
+                _ow_ah_emit(string.format(
+                    'AH|result|LISTED %s for %d gil (fee %d, slot %d)',
+                    r and r.en or 'item', _ow_ah.sell.price, fee, slot + 1))
+            elseif not slot then
+                _ow_ah_emit('AH|result|no empty sale slot (all 7 in use)')
+            else
+                _ow_ah_emit(string.format('AH|result|not enough gil for the %d fee', fee))
+            end
+        else
+            _ow_ah_emit('AH|result|sell rejected by server')
+        end
+        _ow_ah.sell = nil
+    elseif t == 0x0A or t == 0x0B or t == 0x0D then
+        if data:byte(7) == 1 then
+            local slot = data:byte(6)            -- Slot at offset 0x05
+            local st = data:byte(0x15)           -- Sale status at offset 0x14
+            if slot and slot <= 6 then
+                if st == 0 then
+                    _ow_ah.sales[slot] = {status = 'Empty'}
+                elseif #data >= 0x3C then
+                    -- Read GP_AUC_BOX fields at their absolute offsets instead
+                    -- of via packets.parse: the Windower field names there can
+                    -- shift with a lib update, which blanks the sale-slot item
+                    -- names. Offsets verified against live 0x04C captures.
+                    _ow_ah.sales[slot] = {
+                        status = _OW_AH_SALESTAT[st] or 'On auction',
+                        item  = data:byte(0x29) + data:byte(0x2A) * 256,   -- ItemNo @0x28
+                        count = data:byte(0x2B),                           -- ItemQuantity @0x2A
+                        price = data:byte(0x2D) + data:byte(0x2E) * 256     -- Price @0x2C
+                              + data:byte(0x2F) * 65536 + data:byte(0x30) * 16777216,
+                        ts    = data:byte(0x39) + data:byte(0x3A) * 256     -- TimeStamp @0x38
+                              + data:byte(0x3B) * 65536 + data:byte(0x3C) * 16777216,
+                    }
+                else
+                    _ow_ah.sales[slot] = {status = _OW_AH_SALESTAT[st] or 'On auction'}
+                end
+                _ow_ah_emit_sales()
+            end
+        end
+    elseif t == 0x0C or t == 0x10 then
+        if data:byte(7) == 1 then
+            local slot = data:byte(6)
+            if slot and slot <= 6 then
+                _ow_ah.sales[slot] = {status = 'Empty'}
+                _ow_ah_emit_sales()
+            end
+        end
+    end
+end)
+
+-- ── dev packet capture: dump raw AH packets so we can decode the
+-- price-history (GP_AUC_PARAM_TRANS fragments) + on-sale quantity that
+-- the server actually sends.  //ow ah log on|off   writes logs/ah_capture.log
+_ow_ah.capture = false   -- false | 'ah' (0x04C/0x04E) | 'all' (every packet)
+_ow_ah.capcount = 0
+_ow_ah.capbuf = {}       -- buffered capture lines; flushed in batches
+
+local function _ow_ah_hexdump(s)
+    local t = {}
+    for i = 1, #s do t[i] = string.format('%02X', s:byte(i)) end
+    return table.concat(t, ' ')
+end
+
+-- Flush buffered capture lines to disk in ONE batched write. Per-packet
+-- disk I/O (open/write/close on Windower's thread) added enough latency
+-- to stall the game's AH search/menu packets, so we buffer instead.
+local function _ow_ah_capflush()
+    local b = _ow_ah.capbuf
+    if not b or #b == 0 then return end
+    pcall(function()
+        local f = io.open(ow_user_config_dir() .. '/ah_capture.log', 'a')
+        if not f then return end
+        f:write(table.concat(b))
+        f:close()
+        _ow_ah.capbuf = {}
+    end)
+end
+
+local function _ow_ah_caplog(dir, id, data)
+    -- Cheap path only: build the text and buffer it. No disk I/O here.
+    local b = _ow_ah.capbuf
+    if not b then b = {}; _ow_ah.capbuf = b end
+    local cmd = data:byte(5) or 0          -- Command (offset 0x04)
+    local res = data:byte(7) or 0          -- Result  (offset 0x06, S->C)
+    -- Tag the AH channel so it stands out amid all-packet noise; seq + ms
+    -- let a capture line be tied to a //ow ah mark dropped in-game.
+    local tag = (id == 0x04C or id == 0x04E) and '*AH* ' or '     '
+    _ow_ah.capcount = (_ow_ah.capcount or 0) + 1
+    b[#b + 1] = string.format('[%s.%03d #%d] %s%-4s 0x%03X len=%-3d Cmd=0x%02X Res=0x%02X\n  %s\n',
+        os.date('%H:%M:%S'), math.floor((os.clock() % 1) * 1000),
+        _ow_ah.capcount, tag, dir, id, #data, cmd, res, _ow_ah_hexdump(data))
+    if #b >= 400 then _ow_ah_capflush() end
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    local m = _ow_ah.capture
+    if m == 'all' or (m and id == 0x04C) then _ow_ah_caplog('S->C', id, data) end
+end)
+windower.register_event('outgoing chunk', function(id, data)
+    local m = _ow_ah.capture
+    if m == 'all' or (m and id == 0x04E) then _ow_ah_caplog('C->S', id, data) end
+end)
+
+-- ── item info for hover tooltips (what am I buying/selling) ───────────────
+-- jobs/slots are Windower Sets at runtime (keys = numeric ids). Doing
+-- arithmetic on the Set crashed; iterate it instead. Accept a number too.
+local function _ow_ah_set_ids(v)
+    local out = {}
+    if type(v) == 'table' then
+        for k, val in pairs(v) do
+            if val and type(k) == 'number' then out[#out + 1] = k end
+        end
+    elseif type(v) == 'number' then
+        for i = 0, 31 do
+            if math.floor(v / (2 ^ i)) % 2 >= 1 then out[#out + 1] = i end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+local function _ow_ah_jobs_str(jobs)
+    local ids = _ow_ah_set_ids(jobs)
+    if #ids == 0 then return '' end
+    if #ids >= 20 then return 'All Jobs' end
+    local names = {}
+    for _, jid in ipairs(ids) do
+        local j = res.jobs and res.jobs[jid]
+        names[#names + 1] = (j and (j.ens or j.en)) or ('?' .. jid)
+    end
+    return table.concat(names, ' ')
+end
+
+local function _ow_ah_slots_str(slots)
+    local ids = _ow_ah_set_ids(slots)
+    if #ids == 0 then return '' end
+    local out = {}
+    for _, sid in ipairs(ids) do
+        local s = res.slots and res.slots[sid]
+        out[#out + 1] = (s and (s.en or s.ens)) or ('slot' .. sid)
+    end
+    return table.concat(out, '/')
+end
+
+local function _ow_ah_races_str(races)
+    local ids = _ow_ah_set_ids(races)
+    if #ids == 0 then return '' end
+    if #ids >= 8 then return 'All Races' end
+    local names = {}
+    for _, rid in ipairs(ids) do
+        local r = res.races and res.races[rid]
+        names[#names + 1] = (r and (r.ens or r.en)) or ('?' .. rid)
+    end
+    return table.concat(names, ' ')
+end
+
+local function _ow_ah_targets_str(targets)
+    if type(targets) ~= 'table' then return '' end
+    local out = {}
+    for k, v in pairs(targets) do
+        if v and type(k) == 'string' then out[#out + 1] = k end
+    end
+    return table.concat(out, '/')
+end
+
+function _ow_ah_iteminfo(id)
+    id = tonumber(id)
+    local it = id and res.items[id]
+    if not it then return end
+    -- Full in-game stat text (DMG/Delay/bonuses/WS/effects/flavor), keyed by
+    -- item id, from Windower's item_descriptions resource -- covers EVERY item,
+    -- not just ones you own. res.item_descriptions lazy-loads on first access.
+    local desc = nil
+    pcall(function()
+        local d = res.item_descriptions and res.item_descriptions[id]
+        if d and d.en and d.en ~= '' then desc = d.en end
+    end)
+    local lines = {}
+    lines[#lines + 1] = it.en or ('item ' .. tostring(id))
+    -- line 2: (Category/Skill) Races Lv.X
+    local l2 = '(' .. (it.category or '?') .. ')'
+    local sk = it.skill and it.skill > 0 and res.skills and res.skills[it.skill]
+    if sk and sk.en then l2 = l2 .. ' ' .. sk.en end
+    local races = _ow_ah_races_str(it.races)
+    if races ~= '' then l2 = l2 .. ' ' .. races end
+    if it.level and it.level > 0 then l2 = l2 .. ' Lv.' .. it.level end
+    lines[#lines + 1] = l2
+    -- usable jobs
+    local jobs = _ow_ah_jobs_str(it.jobs)
+    if jobs ~= '' then lines[#lines + 1] = jobs end
+    if desc then
+        -- full stat block (preferred): split the description into lines,
+        -- sanitising the emit separators out of each.
+        for line in (desc .. '\n'):gmatch('([^\n]*)\n') do
+            line = line:gsub('[~|\r]', ' '):gsub('%s+$', '')
+            if line ~= '' then lines[#lines + 1] = line end
+        end
+    else
+        -- fallback to res.items numbers when no description text exists
+        if it.damage and it.delay and it.delay > 0 then
+            lines[#lines + 1] = string.format('DMG:%d  Delay:%d  (DPS %.1f)',
+                it.damage, it.delay, it.damage * 60 / it.delay)
+        elseif it.damage and it.damage > 0 then
+            lines[#lines + 1] = 'DMG:' .. it.damage
+        elseif it.defense and it.defense > 0 then
+            lines[#lines + 1] = 'DEF:' .. it.defense
+        end
+    end
+    -- equip slot (structural; not in the description text)
+    local slots = _ow_ah_slots_str(it.slots)
+    if slots ~= '' then lines[#lines + 1] = 'Slot: ' .. slots end
+    -- usable cast/target only when there's no description (desc covers usables)
+    if not desc then
+        if it.cast_time and it.cast_time > 0 then
+            lines[#lines + 1] = string.format('Cast: %ds', it.cast_time)
+        end
+        local tgt = _ow_ah_targets_str(it.targets)
+        if tgt ~= '' and tgt ~= 'Self' then lines[#lines + 1] = 'Target: ' .. tgt end
+    end
+    -- stack + id
+    if (it.stack or 1) > 1 then lines[#lines + 1] = 'Stacks to ' .. it.stack end
+    lines[#lines + 1] = 'Item #' .. id
+    _ow_ah_emit('AH|info|' .. id .. '|' .. table.concat(lines, '~'))
+end
+
+-- ---------------------------------------------------------------------------
+--  Puppetmaster attachment engine
+--  Builds the automaton parts catalogue from Windower resources, reads the
+--  live loadout via get_mjob_data(), and equips a named set with the native
+--  windower.ffxi.set_attachment / reset_attachments calls (paced, like the
+--  AutoControl addon by Ricky Gall). Drives the overlay's PUP Attachments
+--  panel over the inventory channel. PUP main only; pet must be despawned.
+-- ---------------------------------------------------------------------------
+do
+    local PUP_JOB    = 18
+    local STEP_DELAY = 0.6          -- seconds between attachment writes
+    local catalog    = nil          -- { heads=, frames=, atts= } cache
+    local queue      = {}           -- pending equip steps
+    local busy       = false
+
+    local function emit(payload)
+        pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+    end
+
+    local function each_automaton(fn)
+        local ok = pcall(function()
+            for id, it in pairs(res.items:category('Automaton')) do fn(id, it) end
+        end)
+        if not ok then
+            for id, it in pairs(res.items) do
+                if type(it) == 'table' and it.category == 'Automaton' then fn(id, it) end
+            end
+        end
+    end
+
+    -- Classify an Automaton-category item by name (head / frame / attachment).
+    local function kind_of(name)
+        local low = (name or ''):lower()
+        if low:find('head', 1, true)  then return 'head'  end
+        if low:find('frame', 1, true) then return 'frame' end
+        return 'att'
+    end
+
+    local function build_catalog()
+        local heads, frames, atts = {}, {}, {}
+        each_automaton(function(id, it)
+            local nm = it.name or it.en or ('item ' .. id)
+            local rec = { id = id, name = nm }
+            local k = kind_of(nm)
+            if     k == 'head'  then heads[#heads + 1]   = rec
+            elseif k == 'frame' then frames[#frames + 1] = rec
+            else                     atts[#atts + 1]     = rec end
+        end)
+        local byname = function(a, b) return a.name < b.name end
+        table.sort(heads, byname)
+        table.sort(frames, byname)
+        table.sort(atts, byname)
+        catalog = { heads = heads, frames = frames, atts = atts }
+        return catalog
+    end
+
+    local function emit_section(tag, list)
+        local parts = { 'PUPATT', 'cat', tag }
+        for _, r in ipairs(list) do parts[#parts + 1] = r.id .. '=' .. r.name end
+        emit(table.concat(parts, '|'))
+    end
+
+    local function emit_catalog()
+        local c = catalog or build_catalog()
+        emit_section('head',  c.heads)
+        emit_section('frame', c.frames)
+        emit_section('att',   c.atts)
+        emit('PUPATT|cat|end')
+    end
+
+    local function emit_current()
+        local pl = windower.ffxi.get_player()
+        if not pl or pl.main_job_id ~= PUP_JOB or not windower.ffxi.get_mjob_data then
+            emit('PUPATT|current|none')
+            return
+        end
+        local d = windower.ffxi.get_mjob_data()
+        if not d then emit('PUPATT|current|none'); return end
+        local a = d.attachments or {}
+        local parts = { 'PUPATT', 'current', tostring(d.head or 0), tostring(d.frame or 0) }
+        for i = 1, 12 do parts[#parts + 1] = tostring(a[i] or 0) end
+        emit(table.concat(parts, '|'))
+    end
+
+    local function pet_is_out()
+        local pet = windower.ffxi.get_mob_by_target('pet')
+        return pet ~= nil and pet.id ~= nil and pet.id ~= 0
+    end
+
+    local function step()
+        local sstep = table.remove(queue, 1)
+        if not sstep then
+            busy = false
+            emit('PUPATT|status|Equip complete.')
+            coroutine.schedule(emit_current, 0.5)
+            return
+        end
+        pcall(function()
+            if sstep.kind == 'reset' then
+                windower.ffxi.reset_attachments()
+            elseif sstep.kind == 'head' or sstep.kind == 'frame' then
+                windower.ffxi.set_attachment(sstep.id)
+            else
+                windower.ffxi.set_attachment(sstep.id, sstep.slot)
+            end
+        end)
+        coroutine.schedule(step, STEP_DELAY)
+    end
+
+    local function guard()
+        local pl = windower.ffxi.get_player()
+        if not pl or pl.main_job_id ~= PUP_JOB then
+            emit('PUPATT|status|Switch to PUP main to change attachments.')
+            return false
+        end
+        if pet_is_out() then
+            emit('PUPATT|status|Despawn your automaton first, then try again.')
+            return false
+        end
+        return true
+    end
+
+    local function equip(ids)
+        if not guard() then return end
+        if busy then emit('PUPATT|status|Still applying the previous set...'); return end
+        queue = { { kind = 'reset' } }
+        local head, frame = tonumber(ids[1]) or 0, tonumber(ids[2]) or 0
+        if head  > 0 then queue[#queue + 1] = { kind = 'head',  id = head  } end
+        if frame > 0 then queue[#queue + 1] = { kind = 'frame', id = frame } end
+        for slot = 1, 12 do
+            local aid = tonumber(ids[2 + slot]) or 0
+            if aid > 0 then queue[#queue + 1] = { kind = 'att', id = aid, slot = slot } end
+        end
+        busy = true
+        emit('PUPATT|status|Applying set...')
+        coroutine.schedule(step, 0.2)
+    end
+
+    local function clear_all()
+        if not guard() then return end
+        pcall(function() windower.ffxi.reset_attachments() end)
+        emit('PUPATT|status|Attachments cleared.')
+        coroutine.schedule(emit_current, 0.5)
+    end
+
+    -- Global entry point routed from the //ow dispatcher.
+    function _ow_pupatt_command(rest)
+        local a = {}
+        for tok in (tostring(rest) .. '|'):gmatch('([^|]*)|') do a[#a + 1] = tok end
+        local cmd = (a[1] or ''):lower()
+        if cmd == 'catalog' then
+            build_catalog(); emit_catalog()
+        elseif cmd == 'current' then
+            emit_current()
+        elseif cmd == 'equip' then
+            local ids = {}
+            for i = 2, 15 do ids[i - 1] = a[i] end
+            equip(ids)
+        elseif cmd == 'clear' then
+            clear_all()
+        elseif cmd == 'sync' then
+            build_catalog(); emit_catalog()
+            coroutine.schedule(emit_current, 0.3)
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------
+--  Bard song-set singer
+--  Drives a saved rotation from the overlay's BRD Loadouts tab: fires the
+--  toggled job abilities (Clarion Call / Troubadour / Nightingale / Soul
+--  Voice), then sings each song in listed order, timing the next cast off the
+--  incoming 0x028 magic-finish action packet (category 4, actor = me, param =
+--  the song's spell id). A timeout -> retry -> skip fallback keeps it from
+--  stalling on a missed packet or an interrupt. Marcato'd songs get the JA
+--  first. Dummy/FullLength/Cheer steps are sent to GearSwap as their *Lock*
+--  variants so the mode is held for the whole rotation instead of auto-
+--  resetting between casts. BRD main or sub only.
+-- ---------------------------------------------------------------------------
+-- ── BRD song-gear (OmniWatch self-equip) config ─────────────────────────────
+-- Optional path for bards who do NOT run a GearSwap that exposes
+-- ExtraSongsMode (Selindrile/Mote style). When source == 'omniwatch' the
+-- singer equips a configured gear set per song mode itself (via
+-- windower.ffxi.set_equip) instead of handing the mode to GearSwap. Kept in
+-- its OWN per-character file so the //ow setup wizard's user_config rewrite
+-- can never clobber it.
+--
+-- UNTESTED: the addon author uses Selindrile's GearSwap (source =
+-- 'gearswap'), so this self-equip path ships unverified. Default 'gearswap'
+-- preserves the original behavior exactly.
+function ow_brd_songgear_path()
+    return ow_user_config_dir() .. '/brd_songgear.lua'
+end
+
+function ow_load_brd_songgear()
+    local cfg = nil
+    local ok, chunk = pcall(loadfile, ow_brd_songgear_path())
+    if ok and chunk then
+        local ok2, data = pcall(chunk)
+        if ok2 and type(data) == 'table' then cfg = data end
+    end
+    if type(cfg) ~= 'table' then cfg = {} end
+    cfg.source = (type(cfg.source) == 'string') and cfg.source:lower() or 'gearswap'
+    if cfg.source ~= 'omniwatch' then cfg.source = 'gearswap' end
+    if type(cfg.sets) ~= 'table' then cfg.sets = {} end
+    return cfg
+end
+
+function ow_save_brd_songgear(cfg)
+    ow_ensure_user_config_dir()
+    local f = io.open(ow_brd_songgear_path(), 'w')
+    if not f then return false end
+    local src = (cfg and cfg.source == 'omniwatch') and 'omniwatch' or 'gearswap'
+    f:write('-- OmniWatch BRD song-gear config (//ow brdgear ...)\n')
+    f:write('-- source: gearswap (default) or omniwatch (self-equip; UNTESTED)\n')
+    f:write('return {\n')
+    f:write(string.format('    source = %q,\n', src))
+    f:write('    sets = {\n')
+    local SLOT_ORDER = { 'main','sub','range','ammo','head','body','hands',
+        'legs','feet','neck','waist','left_ear','right_ear','left_ring',
+        'right_ring','back' }
+    local seen = {}
+    local function emit_mode(m)
+        local set = cfg and cfg.sets and cfg.sets[m]
+        if type(set) ~= 'table' then return end
+        seen[m] = true
+        f:write(string.format('        %s = {\n', m))
+        local emitted = {}
+        for _, sl in ipairs(SLOT_ORDER) do
+            local v = set[sl]
+            if type(v) == 'string' and v ~= '' then
+                emitted[sl] = true
+                f:write(string.format('            %-11s = %q,\n', sl, v))
+            end
+        end
+        for k, v in pairs(set) do
+            if not emitted[k] and type(v) == 'string' and v ~= '' then
+                f:write(string.format('            [%q] = %q,\n', tostring(k), v))
+            end
+        end
+        f:write('        },\n')
+    end
+    for _, m in ipairs({ 'none','dummy','fulllength','cheer' }) do emit_mode(m) end
+    if cfg and type(cfg.sets) == 'table' then
+        for m, _ in pairs(cfg.sets) do if not seen[m] then emit_mode(m) end end
+    end
+    f:write('    },\n')
+    f:write('}\n')
+    f:close()
+    return true
+end
+
+function ow_write_brd_songgear_template_if_missing()
+    local existing = io.open(ow_brd_songgear_path(), 'r')
+    if existing then existing:close(); return false end
+    ow_ensure_user_config_dir()
+    local f = io.open(ow_brd_songgear_path(), 'w')
+    if not f then return false end
+    f:write([==[-- OmniWatch BRD song-gear config
+--
+-- source:
+--   'gearswap'  (default) hand each song mode to your GearSwap via
+--               `gs c set extrasongsmode <mode>` (Lock variant). Use this if
+--               you run a Selindrile/Mote-style BRD GearSwap.
+--   'omniwatch' OmniWatch equips the per-mode 'sets' below itself, so
+--               dummy / fulllength / cheer work WITHOUT any GearSwap.
+--               UNTESTED -- the addon author uses GearSwap, so verify it does
+--               what you expect before relying on it.
+--
+-- 'sets' is only used when source = 'omniwatch'. Each mode maps a slot to the
+-- exact in-game (English) item name. List only the slots that change for that
+-- mode -- commonly just the instrument in 'range'; unlisted slots keep what
+-- you are already wearing. Your gear when the rotation started is restored
+-- when singing finishes or is stopped.
+-- Slots: main sub range ammo head body hands legs feet neck waist
+--        left_ear right_ear left_ring right_ring back
+-- Items are matched by name to the first copy found in your bags; augment-
+-- specific copies are not distinguished.
+return {
+    source = 'gearswap',
+    sets = {
+        -- dummy      = { range = 'Daurdabla' },
+        -- fulllength = { range = 'Daurdabla' },
+        -- cheer      = { range = 'Marsyas' },
+        -- none       = { range = 'Gjallarhorn' },
+    },
+}
+]==])
+    f:close()
+    return true
+end
+
+do
+    local BRD_JOB = 10
+    local SETTLE, JA_DELAY, MARCATO_DELAY, MODE_DELAY, SONG_TIMEOUT, MAX_RETRY =
+        0.5, 1.3, 1.3, 0.5, 9.0, 2
+    local IDLE_MODE = 'none'   -- extrasongsmode restored after a rotation/stop
+    local st = { active = false, steps = {}, idx = 1, wait_sid = nil,
+                 wait_idx = 0, retries = 0, skip_dummies = false, token = 0 }
+    -- Push run state to the overlay so its Sing/Stop button is a true
+    -- toggle (flips back when a rotation finishes or stops on its own).
+    local function push_state(s)
+        pcall(function()
+            if _G._ow_udp_inv and _OW_MB_TAG then
+                _G._ow_udp_inv:send(_OW_MB_TAG('BRDSET|state|' .. s))
+            end
+        end)
+    end
+    local song_ids, song_buffs = nil, nil
+
+    local function emit_chat(msg) ow_chat(121, '[BRD] ' .. msg) end
+
+    -- BRD song-gear self-equip (source == 'omniwatch'); see
+    -- ow_load_brd_songgear. st.song_gear holds the config for the current
+    -- rotation; st.song_equip_snap holds the pre-rotation equipment to put
+    -- back when singing ends. UNTESTED path (author uses GearSwap).
+    local _SONG_EQUIP_SLOTS = {
+        main = 0, sub = 1, range = 2, ranged = 2, ammo = 3, head = 4,
+        body = 5, hands = 6, legs = 7, feet = 8, neck = 9, waist = 10,
+        left_ear = 11, ear1 = 11, right_ear = 12, ear2 = 12,
+        left_ring = 13, ring1 = 13, right_ring = 14, ring2 = 14, back = 15,
+    }
+    local _SONG_SLOT_NAMES = {
+        'main','sub','range','ammo','head','body','hands','legs','feet',
+        'neck','waist','left_ear','right_ear','left_ring','right_ring','back',
+    }
+
+    local function song_gear_source()
+        return (st.song_gear and st.song_gear.source) or 'gearswap'
+    end
+
+    local function song_equip_one(slot_name, item_name)
+        if not (windower.ffxi and windower.ffxi.set_equip) then return end
+        local slot_id = _SONG_EQUIP_SLOTS[tostring(slot_name):lower()]
+        if not slot_id then return end
+        if type(item_name) ~= 'string' or item_name == '' then return end
+        local item = res.items and (res.items:with('en', item_name)
+                                     or res.items:with('enl', item_name))
+        local iid = item and item.id
+        if not iid then
+            emit_chat('song gear: item not found - "' .. item_name .. '".')
+            return
+        end
+        local loc = (type(_ow_get_item_loc) == 'function') and _ow_get_item_loc(iid) or nil
+        if not loc then
+            emit_chat('song gear: "' .. item_name .. '" not in your bags.')
+            return
+        end
+        pcall(windower.ffxi.set_equip, slot_id, loc.idx, loc.bag)
+    end
+
+    local function song_equip_set(mode)
+        local sets = st.song_gear and st.song_gear.sets
+        local set = sets and sets[tostring(mode):lower()]
+        if type(set) ~= 'table' then return end
+        for slot_name, item_name in pairs(set) do
+            song_equip_one(slot_name, item_name)
+        end
+    end
+
+    local function song_snapshot_equip()
+        local snap = nil
+        pcall(function()
+            local items = windower.ffxi.get_items and windower.ffxi.get_items()
+            local eq = items and items.equipment
+            if not eq then return end
+            snap = {}
+            for _, sl in ipairs(_SONG_SLOT_NAMES) do
+                snap[sl] = { idx = tonumber(eq[sl]) or 0,
+                             bag = tonumber(eq[sl .. '_bag']) or 0 }
+            end
+        end)
+        return snap
+    end
+
+    local function song_restore_equip()
+        local snap = st.song_equip_snap
+        if not snap or not (windower.ffxi and windower.ffxi.set_equip) then return end
+        for _, sl in ipairs(_SONG_SLOT_NAMES) do
+            local loc = snap[sl]
+            local slot_id = _SONG_EQUIP_SLOTS[sl]
+            if slot_id and loc and (tonumber(loc.idx) or 0) > 0 then
+                pcall(windower.ffxi.set_equip, slot_id, loc.idx, loc.bag)
+            end
+        end
+    end
+
+    local function build_song_ids()
+        song_ids = {}
+        for id, sp in pairs(res.spells) do
+            if type(sp) == 'table' and sp.name then song_ids[sp.name] = id end
+        end
+    end
+
+    local function build_song_buffs()
+        song_buffs = {}
+        for _, sp in pairs(res.spells) do
+            if type(sp) == 'table' and sp.type == 'BardSong' and sp.status then
+                song_buffs[sp.status] = true
+            end
+        end
+    end
+
+    local function active_song_count()
+        local pl = windower.ffxi.get_player()
+        if not pl or not pl.buffs then return 0 end
+        if not song_buffs then build_song_buffs() end
+        local n = 0
+        for _, b in ipairs(pl.buffs) do if song_buffs[b] then n = n + 1 end end
+        return n
+    end
+
+    local function ja(name) windower.chat.input('/ja "' .. name .. '" <me>') end
+    local function ma(name) windower.chat.input('/ma "' .. name .. '" <me>') end
+
+    local do_step, song_timeout    -- forward declarations
+
+    do_step = function()
+        if not st.active then return end
+        local step = st.steps[st.idx]
+        if not step then
+            st.active = false
+            if song_gear_source() == 'omniwatch' then
+                song_restore_equip()
+            else
+                windower.send_command('gs c set extrasongsmode ' .. IDLE_MODE)
+            end
+            push_state('idle')
+            emit_chat('Rotation complete.')
+            return
+        end
+        if step.kind == 'ja' then
+            ja(step.name)
+            st.idx = st.idx + 1
+            coroutine.schedule(do_step, JA_DELAY)
+        elseif step.kind == 'mode' then
+            -- Keep the panel labels (none/dummy/fulllength/cheer) as-is, but
+            -- send the *Lock* variant to GearSwap for dummy/fulllength/cheer so
+            -- the mode is held for the whole rotation. The BRD.lua resets
+            -- ExtraSongsMode after any non-Lock cast, which desyncs a multi-
+            -- song rotation and drops a song. 'none' has no Lock variant and
+            -- needs no hold, so it is sent unchanged.
+            local _ml = tostring(step.mode):lower()
+            if song_gear_source() == 'omniwatch' then
+                -- OmniWatch owns equipment: equip the configured set for this
+                -- mode itself, no GearSwap dependency. UNTESTED path.
+                song_equip_set(_ml)
+            else
+                local _send_mode = step.mode
+                if _ml == 'dummy' or _ml == 'fulllength' or _ml == 'cheer' then
+                    _send_mode = _ml .. 'lock'
+                end
+                windower.send_command('gs c set extrasongsmode ' .. _send_mode)
+            end
+            st.idx = st.idx + 1
+            coroutine.schedule(do_step, MODE_DELAY)
+        elseif step.kind == 'marcato' then
+            ja('Marcato')
+            st.idx = st.idx + 1
+            coroutine.schedule(do_step, MARCATO_DELAY)
+        else
+            -- (Dummy-skip removed: dummies are always cast now. The old
+            -- "skip dummies when >4 songs up" guard was dropping a step and
+            -- leaving 3 songs instead of 4 in overwrite rotations.)
+            local sid = song_ids and song_ids[step.name]
+            if not sid then
+                emit_chat('Unknown song "' .. tostring(step.name) .. '" - skipped.')
+                st.idx = st.idx + 1
+                return do_step()
+            end
+            st.wait_sid = sid
+            st.wait_idx = st.idx
+            ma(step.name)
+            local tok, widx = st.token, st.idx
+            coroutine.schedule(function() song_timeout(tok, widx) end, SONG_TIMEOUT)
+        end
+    end
+
+    song_timeout = function(tok, widx)
+        if not st.active or st.token ~= tok then return end
+        if st.wait_idx ~= widx or st.wait_sid == nil then return end
+        if st.retries < MAX_RETRY then
+            st.retries = st.retries + 1
+            emit_chat('No finish for "' .. st.steps[widx].name
+                      .. '" - retry ' .. st.retries .. '.')
+            st.wait_sid = nil
+            do_step()
+        else
+            emit_chat('Skipping "' .. st.steps[widx].name
+                      .. '" after ' .. MAX_RETRY .. ' retries.')
+            st.retries = 0
+            st.wait_sid = nil
+            st.idx = st.idx + 1
+            do_step()
+        end
+    end
+
+    windower.register_event('action', function(act)
+        if not st.active or not st.wait_sid then return end
+        if act.category == 4 then
+            local pl = windower.ffxi.get_player()
+            if pl and act.actor_id == pl.id and act.param == st.wait_sid then
+                st.wait_sid = nil
+                st.retries = 0
+                st.idx = st.idx + 1
+                coroutine.schedule(do_step, SETTLE)
+            end
+        end
+    end)
+
+    -- Global entry point routed from the BRDSET| rail (overlay Sing/Stop).
+    function _ow_brdset_command(rest)
+        local a = {}
+        for tok in (tostring(rest) .. '|'):gmatch('([^|]*)|') do a[#a + 1] = tok end
+        local cmd = (a[1] or ''):lower()
+        if cmd == 'stop' then
+            if st.active then
+                st.active = false
+                st.token = st.token + 1
+                if song_gear_source() == 'omniwatch' then
+                    song_restore_equip()
+                else
+                    windower.send_command('gs c set extrasongsmode ' .. IDLE_MODE)
+                end
+                push_state('idle')
+                emit_chat('Singing stopped.')
+            end
+            return
+        end
+        if cmd ~= 'sing' then return end
+        local pl = windower.ffxi.get_player()
+        if not pl or (pl.main_job_id ~= BRD_JOB and pl.sub_job_id ~= BRD_JOB) then
+            emit_chat('Switch to BRD (main or sub) to sing.')
+            push_state('idle')
+            return
+        end
+        if st.active then
+            emit_chat('Already singing - stop first.')
+            return
+        end
+        if not song_ids then build_song_ids() end
+        local steps = {}
+        if a[3] == '1' then steps[#steps + 1] = { kind = 'ja', name = 'Clarion Call' } end
+        if a[5] == '1' then steps[#steps + 1] = { kind = 'ja', name = 'Troubadour' } end
+        if a[4] == '1' then steps[#steps + 1] = { kind = 'ja', name = 'Nightingale' } end
+        if a[2] == '1' then steps[#steps + 1] = { kind = 'ja', name = 'Soul Voice' } end
+        local last_mode = nil
+        for i = 6, #a do
+            local tok = a[i]
+            if tok ~= '' then
+                local nm, mode, mar = tok:match('^(.-)%^(.-)%^(.-)$')
+                if nm and nm ~= '' then
+                    if mode == nil or mode == '' then mode = 'fulllength' end
+                    if mode ~= last_mode then
+                        steps[#steps + 1] = { kind = 'mode', mode = mode }
+                        last_mode = mode
+                    end
+                    if mar == '1' then steps[#steps + 1] = { kind = 'marcato' } end
+                    steps[#steps + 1] =
+                        { kind = 'song', name = nm, dummy = (mode == 'dummy') }
+                end
+            end
+        end
+        if #steps == 0 then emit_chat('Set is empty.'); push_state('idle'); return end
+        st.steps = steps
+        st.idx = 1
+        st.retries = 0
+        st.wait_sid = nil
+        st.token = st.token + 1
+        st.skip_dummies = false   -- dummy-skip removed; always cast dummies
+        st.song_gear = ow_load_brd_songgear()   -- per-rotation: picks up edits
+        st.song_equip_snap = nil
+        if st.song_gear.source == 'omniwatch' then
+            st.song_equip_snap = song_snapshot_equip()
+        end
+        st.active = true
+        push_state('singing')
+        emit_chat('Singing ' .. #steps .. ' step(s)...')
+        do_step()
+    end
+end
+
+function _ow_ah_command(rest)
+    local a = {}
+    for tok in (tostring(rest) .. '|'):gmatch('([^|]*)|') do a[#a+1] = tok end
+    local cmd = (a[1] or ''):lower()
+    if cmd == 'search' then
+        _ow_ah_search(a[2] or '', a[3] or '')
+    elseif cmd == 'buy' then
+        _ow_ah_buy(a[2], a[3])
+    elseif cmd == 'stop' then
+        _ow_ah_stop()
+    elseif cmd == 'sell' then
+        _ow_ah_sell(tonumber(a[2]), tonumber(a[3]) or 1, tonumber(a[4]) or 0)
+    elseif cmd == 'inv' then
+        _ow_ah_inv()
+    elseif cmd == 'sales' then
+        _ow_ah_check_sales()   -- refresh from server (async boxes arrive + re-emit)
+        _ow_ah_emit_sales()    -- send the current cache immediately
+    elseif cmd == 'info' then
+        _ow_ah_iteminfo(a[2])
+    elseif cmd == 'mark' then
+        -- Drop a labelled marker into the capture stream so a given action
+        -- (e.g. "view price history") ties to the packets it produced.
+        local label = table.concat(a, ' ', 2)
+        if label == '' then label = '(unlabeled)' end
+        if _ow_ah.capture then
+            local b = _ow_ah.capbuf
+            if not b then b = {}; _ow_ah.capbuf = b end
+            _ow_ah.capcount = (_ow_ah.capcount or 0) + 1
+            b[#b + 1] = string.format('\n==== MARK %s.%03d #%d: %s ====\n',
+                os.date('%H:%M:%S'), math.floor((os.clock() % 1) * 1000),
+                _ow_ah.capcount, label)
+            if windower and windower.add_to_chat then
+                ow_chat(207, '[OmniWatch][AH] mark: ' .. label)
+            end
+        elseif windower and windower.add_to_chat then
+            ow_chat(167, '[OmniWatch][AH] start capture first: //ow ah log on')
+        end
+    elseif cmd == 'log' then
+        local on = (a[2] or ''):lower()
+        -- 'on' now captures EVERYTHING (the price history is not on the AH
+        -- channel, so AH-only mode misses it). 'ah' stays as an explicit opt-in.
+        if on == 'off' then _ow_ah.capture = false
+        elseif on == 'ah' then _ow_ah.capture = 'ah'
+        elseif on == 'on' or on == 'all' then _ow_ah.capture = 'all'
+        else _ow_ah.capture = _ow_ah.capture and false or 'all' end
+        local where = ow_user_config_dir() .. '/ah_capture.log'
+        if _ow_ah.capture then
+            pcall(function()
+                ow_ensure_user_config_dir()
+                local f = io.open(where, 'a')
+                if f then
+                    f:write(string.format('==== capture started %s ====\n',
+                        os.date('%Y-%m-%d %H:%M:%S')))
+                    f:close()
+                end
+            end)
+        end
+        if _ow_ah.capture then
+            _ow_ah.capcount = 0
+            _ow_ah.capbuf = {}
+        else
+            _ow_ah_capflush()
+        end
+        local mode = (_ow_ah.capture == 'all') and 'ALL packets' or 'AH only'
+        local msg = 'AH packet capture ' .. (_ow_ah.capture
+            and (mode .. ' -> ' .. where)
+            or ('OFF (' .. tostring(_ow_ah.capcount or 0) .. ' packets captured)'))
+        if windower and windower.add_to_chat then
+            ow_chat(207, '[OmniWatch] ' .. msg)
+            if _ow_ah.capture then
+                ow_chat(207, '[OmniWatch] before each action: //ow ah mark <label>  (e.g. //ow ah mark view price history)')
+            end
+        end
+        _ow_ah_emit('AH|result|' .. msg)
+    elseif cmd == 'spoofmenu' then
+        _ow_ah.spoof_menu = ((a[2] or ''):lower() == 'on')
+        _ow_ah_emit('AH|result|menu-open spoof '
+            .. (_ow_ah.spoof_menu and 'ON (risky)' or 'OFF'))
+    elseif cmd == 'status' then
+        _ow_ah_emit_status()
+    end
+end
+
+
+end  -- close SkillUp+AH engine scope (Lua 200-local cap)
+
 local function _ow_drain_inbound()
     if not udp_cmd_in then return end
     local guard = 64    -- max packets per drain (defensive)
@@ -4951,11 +8894,13 @@ local function _ow_drain_inbound()
             if _sim then
                 local turning_on = (rest == 'on')
                 _sim.set_active(turning_on)
-                -- When sim turns on, send a fresh inventory snapshot
-                -- at the next prerender tick (rate-limit allows since
-                -- _ow_inv_snap_last_sent starts at 0).
-                if turning_on and _ow_mark_inv_dirty then
-                    _ow_mark_inv_dirty()
+                -- When sim turns on, send a fresh inventory snapshot at
+                -- the next prerender tick. Reset the 1 Hz snapshot gate so
+                -- the EQUIPPED seed fires immediately rather than waiting
+                -- up to a second (the cause of "current gear didn't load
+                -- until I reopened sim").
+                if turning_on and _ow_force_inv_resend then
+                    _ow_force_inv_resend()
                 end
                 -- When sim turns OFF, force the live-stats path to fully
                 -- recompute on its next tick. The 1 Hz live gate only
@@ -4994,7 +8939,7 @@ local function _ow_drain_inbound()
                 local spath = rest:sub(s1 + 1)
                 local ok_imp, err_imp = pcall(_sim.import_set, fpath, spath)
                 if not ok_imp then
-                    windower.add_to_chat(123,
+                    ow_chat(123,
                         '[OmniWatch] sim import error: ' .. tostring(err_imp))
                 elseif err_imp == true and _sim.get_equipment then
                     -- Import landed in the lua sim state. Echo the resolved
@@ -5042,9 +8987,76 @@ local function _ow_drain_inbound()
             else
                 p1 = rest
             end
-            if _sim and p1 then
+            if p1 == 'refresh' then
+                -- Sim REFRESH button: re-sync from live gear + force a
+                -- full stats recompute. Resend the inventory snapshot (the
+                -- EQUIPPED seed only repopulates empty slots, so in-progress
+                -- picks are preserved) and invalidate the stats signature
+                -- caches so the next stats tick recomputes and resends —
+                -- same caches the sim-off path trips.
+                if _ow_force_inv_resend then _ow_force_inv_resend() end
+                _ow_stats_last_full      = nil
+                _ow_stats_last_job       = nil
+                _ow_stats_last_hastesig  = nil
+                _ow_stats_last_buffsig   = nil
+                _ow_stats_last_blusetsig = nil
+            elseif _sim and p1 then
                 _sim.set_value(p1, p2, p3)
             end
+        elseif head == 'SCANZONE' then
+            -- Overlay packet-scan request: SCANZONE|scan|<index>
+            local s1  = rest:find('|', 1, true)
+            local sub = s1 and rest:sub(1, s1 - 1) or rest
+            local arg = s1 and rest:sub(s1 + 1) or ''
+            if sub == 'scan' then
+                _ow_scanzone_scan(arg)
+            elseif sub == 'wide' then
+                _ow_scanzone_widescan()
+            elseif sub == 'track' then
+                _ow_scanzone_track(arg)
+            elseif sub == 'radar' then
+                _ow_scanzone_radar_set(arg == 'on')
+            elseif sub == 'lamps' then
+                if arg == 'refresh' then
+                    _ow_scanzone_lamps_refresh()
+                else
+                    _ow_scanzone_lamps_set(arg == 'on')
+                end
+            end
+        elseif head == 'SYNERGY' then
+            -- DEV Synergy panel commands: SYNERGY|feed|<elem> /
+            -- SYNERGY|func|<name> / SYNERGY|refewell / SYNERGY|end /
+            -- SYNERGY|refresh
+            local s1  = rest:find('|', 1, true)
+            local sub = s1 and rest:sub(1, s1 - 1) or rest
+            local arg = s1 and rest:sub(s1 + 1) or ''
+            if sub == 'feed' then
+                _ow_synergy_cmd_feed(arg)
+            elseif sub == 'func' then
+                _ow_synergy_cmd_func(arg)
+            elseif sub == 'refewell' then
+                _ow_synergy_cmd_refewell()
+            elseif sub == 'end' then
+                _ow_synergy_cmd_func('end')
+            elseif sub == 'refresh' then
+                _ow_synergy_cmd_refresh()
+            end
+        elseif head == 'CRAFT' then
+            -- DEV Craft panel commands: make / repeat / put / stop /
+            -- pause / resume / delay / food / support / jiggle / hq /
+            -- display / status. Payload after the sub is feature-specific.
+            local s1  = rest:find('|', 1, true)
+            local sub = s1 and rest:sub(1, s1 - 1) or rest
+            local arg = s1 and rest:sub(s1 + 1) or ''
+            _ow_craft_command(sub, arg)
+        elseif head == 'SKILLUP' then
+            -- DEV SkillUp panel: start|<skill> / stop / after|<mode> /
+            -- toggle|<trust|geo|item> / inst|<wind|string>|<name> / status
+            _ow_su_command(rest)
+        elseif head == 'AH' then
+            -- DEV Auction House: search|<q>|<cat> / buy|<throttle>|<items>
+            -- / stop / status
+            _ow_ah_command(rest)
         elseif head == 'SETTING' then
             -- Forwarded from Python's settings menu via the
             -- apply_setting_side_effects path (any setting flagged
@@ -5067,6 +9079,70 @@ local function _ow_drain_inbound()
                 local lv = (sval or ''):lower()
                 local bool_val = (lv == 'true' or lv == '1')
                 pcall(OW_Skillchains.set_setting, internal_key, bool_val)
+            end
+            if skey == 'autora_enabled' then
+                local on = ((sval or ''):lower() == 'true')
+                           or (sval == '1')
+                if on then _ow_autora_start() else _ow_autora_stop() end
+            end
+            if skey == 'autora_stop_tp' then
+                local n = tonumber(sval)
+                if n then
+                    if n < 1000 then n = 1000
+                    elseif n > 3000 then n = 3000 end
+                    _ow_autora_stop_tp = n
+                end
+            end
+            if skey == 'autora_ignore_tp' then
+                local ig = ((sval or ''):lower() == 'true')
+                           or (sval == '1')
+                _ow_autora_halt_tp = not ig
+            end
+            if skey == 'ase_enabled' then
+                _ow_ase_enabled = ((sval or ''):lower() == 'true')
+                                  or (sval == '1')
+            end
+            if skey == 'ase_dead' then
+                _ow_ase_dead = ((sval or ''):lower() == 'true')
+                               or (sval == '1')
+            end
+            if skey == 'ase_appearing' then
+                _ow_ase_appearing = ((sval or ''):lower() == 'true')
+                                    or (sval == '1')
+            end
+            if skey == 'ase_fading' then
+                _ow_ase_fading = ((sval or ''):lower() == 'true')
+                                 or (sval == '1')
+            end
+            if skey == 'fisher_catch_limit' then
+                if _ow_fisher_set_opt then
+                    _ow_fisher_set_opt('catch_limit', tonumber(sval) or 0)
+                end
+            end
+            if skey == 'fisher_bait' then
+                if _ow_fisher_set_bait then _ow_fisher_set_bait(sval or '') end
+            end
+            if skey == 'fisher_catch' then
+                if _ow_fisher_set_catch then _ow_fisher_set_catch(sval or '') end
+            end
+            if skey == 'fisher_debug' then
+                if _ow_fisher_set_opt then
+                    _ow_fisher_set_opt('debug_messages',
+                        ((sval or ''):lower() == 'true') or (sval == '1'))
+                end
+            end
+            if skey:match('^fisher_opt_') and _ow_fisher_set_opt then
+                _ow_fisher_set_opt(skey:sub(12), tonumber(sval) or 0)
+            end
+            if skey == 'fisher_enabled' then
+                -- Drives the embedded Fisher engine (this addon).
+                local on = ((sval or ''):lower() == 'true')
+                           or (sval == '1')
+                if on then
+                    if _ow_fisher_start then _ow_fisher_start() end
+                else
+                    if _ow_fisher_stop then _ow_fisher_stop() end
+                end
             end
             -- Other SETTING keys: no handler yet. Left for future
             -- schema-pushed settings.
@@ -5138,11 +9214,11 @@ local function _ow_drain_inbound()
                 ow_user_config.setup_complete = true
                 local ok, err = ow_save_user_config()
                 if ok then
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW Setup] Configuration saved. Run //ow config '
                         .. 'to verify, or //ow setup to redo.')
                 else
-                    windower.add_to_chat(123,
+                    ow_chat(123,
                         '[OW Setup] Save failed: ' .. tostring(err))
                 end
                 -- Refresh settings.Bards immediately so the values flow
@@ -5171,15 +9247,15 @@ local function _ow_drain_inbound()
                 ow_user_config.setup_complete = true
                 local ok, err = ow_save_user_config()
                 if ok then
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW Setup] Marked complete (no changes). '
                         .. 'Run //ow setup any time to (re)configure.')
                 else
-                    windower.add_to_chat(123,
+                    ow_chat(123,
                         '[OW Setup] Save failed: ' .. tostring(err))
                 end
             elseif action == 'cancel' then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW Setup] Cancelled. No changes saved.')
             elseif action == 'request_open' then
                 -- Pygame UI clicked the "Gear settings" button or
@@ -5212,7 +9288,7 @@ local function _ow_drain_inbound()
                     -- Meant for a different character on this machine.
                     -- Silently ignore so the wrong box never drops.
                     if _ow_cast_debug then
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW] INVACT ignored (for ' .. who
                             .. ', I am ' .. myname .. ')')
                     end
@@ -5220,13 +9296,13 @@ local function _ow_drain_inbound()
                     if action == 'drop' then
                         local ok, err = pcall(_ow_inv_drop_item_by_id, item_id)
                         if not ok then
-                            windower.add_to_chat(123,
+                            ow_chat(123,
                                 '[OmniWatch] drop error: ' .. tostring(err))
                         end
                     elseif action == 'autodrop' then
                         local ok, err = pcall(_ow_inv_autodrop_by_id, item_id)
                         if not ok then
-                            windower.add_to_chat(123,
+                            ow_chat(123,
                                 '[OmniWatch] autodrop error: ' .. tostring(err))
                         end
                     end
@@ -5251,7 +9327,7 @@ local function _ow_drain_inbound()
                 local myname = me and me.name or ''
                 if who ~= '' and myname ~= '' and who ~= myname then
                     if _ow_cast_debug then
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW] BLUSETS ignored (for ' .. who
                             .. ', I am ' .. myname .. ')')
                     end
@@ -5261,13 +9337,13 @@ local function _ow_drain_inbound()
                     local names   = b3 and rest2:sub(b3 + 1) or ''
                     local ok, err = pcall(_ow_blusets_start, setname, names)
                     if not ok then
-                        windower.add_to_chat(123,
+                        ow_chat(123,
                             '[OmniWatch] blusets error: ' .. tostring(err))
                     end
                 elseif action == 'stop' then
                     if _ow_blusets_active then
                         _ow_blusets_active = nil
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OmniWatch] BLU spellset change stopped.')
                     end
                 end
@@ -5291,16 +9367,56 @@ local function _ow_drain_inbound()
                 local myname = me and me.name or ''
                 if who ~= '' and myname ~= '' and who ~= myname then
                     if _ow_cast_debug then
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW] WARP ignored (for ' .. who
                             .. ', I am ' .. myname .. ')')
                     end
                 elseif cmd and cmd ~= '' then
                     if _ow_cast_debug then
-                        windower.add_to_chat(207, '[OW] WARP run: ' .. cmd)
+                        ow_chat(207, '[OW] WARP run: ' .. cmd)
                     end
                     windower.send_command(cmd)
                 end
+            end
+        elseif head == 'CALLTRUST' then
+            -- Summon a saved trust set from the overlay's Call Trust button.
+            -- Wire form: CALLTRUST|<char>|<set name>|<Name;Name;...>
+            -- <char> guard mirrors BLUSETS/WARP: act only on the named box
+            -- (empty <char> always acts) so a call can't fire on the wrong
+            -- multibox character.
+            local c1 = rest:find('|', 1, true)
+            if c1 then
+                local who   = rest:sub(1, c1 - 1)
+                local tail  = rest:sub(c1 + 1)
+                local c2    = tail:find('|', 1, true)
+                local setnm = c2 and tail:sub(1, c2 - 1) or '?'
+                local names = c2 and tail:sub(c2 + 1) or ''
+                local me     = windower.ffxi.get_player
+                               and windower.ffxi.get_player()
+                local myname = me and me.name or ''
+                if who ~= '' and myname ~= '' and who ~= myname then
+                    if _ow_cast_debug then
+                        ow_chat(207,
+                            '[OW] CALLTRUST ignored (for ' .. who
+                            .. ', I am ' .. myname .. ')')
+                    end
+                else
+                    local ok, err = pcall(_ow_calltrust_start, setnm, names)
+                    if not ok then
+                        ow_chat(123,
+                            '[OmniWatch] calltrust error: ' .. tostring(err))
+                    end
+                end
+            end
+        elseif head == 'PUPATT' then
+            local ok, perr = pcall(_ow_pupatt_command, rest)
+            if not ok then
+                ow_chat(123, '[OmniWatch] pupatt error: ' .. tostring(perr))
+            end
+        elseif head == 'BRDSET' then
+            local ok, berr = pcall(_ow_brdset_command, rest)
+            if not ok then
+                ow_chat(123, '[OmniWatch] brdset error: ' .. tostring(berr))
             end
         elseif head == 'CMD' then
             -- Hotbar buttons of kind="windower" send their command
@@ -5312,7 +9428,7 @@ local function _ow_drain_inbound()
             -- run windower.send_command('input /checkparam <me>').
             if rest and rest ~= '' then
                 if _ow_cast_debug then
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW] CMD recv: ' .. tostring(rest))
                 end
                 windower.send_command(rest)
@@ -5325,7 +9441,7 @@ local function _ow_drain_inbound()
             -- didn't prefix CMD|.
             if not sep then
                 if _ow_cast_debug then
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW] bare cmd recv: ' .. tostring(data))
                 end
                 windower.send_command(data)
@@ -5476,7 +9592,11 @@ local function _ow_prune_buff_sources()
     local player = windower.ffxi.get_player()
     if not (player and player.buffs) then return end
     local active = {}
-    for _, bid in ipairs(player.buffs) do active[bid] = true end
+    local active_count = {}
+    for _, bid in ipairs(player.buffs) do
+        active[bid] = true
+        active_count[bid] = (active_count[bid] or 0) + 1
+    end
     local changed = false
     local now = os.time()
     -- Grace period: when a song is cast, cat=4 fires before the buff
@@ -5502,7 +9622,7 @@ local function _ow_prune_buff_sources()
                     for _, s in ipairs(srcs) do
                         names[#names+1] = (s.src_kind or '?') .. ':' .. tostring(s.src_name or '?')
                     end
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] prune: bid=%d not in player.buffs, dropping %d records: %s',
                         bid, #srcs, table.concat(names, ',')))
                 end
@@ -5530,6 +9650,85 @@ local function _ow_prune_buff_sources()
                         changed = true  -- record dropped
                     else
                         kept[#kept+1] = s
+                    end
+                end
+                -- Drop stale EXCESS records. When a song is overwritten by
+                -- another of the same buff_id — e.g. a dummy song replaced
+                -- by the real song in the same slot during an extrasongsmode
+                -- rotation — the buff_id stays in player.buffs, so the dummy
+                -- record is never pruned above and its acc/att keeps being
+                -- summed on TOP of the real song's (the +1-song over-count
+                -- that only appears when dummy songs are mixed in). Cap the
+                -- bucket to the number of instances of this buff_id actually
+                -- live in player.buffs, dropping the OLDEST (the dummy was
+                -- cast before the real song that replaced it).
+                -- Collapse duplicate records of the SAME song name, keeping
+                -- the highest-potency one. The dummy->real rotation and the
+                -- cat=8/cat=4 double-write can leave two records for one song
+                -- (e.g. a stale nil/0% "Victory March" beside the real one);
+                -- both would otherwise sum. One self-song name = one buff.
+                do
+                    local best, order = {}, {}
+                    for _, srec in ipairs(kept) do
+                        local key = srec.src_name or tostring(srec.src_id or '?')
+                        local cur = best[key]
+                        if not cur then
+                            best[key] = srec
+                            order[#order + 1] = key
+                        else
+                            changed = true
+                            if (tonumber(srec.potency) or 0)
+                               > (tonumber(cur.potency) or 0) then
+                                best[key] = srec
+                            end
+                        end
+                    end
+                    if #order < #kept then
+                        local dedup = {}
+                        for _, k in ipairs(order) do
+                            dedup[#dedup + 1] = best[k]
+                        end
+                        kept = dedup
+                    end
+                end
+                -- Reconcile song records against the songs ACTUALLY live.
+                -- Marches all share buff_id 214, and player.buffs lists 214
+                -- only ONCE no matter how many marches are up, so the old
+                -- active_count[214] cap was 1 and collapsed stacked marches
+                -- to a single record — dropping Honor when Victory landed
+                -- (the "+3% instead of stacking" haste bug). Instead, gather
+                -- the song names currently present in buff_details (the 0x063
+                -- slot reconcile stamps full_name there) and keep every song
+                -- record whose name is live; drop song records for songs no
+                -- longer active — e.g. a dummy overwritten by the real song
+                -- in an extrasongsmode rotation. Non-song records and records
+                -- cast in the last 5s (bd may not be stamped yet) are kept.
+                -- Skip entirely if no live song names are visible (bd not yet
+                -- populated) so we never false-drop a real march.
+                do
+                    local live_names, saw_any = {}, false
+                    if _ExtraData and _ExtraData.player
+                       and _ExtraData.player.buff_details then
+                        for _, b in pairs(_ExtraData.player.buff_details) do
+                            if type(b) == 'table' and b.full_name then
+                                live_names[b.full_name] = true
+                                saw_any = true
+                            end
+                        end
+                    end
+                    if saw_any then
+                        local keep2 = {}
+                        for _, s in ipairs(kept) do
+                            local fresh = s.cast_time
+                                and (now - s.cast_time) < 5
+                            if s.src_kind ~= 'song' or fresh
+                               or (s.src_name and live_names[s.src_name]) then
+                                keep2[#keep2 + 1] = s
+                            else
+                                changed = true  -- stale song record dropped
+                            end
+                        end
+                        kept = keep2
                     end
                 end
                 if #kept ~= #srcs then
@@ -5592,7 +9791,7 @@ ow_safe_register('load', function()
                         chr    = tonumber(p['Base CHR']) or 0,
                     }
                     if _ow_cast_debug then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] base stats primed from cached 0x061: '
                             ..'STR=%d DEX=%d VIT=%d AGI=%d INT=%d MND=%d CHR=%d',
                             _ow_base_stats.str, _ow_base_stats.dex,
@@ -5608,7 +9807,7 @@ ow_safe_register('load', function()
     -- This way new installs get a clear template to hand-edit, instead
     -- of a silent empty config. Existing files are NOT touched.
     pcall(ow_write_user_config_template_if_missing)
-    windower.add_to_chat(207, string.format(
+    ow_chat(207, string.format(
         '[OmniWatch] loaded v%s. Type //ow help for commands.',
         _addon.version))
     -- First-run setup nag. setup_complete is set to true by the wizard
@@ -5617,7 +9816,7 @@ ow_safe_register('load', function()
     -- once. Hand-editors who never run //ow setup can flip the flag
     -- in user_config.lua to silence this.
     if not (ow_user_config and ow_user_config.setup_complete) then
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OmniWatch] First run: type //ow setup to configure your '
             .. 'Song+ / Phantom Roll+ / Geomancy+ / Unity Rank values. '
             .. 'Or //ow setup skip to dismiss.')
@@ -5719,10 +9918,10 @@ ow_safe_register('addon command', function(command, ...)
     command = (command or ''):lower()
     local args = {...}
     if command == 'help' or command == '' then
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OmniWatch] commands (prefix //ow or //omniwatch):')
         for _, cmd in ipairs(PW_COMMANDS_HELP) do
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '  %-22s  %s', cmd[1], cmd[2]))
         end
         return
@@ -5732,27 +9931,91 @@ ow_safe_register('addon command', function(command, ...)
         udp_gs:send('SET|' .. path)
         if _ow_gs_debug and path ~= _ow_last_echoed_set then
             _ow_last_echoed_set = path
-            windower.add_to_chat(207, '[OW] SET -> ' .. path)
+            ow_chat(207, '[OW] SET -> ' .. path)
         end
     elseif command == 'state' and #args > 0 then
         local s = table.concat(args, ' ')
         udp_gs:send('STATE|' .. s)
+    elseif command == 'su' or command == 'skillup' then
+        _ow_su_command(table.concat(args, '|'))
+    elseif command == 'ah' or command == 'auction' then
+        _ow_ah_command(table.concat(args, '|'))
+    elseif command == 'pupatt' or command == 'pup' then
+        _ow_pupatt_command(table.concat(args, '|'))
     elseif command == 'debug' then
         _ow_cast_debug = not _ow_cast_debug
         _ow_gs_debug   = not _ow_gs_debug
-        windower.add_to_chat(207, string.format('[OW] debug = %s',
+        ow_chat(207, string.format('[OW] debug = %s',
             tostring(_ow_cast_debug)))
+        -- Echo to GAME chat (deliberate exception to the log redirect) so
+        -- this interactive toggle gives live feedback and surfaces where
+        -- the log is being written.
+        if windower and windower.add_to_chat then
+            local _lp = _ow_log_path
+            if not _lp and type(ow_user_config_dir) == 'function' then
+                local ok, d = pcall(ow_user_config_dir)
+                if ok and d then _lp = d .. '/omniwatch.log' end
+            end
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] debug = %s  |  log: %s',
+                tostring(_ow_cast_debug), tostring(_lp or '?')))
+        end
+    elseif command == 'szdbg' then
+        -- Dump nearby targetable entities with the raw fields that drive the
+        -- Scan Zone PC/NPC/Mob/Object classifier, so the real spawn_type /
+        -- is_npc / id values for this server's entities can be confirmed.
+        -- Run it standing near a known PC, NPC, monster (and object) and
+        -- read the columns off the log.
+        local me = windower.ffxi.get_mob_by_target
+                   and windower.ffxi.get_mob_by_target('me')
+        local n = 0
+        ow_chat(207,
+            '[OW szdbg] name | spawn_type | is_npc | id | id%4096')
+        for _, v in pairs(windower.ffxi.get_mob_array()) do
+            if type(v) == 'table' and v.valid_target
+                    and v.name and v.name ~= ''
+                    and (not me or not me.index or v.index ~= me.index) then
+                local near = true
+                if me and me.x and v.x and v.y then
+                    local dx, dy = v.x - me.x, v.y - me.y
+                    near = (dx * dx + dy * dy) <= (30 * 30)
+                end
+                if near and n < 25 then
+                    ow_chat(207, string.format(
+                        '  %-20s st=%s npc=%s id=%d m=%d',
+                        tostring(v.name):sub(1, 20),
+                        tostring(v.spawn_type), tostring(v.is_npc),
+                        v.id or 0, (v.id or 0) % 4096))
+                    n = n + 1
+                end
+            end
+        end
+        ow_chat(207,
+            string.format('[OW szdbg] %d entities listed (run near '
+                          .. 'a PC / NPC / mob)', n))
     elseif command == 'buffdebug' then
         _ow_buff_debug = not _ow_buff_debug
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
-        windower.add_to_chat(207, string.format('[OW] buff_debug = %s',
+        ow_chat(207, string.format('[OW] buff_debug = %s',
             tostring(_ow_buff_debug)))
+        -- Echo to GAME chat (exception to the log redirect) so this
+        -- interactive toggle gives live feedback and surfaces the log path.
+        if windower and windower.add_to_chat then
+            local _lp = _ow_log_path
+            if not _lp and type(ow_user_config_dir) == 'function' then
+                local ok, d = pcall(ow_user_config_dir)
+                if ok and d then _lp = d .. '/omniwatch.log' end
+            end
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] buff_debug = %s  |  log: %s',
+                tostring(_ow_buff_debug), tostring(_lp or '?')))
+        end
     elseif command == 'partydebug' then
         -- Toggle the 0x0DD/0x0DF party-job trace: logs each parsed party/
         -- char update's job fields so the capture can be verified against a
         -- known party. Off by default; harmless when off.
         _OW_PARTY_DEBUG = not _OW_PARTY_DEBUG
-        windower.add_to_chat(207, '[OmniWatch] partydebug '
+        ow_chat(207, '[OmniWatch] partydebug '
             .. (_OW_PARTY_DEBUG and 'ON' or 'OFF'))
     elseif command == 'warpringreset' then
         -- Manual clear of the Warp Ring cooldown. Useful for
@@ -5770,7 +10033,7 @@ ow_safe_register('addon command', function(command, ...)
         if _G._ow_warp_ring_diag then
             _G._ow_warp_ring_diag()
         else
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OmniWatch] warp ring module not loaded')
         end
     elseif command == 'currencydebug' then
@@ -5782,11 +10045,11 @@ ow_safe_register('addon command', function(command, ...)
         --   • on toggle, the current cache contents print so we know what
         --     the cycler is reading
         _G._ow_currency_debug = not _G._ow_currency_debug
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW currency] debug = %s', tostring(_G._ow_currency_debug)))
         if _G._ow_currency_debug then
             local c = _G._ow_currency_cache or {}
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW currency] cache: gil=%s sparks=%s accolades=%s ' ..
                 'gallimaufry=%s temenos=%s apollyon=%s',
                 tostring(c.gil), tostring(c.sparks), tostring(c.accolades),
@@ -5807,7 +10070,7 @@ ow_safe_register('addon command', function(command, ...)
         -- for EXP and Exemplar. On toggle, prints the current cache
         -- (including live-read CP from the player table).
         _G._ow_points_debug = not _G._ow_points_debug
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW points] debug = %s', tostring(_G._ow_points_debug)))
         if _G._ow_points_debug then
             local p = _G._ow_points_cache or {}
@@ -5822,7 +10085,7 @@ ow_safe_register('addon command', function(command, ...)
                     cp_val = tonumber(je.cp) or 0
                 end
             end
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW points] cache: exp=%s/%s cp=%s/%s exemplar=%s/%s',
                 tostring(p.exp), tostring(p.exp_tnl),
                 tostring(cp_val), tostring(p.cp_tnl),
@@ -5843,7 +10106,7 @@ ow_safe_register('addon command', function(command, ...)
         -- so we can see the COMPLETE packet, not just the chat-
         -- truncated preview. Chat still gets a one-line summary.
         _G._ow_hp_debug = not _G._ow_hp_debug
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW HP] debug = %s. Full packet dumps go to '
             .. '%%APPDATA%%/OmniWatch/hpdebug_log.txt. '
             .. 'Now talk to a Home Point NPC.',
@@ -5853,7 +10116,7 @@ ow_safe_register('addon command', function(command, ...)
         -- Writes to sgdebug_log.txt. Use to verify the bitfield offset
         -- and that the master-list indexing matches in-game.
         _G._ow_sg_debug = not _G._ow_sg_debug
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW SG] debug = %s. Full packet dumps go to '
             .. '%%APPDATA%%/OmniWatch/sgdebug_log.txt. '
             .. 'Now talk to a Survival Guide NPC.',
@@ -5867,10 +10130,10 @@ ow_safe_register('addon command', function(command, ...)
         -- can be re-run safely for visual previews.
         local ok, err = pcall(function() udp_inv:send('CONGRATS_TEST') end)
         if ok then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW congrats] banner triggered (5 sec)')
         else
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW congrats] send failed: %s', tostring(err)))
         end
     elseif command == 'dwtest' then
@@ -5884,7 +10147,7 @@ ow_safe_register('addon command', function(command, ...)
             local _saved_dbg = _ow_buff_debug
             _ow_buff_debug = true
             ow_send_stats(s)   -- computes haste/dw, fires [OW dw] line
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW dwtest] panel dw_needed=%s | required=%s trait=%s jp=%s | dual_wield(gear)=%s total_haste=%s',
                 tostring(s['dw needed']), tostring(s['_dw_required_pct']),
                 tostring(s['dw trait']), tostring(s['_jp_dw_gift']),
@@ -5894,7 +10157,7 @@ ow_safe_register('addon command', function(command, ...)
             _ow_write_dw_needed(s, sim_on, true)
             _ow_buff_debug = _saved_dbg
         else
-            windower.add_to_chat(207, '[OW dwtest] no stats computed')
+            ow_chat(207, '[OW dwtest] no stats computed')
         end
     elseif command == 'geartrace' then
         -- Toggle a one-shot tracer in Gear_Processing.lua's
@@ -5904,7 +10167,7 @@ ow_safe_register('addon command', function(command, ...)
         -- piece of gear in the equipment has "R. Accuracy" and no
         -- [OW gear-trace] line prints, the file isn't being picked up.
         _ow_gear_trace = not _ow_gear_trace
-        windower.add_to_chat(207, string.format('[OW] gear_trace = %s',
+        ow_chat(207, string.format('[OW] gear_trace = %s',
             tostring(_ow_gear_trace)))
     elseif command == 'gearcache_clear' or command == 'cachebust' then
         -- Nuke the persisted gearinfo cache and rebuild it from
@@ -5919,7 +10182,7 @@ ow_safe_register('addon command', function(command, ...)
         local p = windower.ffxi.get_player()
         local pname = (p and p.name) or ''
         if pname == '' then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] gearcache_clear: no player name available')
             return
         end
@@ -5933,10 +10196,10 @@ ow_safe_register('addon command', function(command, ...)
         full_gear_table_from_file = T{}
         local ok, err = pcall(parse_inventory)
         if ok then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] gearcache cleared and rebuilt from %s', path))
         else
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] gearcache cleared but parse_inventory failed: %s',
                 tostring(err)))
         end
@@ -5946,7 +10209,7 @@ ow_safe_register('addon command', function(command, ...)
         -- so we can empirically determine the right epoch formula.
         -- Used to develop/verify the server-pushed buff duration system.
         _ow_buffts_debug = not _ow_buffts_debug
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] buffts_debug = %s. Cast a buff and watch for [OW buffts] '
             .. 'lines.', tostring(_ow_buffts_debug)))
     elseif command == 'augstats' then
@@ -5959,7 +10222,7 @@ ow_safe_register('addon command', function(command, ...)
         local items = windower.ffxi.get_items()
         local equip = items and items.equipment
         if not equip then
-            windower.add_to_chat(167, '[OW] augstats: no equipment data.')
+            ow_chat(167, '[OW] augstats: no equipment data.')
             return
         end
         local function emit(line)
@@ -5967,7 +10230,7 @@ ow_safe_register('addon command', function(command, ...)
             pcall(function()
                 udp_inv:send(_OW_MB_TAG('AUGPROBE|' .. line))
             end)
-            windower.add_to_chat(207, '[OW] ' .. line)
+            ow_chat(207, '[OW] ' .. line)
         end
         local audited = 0
         for slot_name, idx in pairs(equip) do
@@ -6112,12 +10375,12 @@ ow_safe_register('addon command', function(command, ...)
                    and rawget(windower.ffxi, 'get_item_augments')
                    or (windower.ffxi and windower.ffxi.get_item_augments)
         if type(fn) ~= 'function' then
-            windower.add_to_chat(167,
+            ow_chat(167,
                 '[OW] augprobe: windower.ffxi.get_item_augments is not '
                 .. 'present in this Windower build.')
             return
         end
-        windower.add_to_chat(207, '[OW] augprobe: function exists. '
+        ow_chat(207, '[OW] augprobe: function exists. '
             .. 'Probing equipped items...')
         local function dump(v, depth, lines)
             depth = depth or 0
@@ -6140,7 +10403,7 @@ ow_safe_register('addon command', function(command, ...)
         local items = windower.ffxi.get_items()
         local equip = items and items.equipment
         if not equip then
-            windower.add_to_chat(167, '[OW] augprobe: no equipment data.')
+            ow_chat(167, '[OW] augprobe: no equipment data.')
             return
         end
         local probed = 0
@@ -6174,7 +10437,7 @@ ow_safe_register('addon command', function(command, ...)
                         local ok, ret = pcall(att.call)
                         if ok and ret ~= nil then
                             probed = probed + 1
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] augprobe %s [%s/%d] sig%s -> %s',
                                 iname, tostring(bag_id), idx, att.desc,
                                 type(ret)))
@@ -6200,11 +10463,11 @@ ow_safe_register('addon command', function(command, ...)
                                 end)
                             end
                             for li = 1, math.min(#lines, 6) do
-                                windower.add_to_chat(207,
+                                ow_chat(207,
                                     '    ' .. lines[li])
                             end
                             if #lines > 6 then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '    ...(%d more lines in console)',
                                     #lines - 6))
                             end
@@ -6215,11 +10478,11 @@ ow_safe_register('addon command', function(command, ...)
             end
         end
         if probed == 0 then
-            windower.add_to_chat(167, '[OW] augprobe: function present '
+            ow_chat(167, '[OW] augprobe: function present '
                 .. 'but no signature returned data for any equipped '
                 .. 'item. Full attempt log is in the console.')
         else
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] augprobe: done — %d item(s) answered. Full dumps '
                 .. 'in the Windower console.', probed))
         end
@@ -6233,10 +10496,10 @@ ow_safe_register('addon command', function(command, ...)
             keys[#keys+1] = k
         end
         table.sort(keys)
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] dumpstats: %d entries', #keys))
         for _, k in ipairs(keys) do
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '  %s = %s', k, tostring(stats[k])))
         end
     elseif command == 'jobbonus' then
@@ -6251,7 +10514,7 @@ ow_safe_register('addon command', function(command, ...)
         -- expected raw for the active Chaos roll given current PR+.
         local p = windower.ffxi.get_player()
         if not p then
-            windower.add_to_chat(207, '[OW] jobbonus: no player')
+            ow_chat(207, '[OW] jobbonus: no player')
             return
         end
         local me_lower = (p.name or ''):lower()
@@ -6260,11 +10523,11 @@ ow_safe_register('addon command', function(command, ...)
         local cfg_pr = (ow_user_config and ow_user_config.corsairs
                         and ow_user_config.corsairs.self
                         and ow_user_config.corsairs.self.phantom_roll) or 'nil'
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] PR+ wizard=%s | settings.Cors[%s]=%s',
             tostring(cfg_pr), me_lower, tostring(cors_setting)))
         if Buffs_inform then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] Buffs_inform.Attack perc=%s (÷1024 = %.2f%%)',
                 tostring(Buffs_inform['Attack perc']),
                 ((tonumber(Buffs_inform['Attack perc']) or 0) / 1024) * 100))
@@ -6289,7 +10552,7 @@ ow_safe_register('addon command', function(command, ...)
                     local rv_at_n   = roll_arr and roll_arr[roll_value]
                     if type(rv_at_n) == 'number' then
                         local expected_raw = rv_at_n + step * pr_eff
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW]   %s rolled %d: expected raw=%d (= %d + %d×%d)',
                             nm, roll_value, expected_raw,
                             rv_at_n, step, pr_eff))
@@ -6298,21 +10561,21 @@ ow_safe_register('addon command', function(command, ...)
                        and rd.bonus['Main job'] ~= 'NON' then
                         local bj  = rd.bonus['Main job']
                         local eff = tonumber(rd.bonus.effect) or 0
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] %s -- if %s in party (+%d):',
                             nm, bj, eff))
                         local pct_info = PCT_ROLLS[nm]
                         if pct_info then
                             local pct = eff / 1024 * 100
                             if #pct_info.affects == 0 then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     "    +%.2f%% %s (panel doesn't show pet stats)",
                                     pct, pct_info.label))
                             else
                                 for _, sk in ipairs(pct_info.affects) do
                                     local cur = stats[sk] or 0
                                     local add = math.floor(cur * eff / 1024)
-                                    windower.add_to_chat(207, string.format(
+                                    ow_chat(207, string.format(
                                         '    +%.2f%% %s: %s %d → %d (+%d)',
                                         pct, pct_info.label, sk, cur, cur + add, add))
                                 end
@@ -6349,12 +10612,12 @@ ow_safe_register('addon command', function(command, ...)
                             if keys then
                                 for _, sk in ipairs(keys) do
                                     local cur = stats[sk] or 0
-                                    windower.add_to_chat(207, string.format(
+                                    ow_chat(207, string.format(
                                         '    %s: %d → %d (+%d)',
                                         sk, cur, cur + eff, eff))
                                 end
                             else
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '    +%d %s (no panel mapping)',
                                     eff, effect))
                             end
@@ -6365,7 +10628,7 @@ ow_safe_register('addon command', function(command, ...)
             end
         end
         if count == 0 then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] jobbonus: no active rolls (or none with a bonus job)')
         end
     elseif command == 'dumpgifts' then
@@ -6379,7 +10642,7 @@ ow_safe_register('addon command', function(command, ...)
         local p = windower.ffxi.get_player()
         local mjob = p and p.main_job
         if not (mjob and ow_Gifts and ow_Gifts[mjob]) then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] dumpgifts: no Gifts data for %s', tostring(mjob)))
             return
         end
@@ -6387,7 +10650,7 @@ ow_safe_register('addon command', function(command, ...)
         if p.job_points and p.job_points[mjob:lower()] then
             jp_spent = p.job_points[mjob:lower()].jp_spent or 0
         end
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] dumpgifts %s -- jp_spent=%d', mjob, jp_spent))
         local gifts = ow_Gifts[mjob]['Gifts'] or {}
         -- Sort thresholds for readable output.
@@ -6396,19 +10659,19 @@ ow_safe_register('addon command', function(command, ...)
         table.sort(thresholds)
         for _, t in ipairs(thresholds) do
             local reached = (jp_spent >= t) and 'YES' or 'no'
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] @%dJP (reached=%s):', t, reached))
             local bonuses = gifts[t]
             if type(bonuses) == 'table' then
                 for bn, bv in pairs(bonuses) do
                     local mapped = _PW_GIFT_STAT_MAP[bn]
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '  [%s] = %s  →  %s',
                         tostring(bn), tostring(bv),
                         mapped or '(NOT IN MAP -- dropped)'))
                 end
             else
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '  (non-table value: %s)', tostring(bonuses)))
             end
         end
@@ -6418,28 +10681,28 @@ ow_safe_register('addon command', function(command, ...)
         -- tier values, and the per-spell stat bonuses.
         local p = windower.ffxi.get_player()
         if not p then
-            windower.add_to_chat(207, '[OW] blu: no player data')
+            ow_chat(207, '[OW] blu: no player data')
             return
         end
         if p.main_job ~= 'BLU' and p.sub_job ~= 'BLU' then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] blu: not on BLU (main=%s sub=%s)',
                 p.main_job or '?', p.sub_job or '?'))
             return
         end
         local spell_ids = ow_get_blu_set_spells()
         if not spell_ids then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] blu: get_mjob_data/get_sjob_data returned no '
                 .. 'spells. Try restarting Windower or report this.')
             return
         end
         local jp_sum = ow_get_blu_jp_summary()
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] blu: jp_spent=%d  master_level=%d  gifts=%d (+%d pts)',
             jp_sum.jp_spent, jp_sum.master_level, jp_sum.gifts,
             jp_sum.gifts * 8))
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] blu: %d equipped spells', #spell_ids))
         -- Per-spell breakdown.
         local missing = {}
@@ -6465,18 +10728,18 @@ ow_safe_register('addon command', function(command, ...)
                         parts[#parts+1] = '['..table.concat(stat_parts, ',')..']'
                     end
                 end
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '  %s  %s', name, table.concat(parts, '  ')))
             else
                 missing[#missing+1] = name
             end
         end
         if #missing > 0 then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] blu: %d spell(s) NOT in OW_BLU_SPELLS table:',
                 #missing))
             for _, n in ipairs(missing) do
-                windower.add_to_chat(207, '  '..n)
+                ow_chat(207, '  '..n)
             end
         end
         -- Resolved totals: print trait-point breakdown by category,
@@ -6488,19 +10751,19 @@ ow_safe_register('addon command', function(command, ...)
                 cats[#cats+1] = k
             end
             table.sort(cats)
-            windower.add_to_chat(207, '[OW] blu: trait points '
+            ow_chat(207, '[OW] blu: trait points '
                 .. '(post-gift):')
             for _, c in ipairs(cats) do
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '  %s = %d', c, _ow_blu_cache.trait_pts[c]))
             end
         end
-        windower.add_to_chat(207, '[OW] blu: stat output:')
+        ow_chat(207, '[OW] blu: stat output:')
         local sk = {}
         for k, _ in pairs(blu_stats) do sk[#sk+1] = k end
         table.sort(sk)
         for _, k in ipairs(sk) do
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '  %s = %s', k, tostring(blu_stats[k])))
         end
     elseif command == 'spelldump' then
@@ -6522,13 +10785,13 @@ ow_safe_register('addon command', function(command, ...)
         }
         local target = args[1] and args[1]:upper() or nil
         if not (windower.ffxi.get_spells and res and res.spells) then
-            windower.add_to_chat(207, '[OW] spelldump: get_spells '
+            ow_chat(207, '[OW] spelldump: get_spells '
                 .. 'or res.spells unavailable')
             return
         end
         local ok_spells, spells = pcall(windower.ffxi.get_spells)
         if not ok_spells or type(spells) ~= 'table' then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] spelldump: get_spells() failed: '
                 .. tostring(spells))
             return
@@ -6562,11 +10825,11 @@ ow_safe_register('addon command', function(command, ...)
             end
         end
         -- Summary line per school
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OW] spelldump: learned / master by school:')
         local ordered_tags = {'BLM','WHM','SMN','NIN','BRD','GEO'}
         for _, tag in ipairs(ordered_tags) do
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '  %s: %d learned / %d master',
                 tag, #learned_by_tag[tag], master_by_tag[tag]))
         end
@@ -6574,10 +10837,10 @@ ow_safe_register('addon command', function(command, ...)
         if target and learned_by_tag[target] then
             local arr = learned_by_tag[target]
             table.sort(arr)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] %s learned (%d):', target, #arr))
             for _, nm in ipairs(arr) do
-                windower.add_to_chat(207, '    ' .. nm)
+                ow_chat(207, '    ' .. nm)
             end
         end
         -- Also probe a known spell ID so we see what fields exist.
@@ -6590,10 +10853,10 @@ ow_safe_register('addon command', function(command, ...)
                 fields[#fields + 1] = k
             end
             table.sort(fields)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] res.spells[144] (Fire) fields: %s',
                 table.concat(fields, ', ')))
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '  type=%s  en=%s  english=%s  name=%s',
                 tostring(fire.type),
                 tostring(fire.en),
@@ -6615,20 +10878,20 @@ ow_safe_register('addon command', function(command, ...)
             ow_user_config.setup_complete = true
             local ok, err = ow_save_user_config()
             if ok then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW Setup] Marked complete (values unchanged). '
                     .. 'Run //ow setup any time to (re)configure.')
             else
-                windower.add_to_chat(123,
+                ow_chat(123,
                     '[OW Setup] Save failed: ' .. tostring(err))
             end
             return
         end
         _ow_cfgwiz_open()
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OW Setup] Config overlay opened. Click +/- to adjust values, '
             .. 'Save when done. (Click outside the modal to cancel.)')
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OW Setup] Tip: enter ONLY the values from your typical '
             .. 'cast set. all_songs sums every "All Songs +N" piece '
             .. '(Gjall=4, Mnbw=2, etc.); per-family fields like carol '
@@ -6645,7 +10908,7 @@ ow_safe_register('addon command', function(command, ...)
         local sub = args[1] and args[1]:lower() or ''
         local bards = ow_user_config.bards
         if sub == '' then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] user_config bards (edit data/user_config.lua + //lua r omniwatch):')
             local names = {}
             for k, _ in pairs(bards) do names[#names+1] = k end
@@ -6663,17 +10926,17 @@ ow_safe_register('addon command', function(command, ...)
                         parts[#parts+1] = string.format('%s=%d', fk, v)
                     end
                 end
-                windower.add_to_chat(207, string.format('  %s: %s',
+                ow_chat(207, string.format('  %s: %s',
                     name,
                     #parts > 0 and table.concat(parts, ' ') or '(all zero)'))
             end
         elseif sub == 'save' then
             local ok, err = ow_save_user_config()
             if ok then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW] saved to data/user_config.lua (your hand-edits to non-bards sections were not preserved).')
             else
-                windower.add_to_chat(207, '[OW] save failed: ' .. tostring(err))
+                ow_chat(207, '[OW] save failed: ' .. tostring(err))
             end
         else
             -- //ow config <bard> <family> <n>
@@ -6681,11 +10944,11 @@ ow_safe_register('addon command', function(command, ...)
             local fam_name  = args[2] and args[2]:lower() or nil
             local value     = tonumber(args[3])
             if not (bard_name and fam_name and value) then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW] usage: //ow config <bard> <family> <n>')
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '       <bard> = self | <ally name lowercase>')
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '       <family> = ' .. table.concat(PW_BARD_FAMILY_KEYS, ', '))
                 return
             end
@@ -6694,14 +10957,14 @@ ow_safe_register('addon command', function(command, ...)
                 if fk == fam_name then fam_known = true; break end
             end
             if not fam_known then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] unknown family "%s". Valid: %s',
                     fam_name, table.concat(PW_BARD_FAMILY_KEYS, ', ')))
                 return
             end
             bards[bard_name] = bards[bard_name] or {}
             bards[bard_name][fam_name] = value
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] bards.%s.%s = %d  (in memory; //ow config save to write file)',
                 bard_name, fam_name, value))
         end
@@ -6710,7 +10973,7 @@ ow_safe_register('addon command', function(command, ...)
         local me = windower.ffxi.get_player()
         if me and me.id then
             udp_cast:send(string.format('CAST_START|%d|spell|TEST SPELL', me.id))
-            windower.add_to_chat(207, '[OW] sent TEST CAST_START on self')
+            ow_chat(207, '[OW] sent TEST CAST_START on self')
         end
     elseif command == 'position' then
         -- Toggle position-edit mode in the OmniWatch overlay: forces all
@@ -6724,7 +10987,7 @@ ow_safe_register('addon command', function(command, ...)
             mode = 'toggle'
         end
         udp_gs:send('SETUP|' .. mode)
-        windower.add_to_chat(207, '[OW] panel position mode: ' .. mode
+        ow_chat(207, '[OW] panel position mode: ' .. mode
             .. ' (run //ow position again to exit)')
     elseif command == 'lock' then
         -- Toggle panel lock. When locked, panels can't be dragged or
@@ -6736,62 +10999,62 @@ ow_safe_register('addon command', function(command, ...)
             mode = 'toggle'
         end
         udp_gs:send('LOCK|' .. mode)
-        windower.add_to_chat(207, '[OW] panel lock: ' .. mode)
+        ow_chat(207, '[OW] panel lock: ' .. mode)
     elseif command == 'events' then
         -- Diagnostic: list current event-bus subscriber counts. Confirms
         -- that features have wired up to the events they need.
-        windower.add_to_chat(207, '[OW] Event bus subscribers:')
+        ow_chat(207, '[OW] Event bus subscribers:')
         local any = false
         for evt, list in pairs(ow_events._subs) do
             any = true
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW]   %-18s %d subscriber(s)', evt, #list))
         end
         if not any then
-            windower.add_to_chat(207, '[OW]   (no subscribers registered)')
+            ow_chat(207, '[OW]   (no subscribers registered)')
         end
     elseif command == 'dumpsources' then
         -- Show all snooped buff sources: songs, haste spells, food, rolls.
         -- Useful for verifying that the action snoops are catching casts
         -- and that pruning is working when buffs drop.
-        windower.add_to_chat(207, '[OW] Buff sources by buff_id:')
+        ow_chat(207, '[OW] Buff sources by buff_id:')
         local any = false
         for bid, srcs in pairs(_ow_buff_sources) do
             any = true
             local nm = (res.buffs[bid] and (res.buffs[bid].en or res.buffs[bid].name))
                        or ('id:'..bid)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW]   buff %d (%s):', bid, nm))
             for _, s in ipairs(srcs) do
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]     %s "%s" potency=%s',
                     s.src_kind or '?', s.src_name or '?',
                     tostring(s.potency or 0)))
             end
         end
         if not any then
-            windower.add_to_chat(207, '[OW]   (none)')
+            ow_chat(207, '[OW]   (none)')
         end
-        windower.add_to_chat(207, '[OW] Phantom Roll state:')
+        ow_chat(207, '[OW] Phantom Roll state:')
         any = false
         for rid, val in pairs(_ow_roll_state) do
             any = true
             local nm = (res.job_abilities[rid] and res.job_abilities[rid].en)
                        or ('roll:'..rid)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW]   %s = %d', nm, val))
         end
         if not any then
-            windower.add_to_chat(207, '[OW]   (none)')
+            ow_chat(207, '[OW]   (none)')
         end
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] Food: %s (%d)',
             (_ow_food_item_id ~= 0 and res.items[_ow_food_item_id]
              and res.items[_ow_food_item_id].english) or 'none',
             _ow_food_item_id))
         if next(_ow_food_stats) then
             for k, v in pairs(_ow_food_stats) do
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]   %s = %+d', k, v))
             end
         end
@@ -6802,15 +11065,15 @@ ow_safe_register('addon command', function(command, ...)
         -- members, pets, trusts, mobs.
         -- Usage: //ow chatclass <numeric id>
         if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
+            ow_chat(123, '[OW] chat module not loaded.')
         else
             local id = tonumber(args[1])
             if not id then
-                windower.add_to_chat(123,
+                ow_chat(123,
                     '[OW] usage: //ow chatclass <numeric id>')
             else
                 local cat, name, slot = _chat.classify_entity(id)
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] id=%d → category=%s name=%s slot=%s',
                     id, tostring(cat), tostring(name), tostring(slot)))
             end
@@ -6830,14 +11093,14 @@ ow_safe_register('addon command', function(command, ...)
         --
         -- Usage: //ow chatdump [N]   (default 20)
         if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
+            ow_chat(123, '[OW] chat module not loaded.')
         else
             local n = tonumber(args[1]) or 20
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] live ring: text=%d/%d (dropped=%d)',
                 _chat.text_ring.size(),   _chat.text_ring.capacity(),
                 _chat.text_ring.dropped()))
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] history: text=%d/%d',
                 _chat.text_history.size(),   _chat.text_history.capacity()))
             -- Show most-recent N text events from history. The peek()
@@ -6845,12 +11108,12 @@ ow_safe_register('addon command', function(command, ...)
             local snap = _chat.text_history.peek()
             local start = math.max(1, #snap - n + 1)
             if #snap == 0 then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW]   (history empty -- say something or wait for chat)')
             else
                 for i = start, #snap do
                     local ev = snap[i]
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW]   #%d mode=%d %s [%s]: %s',
                         i, ev.mode or 0,
                         (ev.actor_name ~= '' and ev.actor_name) or '?',
@@ -6865,10 +11128,10 @@ ow_safe_register('addon command', function(command, ...)
         -- //ow chatdump. Doesn't touch the live ring -- it's drained
         -- on next prerender tick anyway.
         if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
+            ow_chat(123, '[OW] chat module not loaded.')
         else
             _chat.reset_history()
-            windower.add_to_chat(207, '[OW] chat history cleared.')
+            ow_chat(207, '[OW] chat history cleared.')
         end
     elseif command == 'chatdebug' then
         -- UNIFIED chat diagnostics. One switch drives every chat-debug
@@ -6914,7 +11177,7 @@ ow_safe_register('addon command', function(command, ...)
                 os.date('%H:%M:%S')))
         end
 
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] chatdebug = %s%s', tostring(target),
             target and ' (logs to %APPDATA%/OmniWatch/chatdebug_log.txt)'
                    or ''))
@@ -6925,7 +11188,7 @@ ow_safe_register('addon command', function(command, ...)
         -- unaffected (single-hit usually).
         -- Usage: //ow condense [on|off]
         if not _chat then
-            windower.add_to_chat(123, '[OW] chat module not loaded.')
+            ow_chat(123, '[OW] chat module not loaded.')
         else
             local target
             if args[1] == 'on' or args[1] == 'off' then
@@ -6934,7 +11197,7 @@ ow_safe_register('addon command', function(command, ...)
                 target = not _chat.is_condense_melee()
             end
             _chat.set_condense_melee(target)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] condense multi-hit melee/ranged = %s',
                 tostring(target)))
         end
@@ -6946,7 +11209,7 @@ ow_safe_register('addon command', function(command, ...)
         local equipment = windower.ffxi.get_items
                           and windower.ffxi.get_items('equipment')
         if not equipment then
-            windower.add_to_chat(207, '[OW] no equipment data')
+            ow_chat(207, '[OW] no equipment data')
             return
         end
         local slots = {'main','sub','range','ammo','head','neck',
@@ -6964,7 +11227,7 @@ ow_safe_register('addon command', function(command, ...)
                         local nm = res.items[idata.id]
                                    and (res.items[idata.id].en or res.items[idata.id].enl)
                                    or '?'
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] %-10s id=%d  %s', sn, idata.id, nm))
                         -- Description text (the same text /checkparam-style
                         -- code reads). For ilvl items this comes from res
@@ -6972,7 +11235,7 @@ ow_safe_register('addon command', function(command, ...)
                         local desc = res.items[idata.id]
                                      and res.items[idata.id].description
                         if desc and desc ~= '' then
-                            windower.add_to_chat(207, '[OW]   desc: '
+                            ow_chat(207, '[OW]   desc: '
                                                       ..tostring(desc):sub(1, 200))
                         end
                         -- Augments via extdata (preferred) + item_data fallback.
@@ -6989,26 +11252,26 @@ ow_safe_register('addon command', function(command, ...)
                         if augs and #augs > 0 then
                             for ai, a in ipairs(augs) do
                                 if a and a ~= '' and a ~= 'none' then
-                                    windower.add_to_chat(207, string.format(
+                                    ow_chat(207, string.format(
                                         '[OW]   aug %d: "%s"', ai, tostring(a)))
                                 end
                             end
                         end
                         if ow_enhanced[idata.id] then
-                            windower.add_to_chat(207, '[OW]   enhanced: '
+                            ow_chat(207, '[OW]   enhanced: '
                                                       ..tostring(ow_enhanced[idata.id]))
                         end
                         if DW_Gear and DW_Gear[idata.id] then
                             local dw = DW_Gear[idata.id]['Dual Wield']
                             if dw then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW]   DW_Gear: dual wield+%d', dw))
                             end
                         end
                         if Martial_Arts_Gear and Martial_Arts_Gear[idata.id] then
                             local ma = Martial_Arts_Gear[idata.id]['Martial Arts']
                             if ma then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW]   MA_Gear: martial arts-%d', ma))
                             end
                         end
@@ -7023,27 +11286,27 @@ ow_safe_register('addon command', function(command, ...)
         -- full total. This command exposes both layers for debugging.
         local p = windower.ffxi.get_player()
         if not p then
-            windower.add_to_chat(207, '[OW] no player data')
+            ow_chat(207, '[OW] no player data')
             return
         end
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OW] player.stats (delta -- gear + merits + JP + buffs):')
         if p.stats then
             for _, k in ipairs({'str','dex','vit','agi','int','mnd','chr'}) do
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]   %s = %s', k:upper(), tostring(p.stats[k])))
             end
         end
-        windower.add_to_chat(207, '[OW] player.merits:')
+        ow_chat(207, '[OW] player.merits:')
         if p.merits then
             for _, k in ipairs({'str','dex','vit','agi','int','mnd','chr'}) do
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]   %s = %s', k:upper(), tostring(p.merits[k])))
             end
         else
-            windower.add_to_chat(207, '[OW]   (no merits table)')
+            ow_chat(207, '[OW]   (no merits table)')
         end
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OW] Compare to /checkparam (which shows the TOTAL).')
     elseif command == 'dumpbuffs' then
         -- Print every buff currently active on the player, with the buff's
@@ -7052,21 +11315,21 @@ ow_safe_register('addon command', function(command, ...)
         local p = windower.ffxi.get_player()
         if p and p.buffs then
             if #p.buffs == 0 then
-                windower.add_to_chat(207, '[OW] No active buffs.')
+                ow_chat(207, '[OW] No active buffs.')
             end
             for i, bid in ipairs(p.buffs) do
                 local b = res.buffs and res.buffs[bid]
                 local nm = (b and (b.en or b.name)) or '(unknown)'
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] buff %2d: id=%d  %s', i, bid, nm))
             end
         else
-            windower.add_to_chat(207, '[OW] get_player() has no buff list.')
+            ow_chat(207, '[OW] get_player() has no buff list.')
         end
         -- Resolved speed-buff IDs (from res.buffs lookup at load time).
         -- Useful for verifying the addon is looking for the right buff
         -- numbers if speed cells aren't updating.
-        windower.add_to_chat(207, '[OW] Resolved speed-buff IDs:')
+        ow_chat(207, '[OW] Resolved speed-buff IDs:')
         local resolved = {
             {"Bolter's Roll", PW_BUFF_BOLTERS},
             {"Mazurka",       PW_BUFF_MAZURKA},
@@ -7077,12 +11340,46 @@ ow_safe_register('addon command', function(command, ...)
             {"Encumbrance",   PW_BUFF_ENCUMBRANCE},
         }
         for _, pair in ipairs(resolved) do
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW]   %-14s -> %s', pair[1], tostring(pair[2])))
         end
         if _ow_bolters_value > 0 then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] Cached Bolter\'s roll value = %d', _ow_bolters_value))
+        end
+    elseif command == 'brdgear' then
+        -- How BRD song modes (dummy/fulllength/cheer) get applied:
+        --   //ow brdgear                 show status
+        --   //ow brdgear gearswap        hand modes to GearSwap (default)
+        --   //ow brdgear omniwatch       OmniWatch self-equips (UNTESTED)
+        --   //ow brdgear reload          re-read brd_songgear.lua
+        ow_write_brd_songgear_template_if_missing()
+        local sub = (args[1] or ''):lower()
+        if sub == 'gearswap' or sub == 'omniwatch' then
+            local cfg = ow_load_brd_songgear()
+            cfg.source = sub
+            if ow_save_brd_songgear(cfg) then
+                ow_chat(207, '[OW] BRD song gear source = ' .. sub ..
+                    (sub == 'omniwatch'
+                        and ' (self-equip; UNTESTED - verify your sets in brd_songgear.lua)'
+                        or  ' (hands modes to GearSwap)'))
+            else
+                ow_chat(123, '[OW] could not write brd_songgear.lua')
+            end
+        elseif sub == '' or sub == 'status' or sub == 'reload' then
+            local cfg = ow_load_brd_songgear()
+            local nmodes = 0
+            if type(cfg.sets) == 'table' then
+                for _ in pairs(cfg.sets) do nmodes = nmodes + 1 end
+            end
+            ow_chat(207, string.format(
+                '[OW] BRD song gear source = %s | %d mode set(s) | %s',
+                cfg.source, nmodes, ow_brd_songgear_path()))
+            if cfg.source == 'omniwatch' then
+                ow_chat(207, '[OW] note: the self-equip path is UNTESTED (author uses GearSwap).')
+            end
+        else
+            ow_chat(167, '[OW] usage: //ow brdgear [gearswap|omniwatch|reload]')
         end
     elseif command == 'serverstats' then
         -- Experimental: silent server-truth stat fetcher via 0x061
@@ -7092,30 +11389,30 @@ ow_safe_register('addon command', function(command, ...)
         --   //ow serverstats off          disable
         --   //ow serverstats debug on/off toggle module debug logging
         if not OW_ServerStats then
-            windower.add_to_chat(123,
+            ow_chat(123,
                 '[OW] Server_Stats module not loaded. Place Server_Stats.lua '
                 .. 'in the addon root and /reload.')
         else
             local sub = (args[1] or 'status'):lower()
             if sub == 'on' or sub == 'enable' then
                 OW_ServerStats.enable()
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW] serverstats: ENABLED (server-authoritative '
                     .. 'pAtt/def/pAcc will override local compute when '
                     .. 'a roll is active)')
             elseif sub == 'off' or sub == 'disable' then
                 OW_ServerStats.disable()
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW] serverstats: DISABLED (panel will show '
                     .. 'locally-computed values only)')
             elseif sub == 'debug' then
                 local v = (args[2] or ''):lower()
                 if v == 'on' or v == '1' or v == 'true' then
                     OW_ServerStats.set_debug(true)
-                    windower.add_to_chat(207, '[OW] serverstats debug ON')
+                    ow_chat(207, '[OW] serverstats debug ON')
                 else
                     OW_ServerStats.set_debug(false)
-                    windower.add_to_chat(207, '[OW] serverstats debug off')
+                    ow_chat(207, '[OW] serverstats debug off')
                 end
             elseif sub == 'trace' then
                 -- Diagnostic: dump the most recent 0x061 and 0x063
@@ -7123,32 +11420,32 @@ ow_safe_register('addon command', function(command, ...)
                 -- after a roll cast where the panel didn't update
                 -- correctly to see what the server actually sent.
                 if not OW_ServerStats.trace then
-                    windower.add_to_chat(123,
+                    ow_chat(123,
                         '[OW] serverstats: this build has no trace()')
                 else
                     local t = OW_ServerStats.trace()
-                    windower.add_to_chat(207, '[OW] serverstats trace:')
+                    ow_chat(207, '[OW] serverstats trace:')
                     if t.last_0x061_hex then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW]   last 0x061 (age=%.1fs):',
                             t.last_0x061_age))
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW]   ' .. t.last_0x061_hex)
                     else
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW]   last 0x061: none seen yet')
                     end
                     if t.last_0x063_hex then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW]   last 0x063 (age=%.1fs):',
                             t.last_0x063_age))
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW]   ' .. t.last_0x063_hex)
                     else
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW]   last 0x063: none seen yet')
                     end
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW]   cached: pAtt=%s def=%s pAcc=%s',
                         tostring(t.cached_patt or '-'),
                         tostring(t.cached_def  or '-'),
@@ -7161,26 +11458,26 @@ ow_safe_register('addon command', function(command, ...)
                 -- if there is one, otherwise explain.
                 local s = OW_ServerStats.status()
                 if s.cached_patt then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] serverstats cached: pAtt=%d def=%d age=%.1fs',
                         s.cached_patt, s.cached_def, s.cache_age_s))
                 else
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW] serverstats: no sample yet -- cast a roll '
                         .. 'or change buffs to trigger a server push')
                 end
             else
                 -- 'status' or anything else: print full state.
                 local s = OW_ServerStats.status()
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] serverstats: enabled=%s debug=%s',
                     tostring(s.enabled), tostring(s.debug)))
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]   0x061: packets=%d captures=%d skipped=%d',
                     s.packets_seen or 0,
                     s.captures_made or 0,
                     s.skipped_partial or 0))
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]   0x063: packets=%d captures=%d skipped=%d',
                     s.pacc_packets_seen or 0,
                     s.pacc_captures_made or 0,
@@ -7189,14 +11486,14 @@ ow_safe_register('addon command', function(command, ...)
                     local pa  = s.cached_patt and tostring(s.cached_patt) or '-'
                     local de  = s.cached_def  and tostring(s.cached_def)  or '-'
                     local pac = s.cached_pacc and tostring(s.cached_pacc) or '-'
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW]   cached: pAtt=%s def=%s pAcc=%s',
                         pa, de, pac))
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW]   ages: att=%.1fs acc=%.1fs',
                         s.cache_age_s, s.pacc_age_s))
                 else
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW]   cached: (no sample yet)')
                 end
             end
@@ -7209,15 +11506,15 @@ ow_safe_register('addon command', function(command, ...)
         if sub == '' then
             -- Toggle panel visibility on the python side via UDP.
             udp_dps:send('TOGGLE_PANEL')
-            windower.add_to_chat(207, '[OW] DPS panel toggle sent.')
+            ow_chat(207, '[OW] DPS panel toggle sent.')
         elseif sub == 'reset' then
             _ow_dps_reset()
             udp_dps:send(_OW_MB_TAG('DPS_EMPTY'))
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] DPS rolling window cleared.')
         elseif sub == 'party' then
             PW_DPS_INCLUDE_PARTY = not PW_DPS_INCLUDE_PARTY
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] DPS party tracking: %s. Existing party events stay '
                 .. 'in the buffer until they age out (or //ow dps reset).',
                 PW_DPS_INCLUDE_PARTY and 'ON' or 'OFF'))
@@ -7225,17 +11522,17 @@ ow_safe_register('addon command', function(command, ...)
             local n = tonumber(args[2])
             if n and n >= 0 and n <= 3600 then
                 _ow_dps_window_s = (n == 0) and 36000 or n   -- 0 = effectively unbounded (10h)
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] DPS window set to %ds.', _ow_dps_window_s))
                 _ow_dps_prune()
             else
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW] usage: //ow dps window <0..3600>')
             end
         elseif sub == 'status' then
             -- Diagnostic dump for figuring out why the DPS panel is empty.
-            windower.add_to_chat(207, '[OW] === DPS tracker status ===')
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, '[OW] === DPS tracker status ===')
+            ow_chat(207, string.format(
                 '[OW] actions seen total: %d',
                 _ow_dps_actions_total))
             local cats = {}
@@ -7243,23 +11540,23 @@ ow_safe_register('addon command', function(command, ...)
                 table.insert(cats, string.format('cat=%d:%d', c, n))
             end
             table.sort(cats)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] by category:  %s',
                 #cats > 0 and table.concat(cats, ' ') or '(none)'))
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] classified: yes=%d  no=%d',
                 _ow_dps_classified_yes, _ow_dps_classified_no))
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] events recorded: %d  buffer size: %d  window: %ds',
                 _ow_dps_recorded_events, #_ow_dps_events,
                 _ow_dps_window_s))
             local me = windower.ffxi.get_player()
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] me.id=%d  me.name=%s  party_track=%s',
                 me and me.id or 0,
                 me and me.name or '?',
                 PW_DPS_INCLUDE_PARTY and 'ON' or 'OFF'))
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] last action: cat=%d msg=%d actor_id=%d actor=%s',
                 _ow_dps_last_cat, _ow_dps_last_msg,
                 _ow_dps_last_actor_id, _ow_dps_last_actor_name))
@@ -7275,16 +11572,16 @@ ow_safe_register('addon command', function(command, ...)
                     table.insert(list, string.format(
                         'msg=%d:%d', unrec_pairs[i].m, unrec_pairs[i].n))
                 end
-                windower.add_to_chat(207, '[OW] unrecognized msgs (top 8): '
+                ow_chat(207, '[OW] unrecognized msgs (top 8): '
                     .. table.concat(list, ' '))
             end
         elseif sub == 'debug' then
             _ow_dps_debug = not _ow_dps_debug
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] DPS debug logging: %s',
                 _ow_dps_debug and 'ON' or 'OFF'))
         else
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] unknown dps subcommand: %s', sub))
         end
     elseif command == 'sc' then
@@ -7301,7 +11598,7 @@ ow_safe_register('addon command', function(command, ...)
         --   sc track       → toggle the whole "track sc" master
         --   sc dump        → print diagnostic state
         if not OW_Skillchains then
-            windower.add_to_chat(123,
+            ow_chat(123,
                 '[OW] Skillchains module not loaded. Place '
                 .. 'Skillchains.lua next to OmniWatch.lua and reload.')
             return
@@ -7320,27 +11617,27 @@ ow_safe_register('addon command', function(command, ...)
         if sub == '' then
             local cur = OW_Skillchains.get_setting('show_panel')
             OW_Skillchains.set_setting('show_panel', not cur)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] SC panel: %s', cur and 'OFF' or 'ON'))
         elseif sub_map[sub] then
             local key = sub_map[sub]
             local cur = OW_Skillchains.get_setting(key)
             OW_Skillchains.set_setting(key, not cur)
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] SC %s: %s', sub, cur and 'OFF' or 'ON'))
         elseif sub == 'dump' then
             local st = OW_Skillchains.status()
-            windower.add_to_chat(207, '[OW] === Skillchains status ===')
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, '[OW] === Skillchains status ===')
+            ow_chat(207, string.format(
                 '[OW] job=%s  aeonic=%s  resonating=%d',
                 tostring(st.main_job), tostring(st.aeonic_flavor),
                 st.resonating_count))
             for k, v in pairs(st.settings) do
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW]   %s = %s', k, tostring(v)))
             end
         else
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] usage: //ow sc [burst|weapon|spell|pet|props|'
                 .. 'timer|step|track|dump]')
         end
@@ -7427,7 +11724,7 @@ local function ensure_icon(id)
     if not ok then
         -- Mark as attempted so we don't retry every equip tick for the same id.
         extracted_ids[id] = true
-        windower.add_to_chat(123, '[OmniWatch] icon extract failed for id '
+        ow_chat(123, '[OmniWatch] icon extract failed for id '
                                    .. tostring(id) .. ': ' .. tostring(err))
         return false
     end
@@ -7469,7 +11766,7 @@ local function ensure_status_icon(id)
     end
     if not ok then
         extracted_status_ids[id] = true
-        windower.add_to_chat(123, '[OmniWatch] status icon extract failed '
+        ow_chat(123, '[OmniWatch] status icon extract failed '
                                    .. 'for id ' .. tostring(id) .. ': '
                                    .. tostring(err))
         return false
@@ -7752,7 +12049,7 @@ ow_safe_register('incoming chunk', function(id, original)
        and _chat and _chat.process_chat_packet then
         local ok, err = pcall(_chat.process_chat_packet, id, original)
         if not ok then
-            windower.add_to_chat(123,
+            ow_chat(123,
                 '[OW chat_pkt] handler error: ' .. tostring(err))
         end
     end
@@ -8116,13 +12413,13 @@ local function _ow_refresh_bard_settings()
     -- aren't picking up the configured bonuses.
     if _ow_buff_debug then
         local sb = settings.Bards[me].song_bonus
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] song_bonus[%s]: all=%d carol=%d paeon=%d ballad=%d minne=%d minuet=%d madrigal=%d prelude=%d march=%d etude=%d',
             tostring(me), sb.all_songs or 0, sb.carol or 0,
             sb.paeon or 0, sb.ballad or 0, sb.minne or 0,
             sb.minuet or 0, sb.madrigal or 0, sb.prelude or 0,
             sb.march or 0, sb.etude or 0))
-        windower.add_to_chat(207,
+        ow_chat(207,
             '[OW] (config bards.self → settings.Bards; no gear scan)')
     end
 
@@ -8217,7 +12514,7 @@ local function _ow_refresh_cor_settings()
     if cfg and cfg > 0 then
         settings.Cors[me] = cfg
         if _ow_buff_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] settings.Cors[%s] = %d (from wizard config)', me, cfg))
         end
     else
@@ -8225,7 +12522,7 @@ local function _ow_refresh_cor_settings()
         -- manual_COR_bonus fallback applies. Avoids stomping any value
         -- the user may have hand-set in GearInfo's settings.
         if _ow_buff_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] settings.Cors[%s] not set (no wizard phantom_roll)', me))
         end
     end
@@ -8269,7 +12566,7 @@ _ow_refresh_geo_settings = function()
     }
     if _ow_buff_debug then
         local g = settings.Geo[me]
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] settings.Geo[%s] = indi=%d geo=%d bolster=%d handbell=%d all=%d',
             me, g.indi, g.geo, g.bolster, g.handbell, g.all))
     end
@@ -8337,20 +12634,20 @@ _ow_refresh_unity_rank = function()
             pcall(_gi.prime_inventory)
         end
         if _ow_buff_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] settings.player.rank = %d (cache invalidated)', target))
         end
     elseif target then
         -- Same value, just keep settings.player.rank in sync (cheap).
         settings.player.rank = target
         if _ow_buff_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] settings.player.rank = %d (unchanged)', target))
         end
     else
         -- No wizard value — leave whatever _loader.lua set (default 1).
         if _ow_buff_debug then
-            windower.add_to_chat(207,
+            ow_chat(207,
                 '[OW] settings.player.rank not overridden (no wizard unity_rank)')
         end
     end
@@ -8363,7 +12660,7 @@ _ow_refresh_unity_rank = function()
         local has_section = (ow_user_config and ow_user_config.player) and 'yes' or 'NO'
         local raw         = (ow_user_config and ow_user_config.player
                              and tostring(ow_user_config.player.unity_rank)) or 'nil'
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] unity rank: settings.player.rank=%s, ow_user_config.player section=%s, raw value=%s',
             tostring(settings.player.rank), has_section, raw))
     end
@@ -8388,7 +12685,7 @@ local function _ow_build_song_tables()
                 PW_HONOR_MARCH_STATS[spell.id] = PW_HONOR_MARCH_STATS_BY_NAME[name]
             end
         else
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] song table: %s → NOT FOUND in res.spells', name))
         end
     end
@@ -9327,7 +13624,7 @@ local function handle_incoming_action(act)
     if _ow_cast_debug then
         local actor = windower.ffxi.get_mob_by_id(actor_id or 0)
         local actor_name = (actor and actor.name) or '?'
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] action cat=%d param=%d msg=%s actor=%s',
             cat or -1, act.param or -1, tostring(msg_id), actor_name))
     end
@@ -9378,7 +13675,7 @@ local function handle_incoming_action(act)
                         display_name = ab.en or ab.name,
                     })
                     -- Always print so we see when JAs wire through.
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] JA WIRE: %s bid=%d dur=%ds (cat=6 self)',
                         ab.en or '?', ab.status, ab.duration))
                 end
@@ -9407,7 +13704,7 @@ local function handle_incoming_action(act)
                 _ow_bolters_value = roll_value
             end
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] Bolters roll value = %d', roll_value))
             end
         end
@@ -9460,7 +13757,7 @@ local function handle_incoming_action(act)
             if _ow_cast_debug then
                 local nm = (res.job_abilities[act.param]
                             and res.job_abilities[act.param].en) or '?'
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] roll %s = %d%s', nm, roll_value,
                     crooked and ' [CROOKED 1.2x]' or ''))
             end
@@ -9511,7 +13808,7 @@ local function handle_incoming_action(act)
                             ts   = os.time(),
                         }
                         if _ow_buff_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] roll dur snapshot bid=%d mult=%.3fx',
                                 buff_id, mult))
                         end
@@ -9598,7 +13895,7 @@ local function handle_incoming_action(act)
             if _ow_cast_debug then
                 local nm = (res.job_abilities[act.param]
                             and res.job_abilities[act.param].en) or '?'
-                windower.add_to_chat(207, '[OW] roll '..nm..' = BUST')
+                ow_chat(207, '[OW] roll '..nm..' = BUST')
             end
         end
     end
@@ -10059,7 +14356,7 @@ local function handle_incoming_action(act)
                                 end
 
                                 if _ow_cast_debug then
-                                    windower.add_to_chat(207, string.format(
+                                    ow_chat(207, string.format(
                                         '[OW] cat=8 buff snapshot: SV_id=%s MC_id=%s active=[%s] sv=%s mc=%s mult=%.1f',
                                         tostring(PW_BUFF_SOUL_VOICE),
                                         tostring(PW_BUFF_MARCATO),
@@ -10090,14 +14387,14 @@ local function handle_incoming_action(act)
                             end
                             if mult ~= 1 then
                                 potency = potency * mult
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW] %s: %s active, potency x%.1f = %.2f%%',
                                     song_name,
                                     (mult >= 2.0) and 'Soul Voice' or 'Marcato',
                                     mult, potency))
                             end
                         end
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] %s: gear March+%d (cap %d), potency %.2f%%',
                             song_name, sp, entry.cap, potency))
                     end
@@ -10138,7 +14435,7 @@ local function handle_incoming_action(act)
                         end
                         _ow_save_buff_state()
                         if _ow_cast_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] song %s applied: buff_id=%d potency=%s',
                                 song_name, buff_id, tostring(potency or '-')))
                         end
@@ -10155,7 +14452,7 @@ local function handle_incoming_action(act)
                                     tostring(s.src_name or '?'),
                                     tostring(s.potency or '-'))
                             end
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] march sources now: [%s]',
                                 table.concat(parts, ', ')))
                         end
@@ -10185,7 +14482,7 @@ local function handle_incoming_action(act)
                 _ow_buff_sources[33] = kept
                 _ow_save_buff_state()
                 if _ow_cast_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] %s applied: %.1f%% magic haste', spell_name, potency))
                 end
             end
@@ -10209,7 +14506,7 @@ local function handle_incoming_action(act)
                 spell_id = sid, name = sname,
             })
         elseif _ow_cast_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] CAST_START: no spell for sid=%s (act.param=%s, action.param=%s)',
                 tostring(sid), tostring(act.param), tostring(action and action.param)))
         end
@@ -10229,7 +14526,7 @@ local function handle_incoming_action(act)
             -- No valid ability resolved — don't fabricate a name.
             -- A missing readies line is better than a wrong one.
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] MOB_TP_BEGIN: no ability for act.param=%s '
                     .. '(action.param=%s)',
                     tostring(aid),
@@ -10307,7 +14604,7 @@ local function handle_incoming_action(act)
                    and res.monster_abilities[act.param]
         if not ab then
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] MOB_TP_FINISH: no ability for act.param=%s',
                     tostring(act.param)))
             end
@@ -10442,7 +14739,7 @@ ow_safe_register('incoming chunk', function(id, data)
     end
 
     if _OW_PARTY_DEBUG then
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW party] 0x%03X id=%u name=%s  mj=%s(%s) lv%s  sj=%s(%s) lv%s',
             id, mid, tostring(packet['Name']),
             jname(mjob_id), tostring(mjob_id), tostring(mlvl),
@@ -10474,7 +14771,7 @@ ow_safe_register('incoming chunk', function(id, data)
             -- path throws and you can't tell why your debug line never
             -- prints. Toggle buffdebug to see; never bothers normal users.
             if not ok2 and _ow_buff_debug then
-                windower.add_to_chat(123, string.format(
+                ow_chat(123, string.format(
                     '[OW] action handler error: %s', tostring(err2)))
             end
             -- Forward to GearInfo's captured action handler. Its
@@ -10500,7 +14797,7 @@ ow_safe_register('incoming chunk', function(id, data)
                 local ok_gi, err_gi = pcall(_gi.captured_action_handler, parsed)
                 windower.add_to_chat = _saved_atc
                 if not ok_gi and _ow_buff_debug then
-                    windower.add_to_chat(123, string.format(
+                    ow_chat(123, string.format(
                         '[OW] _gi action handler error: %s',
                         tostring(err_gi)))
                 end
@@ -10542,7 +14839,7 @@ ow_safe_register('incoming chunk', function(id, data)
                                        and prev.level or lvl
                         _ow_th_table[tgt_id] = {level = newlvl, ts = os.clock()}
                         if _ow_cast_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW TH] mob=%d TH=%d (cat=%d)',
                                 tgt_id, newlvl, cat))
                         end
@@ -10614,7 +14911,7 @@ ow_safe_register('incoming chunk', function(id, data)
                 chr    = tonumber(p['Base CHR']) or 0,
             }
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] base stats updated: STR=%d DEX=%d VIT=%d AGI=%d INT=%d MND=%d CHR=%d',
                     _ow_base_stats.str, _ow_base_stats.dex,
                     _ow_base_stats.vit, _ow_base_stats.agi,
@@ -10653,7 +14950,7 @@ ow_safe_register('incoming chunk', function(id, data)
     if _gi and _gi.parse and _gi.parse.i and _gi.parse.i[id] then
         local ok_gi, err_gi = pcall(_gi.parse.i[id], data)
         if not ok_gi and _ow_cast_debug then
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OW] _gi.parse.i[0x%03X] error: %s', id, tostring(err_gi)))
         end
     end
@@ -10718,7 +15015,7 @@ ow_safe_register('incoming chunk', function(id, data)
                 local d_new     = t_new - now_unix
                 local bname = (res.buffs[buff_id] and res.buffs[buff_id].en)
                               or ('id=' .. buff_id)
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW buffts] i=%d bid=%d (%s) raw=%u new=%+ds classic=%+ds direct=%+ds no_div=%+ds',
                     i, buff_id, bname, raw_uint,
                     math.floor(d_new),
@@ -10738,6 +15035,7 @@ ow_safe_register('incoming chunk', function(id, data)
             bd = _G._ExtraData.player.buff_details
         end
         _ow_buff_slots = {}
+        _ow_buff_slot_fullname = {}
         _ow_buff_slot_expires_at = {}
 
         -- ── Server-truth expiry timestamps ──────────────────────────────
@@ -10858,6 +15156,23 @@ ow_safe_register('incoming chunk', function(id, data)
             end
             return best_gi, best_assoc
         end
+        -- Pop the oldest non-stale pending cast name for this bid. Lets
+        -- two same-bid songs cast back-to-back (e.g. Victory + Advancing
+        -- March, both buff_id 214) land in ONE 0x063 packet and still bind
+        -- to DISTINCT names in cast order — instead of both grabbing the
+        -- single last-cast pending_meta. FIFO = application order.
+        local function _dequeue_pending_name(bid)
+            local q = _ow_buff_pending_names and _ow_buff_pending_names[bid]
+            if not q then return nil end
+            local nowc = os.clock()
+            while #q > 0 do
+                local e = table.remove(q, 1)
+                if e and (nowc - (e.ts or 0)) < 5 then
+                    return e
+                end
+            end
+            return nil
+        end
         -- Real 0x063 just arrived: drop any synthetic-slot entries in
         -- _ow_buff_timers so the reconcile loop rebuilds them from the
         -- real slots. Without this, a buff would have TWO timer entries
@@ -10942,31 +15257,43 @@ ow_safe_register('incoming chunk', function(id, data)
                         -- casts of the same bid), and we'd mis-attribute
                         -- the new buff to the old stash. Fresh slots get
                         -- attribution only via pending_meta below.
-                        if prev_slot == nil and pm_fresh then
-                            -- Fresh slot, fresh meta: bind to the most
-                            -- recent cast. Strip the '~' prefix that
-                            -- PEND-PUSH adds for other-caster buffs —
-                            -- that's a timer-display convention, not
-                            -- part of the song's name as Bard_Songs
-                            -- knows it.
-                            local nm = pm.name or ''
-                            if nm:sub(1, 1) == '~' then
-                                nm = nm:sub(2)
+                        if prev_slot == nil then
+                            -- Fresh slot: bind its name from our per-cast
+                            -- pending QUEUE (FIFO = application order) so
+                            -- two same-bid songs cast back-to-back and
+                            -- landing in ONE 0x063 packet (e.g. Victory +
+                            -- Advancing March, both buff_id 214) get
+                            -- DISTINCT names instead of both grabbing the
+                            -- single last-cast pending_meta. Falls back to
+                            -- the single pending_meta when the queue is
+                            -- empty (single-song casts, other-caster buffs).
+                            local qe = _dequeue_pending_name(entry.id)
+                            if not qe and pm_fresh then
+                                qe = { name = pm.name, caster = pm.caster }
                             end
-                            local cs = pm.caster
-                            _ow_buff_assoc[entry.id] = _ow_buff_assoc[entry.id] or {}
-                            _ow_buff_assoc[entry.id][gi] = {
-                                full_name = nm,
-                                Caster    = cs,
-                            }
-                            if _ow_buff_debug then
-                                windower.add_to_chat(207, string.format(
-                                    '[OW] assoc bind bid=%d slot=%d gi=%s: full=%s Caster=%s',
-                                    entry.id, slot, tostring(gi),
-                                    tostring(nm), tostring(cs)))
+                            if qe then
+                                -- Strip the '~' prefix PEND-PUSH adds for
+                                -- other-caster buffs — display convention,
+                                -- not part of the Bard_Songs name.
+                                local nm = qe.name or ''
+                                if nm:sub(1, 1) == '~' then
+                                    nm = nm:sub(2)
+                                end
+                                local cs = qe.caster
+                                _ow_buff_assoc[entry.id] = _ow_buff_assoc[entry.id] or {}
+                                _ow_buff_assoc[entry.id][gi] = {
+                                    full_name = nm,
+                                    Caster    = cs,
+                                }
+                                if _ow_buff_debug then
+                                    ow_chat(207, string.format(
+                                        '[OW] assoc bind bid=%d slot=%d gi=%s: full=%s Caster=%s',
+                                        entry.id, slot, tostring(gi),
+                                        tostring(nm), tostring(cs)))
+                                end
+                                existing_assoc = _ow_buff_assoc[entry.id][gi]
+                                existing_gi    = gi
                             end
-                            existing_assoc = _ow_buff_assoc[entry.id][gi]
-                            existing_gi    = gi
                         end
                         if existing_assoc then
                             -- Force-write attribution onto the entry.
@@ -10990,6 +15317,14 @@ ow_safe_register('incoming chunk', function(id, data)
                         -- Mark seen for end-of-packet sweep.
                         _assoc_seen[entry.id] = _assoc_seen[entry.id] or {}
                         _assoc_seen[entry.id][gi] = true
+                        -- Capture the finalized song name for this slot so
+                        -- the BUFF_BATCH timer builder can seed the label
+                        -- from the specific name (e.g. "Honor March") rather
+                        -- than the generic buff-id name ("March"). entry.full_name
+                        -- was just force-written from our (bid,gi) assoc above.
+                        if entry.full_name and entry.full_name ~= '' then
+                            _ow_buff_slot_fullname[slot] = entry.full_name
+                        end
                     end
                     -- ── end song attribution ────────────────────────────
                     -- Identity match against previous packet WITH
@@ -11010,7 +15345,7 @@ ow_safe_register('incoming chunk', function(id, data)
                         if prev_slot ~= slot then
                             _id_moved_count = _id_moved_count + 1
                             if _ow_buff_debug then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW] song moved bid=%d gi=%.0f slot %d→%d (kept name=%s)',
                                     entry.id, gi, prev_slot, slot,
                                     tostring(prev_timers[prev_slot].name)))
@@ -11021,7 +15356,7 @@ ow_safe_register('incoming chunk', function(id, data)
                     else
                         _id_fresh_count = _id_fresh_count + 1
                         if _ow_buff_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] song fresh bid=%d gi=%.0f slot=%d (no prev match)',
                                 entry.id, gi, slot))
                         end
@@ -11040,6 +15375,32 @@ ow_safe_register('incoming chunk', function(id, data)
             -- prev entry for stay absent from new_timers — reconcile
             -- will create them fresh from pending_meta.
             _ow_buff_timers = new_timers
+            -- Force a stats recompute when the SONG ATTRIBUTION changes.
+            -- The fast-poll stat gate keys off p.buffs (buff_ids only), so
+            -- when a song's full_name is stamped HERE after its buff_id
+            -- already entered p.buffs — a 2nd song on the same shared bid
+            -- (two minuets = bid 198, two marches = bid 214), or the 0x063
+            -- landing a beat behind the buff — the gate sees no buff_id
+            -- change and never recomputes, leaving acc/att stale at the
+            -- previous value until some unrelated event trips it (the
+            -- "cast Minuet IV and attack stayed the same" bug). Diff the set
+            -- of attributed song names; if it changed, null the buff-sig so
+            -- the next fast-poll tick recomputes with the new song folded in.
+            do
+                local fn = {}
+                for i = 1, 32 do
+                    local e2 = bd[i]
+                    if e2 and e2.full_name and e2.full_name ~= '' then
+                        fn[#fn + 1] = e2.full_name
+                    end
+                end
+                table.sort(fn)
+                local attrib_sig = table.concat(fn, ',')
+                if attrib_sig ~= _ow_last_attrib_sig then
+                    _ow_last_attrib_sig = attrib_sig
+                    _ow_stats_last_buffsig = nil
+                end
+            end
             -- Drop _ow_buff_assoc entries whose (bid, gi) wasn't observed
             -- this packet AND whose bid has no observations within
             -- tolerance either. The simple version: any (bid, gi) that
@@ -11075,7 +15436,7 @@ ow_safe_register('incoming chunk', function(id, data)
             -- the song-attribution identity-tracker, but noisy for
             -- normal play (fires every time anyone in range casts).
             if _ow_buff_debug and (_id_fresh_count > 0 or _id_moved_count > 0) then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] 0x063 ident: kept=%d moved=%d fresh=%d total=%d',
                     _id_kept_count, _id_moved_count,
                     _id_fresh_count, _dbg_count))
@@ -11088,7 +15449,7 @@ ow_safe_register('incoming chunk', function(id, data)
                     local entry = bd[i]
                     if entry and entry.id and entry.id ~= 0
                        and entry.id ~= 255 and entry.id ~= 0xFFFF then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] bd[%d] bid=%s gi=%s name=%s full=%s Caster=%s',
                             i - 1,
                             tostring(entry.id),
@@ -11102,7 +15463,7 @@ ow_safe_register('incoming chunk', function(id, data)
         end
         if _ow_buff_debug then
             if _dbg_count ~= (_ow_last_buff_dbg or -1) then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] _ExtraData buff snapshot: %d buffs (now_unix=%d)',
                     _dbg_count, now_unix))
                 _ow_last_buff_dbg = _dbg_count
@@ -11110,7 +15471,7 @@ ow_safe_register('incoming chunk', function(id, data)
                     -- Print the entry.time field for diagnostic; the
                     -- math is bad but the relative trend is stable.
                     local entry_time = bd and bd[s+1] and bd[s+1].time or 0
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW]   slot=%d bid=%d gi_time=%.0f',
                         s, b, entry_time))
                 end
@@ -11328,6 +15689,13 @@ _ow_buff_timers = {}
 -- Updated by the slot poller (every 0.25s tick). Used by the auto-discovery
 -- walk to drive _ow_buff_timers entries with precise expiry times.
 _ow_buff_slots = {}
+-- _ow_buff_slot_fullname[slot] = attributed song name for the slot (e.g.
+-- "Honor March"), captured during the 0x063 reconcile so the BUFF_BATCH
+-- timer builder can seed the label from the specific song name instead of
+-- the generic buff-id name ("March"). Without this, when one of two marches
+-- (shared buff_id 214) wears off, the survivor's timer falls back to the
+-- generic name on the next rebuild.
+_ow_buff_slot_fullname = {}
 
 -- _ow_buff_slot_expires_at[slot] = os.clock() at expiry.
 -- Captured from 0x063 sub-0x09 timestamps when available; nil if only the
@@ -12099,7 +16467,19 @@ ow_events.on('buff_gain', function(data)
     -- specific tier name ("Honor March", "Valor Minuet V"), which
     -- _ow_buff_name(buff_id) can't resolve since multiple songs share
     -- the same buff_id (March = 214 for all three).
-    local nm = data.display_name or _ow_buff_name(buff_id)
+    -- Resolve the song's specific tier name from the cast's spell_id
+    -- FIRST. data.display_name is supposed to carry it ("Honor March",
+    -- "Valor Minuet V"), but when it's absent the old fallback dropped to
+    -- _ow_buff_name(buff_id) — and every March shares buff_id 214, whose
+    -- resource name is a single generic March (Victory March). That's why
+    -- a Honor + Victory pair both showed as "Victory March" in the buff
+    -- timer. spell_id is unique per song, so prefer it.
+    local nm = nil
+    if source == 'song' and data.spell_id and res and res.spells
+       and res.spells[data.spell_id] then
+        nm = res.spells[data.spell_id].en or res.spells[data.spell_id].name
+    end
+    nm = nm or data.display_name or _ow_buff_name(buff_id)
     -- Apply blacklist.
     if cfg.blacklist and cfg.blacklist[nm] then return end
     -- Mark other-player buffs with ~ prefix.
@@ -12157,10 +16537,27 @@ ow_events.on('buff_gain', function(data)
         source    = source,
         ts        = os.clock(),
     }
+    -- Also append to a per-bid FIFO name queue so multiple same-bid
+    -- songs cast back-to-back (Marches all share buff_id 214) can be
+    -- bound to DISTINCT names in cast order by the 0x063 slot reconcile,
+    -- even when both land in a single buff packet. (pending_meta above is
+    -- a single slot the second cast overwrites — fine for the duration
+    -- path and tier labeling, but it can't disambiguate two fresh
+    -- same-bid slots arriving in one packet.)
+    _ow_buff_pending_names = _ow_buff_pending_names or {}
+    _ow_buff_pending_names[buff_id] = _ow_buff_pending_names[buff_id] or {}
+    table.insert(_ow_buff_pending_names[buff_id], {
+        name   = nm,
+        caster = caster_name,
+        ts     = os.clock(),
+    })
+    while #_ow_buff_pending_names[buff_id] > 8 do
+        table.remove(_ow_buff_pending_names[buff_id], 1)
+    end
     -- Diagnostic: shows what hit pending_meta for this bid. Gated
     -- behind _ow_buff_debug so it's silent in normal play.
     if _ow_buff_debug then
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] PEND-PUSH bid=%d nm=[%s] caster=%s dur=%.1fs src=%s',
             buff_id, nm, tostring(caster_name), final_dur, source))
     end
@@ -12201,8 +16598,10 @@ end)
 ow_events.on('zone_change', function()
     _ow_buff_timers = {}
     _ow_buff_slots = {}
+    _ow_buff_slot_fullname = {}
     _ow_buff_slot_expires_at = {}
     _ow_buff_pending_meta = {}
+    _ow_buff_pending_names = {}
     _ow_buff_assoc = {}
 end)
 
@@ -12279,10 +16678,10 @@ ow_safe_register('outgoing text', function(mode, text, blocked)
         for k = 1, math.min(48, #(text or '')) do
             hexparts[#hexparts + 1] = string.format('%02X', text:byte(k))
         end
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW otext] text=%q', (text or ''):sub(1, 50)))
         if #hexparts > 0 then
-            windower.add_to_chat(207, '[OW otext] hex: ' .. table.concat(hexparts, ' '))
+            ow_chat(207, '[OW otext] hex: ' .. table.concat(hexparts, ' '))
         end
     end
 
@@ -12318,7 +16717,7 @@ ow_safe_register('outgoing text', function(mode, text, blocked)
         }
     end)
     if not ok and _chat and _chat.is_debug and _chat.is_debug() then
-        windower.add_to_chat(123, '[OW otext] resolve failed: ' .. tostring(err))
+        ow_chat(123, '[OW otext] resolve failed: ' .. tostring(err))
     end
 end)
 
@@ -12406,7 +16805,7 @@ ow_safe_register('outgoing chunk', function(id, data)
             end
         end)
         if not ok_ot and _ow_chat_debug then
-            windower.add_to_chat(123,
+            ow_chat(123,
                 '[OW] outgoing tell capture failed: ' .. tostring(err_ot))
         end
         -- Continue to other handlers below (don't return; 0x037 path
@@ -12442,7 +16841,7 @@ ow_safe_register('outgoing chunk', function(id, data)
     if _ow_cast_debug then
         local cnt = 0
         for _ in pairs(_ow_food_stats) do cnt = cnt + 1 end
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] food eaten: %s (id=%d, %d stat lines)',
             r.english or '?', item.id, cnt))
     end
@@ -12645,7 +17044,7 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
                 -- Replace the first standalone "?" with the real name.
                 text = text:gsub('%?', rec.name, 1)
                 if _ow_cast_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] resolved "?" -> %s for %s',
                         rec.name, clean))
                 end
@@ -12691,7 +17090,7 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
         local ok_emit, err_emit = pcall(_chat.emit_chat,
                                         original_mode or 0, '', text)
         if not ok_emit and _ow_chat_debug then
-            windower.add_to_chat(123,
+            ow_chat(123,
                 '[OW] chat emit failed: ' .. tostring(err_emit))
         end
     end
@@ -12699,7 +17098,7 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
     -- Diagnostic: if the raw text contains the keywords we care about, print
     -- it so we can inspect what the actual format is.
     if _ow_cast_debug and (text:find('casting') or text:find('readies')) then
-        windower.add_to_chat(207, '[OW] text: ' .. text)
+        ow_chat(207, '[OW] text: ' .. text)
     end
 
     -- Only attend to lines we actually care about — cast-begin and ability-ready.
@@ -12717,11 +17116,11 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
         if mob and mob.id then
             udp_cast:send(string.format('CAST_START|%d|spell|%s', mob.id, spell_name))
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format('[OW] cast_start spell "%s" -> %s (id=%d)',
+                ow_chat(207, string.format('[OW] cast_start spell "%s" -> %s (id=%d)',
                     spell_name, clean, mob.id))
             end
         elseif _ow_cast_debug then
-            windower.add_to_chat(207, string.format('[OW] cast_start but mob lookup failed: "%s"', clean))
+            ow_chat(207, string.format('[OW] cast_start but mob lookup failed: "%s"', clean))
         end
         return
     end
@@ -12733,11 +17132,11 @@ ow_safe_register('incoming text', function(original, modified, original_mode, mo
         if mob and mob.id then
             udp_cast:send(string.format('CAST_START|%d|ability|%s', mob.id, move_name))
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format('[OW] cast_start ability "%s" -> %s (id=%d)',
+                ow_chat(207, string.format('[OW] cast_start ability "%s" -> %s (id=%d)',
                     move_name, clean, mob.id))
             end
         elseif _ow_cast_debug then
-            windower.add_to_chat(207, string.format('[OW] cast_start ability but mob lookup failed: "%s"', clean))
+            ow_chat(207, string.format('[OW] cast_start ability but mob lookup failed: "%s"', clean))
         end
         return
     end
@@ -12916,16 +17315,16 @@ do
                 n = n + 1
             end
             if _ow_buff_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OmniWatch] Misc_augments loaded: %d entries', n))
             end
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] Misc_augments.lua ran but returned no table: %s',
                 tostring(ret)))
         end
     else
-        windower.add_to_chat(123, string.format(
+        ow_chat(123, string.format(
             '[OmniWatch] Misc_augments.lua not loaded (%s) -- JSE neck augments inactive.',
             tostring(load_err)))
     end
@@ -12955,16 +17354,16 @@ do
             if _ow_buff_debug then
                 local n = 0
                 for _ in pairs(ret) do n = n + 1 end
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OmniWatch] Odyssey_augments loaded: %d bundles', n))
             end
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] Odyssey_augments.lua ran but returned no table: %s',
                 tostring(ret)))
         end
     else
-        windower.add_to_chat(123, string.format(
+        ow_chat(123, string.format(
             '[OmniWatch] Odyssey_augments.lua not loaded (%s) -- Odyssey rank augments inactive.',
             tostring(load_err)))
     end
@@ -13152,17 +17551,17 @@ do
                 end
             end
             if _ow_buff_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OmniWatch] DREMA_Augments loaded: %d items, %d paths',
                     items, paths))
             end
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] DREMA_Augments.lua ran but returned no table: %s',
                 tostring(ret)))
         end
     else
-        windower.add_to_chat(123, string.format(
+        ow_chat(123, string.format(
             '[OmniWatch] DREMA_augments.lua not loaded (%s) -- REMA path augments inactive.',
             tostring(load_err)))
     end
@@ -13231,12 +17630,12 @@ do
                 pcall(OW_ServerStats.enable)
             end
             if _ow_buff_debug then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OmniWatch] Server_Stats module loaded and enabled. '
                     .. 'Use //ow serverstats off to disable.')
             end
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] Server_Stats.lua ran but returned no table: %s',
                 tostring(ret)))
         end
@@ -13244,7 +17643,7 @@ do
         -- Missing-file is a normal state for users who removed the module.
         -- Don't yell about it. Only warn if debug is on.
         if _ow_buff_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OmniWatch] Server_Stats.lua not loaded: %s',
                 tostring(load_err)))
         end
@@ -13286,17 +17685,17 @@ do
                 pcall(OW_Skillchains.init)
             end
             if _ow_buff_debug then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OmniWatch] Skillchains module loaded.')
             end
         else
-            windower.add_to_chat(123, string.format(
+            ow_chat(123, string.format(
                 '[OmniWatch] Skillchains.lua ran but returned no table: %s',
                 tostring(ret)))
         end
     else
         if _ow_buff_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OmniWatch] Skillchains.lua not loaded: %s',
                 tostring(load_err)))
         end
@@ -13409,10 +17808,10 @@ ow_parse_desc_line = function(tbl, text, prefix)
                 -- DEBUG: log Store TP / Dual Wield contributions
                 if _ow_cast_debug and v ~= 0 then
                     if key == 'store tp' then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] stp+: +%d from "%s"', v, text:sub(1, 60)))
                     elseif key == 'dual wield' then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] dw+: +%d from "%s"', v, text:sub(1, 60)))
                     end
                 end
@@ -14041,7 +18440,7 @@ function ow_compute_stats()
     if _ow_cast_debug then
         _ow_compute_stats_call_count = (_ow_compute_stats_call_count or 0) + 1
         if _ow_compute_stats_call_count <= 3 or _ow_compute_stats_call_count % 30 == 0 then
-            windower.add_to_chat(207, '[OW] compute_stats called #' .. tostring(_ow_compute_stats_call_count))
+            ow_chat(207, '[OW] compute_stats called #' .. tostring(_ow_compute_stats_call_count))
         end
     end
 
@@ -14246,7 +18645,7 @@ function ow_compute_stats()
                                                  and ow_path_augments[id]
                                                  and ow_path_augments[id][lower]
                                 if _ow_cast_debug then
-                                    windower.add_to_chat(207, string.format(
+                                    ow_chat(207, string.format(
                                         '[OW pathaug] id=%d raw="%s" lower="%s" inTable=%s resolved=%s',
                                         id, astr, lower,
                                         (ow_path_augments and ow_path_augments[id]) and 'Y' or 'N',
@@ -14589,7 +18988,7 @@ function ow_compute_stats()
         local has_gi      = (_gi ~= nil)
         local has_refresh = has_gi and (_gi.refresh_all ~= nil)
         local has_compute = has_gi and (_gi.compute_player_stats ~= nil)
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] _gi trace: present=%s refresh_all=%s compute_player_stats=%s',
             tostring(has_gi), tostring(has_refresh), tostring(has_compute)))
     end
@@ -14723,7 +19122,7 @@ function ow_compute_stats()
             _ow_chain_sig = _ow_chain_sig or ''
             if _ow_buff_debug and sig ~= _ow_chain_sig then
                 _ow_chain_sig = sig
-                windower.add_to_chat(207, '[OW] chain: ' .. sig)
+                ow_chat(207, '[OW] chain: ' .. sig)
             end
             -- ── Resist trace ────────────────────────────────────────────
             -- Dumps the full resist hop: per-buff this_buff[<X> Resist]
@@ -14772,7 +19171,7 @@ function ow_compute_stats()
                                 end
                             end
                             if #hits > 0 then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW] stats on buff full=%s id=%s: %s',
                                     tostring(b.full_name), tostring(b.id),
                                     table.concat(hits, ' ')))
@@ -14789,10 +19188,10 @@ function ow_compute_stats()
                         end
                     end
                     if #bi_hits > 0 then
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW] Buffs_inform: ' .. table.concat(bi_hits, ' '))
                     else
-                        windower.add_to_chat(207,
+                        ow_chat(207,
                             '[OW] Buffs_inform: ALL ZERO')
                     end
                 end
@@ -14800,7 +19199,7 @@ function ow_compute_stats()
             -- ── end stats trace ─────────────────────────────────────────
         end
         if not ok_refresh then
-            windower.add_to_chat(123, '[OW] _gi.refresh_all error: ' .. tostring(refresh_ret))
+            ow_chat(123, '[OW] _gi.refresh_all error: ' .. tostring(refresh_ret))
         else
             -- Trace Gear_info presence after refresh, once. Gated by
             -- _ow_cast_debug so it stays quiet in normal play.
@@ -14808,7 +19207,7 @@ function ow_compute_stats()
                 _gi_refresh_traced = true
                 local gi_present = (Gear_info ~= nil) and (next(Gear_info) ~= nil)
                 local main_skill = Gear_info and Gear_info['main'] and Gear_info['main'].skill
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] _gi refresh trace: ok=%s msg=%s populated=%s main.skill=%s STR=%s DEX=%s',
                     tostring(refresh_ret), tostring(refresh_msg),
                     tostring(gi_present),
@@ -14832,24 +19231,96 @@ function ow_compute_stats()
                             end
                             return '{' .. table.concat(out, ',') .. '}'
                         end
-                        windower.add_to_chat(207, '[OW] _gi compute trace: acc=' .. dump(result.acc))
-                        windower.add_to_chat(207, '[OW] _gi compute trace: att=' .. dump(result.att))
-                        windower.add_to_chat(207, '[OW] _gi compute trace: eva=' .. tostring(result.eva)
+                        ow_chat(207, '[OW] _gi compute trace: acc=' .. dump(result.acc))
+                        ow_chat(207, '[OW] _gi compute trace: att=' .. dump(result.att))
+                        ow_chat(207, '[OW] _gi compute trace: eva=' .. tostring(result.eva)
                             .. ' def=' .. tostring(result.def))
+                        -- Buff-layer attack/accuracy GearInfo folded into the
+                        -- numbers above. If att reads ~1 Minuet high vs
+                        -- /checkparam, the inflated flat value shows here, and
+                        -- the active-buffs list shows whether an extra (stale
+                        -- dummy) Minuet is being counted.
+                        if Buffs_inform then
+                            ow_chat(207, string.format(
+                                '[OW] Buffs_inform: Attack=%s Accuracy=%s Attack_perc=%s STR=%s DEX=%s',
+                                tostring(Buffs_inform['Attack']),
+                                tostring(Buffs_inform['Accuracy']),
+                                tostring(Buffs_inform['Attack perc']),
+                                tostring(Buffs_inform['STR']),
+                                tostring(Buffs_inform['DEX'])))
+                        end
+                        do
+                            local me2 = windower.ffxi.get_player()
+                            local blist = {}
+                            if me2 and me2.buffs then
+                                for _, b in ipairs(me2.buffs) do
+                                    local nm2 = (res.buffs[b]
+                                                 and (res.buffs[b].en or res.buffs[b].name))
+                                                or ('id:' .. tostring(b))
+                                    blist[#blist + 1] = tostring(b) .. ':' .. nm2
+                                end
+                            end
+                            ow_chat(207, '[OW] active buffs: ['
+                                .. table.concat(blist, ', ') .. ']')
+                            local sparts = {}
+                            for sbid, srcs in pairs(_ow_buff_sources or {}) do
+                                if type(srcs) == 'table' then
+                                    for _, sr in ipairs(srcs) do
+                                        sparts[#sparts + 1] = string.format(
+                                            '%d:%s=%s', sbid,
+                                            tostring(sr.src_name or '?'),
+                                            tostring(sr.potency or '-'))
+                                    end
+                                end
+                            end
+                            ow_chat(207, '[OW] buff_sources: ['
+                                .. table.concat(sparts, ', ') .. ']')
+                            -- Screenshot-able game-chat summary (debug only).
+                            -- Surfaces the exact buff-layer Attack/Accuracy and
+                            -- BOTH haste totals GearInfo folded in, plus how many
+                            -- march (214) entries are live and Honor March's
+                            -- tracked haste source. This is what pins the Honor
+                            -- March attack over-count and the missing haste.
+                            if windower and windower.add_to_chat then
+                                local cnt214 = 0
+                                if me2 and me2.buffs then
+                                    for _, b in ipairs(me2.buffs) do
+                                        if b == 214 then cnt214 = cnt214 + 1 end
+                                    end
+                                end
+                                local hm_src = '-'
+                                local s214 = _ow_buff_sources and _ow_buff_sources[214]
+                                if type(s214) == 'table' then
+                                    local hp = {}
+                                    for _, sr in ipairs(s214) do
+                                        hp[#hp+1] = tostring(sr.src_name or '?')
+                                            .. '=' .. tostring(sr.potency or '-')
+                                    end
+                                    hm_src = table.concat(hp, ',')
+                                end
+                                windower.add_to_chat(158, string.format(
+                                    '[OW dbg] buffAtt=%s buffAcc=%s maHaste=%s gHaste=%s | 214x%d src[%s]',
+                                    tostring(Buffs_inform and Buffs_inform['Attack']),
+                                    tostring(Buffs_inform and Buffs_inform['Accuracy']),
+                                    tostring(Buffs_inform and Buffs_inform['ma_haste']),
+                                    tostring(Buffs_inform and Buffs_inform['g_haste']),
+                                    cnt214, hm_src))
+                            end
+                        end
                         if result._errs and #result._errs > 0 then
-                            windower.add_to_chat(123, '[OW] _gi compute helper errors: '
+                            ow_chat(123, '[OW] _gi compute helper errors: '
                                 .. table.concat(result._errs, ' | '))
                         end
                     else
                         -- result might be nil with a 2nd return value (msg) from pcall
                         -- but pcall only gives us the first. Try calling directly to get the msg.
                         local _, _, msg = pcall(_gi.compute_player_stats)
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] _gi compute trace: returned %s (msg=%s)',
                             type(result), tostring(msg)))
                     end
                 else
-                    windower.add_to_chat(123, '[OW] _gi compute trace: ERROR ' .. tostring(result))
+                    ow_chat(123, '[OW] _gi compute trace: ERROR ' .. tostring(result))
                 end
             end
             if ok_compute and type(result) == 'table' then
@@ -14979,7 +19450,7 @@ function ow_compute_stats()
                         end
                         return #out > 0 and table.concat(out, ' ') or 'none'
                     end
-                    windower.add_to_chat(207,
+                    ow_chat(207,
                         '[OW pathaug] re-added after GearInfo: ' .. _nz(_ow_path_aug_stats))
                 end
 
@@ -15174,7 +19645,7 @@ function ow_compute_stats()
                             end
                         end
                         if _ow_cast_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW traits] %s%d/%s%d: DA=%s TA=%s SB=%s FC=%s',
                                 tostring(main_job), main_lvl,
                                 tostring(sub_job), sub_lvl,
@@ -15223,7 +19694,7 @@ function ow_compute_stats()
                             end
                         end
                         if _ow_cast_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW gifts] %s @%dJP: DA=%s TA=%s FC=%s SB=%s',
                                 mjob, jp_spent,
                                 tostring(stats['double attack']),
@@ -15294,7 +19765,7 @@ function ow_compute_stats()
                             stats['attack2'] = (stats['attack2'] or 0) + delta
                         end
                         if _ow_buff_debug then
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] Fudo Masamune: %d shadow(s) -> per-shadow Attack '
                                 .. '%d (delta %+d vs flat 15)',
                                 shadow_count, PER_SHADOW_ATT * shadow_count, delta))
@@ -15303,7 +19774,7 @@ function ow_compute_stats()
                 end
 
                 if _ow_buff_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] GI return: att.main=%s att.sub=%s att.range=%s eva=%s def=%s',
                         tostring(att and att.main),
                         tostring(att and att.sub),
@@ -15311,7 +19782,7 @@ function ow_compute_stats()
                         tostring(result.eva),
                         tostring(result.def)))
                     if Buffs_inform then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] Buffs_inform: Attack=%s "Attack perc"=%s Accuracy=%s DEF=%s Evasion=%s',
                             tostring(Buffs_inform['Attack']),
                             tostring(Buffs_inform['Attack perc']),
@@ -15347,7 +19818,7 @@ function ow_compute_stats()
                                 local ok, v = pcall(_G.get_player_att_from_job)
                                 if ok then job_att = tostring(v) end
                             end
-                            windower.add_to_chat(207, string.format(
+                            ow_chat(207, string.format(
                                 '[OW] att inputs: main.value=%s STR(gear)=%s STR(buff)=%s Attack(gear)=%s Attack(buff)=%s att_from_job=%s',
                                 tostring(gi_main_val), tostring(gi_str), tostring(bi_str),
                                 tostring(gi_attack), tostring(bi_attack), job_att))
@@ -15356,7 +19827,7 @@ function ow_compute_stats()
                                               + (tonumber(job_att) or 0)
                             if approx_base > 0 then
                                 local implied_multi = (att.main / approx_base) - 1
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW] att.main=%d / approx_base=%d → implied multi=%.4f (=%.0f raw vs Buffs_inform=%s)',
                                     att.main, approx_base, implied_multi,
                                     implied_multi * 1024,
@@ -15625,11 +20096,11 @@ function ow_compute_stats()
                                 sr_hits[#sr_hits+1] = string.format(
                                     '%s=%s', tostring(k), tostring(v))
                             end
-                            windower.add_to_chat(207,
+                            ow_chat(207,
                                 "[OW] stats['resist']: "
                                 .. table.concat(sr_hits, ' '))
                         else
-                            windower.add_to_chat(207,
+                            ow_chat(207,
                                 "[OW] stats['resist']: EMPTY/NIL")
                         end
                     end
@@ -15706,7 +20177,7 @@ function ow_compute_stats()
                 _gi_wrote_combat_stats = true
 
                 if _ow_cast_debug or _ow_buff_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] GI stats: acc1=%s acc2=%s att1=%s att2=%s eva=%s def=%s',
                         tostring(stats['accuracy']),
                         tostring(stats['accuracy2']),
@@ -15716,7 +20187,7 @@ function ow_compute_stats()
                         tostring(stats['defense'])))
                 end
             elseif not ok_compute then
-                windower.add_to_chat(123, '[OW] _gi.compute_player_stats error: ' .. tostring(result))
+                ow_chat(123, '[OW] _gi.compute_player_stats error: ' .. tostring(result))
             end
         end
     end
@@ -15935,7 +20406,7 @@ function _ow_write_dw_needed(stats, sim_on, force)
     _ow_last_dw_sent = n
 
     if _ow_buff_debug then
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW dw] gs c hasteinfo %d  (req=%s, trait=%d, jp=%d)',
             n, tostring(stats['_dw_required_pct']), dw_trait, jp_gift))
     end
@@ -16278,9 +20749,9 @@ function ow_send_stats(stats)
                         for _bk, _bv in pairs(blu_stats) do
                             _bp[#_bp+1] = tostring(_bk)..'='..tostring(_bv)
                         end
-                        windower.add_to_chat(207, '[OW blu_stats] '
+                        ow_chat(207, '[OW blu_stats] '
                             .. table.concat(_bp, ' '))
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW eva-decomp] base_eva(pre-merge)=%s sub_eva_bonus=%s blu_eva=%s agi_in_blu=%s',
                             tostring(stats['evasion']),
                             tostring(_sub_eva_bonus),
@@ -16416,7 +20887,7 @@ function ow_send_stats(stats)
                                 -- sole source — no double-count.
                                 local _vit_def = math.floor(v * 1.5)
                                 if _ow_buff_debug then
-                                    windower.add_to_chat(207, string.format(
+                                    ow_chat(207, string.format(
                                         '[OW vit-def] spell vit v=%s -> +%s def',
                                         tostring(v), tostring(_vit_def)))
                                 end
@@ -16492,7 +20963,7 @@ function ow_send_stats(stats)
         local game_time = info and info.time or 0
         local is_night  = (game_time >= 1080) or (game_time < 360)
         if _ow_cast_debug then
-            windower.add_to_chat(207, string.format(
+            ow_chat(207, string.format(
                 '[OW] game_time=%d (mins of day, 0..1439), is_night=%s',
                 game_time, tostring(is_night)))
         end
@@ -16618,18 +21089,18 @@ function ow_send_stats(stats)
                 end
             end
             if _ow_cast_debug and applied_total > 0 then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] gifts applied: %d entries at %d JP for %s',
                     applied_total, jp_spent, mjob))
                 for _, line in ipairs(applied_log) do
-                    windower.add_to_chat(207, line)
+                    ow_chat(207, line)
                 end
                 if applied_total > #applied_log then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '  ... and %d more', applied_total - #applied_log))
                 end
             elseif _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] gifts applied: 0 -- Gifts.lua may be missing or '..
                     'jp_spent=%d below first threshold for %s', jp_spent, mjob))
             end
@@ -16704,7 +21175,7 @@ function ow_send_stats(stats)
                         end
                     end
                     if _ow_cast_debug then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] jp-per-tier: %s tiers=%d → +%d %s%s',
                             field_name, tiers, val, info.stat,
                             info.mirror and ' (+mirror)' or ''))
@@ -16787,7 +21258,7 @@ function ow_send_stats(stats)
     -- ──────────────────────────────────────────────────────────────────
     do
         if _ow_cast_debug then
-            windower.add_to_chat(207, '[OW] tp-calc: ENTERED block')
+            ow_chat(207, '[OW] tp-calc: ENTERED block')
         end
         local p = windower.ffxi.get_player()
         -- When sim is on, reuse the function-scoped `equipment` local
@@ -16798,7 +21269,7 @@ function ow_send_stats(stats)
         local eq = _eq_with_sim()
         if not (p and eq) then
             if _ow_cast_debug then
-                windower.add_to_chat(207, '[OW] tp-calc: bail (no player/eq)')
+                ow_chat(207, '[OW] tp-calc: bail (no player/eq)')
             end
         else
             local function base_tp_from_delay(d)
@@ -16837,7 +21308,7 @@ function ow_send_stats(stats)
                 is_h2h = skname:find('Hand') ~= nil
             end
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] tp-calc: main_d=%d sub_d=%d has_sub=%s h2h=%s range_d=%d',
                     main_delay, sub_delay, tostring(has_real_sub),
                     tostring(is_h2h), range_delay))
@@ -17024,7 +21495,7 @@ function ow_send_stats(stats)
             stats['_dw_required_pct'] = dw_total_required_pct
 
             if _ow_cast_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW] tp-calc: base_d_m=%d dw=%d(cell+jp%d) stp=%d(g%d+j%d+jp%d+m%d) base_tp=%d tp/hit=%d hits/ws=%.2f',
                     base_delay_melee, total_dw, jp_dw_gift,
                     total_stp, gear_stp, job_stp, jp_stp_gift, merit_stp,
@@ -17314,14 +21785,14 @@ function ow_send_stats(stats)
                         stats['ranged attack'] = math.floor(cur_rat * ratio + 0.5)
                     end
                     if _ow_buff_debug then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW.SS] att override: %d→%d (×%.4f) aAtt→%d rAtt→%d',
                             client_patt, server_patt, ratio,
                             stats['attack2'] or 0,
                             stats['ranged attack'] or 0))
                     end
                 elseif _ow_buff_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW.SS] att override: %d→%d (×1.00, aux unchanged)',
                         client_patt, server_patt))
                 end
@@ -17347,14 +21818,14 @@ function ow_send_stats(stats)
                         stats['ranged accuracy'] = math.floor(cur_rac * ratio + 0.5)
                     end
                     if _ow_buff_debug then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW.SS] acc override: %d→%d (×%.4f) aAcc→%d rAcc→%d',
                             client_pacc, server_pacc, ratio,
                             stats['accuracy2'] or 0,
                             stats['ranged accuracy'] or 0))
                     end
                 elseif _ow_buff_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW.SS] acc override: %d→%d (×1.00, aux unchanged)',
                         client_pacc, server_pacc))
                 end
@@ -17428,13 +21899,13 @@ function ow_send_stats(stats)
     end
     local ok_send, send_err = udp_stats:send(_OW_MB_TAG(payload))
     if _ow_cast_debug then
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW] stats sent: %d stat-lines, payload=%dB, ok=%s%s',
             #lines, #payload, tostring(ok_send),
             send_err and (' err=' .. tostring(send_err)) or ''))
     end
     if _ow_buff_debug then
-        windower.add_to_chat(207, string.format(
+        ow_chat(207, string.format(
             '[OW DIAG] stats sent: defense=%s ok=%s',
             tostring(stats['defense']), tostring(ok_send)))
     end
@@ -17535,7 +22006,7 @@ ow_safe_register('prerender', function()
             ow_send_stats(s)
         end)
         if not ok_st then
-            windower.add_to_chat(123,
+            ow_chat(123,
                 '[OmniWatch] serverstats recompute err: ' .. tostring(err_st))
         end
     end
@@ -17759,7 +22230,7 @@ ow_safe_register('prerender', function()
             -- Rate-limit the error spam: only print a given error once per 10s.
             local last_err_time = _omniwatch_last_err_time or 0
             if now - last_err_time > 10 then
-                windower.add_to_chat(123, '[OmniWatch] party send error: ' .. tostring(err))
+                ow_chat(123, '[OmniWatch] party send error: ' .. tostring(err))
                 _omniwatch_last_err_time = now
             end
         end
@@ -18021,13 +22492,13 @@ ow_safe_register('prerender', function()
                                 esc(augs[1]), esc(augs[2]), esc(augs[3]), esc(augs[4]),
                                 stat_block, aug_block)))
                             if _ow_gs_debug then
-                                windower.add_to_chat(207, string.format(
+                                ow_chat(207, string.format(
                                     '[OW] rich slot=%d id=%d name=%s augs=%d',
                                     pos, item_id, name, #augs))
                             end
                         end)
                         if not ok_rich and _ow_gs_debug then
-                            windower.add_to_chat(123, string.format(
+                            ow_chat(123, string.format(
                                 '[OW] rich err slot=%d id=%d: %s',
                                 pos, item_id, tostring(rich_err)))
                         end
@@ -18040,7 +22511,7 @@ ow_safe_register('prerender', function()
         if not ok_eq then
             local last_err_time = _omniwatch_last_eq_err_time or 0
             if now - last_err_time > 10 then
-                windower.add_to_chat(123, '[OmniWatch] equip send error: ' .. tostring(err_eq))
+                ow_chat(123, '[OmniWatch] equip send error: ' .. tostring(err_eq))
                 _omniwatch_last_eq_err_time = now
             end
         end
@@ -18094,7 +22565,7 @@ ow_safe_register('prerender', function()
                     ow_send_stats(stats)
                 end)
                 if not ok_st then
-                    windower.add_to_chat(123,
+                    ow_chat(123,
                         '[OmniWatch] sim stats err: ' .. tostring(err_st))
                 end
                 -- Mark the slower 1 Hz path as "just sent" so it doesn't
@@ -18174,7 +22645,7 @@ ow_safe_register('prerender', function()
                     ow_send_stats(stats)
                 end)
                 if not ok_st then
-                    windower.add_to_chat(123,
+                    ow_chat(123,
                         '[OmniWatch] buff stats err: ' .. tostring(err_st))
                 end
                 -- Mark slower 1Hz path as just-sent so it skips its next tick.
@@ -18201,7 +22672,7 @@ ow_safe_register('prerender', function()
                     end)
                 end
                 if _ow_buff_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW DIAG] buff fast-poll triggered recompute (sig=%s)',
                         buffs_sig_fast:sub(1, 80)))
                 end
@@ -18289,7 +22760,7 @@ ow_safe_register('prerender', function()
         end
         if buffs_sig ~= _ow_stats_last_buffsig then
             if _ow_buff_debug and _ow_stats_last_buffsig then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW DIAG] buff sig changed → stats refresh: '
                     .. tostring(_ow_stats_last_buffsig)
                     .. ' → ' .. tostring(buffs_sig))
@@ -18311,7 +22782,7 @@ ow_safe_register('prerender', function()
                 end
                 if last_stats_ids[pos] ~= iid then
                     if _ow_cast_debug then
-                        windower.add_to_chat(207, string.format(
+                        ow_chat(207, string.format(
                             '[OW] gear-diff pos=%d slot=%s prev_id=%s new_id=%s',
                             pos,
                             (entry and entry.slot_name) or '?',
@@ -18343,7 +22814,7 @@ ow_safe_register('prerender', function()
             end
         else
             if _ow_cast_debug then
-                windower.add_to_chat(207,
+                ow_chat(207,
                     '[OW] gear-diff: get_items(equipment) returned nil')
             end
         end
@@ -18356,7 +22827,7 @@ ow_safe_register('prerender', function()
 
         if changed or full then
             if _ow_buff_debug then
-                windower.add_to_chat(207, string.format(
+                ow_chat(207, string.format(
                     '[OW DIAG] stats compute+send: changed=%s full=%s',
                     tostring(changed), tostring(full)))
             end
@@ -18365,7 +22836,7 @@ ow_safe_register('prerender', function()
                 ow_send_stats(stats)
             end)
             if not ok_st then
-                windower.add_to_chat(123, '[OmniWatch] stats err: ' .. tostring(err_st))
+                ow_chat(123, '[OmniWatch] stats err: ' .. tostring(err_st))
             end
         end
     end
@@ -18385,7 +22856,7 @@ ow_safe_register('prerender', function()
                 _ow_last_gil_heartbeat = now
                 udp_gs:send(_OW_MB_TAG('GIL|' .. tostring(gil)))
                 if _ow_gs_debug then
-                    windower.add_to_chat(207, string.format(
+                    ow_chat(207, string.format(
                         '[OW] sent GIL=%d', gil))
                 end
             end
@@ -18656,7 +23127,7 @@ ow_safe_register('prerender', function()
         if not ok_tg then
             local last_err_time = _omniwatch_last_tg_err_time or 0
             if now - last_err_time > 10 then
-                windower.add_to_chat(123, '[OmniWatch] target send error: ' .. tostring(err_tg))
+                ow_chat(123, '[OmniWatch] target send error: ' .. tostring(err_tg))
                 _omniwatch_last_tg_err_time = now
             end
         end
@@ -18734,7 +23205,7 @@ ow_safe_register('prerender', function()
         if not ok_z then
             local last_err_time = _omniwatch_last_z_err_time or 0
             if now - last_err_time > 10 then
-                windower.add_to_chat(123, '[OmniWatch] zone send error: ' .. tostring(err_z))
+                ow_chat(123, '[OmniWatch] zone send error: ' .. tostring(err_z))
                 _omniwatch_last_z_err_time = now
             end
         end
@@ -18946,7 +23417,16 @@ ow_safe_register('prerender', function()
                 -- store their gear-aware result in _ow_buff_pending_meta;
                 -- prefer that when the buff_id matches.
                 local source = _ow_classify_buff_source(bid, my_id)
-                local nm     = _ow_buff_name(bid)
+                -- Seed the label from the slot's attributed song name when we
+                -- have one (e.g. "Honor March"), falling back to the generic
+                -- buff-id name ("March"). This is the floor: existing_name and
+                -- pending_meta below still override for normal cases, but when
+                -- a sibling march wears off and those paths miss, we no longer
+                -- collapse to the generic name.
+                local generic_nm = _ow_buff_name(bid)
+                local slot_full  = (_ow_buff_slot_fullname or {})[slot]
+                local nm = (slot_full and slot_full ~= '' and slot_full)
+                           or generic_nm
 
                 -- Slot-label policy. Once a slot is labeled (the slot
                 -- poller has bound it to a name from pending_meta),
@@ -19040,6 +23520,13 @@ ow_safe_register('prerender', function()
                     -- real-slot reconcile would find no meta and fall
                     -- to the estimate path. The 30s TTL prevents stale
                     -- meta poisoning a much later cast.
+                end
+                -- Final safety: if the label resolved to the generic bucket
+                -- name but this slot carries a specific attributed song name,
+                -- prefer the specific one. Catches a stale existing_name that
+                -- had already collapsed to "March" on a prior rebuild.
+                if slot_full and slot_full ~= '' and nm == generic_nm then
+                    nm = slot_full
                 end
 
                 -- Source-gating from cfg. Same set as before.
@@ -19182,20 +23669,19 @@ ow_safe_register('prerender', function()
                 end
             end
 
-            -- Distinct-naming for stacked same-bid songs. Two different
-            -- songs can share one buff_id (Advancing March + Victory March,
-            -- both bid 214) and occupy two timer slots. The reconcile names
-            -- every slot from the single pending_meta (the last cast), so
-            -- both would read e.g. "Victory March". _ow_buff_sources[bid]
-            -- holds the distinct songs (it's what the haste math reads), so
-            -- when a bid has 2+ active slots AND 2+ distinct named sources,
-            -- hand each slot a distinct source name. Timing is untouched —
-            -- this only rewrites t.name. Pairing of which name lands on
-            -- which slot is arbitrary, but stacked same-bid songs share a
-            -- duration (both marches = same base duration), so the bars are
-            -- interchangeable and the labels read correctly as a set.
+            -- Distinct-naming SAFETY NET for stacked same-bid songs. Two
+            -- different songs can share one buff_id (Honor + Victory March,
+            -- both bid 214) in two slots. The per-slot reconcile already
+            -- names each slot from the cast it bound (spell_id-resolved),
+            -- which is correct for normally-spaced casts — so we must NOT
+            -- blindly overwrite it. We only step in when the reconcile left
+            -- two same-bid slots sharing a name (or blank), e.g. two songs
+            -- that landed in one packet. Then we pull DISTINCT names from
+            -- _ow_buff_sources (deduped by name) and fill the gaps. We never
+            -- overwrite an already-distinct slot and never assign the same
+            -- name twice — that double-overwrite (from a transiently
+            -- duplicate source bucket) was what showed "2 Victory Marches".
             do
-                -- Group active timer slots by buff_id.
                 local slots_by_bid = {}
                 for slot, t in pairs(_ow_buff_timers) do
                     local b = t.buff_id
@@ -19204,27 +23690,43 @@ ow_safe_register('prerender', function()
                 end
                 for bid, slotlist in pairs(slots_by_bid) do
                     if #slotlist > 1 then
-                        local srcs = _ow_buff_sources[bid]
-                        if type(srcs) == 'table' then
-                            -- Collect distinct, named song sources, newest
-                            -- first (so the freshest casts get assigned).
-                            local named = {}
-                            for _, s in ipairs(srcs) do
-                                if s.src_name and s.src_name ~= '' then
-                                    named[#named + 1] = s
-                                end
+                        -- Already distinct & non-empty? Then leave them.
+                        local seen, dup = {}, false
+                        for _, sl in ipairs(slotlist) do
+                            local nmv = _ow_buff_timers[sl].name
+                            if not nmv or nmv == '' or seen[nmv] then
+                                dup = true
                             end
-                            if #named > 1 then
-                                table.sort(named, function(a, b)
+                            if nmv then seen[nmv] = true end
+                        end
+                        if dup then
+                            local srcs = _ow_buff_sources[bid]
+                            if type(srcs) == 'table' then
+                                local sorted = {}
+                                for _, s in ipairs(srcs) do
+                                    if s.src_name and s.src_name ~= '' then
+                                        sorted[#sorted + 1] = s
+                                    end
+                                end
+                                table.sort(sorted, function(a, b)
                                     return (tonumber(a.cast_time) or 0)
                                          > (tonumber(b.cast_time) or 0)
                                 end)
-                                -- Sort slots for a stable assignment order.
-                                table.sort(slotlist)
-                                local n = math.min(#slotlist, #named)
-                                for i = 1, n do
-                                    local t = _ow_buff_timers[slotlist[i]]
-                                    if t then t.name = named[i].src_name end
+                                -- Distinct names only (dedup by src_name).
+                                local named, seenn = {}, {}
+                                for _, s in ipairs(sorted) do
+                                    if not seenn[s.src_name] then
+                                        seenn[s.src_name] = true
+                                        named[#named + 1] = s.src_name
+                                    end
+                                end
+                                if #named > 1 then
+                                    table.sort(slotlist)
+                                    local n = math.min(#slotlist, #named)
+                                    for i = 1, n do
+                                        local t = _ow_buff_timers[slotlist[i]]
+                                        if t then t.name = named[i] end
+                                    end
                                 end
                             end
                         end
@@ -19239,6 +23741,21 @@ ow_safe_register('prerender', function()
                 for bid, m in pairs(_ow_buff_pending_meta) do
                     if type(m) == 'table' and (now_clock - (m.ts or 0)) > 30 then
                         _ow_buff_pending_meta[bid] = nil
+                    end
+                end
+            end
+            -- Same cull for the FIFO name queue: drop entries a fresh
+            -- slot never consumed (resisted/overwritten casts) so they
+            -- can't mis-bind a much later same-bid cast.
+            if _ow_buff_pending_names then
+                for bid, q in pairs(_ow_buff_pending_names) do
+                    if type(q) == 'table' then
+                        for i = #q, 1, -1 do
+                            if (now_clock - (q[i].ts or 0)) > 30 then
+                                table.remove(q, i)
+                            end
+                        end
+                        if #q == 0 then _ow_buff_pending_names[bid] = nil end
                     end
                 end
             end
@@ -19331,5 +23848,549 @@ ow_safe_register('prerender', function()
         end
     end
 end)
+
+
+-- ════════════════════════════════════════════════════════════════════════
+-- Embedded Fisher engine (dev-gated). Adapted from "fisher" by Seth
+-- VanHeulen, GPLv3 — license and credit retained below. Folded into
+-- OmniWatch so the auto-fishing loop lives in this addon and is driven by
+-- the Fisher dev box (bait / catch / options / start-stop) instead of
+-- fisher's own per-character XML and chat commands. The GM chat-detection
+-- branch is not present in this build. Inert until the dev box enables it.
+--
+--   Copyright 2019-2020 Seth VanHeulen. fisher is free software: you can
+--   redistribute it and/or modify it under the terms of the GNU General
+--   Public License as published by the Free Software Foundation, version 3
+--   or (at your option) any later version. See <https://www.gnu.org/licenses/>.
+-- ════════════════════════════════════════════════════════════════════════
+local function _ow_fisher_boot()
+    local ok_data, data = pcall(require, 'Fisher_data')
+    if not ok_data or type(data) ~= 'table' then
+        ow_chat(167, '[OmniWatch] Fisher engine disabled: '
+            .. 'Fisher_data.lua missing from the addon folder.')
+    else
+    local coroutine = require('coroutine')
+    local math = require('math')
+    local os = require('os')
+    local string = require('string')
+    local table = require('table')
+    local bit = require('bit')
+    pcall(require, 'pack')   -- ensures string.pack / string.unpack exist
+
+    local session
+    local settings
+    local _fisher_catch_limit = 0
+    local _last_bait_csv = ''
+    local _last_catch_csv = ''
+
+    local defaults = {
+        equip_delay=2, move_delay=0, cast_attempt_delay=3, cast_attempt_max=3,
+        release_delay=3, catch_delay_min=3, catch_delay_tweak=15, recast_delay=3,
+        no_hook_max=20, debug_messages=false,
+        fatigue_start=os.date('!%Y-%m-%d', os.time() + 9 * 60 * 60), fatigue_count=0,
+    }
+    local function copy_defaults()
+        local t = {}
+        for k, v in pairs(defaults) do t[k] = v end
+        return t
+    end
+    local function initialize_session()
+        session = {
+            running=false, coroutine_key=math.random(),
+            item_by_id={}, bait_by_id={},
+            catch_limit=0, no_hook=0,
+        }
+    end
+    initialize_session()
+    settings = copy_defaults()
+
+    local MESSAGE_INFO = 207
+    local MESSAGE_WARN = 200
+    local MESSAGE_ERROR = 167
+    local MESSAGE_DEBUG = 160
+
+    local function message(text, level)
+        local mode = level or MESSAGE_INFO
+        if settings.debug_messages or mode ~= MESSAGE_DEBUG then
+            ow_chat(mode, string.format('[fisher] %s', text))
+        end
+    end
+
+    local function stop_fishing(reason)
+        if session.running then
+            session.running = false
+            session.coroutine_key = math.random()
+            if reason then
+                message(string.format('stopped automated fishing (%s)', reason), MESSAGE_ERROR)
+            else
+                message('stopped automated fishing', MESSAGE_WARN)
+            end
+        end
+    end
+
+    local get_equipped_item_id
+    do
+        local bag_by_id = {
+            [0]='inventory', [8]='wardrobe', [10]='wardrobe2', [11]='wardrobe3',
+            [12]='wardrobe4', [13]='wardrobe5', [14]='wardrobe6', [15]='wardrobe7',
+            [16]='wardrobe8',
+        }
+        function get_equipped_item_id(slot_name, items)
+            items = items or windower.ffxi.get_items()
+            local bag = items.equipment[slot_name .. '_bag']
+            local bag_name = bag_by_id[bag]
+            local slot = items.equipment[slot_name]
+            local item = items[bag_name][slot]
+            if item then return item.id end
+        end
+    end
+
+    local function check_equipment()
+        local items = windower.ffxi.get_items()
+        local left_ring_id = get_equipped_item_id('left_ring', items)
+        local right_ring_id = get_equipped_item_id('right_ring', items)
+        if left_ring_id == 15556 or right_ring_id == 15556 then return false end
+        local range_id = get_equipped_item_id('range', items)
+        if range_id == 19319 then
+            return windower.ffxi.get_info().zone == 86
+        end
+        return data.rod_modifiers_by_id[range_id] ~= nil
+    end
+
+    local input_fish_command
+    do
+        local function equip_bait(item, bag)
+            if item.status == 0 and session.bait_by_id[item.id] then
+                message(string.format('equipping item: %d, %d, %d', item.slot, 3, bag), MESSAGE_DEBUG)
+                windower.ffxi.set_equip(item.slot, 3, bag)
+                coroutine.sleep(settings.equip_delay)
+                return true
+            end
+        end
+
+        local function check_bait()
+            local items = windower.ffxi.get_items()
+            local ammo_id = get_equipped_item_id('ammo', items)
+            if session.bait_by_id[ammo_id] then return true end
+            for slot = 1, items.max_inventory do
+                if equip_bait(items.inventory[slot], 0) then return true end
+            end
+            for slot = 1, items.max_wardrobe do
+                if equip_bait(items.wardrobe[slot], 8) then return true end
+            end
+            for slot = 1, items.max_wardrobe2 do
+                if equip_bait(items.wardrobe2[slot], 10) then return true end
+            end
+            if items.enabled_wardrobe3 then
+                for slot = 1, items.max_wardrobe3 do
+                    if equip_bait(items.wardrobe3[slot], 11) then return true end
+                end
+            end
+            if items.enabled_wardrobe4 then
+                for slot = 1, items.max_wardrobe4 do
+                    if equip_bait(items.wardrobe4[slot], 12) then return true end
+                end
+            end
+            if items.enabled_wardrobe5 then
+                for slot = 1, items.max_wardrobe5 do
+                    if equip_bait(items.wardrobe5[slot], 13) then return true end
+                end
+            end
+            if items.enabled_wardrobe6 then
+                for slot = 1, items.max_wardrobe6 do
+                    if equip_bait(items.wardrobe6[slot], 14) then return true end
+                end
+            end
+            if items.enabled_wardrobe7 then
+                for slot = 1, items.max_wardrobe7 do
+                    if equip_bait(items.wardrobe7[slot], 15) then return true end
+                end
+            end
+            if items.enabled_wardrobe8 then
+                for slot = 1, items.max_wardrobe8 do
+                    if equip_bait(items.wardrobe8[slot], 16) then return true end
+                end
+            end
+            return false
+        end
+
+        local function store_item(target_bag, source_item)
+            message(string.format('moving item: %d, %d, %d', target_bag, source_item.slot, source_item.count), MESSAGE_DEBUG)
+            windower.ffxi.put_item(target_bag, source_item.slot, source_item.count)
+            coroutine.sleep(settings.move_delay)
+            return true
+        end
+
+        local function check_inventory()
+            local items = windower.ffxi.get_items()
+            if items.count_inventory < items.max_inventory then return true end
+            local moved = false
+            for slot = 1, items.max_inventory do
+                local source_item = items.inventory[slot]
+                if source_item.status == 0 and session.item_by_id[source_item.id] then
+                    if items.enabled_satchel and items.count_satchel < items.max_satchel then
+                        moved = store_item(5, source_item)
+                    elseif items.enabled_sack and items.count_sack < items.max_sack then
+                        moved = store_item(6, source_item)
+                    elseif items.enabled_case and items.count_case < items.max_case then
+                        moved = store_item(7, source_item)
+                    else
+                        return moved
+                    end
+                end
+            end
+            return moved
+        end
+
+        function input_fish_command(coroutine_key)
+            local cast_attempt = 0
+            while session.running and coroutine_key == session.coroutine_key and cast_attempt < settings.cast_attempt_max do
+                if not next(session.item_by_id) then
+                    stop_fishing('nothing set to catch')
+                elseif not next(session.bait_by_id) then
+                    stop_fishing('no bait set to use')
+                elseif not check_equipment() then
+                    stop_fishing('invalid equipment')
+                elseif not check_bait() then
+                    stop_fishing('out of bait')
+                elseif not check_inventory() then
+                    stop_fishing('out of inventory space')
+                else
+                    cast_attempt = cast_attempt + 1
+                    message(string.format('inputting fish command: %d, %d', cast_attempt, settings.cast_attempt_max), MESSAGE_DEBUG)
+                    windower.send_command('input /fish')
+                    coroutine.sleep(settings.cast_attempt_delay)
+                end
+            end
+            if coroutine_key == session.coroutine_key and cast_attempt >= settings.cast_attempt_max then
+                stop_fishing('unable to cast')
+            end
+        end
+    end
+
+    local function schedule_cast()
+        message(string.format('casting in %d seconds', settings.recast_delay))
+        local coroutine_key = math.random()
+        session.coroutine_key = coroutine_key
+        coroutine.schedule(function () input_fish_command(coroutine_key) end, settings.recast_delay)
+    end
+
+    local function stop_cast_attempts()
+        session.coroutine_key = math.random()
+    end
+
+    local function send_fishing_action(stamina_percent, gold_arrow_chance, coroutine_key)
+        if session.running and coroutine_key == session.coroutine_key then
+            local player = windower.ffxi.get_player()
+            windower.packets.inject_outgoing(0x110, string.pack('IIIHHI', 0xB10, player.id, stamina_percent, player.index, 3, gold_arrow_chance))
+        end
+    end
+
+    local schedule_catch
+    do
+        local function calculate_catch_delay(fishing_parameters)
+            local catch_delay_tweak = math.max(settings.catch_delay_tweak, 1)
+            local regen_per_second = (fishing_parameters[3] - 128) * 60 - fishing_parameters[1] / catch_delay_tweak
+            local catch_delay = fishing_parameters[7] - 4
+            if regen_per_second < 0 then
+                catch_delay = math.min(math.abs(fishing_parameters[1] / regen_per_second), catch_delay)
+            end
+            return math.max(settings.catch_delay_min, catch_delay)
+        end
+
+        function schedule_catch(fishing_parameters)
+            local delay = calculate_catch_delay(fishing_parameters)
+            message(string.format('catching in %d seconds', delay))
+            local gold_arrow_chance = fishing_parameters[9]
+            local coroutine_key = math.random()
+            session.coroutine_key = coroutine_key
+            coroutine.schedule(function () send_fishing_action(0, gold_arrow_chance, coroutine_key) end, delay)
+        end
+    end
+
+    local function schedule_release()
+        message(string.format('releasing in %d seconds', settings.release_delay))
+        local coroutine_key = math.random()
+        session.coroutine_key = coroutine_key
+        coroutine.schedule(function () send_fishing_action(200, 0, coroutine_key) end, settings.release_delay)
+    end
+
+    local function update_fatigue(relative, value)
+        local now = os.time() + 9 * 60 * 60
+        local today = os.date('!%Y-%m-%d', now)
+        now = os.date('!*t', now)
+        if settings.fatigue_start ~= today then
+            settings.fatigue_start = today
+            settings.fatigue_count = 0
+        end
+        if value then
+            if relative then
+                settings.fatigue_count = math.max(settings.fatigue_count + value, 0)
+            else
+                settings.fatigue_count = value
+            end
+        end
+        local reset = (24 * 60) - (now.hour * 60 + now.min)
+        message(string.format('fishing fatigue = %d/200, resets in %dh%dm', settings.fatigue_count, math.floor(reset / 60), reset % 60))
+    end
+
+    local function start_fishing(catch_limit)
+        if not session.running and windower.ffxi.get_player().status == 0 then
+            session.running = true
+            local coroutine_key = math.random()
+            session.coroutine_key = coroutine_key
+            session.catch_limit = tonumber(catch_limit) or 0
+            session.no_hook = 0
+            if session.catch_limit > 0 then
+                message(string.format('started automated fishing (catch limit = %d)', session.catch_limit), MESSAGE_WARN)
+            else
+                message('started automated fishing', MESSAGE_WARN)
+            end
+            update_fatigue()
+            coroutine.schedule(function () input_fish_command(coroutine_key) end, 0)
+        end
+    end
+
+    local identify_hooked_item
+    do
+        local function make_uid(item, normal_mod, legendary_mod, size_mod)
+            local stamina = item.stamina
+            local arrow_duration = item.arrow_duration
+            local arrow_frequency = item.arrow_frequency
+            if item.count then
+                local count_mod = 1 + 0.1 * (item.count - 1)
+                stamina = math.floor(stamina * count_mod)
+                arrow_duration = math.floor(arrow_duration * count_mod)
+                arrow_frequency = math.floor(arrow_frequency * count_mod)
+            end
+            local size = item.size or 0
+            if size_mod == 0 and size == 1 then
+                arrow_duration = math.max(arrow_duration - 1, 1)
+                arrow_frequency = arrow_frequency + 2
+            elseif size_mod == 1 and size == 0 then
+                arrow_duration = math.max(arrow_duration - 2, 1)
+                arrow_frequency = math.max(arrow_frequency - 1, 1)
+            end
+            local stamina_depletion = item.stamina_depletion
+            if normal_mod and not item.legendary then
+                stamina_depletion = math.floor(stamina_depletion * normal_mod)
+            end
+            legendary_mod = legendary_mod or normal_mod
+            if legendary_mod and item.legendary then
+                stamina_depletion = math.floor(stamina_depletion * legendary_mod)
+            end
+            return table.concat({stamina, math.min(arrow_duration, 15), math.min(arrow_frequency, 15), stamina_depletion * 20, size}, ',')
+        end
+
+        local item_by_rod_and_uid = {}
+
+        local function find_item(stamina_base, fishing_parameters)
+            local range_id = get_equipped_item_id('range')
+            if not item_by_rod_and_uid[range_id] then
+                local item_by_uid = {}
+                local rod_modifiers = data.rod_modifiers_by_id[range_id]
+                for i = 1, #data.item_fishing_parameters do
+                    local item = data.item_fishing_parameters[i]
+                    local uid = make_uid(item, unpack(rod_modifiers))
+                    if not item_by_uid[uid] then item_by_uid[uid] = {} end
+                    table.insert(item_by_uid[uid], item)
+                end
+                item_by_rod_and_uid[range_id] = item_by_uid
+                message('item uid cache updated: ' .. range_id, MESSAGE_DEBUG)
+            end
+            local uid = table.concat({stamina_base, fishing_parameters[2], fishing_parameters[4], fishing_parameters[5], fishing_parameters[8] % 2}, ',')
+            return item_by_rod_and_uid[range_id][uid]
+        end
+
+        function identify_hooked_item(fishing_parameters)
+            local continent = data.continent_by_zone[windower.ffxi.get_info().zone] or 1
+            local identified = {}
+            for i = 95, 105 do
+                if fishing_parameters[1] % i == 0 then
+                    local item = find_item(math.floor(fishing_parameters[1] / i), fishing_parameters)
+                    if item then
+                        for j = 1, #item do
+                            if not item[j].continent or bit.band(item[j].continent, continent) ~= 0 then
+                                table.insert(identified, item[j])
+                            end
+                        end
+                    end
+                end
+            end
+            if #identified == 0 then
+                table.insert(identified, data.unknown_item)
+            end
+            return identified
+        end
+    end
+
+    -- Bait / catch lists come from the dev box as comma-separated names.
+    local function set_bait(csv)
+        session.bait_by_id = {}
+        if not csv then return end
+        for raw in string.gmatch(csv, '[^,]+') do
+            local name = raw:gsub('^%s+', ''):gsub('%s+$', ''):lower()
+            if #name > 0 then
+                if name == 'all' or name == 'all bait' then
+                    for n, id in pairs(data.bait_by_name) do session.bait_by_id[id] = n end
+                else
+                    local id = data.bait_by_name[name]
+                    if id then session.bait_by_id[id] = name end
+                end
+            end
+        end
+    end
+
+    local function set_catch(csv)
+        session.item_by_id = {}
+        if not csv then return end
+        for raw in string.gmatch(csv, '[^,]+') do
+            local name = raw:gsub('^%s+', ''):gsub('%s+$', ''):lower()
+            if #name > 0 then
+                if name == 'all' or name == 'all fish' then
+                    for n, id in pairs(data.fish_by_name) do session.item_by_id[id] = n end
+                elseif name == 'all item' then
+                    for n, id in pairs(data.item_by_name) do
+                        if id < 80000 then session.item_by_id[id] = n end
+                    end
+                else
+                    local id = data.fish_by_name[name] or data.item_by_name[name]
+                    if id then session.item_by_id[id] = name end
+                end
+            end
+        end
+    end
+
+    ow_safe_register('login', function ()
+        initialize_session()
+        settings = settings or copy_defaults()
+        -- Re-apply the dev box's bait/catch after the session reset so the
+        -- lists survive a relog without the user re-entering them.
+        set_bait(_last_bait_csv)
+        set_catch(_last_catch_csv)
+    end)
+
+    ow_safe_register('incoming chunk', function (id, original)
+        if id == 0x00B then
+            if string.byte(original, 5) == 1 then
+                stop_fishing('log out')
+            else
+                stop_fishing('zone change')
+            end
+        -- (GM chat-message detection removed: no anti-detection in this build)
+        elseif id == 0x037 then
+            local player_status = windower.ffxi.get_player().status
+            if session.player_status == player_status then return end
+            message(string.format('player status update: %d, %d', player_status, string.byte(original, 75)), MESSAGE_DEBUG)
+            if player_status == 58 or player_status == 61 then
+                update_fatigue('+', 1)
+                if session.running and session.catch_limit > 0 then
+                    session.catch_limit = session.catch_limit - 1
+                    if session.catch_limit > 0 then
+                        message(string.format('remaining catch limit = %d', session.catch_limit))
+                    else
+                        stop_fishing('catch limit')
+                    end
+                end
+            end
+            if session.running then
+                if player_status == 0 then
+                    schedule_cast()
+                elseif player_status == 56 then
+                    stop_cast_attempts()
+                elseif player_status == 57 then
+                    session.no_hook = 0
+                elseif player_status == 62 and session.player_status ~= 57 then
+                    session.no_hook = session.no_hook + 1
+                    message(string.format('no item hooked: %d, %d', session.no_hook, settings.no_hook_max), MESSAGE_DEBUG)
+                    if settings.no_hook_max > 0 and session.no_hook >= settings.no_hook_max then
+                        stop_fishing('no hook limit')
+                    end
+                elseif not (player_status >= 56 and player_status <= 62 or player_status == 0) then
+                    stop_fishing('invalid player status')
+                end
+            end
+            session.player_status = player_status
+        elseif id == 0x115 then
+            local fishing_parameters = {string.unpack(original, 'HHHHHHHHI', 5)}
+            message(string.format('fishing parameters: ' .. table.concat(fishing_parameters, ', ')), MESSAGE_DEBUG)
+            if check_equipment() then
+                local catch = false
+                local identified = identify_hooked_item(fishing_parameters)
+                for i = 1, #identified do
+                    local item = identified[i]
+                    if item.count then
+                        message(string.format('hooked = %s x%d', item.name, item.count), MESSAGE_WARN)
+                    else
+                        message(string.format('hooked = %s', item.name), MESSAGE_WARN)
+                    end
+                    if session.running and not catch then
+                        if session.item_by_id[item.id] then catch = true end
+                    end
+                end
+                if session.running then
+                    if catch then schedule_catch(fishing_parameters) else schedule_release() end
+                end
+            elseif session.running then
+                stop_fishing('invalid equipment')
+            else
+                message('unable to identify hooked item (invalid equipment)', MESSAGE_ERROR)
+            end
+        end
+    end)
+
+    ow_safe_register('outgoing chunk', function (id, original, _, injected)
+        if id == 0x01A then
+            local action_category = string.byte(original, 11)
+            if action_category ~= 14 then stop_fishing('performed another action') end
+        elseif id == 0x110 then
+            local _, stamina_percent, _, action_type, gold_arrow_chance = string.unpack(original, 'IIHHI', 5)
+            message('fishing action: ' .. table.concat({stamina_percent, action_type, gold_arrow_chance}, ', '), MESSAGE_DEBUG)
+            if action_type == 3 then
+                if stamina_percent == 300 then
+                    stop_fishing('fishing timed out')
+                elseif not injected then
+                    stop_fishing('manual fishing action')
+                end
+            end
+        end
+    end)
+
+    ow_safe_register('action', function (action)
+        if session.running then
+            local player_id = windower.ffxi.get_player().id
+            for _, target in pairs(action.targets) do
+                if target.id == player_id then stop_fishing('targeted by action') end
+            end
+        end
+    end)
+
+    -- ── Bridge: called by OmniWatch's SETTING| dispatcher (the dev box) ──
+    _ow_fisher_start = function ()
+        start_fishing(_fisher_catch_limit)
+    end
+    _ow_fisher_stop = function ()
+        stop_fishing()
+    end
+    _ow_fisher_set_bait = function (csv)
+        _last_bait_csv = csv or ''
+        set_bait(_last_bait_csv)
+    end
+    _ow_fisher_set_catch = function (csv)
+        _last_catch_csv = csv or ''
+        set_catch(_last_catch_csv)
+    end
+    _ow_fisher_set_opt = function (k, v)
+        if k == 'catch_limit' then
+            _fisher_catch_limit = tonumber(v) or 0
+        elseif k == 'debug_messages' then
+            settings.debug_messages = v and true or false
+        else
+            settings[k] = tonumber(v) or settings[k]
+        end
+    end
+    end
+end
+_ow_fisher_boot()
 
 --python -m PyInstaller --onefile omniwatch.py

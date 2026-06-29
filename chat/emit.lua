@@ -866,6 +866,29 @@ function M.emit_chat(mode, sender_name, text)
         return
     end
 
+    -- Drop OTHER entities' "casting is interrupted." notices. FFXI
+    -- sends your own as "Your casting is interrupted." but a nearby
+    -- player's or mob's as "<Name>'s casting is interrupted." on this
+    -- same system mode (122). The possessive "'s casting is interrupted"
+    -- only appears for non-self actors, so it cleanly keeps your own
+    -- line (no apostrophe-s) while dropping everyone else's, which is
+    -- just battle noise leaking into the System tab. (To route these to
+    -- Battle instead of hiding them, emit here rather than returning.)
+    if text:find("'s casting is interrupted") then
+        return
+    end
+
+    -- Drop level-up announcements ("X attains level N!"). While
+    -- leveling these spam the System tab with every party member /
+    -- trust ding. The phrase "attains level" is unique to this
+    -- message, so the plain-text match is safe and leaves the rest of
+    -- mode 121 (Records of Eminence, etc.) untouched. (To route these
+    -- somewhere visible instead of hiding them, emit here rather than
+    -- returning.)
+    if text:find('attains level', 1, true) then
+        return
+    end
+
     -- Mode 212 (Unity, incoming-text path) carries TWO things:
     --   * PC member chat — sender wrapped in the 0x7F 0xFC ... 0x7F 0xFB
     --       name markers ("{<7F FC>Armistice<7F FB>} ..."). This path

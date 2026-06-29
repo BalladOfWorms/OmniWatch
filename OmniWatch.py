@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.7.7 (2026-06-16)"
+OMNIWATCH_BUILD_STAMP = "v1.8.0 (2026-06-26)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.7.7"
+OMNIWATCH_VERSION = "1.8.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -5714,6 +5714,26 @@ _warp_btn_draw_pos  = None    # clamped on-screen draw pos (drag grabs here)
 _warp_btn_drag      = None    # click-or-drag state {grab_dx,..,moved}
 _warp_btn_resize    = None    # {start_scale, anchor_x, anchor_y}
 warp_menu_open      = False   # travel menu popover open?
+
+# ── Call Trust floating button (summons the active Trust Set) ──────────────
+calltrust_button_pos     = None   # [x, y] of the floating Call Trust button
+calltrust_button_rect    = None   # hit rect (set during draw)
+calltrust_button_scale   = 1.0    # independent size multiplier
+calltrust_button_handle_rect = None  # corner resize handle (set during draw)
+_ct_btn_draw_pos    = None    # clamped on-screen draw pos (drag grabs here)
+_ct_btn_drag        = None    # click-or-drag state {grab_dx,..,moved}
+_ct_btn_resize      = None    # {start_scale, anchor_x, anchor_y}
+
+# ── Floating Sing button (toggles the BRD singer; mirrors Call Trust) ──────
+sing_button_pos      = None   # [x, y] of the floating Sing button
+sing_button_rect     = None   # hit rect (set during draw)
+sing_button_scale    = 1.0    # independent size multiplier
+sing_button_handle_rect = None  # corner resize handle (set during draw)
+_sing_btn_draw_pos   = None   # clamped on-screen draw pos (drag grabs here)
+_sing_btn_drag       = None   # click-or-drag state {grab_dx,..,moved}
+_sing_btn_resize     = None   # {start_scale, anchor_x, anchor_y}
+_sing_msg            = None   # transient note under the button
+_ct_msg             = None    # (text, expire_ts) transient note under button
 warp_menu_rects     = []      # [(rect, action_dict)] built during menu draw
 warp_menu_rect      = None    # full popover envelope (for tooltip suppress)
 warp_menu_scroll    = 0       # row offset for the windowed (max 12) list
@@ -5860,6 +5880,7 @@ HOTBAR_DRAG_DWELL_SEC = 0.6
 settings_menu_open    = False
 settings_button_rect  = None    # pygame.Rect of the gear button itself
 settings_menu_rects   = []      # list of (pygame.Rect, action_dict)
+_dev_ui = {"collapsed": False}   # Developer settings section collapse state
 settings_menu_scroll  = 0       # vertical scroll offset (px). Reset on close.
 settings_menu_panel_rect = None # actual rendered panel rect, for wheel hit-test
 
@@ -8690,8 +8711,10 @@ SETTINGS_SCHEMA = [
                    "or under a job name in 'per_job' (hidden only on "
                    "that job, in addition to global hides). Re-enter "
                    "setup mode (//ow setup) to apply changes. For most "
-                   "users it's easier to click cells in setup mode "
-                   "and use the 'Save as' button to persist changes.",
+                   "users it's easier to click cells in setup mode: "
+                   "exiting setup mode auto-saves your moves/hides to the "
+                   "current job, or use the 'Save as' button to target "
+                   "global / another job instead.",
     },
 
     # ── Recast Timer ────────────────────────────────────────────────
@@ -9025,6 +9048,200 @@ SETTINGS_SCHEMA = [
                    "encounter, JSON Lines format).",
     },
 
+    # ── Developer (hidden; only rendered when the dev sentinel is set) ─
+    {
+        "key":     "open_scanzone",
+        "label":   "Scan Zone",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Developer",
+        "applies": "python",
+        "action":  "open_scanzone",
+        "help":    "Open the Scan Zone panel: search the current zone's "
+                   "NPC-list DAT files by name and list matching entities "
+                   "with their target index. Operator tooling.",
+    },
+    {
+        "key":     "open_craftsyn",
+        "label":   "Crafting / Synergy",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Developer",
+        "applies": "python",
+        "action":  "open_craftsyn",
+        "help":    "Open the combined Crafting / Synergy panel (two tabs in "
+                   "one window): Crafting searches recipes and "
+                   "auto-synthesizes; Synergy drives the furnace minigame. "
+                   "Switch tabs with Ctrl+Shift+R (Craft) / Ctrl+Shift+Y "
+                   "(Synergy). Operator tooling.",
+    },
+    {
+        "key":     "open_skillup",
+        "label":   "SkillUp",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Developer",
+        "applies": "python",
+        "action":  "open_skillup",
+        "help":    "Open the SkillUp panel: auto-skill the out-of-combat "
+                   "magic skills (Healing / Geomancy / Enhancing / Ninjutsu / "
+                   "Singing / Blue / Summoning). Picks your known self-target "
+                   "spells and loops with MP rest, wind/string swap, Unbridled "
+                   "Learning, ninja-tool unpack and avatar Favor/Siphon/"
+                   "Release; skillups/hr + total; auto-stops on cap. Ported "
+                   "from smd111's GearSwap SkillUp. Operator automation.",
+    },
+    {
+        "key":     "open_autora",
+        "label":   "AutoRA",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Developer",
+        "applies": "python",
+        "action":  "open_autora",
+        "help":    "Open the AutoRA settings box: auto-repeat ranged "
+                   "attacks (/shoot) on your target while engaged, with a "
+                   "configurable TP halt. Operator automation.",
+    },
+    {
+        "key":     "autora_enabled",
+        "label":   "(internal) AutoRA on/off",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Toggle the lua-side AutoRA loop.",
+    },
+    {
+        "key":     "autora_stop_tp",
+        "label":   "(internal) AutoRA stop TP",
+        "kind":    "int",
+        "default": 1000,
+        "min":     1000,
+        "max":     3000,
+        "step":    250,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "TP at which AutoRA stops firing.",
+    },
+    {
+        "key":     "autora_ignore_tp",
+        "label":   "(internal) AutoRA ignore TP",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "When on, AutoRA never halts on TP.",
+    },
+    {
+        "key":     "open_allseeingeye",
+        "label":   "AllSeeingEye",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Developer",
+        "applies": "python",
+        "action":  "open_allseeingeye",
+        "help":    "Open the AllSeeingEye settings box: reveal entities the "
+                   "server hides (dead/corpse, appearing, fading) by "
+                   "rewriting the 0x0E status byte. Operator visibility tooling.",
+    },
+    {
+        "key":     "ase_enabled",
+        "label":   "(internal) AllSeeingEye on/off",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Toggle the lua-side AllSeeingEye reveal.",
+    },
+    {
+        "key":     "ase_dead",
+        "label":   "(internal) ASE reveal dead/corpse",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Reveal entities in dead/corpse status (2).",
+    },
+    {
+        "key":     "ase_appearing",
+        "label":   "(internal) ASE reveal appearing",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Reveal entities in appearing status (6).",
+    },
+    {
+        "key":     "ase_fading",
+        "label":   "(internal) ASE reveal fading",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Reveal entities in fading status (7).",
+    },
+    {
+        "key":     "open_fisher",
+        "label":   "Fisher",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Developer",
+        "applies": "python",
+        "action":  "open_fisher",
+        "help":    "Open the Fisher box: embedded auto-fishing engine. Set "
+                   "bait + catch (comma-separated names), delays and a catch "
+                   "limit, then flip Fishing on.",
+    },
+    {
+        "key":     "fisher_enabled",
+        "label":   "(internal) Fisher on/off",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Start/stop the loaded fisher addon.",
+    },
+    {
+        "key":     "fisher_catch_limit",
+        "label":   "(internal) Fisher catch limit",
+        "kind":    "int",
+        "default": 0,
+        "min":     0,
+        "max":     999,
+        "step":    10,
+        "section": "_Hidden",
+        "applies": "lua",
+        "help":    "Stop after N catches (0 = no limit).",
+    },
+    {"key": "fisher_bait", "label": "(internal) Fisher bait", "kind": "text",
+     "default": "", "placeholder": "insect ball, lugworm",
+     "section": "_Hidden", "applies": "lua", "help": "Bait names (CSV)."},
+    {"key": "fisher_catch", "label": "(internal) Fisher catch", "kind": "text",
+     "default": "", "placeholder": "moat carp, all fish",
+     "section": "_Hidden", "applies": "lua", "help": "Catch names (CSV)."},
+    {"key": "fisher_debug", "label": "(internal) Fisher debug", "kind": "bool",
+     "default": False, "section": "_Hidden", "applies": "lua",
+     "help": "Verbose fisher debug chat."},
+    {"key": "fisher_opt_equip_delay", "label": "(internal) equip delay", "kind": "int",
+     "default": 2, "min": 0, "max": 60, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_move_delay", "label": "(internal) move delay", "kind": "int",
+     "default": 0, "min": 0, "max": 60, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_cast_attempt_delay", "label": "(internal) cast retry delay", "kind": "int",
+     "default": 3, "min": 0, "max": 60, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_cast_attempt_max", "label": "(internal) cast retry max", "kind": "int",
+     "default": 3, "min": 1, "max": 20, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_release_delay", "label": "(internal) release delay", "kind": "int",
+     "default": 3, "min": 0, "max": 60, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_catch_delay_min", "label": "(internal) catch delay min", "kind": "int",
+     "default": 3, "min": 0, "max": 30, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_catch_delay_tweak", "label": "(internal) catch delay tweak", "kind": "int",
+     "default": 15, "min": 1, "max": 60, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_recast_delay", "label": "(internal) recast delay", "kind": "int",
+     "default": 3, "min": 0, "max": 60, "step": 1, "section": "_Hidden", "applies": "lua"},
+    {"key": "fisher_opt_no_hook_max", "label": "(internal) no-hook max", "kind": "int",
+     "default": 20, "min": 0, "max": 200, "step": 5, "section": "_Hidden", "applies": "lua"},
+
     # ── HotBar ──────────────────────────────────────────────────────
     {
         "key":     "hotbar_settings",
@@ -9103,16 +9320,40 @@ SETTINGS_SCHEMA = [
     },
     # ── BLU Spellsets (opens from Misc) ──────────────────────────────
     {
-        "key":     "bluspells_open",
-        "label":   "BluSpells",
+        "key":     "loadouts_open",
+        "label":   "Loadouts",
         "kind":    "button",
         "button_text": "OPEN",
         "section": "Misc",
         "applies": "python",
-        "action":  "open_bluspells",
-        "help":    "Open the BLU Spellsets manager: save named Blue "
-                   "Magic loadouts and equip them in one click "
-                   "(preserve-traits set changes, run on the game side).",
+        "action":  "open_loadouts",
+        "help":    "Open the Loadouts window: BLU Spellsets, Trust Sets, "
+                   "and PUP Attachments, each on its own tab. Save named "
+                   "loadouts per character and apply them in one click.",
+    },
+    {
+        "key":     "show_calltrust",
+        "label":   "Show Call Trust button",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the floating Call Trust button. Click it to "
+                   "summon your active Trust Set (the one marked Active "
+                   "in Settings -> Misc -> TrustSets), in call order. "
+                   "Drag to move it; drag the corner to resize.",
+    },
+    {
+        "key":     "show_singbutton",
+        "label":   "Show Sing button",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show the floating Sing button. Click it to start "
+                   "the last BRD song set you sang (it becomes the "
+                   "active set); click again to stop. Drag to move it; "
+                   "drag the corner to resize.",
     },
     {
         "key":     "show_warp",
@@ -9475,6 +9716,22 @@ SETTINGS_SCHEMA = [
                    "omniwatch_gearswap_path.json next to other configs.",
     },
     # ── Misc ────────────────────────────────────────────────────────
+    {
+        "key":     "open_auction",
+        "label":   "Auction House",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_auction",
+        "help":    "Open the Auction House panel: a Buy tab and a Sell tab in "
+                   "one window. Buy has live item search (singles and stacks "
+                   "listed separately), a multi-item queue with per-item "
+                   "start / max / increment and a bid throttle, and a results "
+                   "log. Sell lists your inventory with a single/stack + price "
+                   "form and your active listings. Right-click any item to "
+                   "open its FFXIAH price page.",
+    },
     {
         "key":     "sim_mode",
         "label":   "Simulation mode",
@@ -10961,8 +11218,18 @@ _SETTINGS_ACTIONS = {
     "exit_omniwatch":          _exit_omniwatch,
     "toggle_fullscreen":       _toggle_fullscreen,
     "open_checklist":          lambda: _open_checklist_modal(),
+    "open_loadouts":           lambda: _loadouts_show(),
     "open_bluspells":          lambda: _blusets_show(),
+    "open_pupatt":             lambda: _pupatt_show(),
+    "open_trustsets":          lambda: _trustsets_show(),
     "open_campaigns":          lambda: _open_campaigns_modal(),
+    "open_scanzone":           lambda: _toggle_scanzone_panel(),
+    "open_craftsyn":           lambda: _toggle_craftsyn_panel(),
+    "open_skillup":            lambda: _toggle_skillup_panel(),
+    "open_auction":            lambda: _toggle_ah_panel(),
+    "open_autora":             lambda: _open_autora(),
+    "open_allseeingeye":       lambda: _open_allseeingeye(),
+    "open_fisher":             lambda: _open_fisher(),
 }
 
 
@@ -18007,10 +18274,11 @@ def _open_campaigns_modal():
     campaigns_scroll = 0
     settings_menu_open = False
     _campaigns_maybe_refresh()
-    # Also kick off a Domain Invasion refresh — the persistent banner
-    # at the top of the modal reads from di_state and the user expects
-    # it to be current the moment the modal opens.
+    # Also kick off Domain Invasion + Where-Is-NM refreshes — those
+    # banners read from di_state / nm_state and the user expects them
+    # current the moment the modal opens.
     _di_maybe_refresh()
+    _nm_maybe_refresh()
 
 
 def _force_campaigns_refresh():
@@ -18304,6 +18572,287 @@ def _di_freshness_text():
 
 
 _di_load_cache()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Crafting guild hours (Vana'diel-time, no network)
+# ─────────────────────────────────────────────────────────────────────────
+# Each crafting guild's HQ shop keeps fixed Vana'diel operating hours and
+# observes one elemental "holiday" per 8-day week on which it stays closed
+# all day. This is static retail data (unchanged since launch); the holiday
+# days are cross-confirmed against the "Days of the Week" guild-holiday
+# table and the hours against per-guild listings. Branch shops (Mhaura,
+# Selbina, Al Zahbi, Carpenters' Landing, …) share their HQ's window, so we
+# track one row per craft.
+#
+# IMPORTANT: the holiday strings MUST match VANA_DAYS exactly — note it's
+# "Lightningday" (not "Lightningsday") in our table — so the comparison
+# against get_vana_time()'s day_name resolves.
+#
+#   (craft, guild, open_hour, close_hour, holiday_day)
+GUILD_HOURS = [
+    ("Clothcraft",   "Weavers'",     6, 21, "Firesday"),
+    ("Woodworking",  "Carpenters'",  6, 21, "Firesday"),
+    ("Smithing",     "Blacksmiths'", 8, 23, "Watersday"),
+    ("Goldsmithing", "Goldsmiths'",  8, 23, "Iceday"),
+    ("Alchemy",      "Alchemists'",  8, 23, "Lightsday"),
+    ("Bonecraft",    "Boneworkers'", 8, 23, "Windsday"),
+    ("Cooking",      "Culinarians'", 5, 20, "Darksday"),
+    ("Leathercraft", "Tanners'",     3, 18, "Iceday"),
+    ("Fishing",      "Fishermen's",  3, 18, "Lightningday"),
+]
+
+GUILD_AUTO_CYCLE_SEC = 4.0   # seconds per guild while the modal is open
+
+
+def _guild_status(open_h, close_h, holiday_day, vana_hour, vana_day):
+    """Return 'holiday' | 'open' | 'closed' for a guild given the current
+    Vana'diel hour (0-23) and day name. Every guild window is same-day
+    (open_h < close_h, no midnight wrap), so a plain range test works.
+    The window is half-open [open_h, close_h): a guild listed 6:00-21:00
+    is open through 20:xx and shut at 21:00."""
+    if vana_day == holiday_day:
+        return "holiday"
+    if open_h <= vana_hour < close_h:
+        return "open"
+    return "closed"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Where Is NM tracker (whereisnm.com)
+# ─────────────────────────────────────────────────────────────────────────
+# Crowd-sourced Limbus (Apollyon / Temenos) NM & ??? spawn tracker — the
+# same data whereisnm.com renders. Clean public REST API with NO auth
+# token; we identify OmniWatch in the User-Agent and send the frontend's
+# x-client-type header. We pull the active (non-expired) report set, filter
+# to the player's server (the shared ffxi_server setting, same as DI), and
+# surface them one at a time in a rotating banner like the transport boxes.
+#
+# Each report record (per the site's API) looks like:
+#   { "server": "Asura", "area": "apollyon", "tower": "nw", "floor": 4,
+#     "spawnType": "question",        # "question" => ??? ; otherwise a NM
+#     "expired": false, "status": "...",
+#     "enemyDisplay": "???",          # NM name when known, else "???"
+#     "displayName": "Apollyon - NW Tower F4",
+#     "minutesSinceUpdate": 23.4, "minutesAgo": 280.1 }
+# displayName and the minute deltas arrive pre-computed, so the banner is
+# close to a 1:1 of the website.
+
+# Active-only endpoint: we omit "?includeExpired=true" so the server hands
+# back just the live reports (lighter than the full history the site pulls
+# to drive its expired-toggle). To show killed/expired entries later,
+# append the param and filter on the `expired` flag instead.
+WHEREISNM_API_URL = "https://whereisnm.com/api/v1/reports"
+WHEREISNM_REFRESH_INTERVAL_SEC = 60        # 1-min cache — same posture as DI
+WHEREISNM_HTTP_TIMEOUT = 8.0
+WHEREISNM_AUTO_CYCLE_SEC = 4.0             # seconds per entry in the banner
+
+nm_state = {
+    "server":     "",      # server the entries are for
+    "entries":    [],      # parsed active reports (see _nm_fetch_now)
+    "fetched_at": 0.0,     # local wall-clock of last successful fetch
+    "error":      "",
+}
+nm_fetch_in_flight = False
+nm_last_attempt    = 0.0
+
+
+def _nm_cache_path():
+    base = _campaigns_cache_path()
+    if not base:
+        return None
+    return os.path.join(os.path.dirname(base), "omniwatch_nm_cache.json")
+
+
+def _nm_load_cache():
+    global nm_state
+    path = _nm_cache_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            if isinstance(data.get("server"), str):
+                nm_state["server"] = data["server"]
+            if isinstance(data.get("entries"), list):
+                nm_state["entries"] = data["entries"]
+            ts = data.get("fetched_at")
+            if isinstance(ts, (int, float)):
+                nm_state["fetched_at"] = float(ts)
+    except Exception as e:
+        print(f"[OmniWatch] NM cache load failed: {e!r}")
+
+
+def _nm_save_cache():
+    path = _nm_cache_path()
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(nm_state, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] NM cache save failed: {e!r}")
+
+
+def _nm_extract_records(parsed):
+    """The reports endpoint may return either a bare JSON array or an
+    envelope ({"reports"/"data"/...: [...]}); accept whichever shape and
+    return the record list (or [] if none is found)."""
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, dict):
+        for k in ("reports", "data", "results", "items"):
+            v = parsed.get(k)
+            if isinstance(v, list):
+                return v
+    return []
+
+
+def _nm_fetch_now():
+    """Synchronous fetch → list of parsed active entries for the player's
+    server, or None on hard error. Background-thread ONLY — the 8s timeout
+    would stall the render loop if called inline."""
+    target_server = _di_current_server().strip()   # shared server setting
+    if not target_server:
+        print("[OmniWatch] NM: server unknown — set ffxi_server in settings")
+        return None
+    req = urllib.request.Request(
+        WHEREISNM_API_URL,
+        headers={
+            "Accept":        "application/json",
+            "User-Agent":    "OmniWatch (FFXI overlay)",
+            "x-client-type": "WhereIsNM-Frontend",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=WHEREISNM_HTTP_TIMEOUT) as resp:
+            body = resp.read()
+    except Exception as e:
+        print(f"[OmniWatch] NM fetch failed: {e!r}")
+        return None
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except Exception as e:
+        print(f"[OmniWatch] NM JSON decode failed: {e!r}")
+        return None
+    records = _nm_extract_records(parsed)
+    tgt = target_server.lower()
+    out = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("server", "")).lower() != tgt:
+            continue
+        if rec.get("expired") is True:
+            continue
+        display = (rec.get("displayName")
+                   or rec.get("display_name") or "").strip()
+        enemy = (rec.get("enemyDisplay")
+                 or rec.get("enemy_display")
+                 or rec.get("enemyInput") or "???")
+        enemy = (str(enemy).strip() or "???")
+        spawn = str(rec.get("spawnType")
+                    or rec.get("spawn_type") or "").lower()
+        area = str(rec.get("area") or "").strip().lower()
+
+        def _f(*keys):
+            for k in keys:
+                v = rec.get(k)
+                if isinstance(v, (int, float)):
+                    return float(v)
+            return None
+
+        out.append({
+            "display":     display or "(unknown spot)",
+            "enemy":       enemy,
+            "is_question": spawn == "question",
+            "area":        area,
+            "mins_update": _f("minutesSinceUpdate", "minutes_since_update"),
+            "mins_ago":    _f("minutesAgo", "minutes_ago"),
+        })
+    # Readable order: Apollyon before Temenos before anything else, then
+    # freshest (smallest minutesSinceUpdate) first within each area.
+    area_rank = {"apollyon": 0, "temenos": 1}
+    out.sort(key=lambda e: (area_rank.get(e["area"], 9),
+                            e["mins_update"] if e["mins_update"] is not None
+                            else 1e9))
+    return out
+
+
+def _nm_background_fetch():
+    """Spawn a daemon thread to refresh NM state. Idempotent — guards
+    against concurrent fetches."""
+    global nm_fetch_in_flight
+    if nm_fetch_in_flight:
+        return
+    nm_fetch_in_flight = True
+
+    def _worker():
+        global nm_fetch_in_flight, nm_last_attempt
+        try:
+            nm_last_attempt = time.time()
+            entries = _nm_fetch_now()
+            if entries is None:
+                # Keep prior cached entries on transient failure; just
+                # note the error for the UI.
+                nm_state["error"] = "fetch failed"
+                return
+            nm_state["server"]     = _di_current_server().strip()
+            nm_state["entries"]    = entries
+            nm_state["fetched_at"] = time.time()
+            nm_state["error"]      = ""
+            _nm_save_cache()
+            print(f"[OmniWatch] NM refreshed: {nm_state['server']} → "
+                  f"{len(entries)} active")
+        except Exception as e:
+            print(f"[OmniWatch] NM worker CRASHED: {e!r}")
+            traceback.print_exc()
+        finally:
+            nm_fetch_in_flight = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _nm_maybe_refresh():
+    """Throttled refresh — safe to call every frame while the modal's open
+    (short-circuits unless both throttle gates have elapsed)."""
+    now = time.time()
+    if nm_fetch_in_flight:
+        return
+    if now - nm_last_attempt < 30.0:
+        return
+    if now - nm_state.get("fetched_at", 0) < WHEREISNM_REFRESH_INTERVAL_SEC:
+        return
+    _nm_background_fetch()
+
+
+def _force_nm_refresh():
+    """Bypass both throttles for a manual Refresh click."""
+    global nm_last_attempt
+    nm_last_attempt = 0.0
+    nm_state["fetched_at"] = 0.0
+    _nm_background_fetch()
+
+
+def _nm_age_text(mins):
+    """Format a minutes-ago float as a compact 'Xm ago' / 'Xh Ym ago'."""
+    if mins is None or mins < 0:
+        return ""
+    mins = int(round(mins))
+    if mins < 1:
+        return "just now"
+    if mins < 60:
+        return f"{mins}m ago"
+    h, m = divmod(mins, 60)
+    if h < 24:
+        return f"{h}h {m}m ago" if m else f"{h}h ago"
+    d, h = divmod(h, 24)
+    return f"{d}d {h}h ago" if h else f"{d}d ago"
+
+
+_nm_load_cache()
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -19154,8 +19703,18 @@ def save_layout():
             "cheatsheet_scroll": cheatsheet_scroll,
             "cheatsheet_button_pos": cheatsheet_button_pos,
             "cheatsheet_button_scale": cheatsheet_button_scale,
+            "scanzone_pos":    globals().get("scanzone_panel_pos", [160, 140]),
+            "scanzone_w":      globals().get("scanzone_panel_w", 400),
+            "scanzone_h":      globals().get("scanzone_panel_h", 340),
             "warp_button_pos": warp_button_pos,
             "warp_button_scale": warp_button_scale,
+            "calltrust_button_pos": calltrust_button_pos,
+            "calltrust_button_scale": calltrust_button_scale,
+            "sing_button_pos": sing_button_pos,
+            "sing_button_scale": sing_button_scale,
+            "brdset_active": _brdset_active,
+            "loadouts_pos": (list(globals().get("_loadouts_pos"))
+                             if globals().get("_loadouts_pos") else None),
             "ow_window_size": list(_windowed_size),
             "buff_anchor":     buff_anchor,
             "buff_scale":      buff_scale,
@@ -19217,6 +19776,7 @@ def save_layout():
 
 def load_layout():
     """Load saved anchors and scales."""
+    global scanzone_panel_pos, scanzone_panel_w, scanzone_panel_h
     global equip_anchor, equip_scale, target_anchor, target_scale
     global target_anchor_st, target_scale_st
     global stats_anchor, stats_scale
@@ -19224,6 +19784,8 @@ def load_layout():
     global cheatsheet_pos, cheatsheet_w, cheatsheet_h, cheatsheet_scroll
     global cheatsheet_button_pos, cheatsheet_button_scale, _windowed_size
     global warp_button_pos, warp_button_scale
+    global calltrust_button_pos, calltrust_button_scale
+    global sing_button_pos, sing_button_scale, _brdset_active
     global buff_anchor, buff_scale
     global dps_anchor, dps_scale, dps_panel_visible
     global skillchain_anchor, skillchain_scale, skillchain_panel_visible
@@ -19306,6 +19868,18 @@ def load_layout():
         ch_ = data.get("cheatsheet_h")
         cheatsheet_w = int(cw_) if isinstance(cw_, (int, float)) else None
         cheatsheet_h = int(ch_) if isinstance(ch_, (int, float)) else None
+        szp = data.get("scanzone_pos")
+        if isinstance(szp, list) and len(szp) == 2:
+            try:
+                scanzone_panel_pos = [int(szp[0]), int(szp[1])]
+            except (TypeError, ValueError):
+                pass
+        szw = data.get("scanzone_w")
+        if isinstance(szw, (int, float)):
+            scanzone_panel_w = int(szw)
+        szh = data.get("scanzone_h")
+        if isinstance(szh, (int, float)):
+            scanzone_panel_h = int(szh)
         cs_sc = data.get("cheatsheet_scroll", 0)
         cheatsheet_scroll = int(cs_sc) if isinstance(cs_sc, (int, float)) else 0
         csb = data.get("cheatsheet_button_pos")
@@ -19330,6 +19904,36 @@ def load_layout():
             warp_button_scale = max(0.5, min(5.0, float(wbs)))
         except (TypeError, ValueError):
             warp_button_scale = 1.0
+        ctbp = data.get("calltrust_button_pos")
+        if isinstance(ctbp, list) and len(ctbp) == 2:
+            try:
+                calltrust_button_pos = [int(ctbp[0]), int(ctbp[1])]
+            except (TypeError, ValueError):
+                calltrust_button_pos = None
+        ctbs = data.get("calltrust_button_scale", 1.0)
+        try:
+            calltrust_button_scale = max(0.5, min(5.0, float(ctbs)))
+        except (TypeError, ValueError):
+            calltrust_button_scale = 1.0
+        sbp = data.get("sing_button_pos")
+        if isinstance(sbp, list) and len(sbp) == 2:
+            try:
+                sing_button_pos = [int(sbp[0]), int(sbp[1])]
+            except (TypeError, ValueError):
+                sing_button_pos = None
+        sbs = data.get("sing_button_scale", 1.0)
+        try:
+            sing_button_scale = max(0.5, min(5.0, float(sbs)))
+        except (TypeError, ValueError):
+            sing_button_scale = 1.0
+        _ba = data.get("brdset_active")
+        _brdset_active = _ba if isinstance(_ba, str) and _ba else None
+        _lp = data.get("loadouts_pos")
+        if isinstance(_lp, list) and len(_lp) == 2:
+            try:
+                globals()["_loadouts_pos_loaded"] = [int(_lp[0]), int(_lp[1])]
+            except (TypeError, ValueError):
+                pass
         ows = data.get("ow_window_size")
         if isinstance(ows, list) and len(ows) == 2:
             try:
@@ -19515,6 +20119,16 @@ _pre_select_active_view_char()
 # to the per-char file but reads from a stale dict — saves don't
 # persist visibly across launches.
 settings = load_settings()
+# AutoRA (dev automation) must never silently resume across launches —
+# force it off on load so it can't start firing ranged attacks on login.
+# The Developer toggle re-arms it live (sending SETTING|autora_enabled).
+settings["autora_enabled"] = False
+# AllSeeingEye (dev visibility) also starts off each launch so it can't
+# silently keep rewriting packets across sessions; the box re-arms it live.
+settings["ase_enabled"] = False
+# Fisher control toggle starts off each launch (it just drives the fisher
+# addon; the box re-fires fisher start when you flip it on).
+settings["fisher_enabled"] = False
 load_layout()
 # Apply the saved windowed size (the window was created at the default
 # size above; resize it to the user's last windowed box if one is saved).
@@ -20476,32 +21090,37 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
     # it's authoritative — survives Python reloads, etc. The peak
     # heuristic remains as a fallback for legacy wire and for buffs
     # without a known start time.
-    seen_ids = set()
+    # Key duration tracking per buff INSTANCE, not per buff_id. Marches
+    # (Honor + Victory) and minuet tiers (IV + V) share one buff_id, so a
+    # bid-only key let them overwrite each other's stored peak — which broke
+    # the fill ratio and could leave a bar stuck at full / not decreasing.
+    # (buff_id, name) is unique per song instance.
+    def _bkey(ent):
+        return (ent.get("buff_id"), ent.get("name"))
+    seen_keys = set()
     for e in entries:
         if e.get("flash") or e.get("worn"):
             continue
-        bid = e.get("buff_id")
-        if bid is None:
+        if e.get("buff_id") is None:
             continue
-        seen_ids.add(bid)
+        k = _bkey(e)
+        seen_keys.add(k)
         secs = e.get("secs", 0.0)
         full_dur = e.get("full_duration")
+        # Peak is monotonic: it only ever GROWS. The wire's full_duration
+        # can arrive as the current remaining (which shrinks each tick); if
+        # we let the stored peak follow it down, ratio = secs/peak stays
+        # pinned near 1.0 and the bar never empties. Clamp to the max ever
+        # seen so the bar always represents fill against the fullest moment.
+        cur = _buff_durations.get(k, 0.0)
         if full_dur and full_dur > 0:
-            # Authoritative — use this as the peak. Clamp against secs
-            # in case full_dur < secs (e.g. clock drift), which would
-            # display a > 100% ratio.
-            _buff_durations[bid] = max(full_dur, secs, 0.1)
-        else:
-            peak = _buff_durations.get(bid)
-            if peak is None or secs > peak:
-                _buff_durations[bid] = max(secs, 0.1)
-    # Prune durations for buffs that left the panel.
-    stale = [k for k in _buff_durations if k not in seen_ids
-                                            and not any(
-                                                (ent.get("flash") or
-                                                 ent.get("worn")) and
-                                                ent.get("buff_id") == k
-                                                for ent in entries)]
+            _buff_durations[k] = max(cur, full_dur, secs, 0.1)
+        elif secs > cur:
+            _buff_durations[k] = max(secs, 0.1)
+    # Prune durations for buff instances that left the panel.
+    stale = [k for k in _buff_durations if k not in seen_keys
+             and not any((ent.get("flash") or ent.get("worn"))
+                         and _bkey(ent) == k for ent in entries)]
     for k in stale:
         del _buff_durations[k]
 
@@ -20547,7 +21166,7 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
             if is_debuff:
                 col = COL_DEBUFF
             bid = e.get("buff_id")
-            peak = _buff_durations.get(bid, max(secs, 0.1))
+            peak = _buff_durations.get(_bkey(e), max(secs, 0.1))
             # Fill ratio: 1.0 fresh, 0.0 expired (decreasing).
             ratio = secs / peak if peak > 0 else 0.0
             ratio = max(0.0, min(1.0, ratio))
@@ -21390,12 +22009,8 @@ def _blusets_clear_rects():
 
 
 def _blusets_show():
-    """Open the BLU Spellsets window (Settings → Misc → BluSpells).
-    Also closes the settings menu so the window isn't drawn behind it."""
-    global _blusets_open, settings_menu_open
-    _blusets_ensure_loaded()
-    _blusets_open = True
-    settings_menu_open = False
+    """Open the Loadouts window on the BLU Spellsets tab."""
+    _loadouts_show("blu")
 
 
 def _blusets_draw_button_row(surface, label, x, y, w, h, danger=False,
@@ -22032,6 +22647,1434 @@ def _blusets_trait_totals():
     return rows
 
 
+# ── PUP Attachments panel ─────────────────────────────────────────────────
+# Save named automaton attachment loadouts (head, frame, 12 slots) per
+# character and equip them in one click via the Lua pupatt engine
+# (PUPATT| rail). Catalogue + live loadout are streamed from Lua. Sets
+# persist to omniwatch_pup_attachments_<charname>.json. Opened from
+# Settings → Misc → PupAttach, modelled on the BLU Spellsets manager.
+_pupatt_open        = False
+_pupatt_view        = "list"        # "list" | "edit"
+_pupatt_sets        = {}            # {name: {"head":id, "frame":id, "atts":[12]}}
+_pupatt_loaded_char = None
+_pupatt_win_pos     = None
+_pupatt_win_drag    = None
+_pupatt_note        = None          # (text, expire_ts)
+_pupatt_confirm_del = None          # (name, expire_ts)
+_pupatt_scroll      = 0
+_pupatt_fonts       = {}
+# catalogue streamed from Lua:
+_pupatt_cat         = {"head": [], "frame": [], "att": []}   # [(id, name), ...]
+_pupatt_cat_by_id   = {}            # id -> name
+_pupatt_current     = None          # {"head":id, "frame":id, "atts":[12]} or None
+# editor scratch:
+_pupatt_edit_name   = ""
+_pupatt_edit_orig   = None          # original name when editing (None = new)
+_pupatt_edit        = {"head": 0, "frame": 0, "atts": [0] * 12}
+_pupatt_active_slot = None          # "head" | "frame" | ("att", i) being picked
+_pupatt_filter      = ""            # picker filter text
+_pupatt_name_focus  = False
+_pupatt_pick_scroll = 0
+# rects rebuilt each frame:
+_pupatt_win_rect    = None
+_pupatt_title_rect  = None
+_pupatt_close_rect  = None
+_pupatt_row_rects   = []            # list view: [(equip_r, edit_r, del_r, name)]
+_pupatt_new_rect    = None
+_pupatt_clear_rect  = None
+_pupatt_slot_rects  = []            # editor: [(rect, slot_key)]
+_pupatt_pick_rects  = []            # picker: [(rect, id)]
+_pupatt_name_rect   = None
+_pupatt_filter_rect = None
+_pupatt_save_rect   = None
+_pupatt_cancel_rect = None
+_pupatt_capture_rect = None
+
+
+def _pupatt_font(sz, bold=False):
+    key = (sz, bold)
+    f = _pupatt_fonts.get(key)
+    if f is None:
+        f = pygame.font.SysFont("Segoe UI", sz, bold=bold)
+        _pupatt_fonts[key] = f
+    return f
+
+
+def _pupatt_char():
+    try:
+        return _mb_lock_target() or ""
+    except Exception:
+        return ""
+
+
+def _pupatt_file_for(char):
+    safe = "".join(c for c in (char or "") if c.isalnum()) or "default"
+    return os.path.join(USER_DIR, f"omniwatch_pup_attachments_{safe}.json")
+
+
+def _pupatt_norm_set(v):
+    atts = v.get("atts") or []
+    atts = [int(a or 0) for a in atts][:12]
+    atts = atts + [0] * (12 - len(atts))
+    return {"head": int(v.get("head", 0) or 0),
+            "frame": int(v.get("frame", 0) or 0),
+            "atts": atts}
+
+
+def _pupatt_ensure_loaded():
+    global _pupatt_sets, _pupatt_loaded_char, _pupatt_win_pos
+    global _pupatt_view, _pupatt_confirm_del
+    ch = _pupatt_char()
+    if ch == _pupatt_loaded_char:
+        return
+    _pupatt_loaded_char = ch
+    _pupatt_sets = {}
+    _pupatt_win_pos = None
+    _pupatt_view = "list"
+    _pupatt_confirm_del = None
+    try:
+        with open(_pupatt_file_for(ch), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        sets = data.get("sets")
+        if isinstance(sets, dict):
+            for k, v in sets.items():
+                if isinstance(v, dict):
+                    _pupatt_sets[str(k)] = _pupatt_norm_set(v)
+        wp = data.get("win_pos")
+        if isinstance(wp, list) and len(wp) == 2:
+            _pupatt_win_pos = [int(wp[0]), int(wp[1])]
+    except Exception:
+        pass
+
+
+def _pupatt_persist():
+    try:
+        with open(_pupatt_file_for(_pupatt_loaded_char), "w",
+                  encoding="utf-8") as f:
+            json.dump({"sets": _pupatt_sets, "win_pos": _pupatt_win_pos},
+                      f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] pupatt save failed: {e!r}")
+
+
+def _pupatt_set_note(text):
+    global _pupatt_note
+    _pupatt_note = (text, time.time() + 4.0)
+
+
+def _pupatt_name_of(iid):
+    try:
+        iid = int(iid or 0)
+    except Exception:
+        return ""
+    if iid == 0:
+        return ""
+    return _pupatt_cat_by_id.get(iid, f"#{iid}")
+
+
+def _pupatt_request_sync():
+    try:
+        sock_cmd_out.sendto(b"PUPATT|sync", _cmd_addr())
+    except Exception:
+        pass
+
+
+def _pupatt_send_equip(name):
+    s = _pupatt_sets.get(name)
+    if not s:
+        _pupatt_set_note("Set is empty — nothing to equip.")
+        return
+    atts = (s.get("atts") or [0] * 12)[:12]
+    atts = [int(a or 0) for a in atts] + [0] * (12 - len(atts))
+    parts = ["PUPATT", "equip", str(int(s.get("head", 0) or 0)),
+             str(int(s.get("frame", 0) or 0))] + [str(a) for a in atts[:12]]
+    try:
+        sock_cmd_out.sendto("|".join(parts).encode("utf-8"), _cmd_addr())
+        _pupatt_set_note(f'Equipping "{name}" — watch game chat.')
+    except Exception as e:
+        print(f"[OmniWatch] pupatt equip send failed: {e!r}")
+
+
+def _pupatt_send_clear():
+    try:
+        sock_cmd_out.sendto(b"PUPATT|clear", _cmd_addr())
+        _pupatt_set_note("Clearing automaton attachments…")
+    except Exception as e:
+        print(f"[OmniWatch] pupatt clear send failed: {e!r}")
+
+
+def _pupatt_ingest(raw):
+    """Handle a PUPATT| message streamed from the Lua engine."""
+    global _pupatt_current
+    parts = raw.split("|")
+    if len(parts) >= 3 and parts[1] == "cat":
+        tag = parts[2]
+        if tag in ("head", "frame", "att"):
+            lst = []
+            for tok in parts[3:]:
+                if "=" in tok:
+                    i, nm = tok.split("=", 1)
+                    try:
+                        iid = int(i)
+                    except ValueError:
+                        continue
+                    lst.append((iid, nm))
+                    _pupatt_cat_by_id[iid] = nm
+            _pupatt_cat[tag] = lst
+    elif len(parts) >= 2 and parts[1] == "current":
+        if len(parts) >= 3 and parts[2] == "none":
+            _pupatt_current = None
+        else:
+            try:
+                vals = [int(x) for x in parts[2:16]]
+            except ValueError:
+                vals = []
+            if len(vals) >= 14:
+                _pupatt_current = {"head": vals[0], "frame": vals[1],
+                                   "atts": vals[2:14]}
+    elif len(parts) >= 2 and parts[1] == "status":
+        _pupatt_set_note("|".join(parts[2:]))
+
+
+def _pupatt_show():
+    """Open the Loadouts window on the PUP Attachments tab."""
+    _loadouts_show("pup")
+
+
+def _pupatt_clear_rects():
+    global _pupatt_win_rect, _pupatt_title_rect, _pupatt_close_rect
+    global _pupatt_new_rect, _pupatt_clear_rect, _pupatt_name_rect
+    global _pupatt_filter_rect, _pupatt_save_rect, _pupatt_cancel_rect
+    global _pupatt_capture_rect
+    _pupatt_win_rect = None
+    _pupatt_title_rect = None
+    _pupatt_close_rect = None
+    _pupatt_new_rect = None
+    _pupatt_clear_rect = None
+    _pupatt_name_rect = None
+    _pupatt_filter_rect = None
+    _pupatt_save_rect = None
+    _pupatt_cancel_rect = None
+    _pupatt_capture_rect = None
+    _pupatt_row_rects.clear()
+    _pupatt_slot_rects.clear()
+    _pupatt_pick_rects.clear()
+
+
+def _pupatt_btn(surface, rect, label, font, danger=False, on=False):
+    if danger:
+        bg, bd, fg = (70, 40, 40), (150, 80, 80), (235, 200, 200)
+    elif on:
+        bg, bd, fg = (54, 74, 104), (95, 130, 180), (216, 228, 245)
+    else:
+        bg, bd, fg = (34, 40, 52), (78, 88, 108), (205, 212, 224)
+    pygame.draw.rect(surface, bg, rect, border_radius=3)
+    pygame.draw.rect(surface, bd, rect, 1, border_radius=3)
+    t = font.render(label, True, fg)
+    surface.blit(t, (rect.centerx - t.get_width() // 2,
+                     rect.centery - t.get_height() // 2))
+
+
+def _pupatt_field(surface, rect, text, font, focused, placeholder=""):
+    pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=3)
+    pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
+                     rect, 1, border_radius=3)
+    show = text if text else placeholder
+    col = (225, 225, 230) if text else (120, 128, 142)
+    t = font.render(show, True, col)
+    surface.blit(t, (rect.x + 5, rect.centery - t.get_height() // 2))
+
+
+_PUPATT_SLOTS = ([("head", "Head"), ("frame", "Frame")] +
+                 [(("att", i), f"Slot {i + 1}") for i in range(12)])
+
+
+def draw_pupatt_window(surface):
+    global _pupatt_win_pos, _pupatt_win_rect, _pupatt_title_rect
+    global _pupatt_close_rect, _pupatt_new_rect, _pupatt_clear_rect
+    global _pupatt_name_rect, _pupatt_filter_rect, _pupatt_save_rect
+    global _pupatt_cancel_rect, _pupatt_capture_rect
+    _pupatt_clear_rects()
+    if not _pupatt_open:
+        return
+    _pupatt_ensure_loaded()
+    f = _pupatt_font(13)
+    fb = _pupatt_font(13, True)
+    fs = _pupatt_font(11)
+    pad, title_h, row_h = 8, 22, 24
+    w = 380
+
+    if _pupatt_view == "list":
+        nrows = max(1, len(_pupatt_sets))
+        body = nrows * row_h + 6 + 24 + 6 + 24
+    else:
+        body = 24 + 6 + 14 * 22 + 8 + 24
+        if _pupatt_active_slot is not None:
+            body += 6 + 22 + 7 * 19
+    h = title_h + pad + body + pad + 18
+
+    if _pupatt_win_pos is None:
+        _pupatt_win_pos = [(surface.get_width() - w) // 2, 110]
+    x = max(0, min(int(_pupatt_win_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(_pupatt_win_pos[1]), surface.get_height() - h))
+    _pupatt_win_pos[0], _pupatt_win_pos[1] = x, y
+
+    panel = pygame.Rect(x, y, w, h)
+    _pupatt_win_rect = panel
+    pygame.draw.rect(surface, COL_PANEL, panel, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel, 1, border_radius=4)
+    pygame.draw.rect(surface, COL_EV_HEADER, (x + 1, y + 1, w - 2, title_h - 1),
+                     border_radius=3)
+    title = "PUP Attachments" + ("  ·  edit" if _pupatt_view == "edit" else "")
+    surface.blit(fb.render(title, True, COL_EV_TITLE),
+                 (x + 8, y + (title_h - fb.get_height()) // 2))
+    _pupatt_title_rect = pygame.Rect(x, y, w - 22, title_h)
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    surface.blit(fb.render("x", True, (220, 180, 180)),
+                 (close_r.x + 4, close_r.y + 1))
+    _pupatt_close_rect = close_r
+
+    cy = y + title_h + pad
+    if _pupatt_view == "list":
+        if not _pupatt_sets:
+            surface.blit(fs.render("No sets yet — make one with + New set.",
+                                   True, (150, 158, 172)), (x + pad, cy + 4))
+            cy += row_h
+        for name in sorted(_pupatt_sets):
+            equip_r = pygame.Rect(x + pad, cy, 64, row_h - 4)
+            edit_r = pygame.Rect(x + w - pad - 40 - 4 - 64, cy, 64, row_h - 4)
+            del_r = pygame.Rect(x + w - pad - 40, cy, 40, row_h - 4)
+            nm = fs.render(name[:28], True, (215, 222, 234))
+            surface.blit(nm, (equip_r.right + 6, cy + (row_h - 4 - nm.get_height()) // 2))
+            _pupatt_btn(surface, equip_r, "Equip", fs)
+            _pupatt_btn(surface, edit_r, "Edit", fs)
+            danger = (_pupatt_confirm_del and _pupatt_confirm_del[0] == name
+                      and _pupatt_confirm_del[1] > time.time())
+            _pupatt_btn(surface, del_r, "Sure?" if danger else "Del", fs,
+                        danger=bool(danger))
+            _pupatt_row_rects.append((equip_r, edit_r, del_r, name))
+            cy += row_h
+        cy += 6
+        new_r = pygame.Rect(x + pad, cy, w - 2 * pad, 24)
+        _pupatt_btn(surface, new_r, "+ New set", f)
+        _pupatt_new_rect = new_r
+        cy += 24 + 6
+        clr_r = pygame.Rect(x + pad, cy, w - 2 * pad, 24)
+        _pupatt_btn(surface, clr_r, "Clear automaton (remove all)", fs)
+        _pupatt_clear_rect = clr_r
+        cy += 24
+    else:
+        name_r = pygame.Rect(x + pad, cy, w - 2 * pad, 24)
+        _pupatt_field(surface, name_r, _pupatt_edit_name, f,
+                      _pupatt_name_focus, "set name…")
+        _pupatt_name_rect = name_r
+        cy += 24 + 6
+        for key, label in _PUPATT_SLOTS:
+            lab = fs.render(label, True, (170, 182, 200))
+            surface.blit(lab, (x + pad, cy + (22 - lab.get_height()) // 2))
+            box = pygame.Rect(x + pad + 50, cy, w - 2 * pad - 50, 20)
+            active = (_pupatt_active_slot == key)
+            if key == "head":
+                val = _pupatt_name_of(_pupatt_edit["head"])
+            elif key == "frame":
+                val = _pupatt_name_of(_pupatt_edit["frame"])
+            else:
+                val = _pupatt_name_of(_pupatt_edit["atts"][key[1]])
+            pygame.draw.rect(surface, (24, 27, 34), box, border_radius=3)
+            pygame.draw.rect(surface, (195, 160, 80) if active else (70, 78, 94),
+                             box, 1, border_radius=3)
+            vt = fs.render(val or "— empty —", True,
+                           (225, 225, 230) if val else (120, 128, 142))
+            surface.blit(vt, (box.x + 5, box.centery - vt.get_height() // 2))
+            _pupatt_slot_rects.append((box, key))
+            cy += 22
+        cy += 8
+        cap_r = pygame.Rect(x + pad, cy, 120, 24)
+        _pupatt_btn(surface, cap_r, "Capture current", fs)
+        _pupatt_capture_rect = cap_r
+        save_r = pygame.Rect(x + w - pad - 64 - 4 - 64, cy, 64, 24)
+        cancel_r = pygame.Rect(x + w - pad - 64, cy, 64, 24)
+        _pupatt_btn(surface, save_r, "Save", f, on=True)
+        _pupatt_btn(surface, cancel_r, "Cancel", f)
+        _pupatt_save_rect = save_r
+        _pupatt_cancel_rect = cancel_r
+        cy += 24
+        if _pupatt_active_slot is not None:
+            cy += 6
+            filt_r = pygame.Rect(x + pad, cy, w - 2 * pad, 22)
+            _pupatt_field(surface, filt_r, _pupatt_filter, fs, True,
+                          "type to filter…")
+            _pupatt_filter_rect = filt_r
+            cy += 22
+            if _pupatt_active_slot == "head":
+                opts = _pupatt_cat["head"]
+            elif _pupatt_active_slot == "frame":
+                opts = _pupatt_cat["frame"]
+            else:
+                opts = _pupatt_cat["att"]
+            flt = _pupatt_filter.lower()
+            shown = [(0, "— empty —")] + [o for o in opts
+                                          if flt in o[1].lower()]
+            vis = 7
+            start = max(0, min(_pupatt_pick_scroll, max(0, len(shown) - vis)))
+            for o in shown[start:start + vis]:
+                rr = pygame.Rect(x + pad, cy, w - 2 * pad, 19)
+                pygame.draw.rect(surface, (18, 20, 26), rr)
+                ot = fs.render(o[1][:42], True, (205, 214, 226))
+                surface.blit(ot, (rr.x + 5, rr.y + 1))
+                _pupatt_pick_rects.append((rr, o[0]))
+                cy += 19
+            if len(shown) > vis:
+                more = fs.render(f"{len(shown)} matches (scroll)", True,
+                                 (130, 138, 152))
+                surface.blit(more, (x + w - pad - more.get_width() - 2, cy))
+
+    if _pupatt_note and _pupatt_note[1] > time.time():
+        nt = fs.render(_pupatt_note[0][:60], True, (180, 210, 170))
+        surface.blit(nt, (x + pad, y + h - 16))
+
+
+def _pupatt_handle_event(event):
+    global _pupatt_open, _pupatt_view, _pupatt_win_drag, _pupatt_confirm_del
+    global _pupatt_edit, _pupatt_edit_name, _pupatt_edit_orig
+    global _pupatt_active_slot, _pupatt_filter, _pupatt_name_focus
+    global _pupatt_pick_scroll, _pupatt_win_pos
+    if not _pupatt_open:
+        return False
+
+    if event.type == pygame.KEYDOWN and (_pupatt_name_focus
+                                         or _pupatt_active_slot is not None):
+        if event.key == pygame.K_ESCAPE:
+            _pupatt_name_focus = False
+            _pupatt_active_slot = None
+            return True
+        if event.key == pygame.K_RETURN:
+            _pupatt_name_focus = False
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            if _pupatt_name_focus:
+                _pupatt_edit_name = _pupatt_edit_name[:-1]
+            else:
+                _pupatt_filter = _pupatt_filter[:-1]
+            return True
+        ch = event.unicode
+        if ch and 32 <= ord(ch) < 127:
+            if _pupatt_name_focus:
+                _pupatt_edit_name = (_pupatt_edit_name + ch)[:32]
+            else:
+                _pupatt_filter = (_pupatt_filter + ch)[:32]
+                _pupatt_pick_scroll = 0
+            return True
+        return True
+
+    if event.type == pygame.MOUSEWHEEL:
+        mx, my = pygame.mouse.get_pos()
+        if _pupatt_win_rect and _pupatt_win_rect.collidepoint(mx, my):
+            if _pupatt_active_slot is not None:
+                _pupatt_pick_scroll = max(0, _pupatt_pick_scroll - event.y)
+            return True
+
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        _pupatt_win_drag = None
+        return False
+
+    if event.type == pygame.MOUSEMOTION and _pupatt_win_drag is not None:
+        mx, my = event.pos
+        _pupatt_win_pos = [mx - _pupatt_win_drag[0], my - _pupatt_win_drag[1]]
+        return True
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if _pupatt_close_rect and _pupatt_close_rect.collidepoint(mx, my):
+            _pupatt_open = False
+            return True
+        if _pupatt_title_rect and _pupatt_title_rect.collidepoint(mx, my):
+            _pupatt_win_drag = (mx - _pupatt_win_pos[0], my - _pupatt_win_pos[1])
+            return True
+
+        if _pupatt_view == "list":
+            for equip_r, edit_r, del_r, name in _pupatt_row_rects:
+                if equip_r.collidepoint(mx, my):
+                    _pupatt_send_equip(name)
+                    return True
+                if edit_r.collidepoint(mx, my):
+                    s = _pupatt_sets.get(name) or {}
+                    _pupatt_edit = _pupatt_norm_set(s)
+                    _pupatt_edit_name = name
+                    _pupatt_edit_orig = name
+                    _pupatt_active_slot = None
+                    _pupatt_name_focus = False
+                    _pupatt_filter = ""
+                    _pupatt_view = "edit"
+                    return True
+                if del_r.collidepoint(mx, my):
+                    if (_pupatt_confirm_del and _pupatt_confirm_del[0] == name
+                            and _pupatt_confirm_del[1] > time.time()):
+                        _pupatt_sets.pop(name, None)
+                        _pupatt_persist()
+                        _pupatt_confirm_del = None
+                        _pupatt_set_note(f'Deleted "{name}".')
+                    else:
+                        _pupatt_confirm_del = (name, time.time() + 3.0)
+                    return True
+            if _pupatt_new_rect and _pupatt_new_rect.collidepoint(mx, my):
+                _pupatt_edit = {"head": 0, "frame": 0, "atts": [0] * 12}
+                _pupatt_edit_name = ""
+                _pupatt_edit_orig = None
+                _pupatt_active_slot = None
+                _pupatt_name_focus = True
+                _pupatt_filter = ""
+                _pupatt_view = "edit"
+                return True
+            if _pupatt_clear_rect and _pupatt_clear_rect.collidepoint(mx, my):
+                _pupatt_send_clear()
+                return True
+        else:
+            if _pupatt_name_rect and _pupatt_name_rect.collidepoint(mx, my):
+                _pupatt_name_focus = True
+                _pupatt_active_slot = None
+                return True
+            for box, key in _pupatt_slot_rects:
+                if box.collidepoint(mx, my):
+                    _pupatt_active_slot = (None if _pupatt_active_slot == key
+                                           else key)
+                    _pupatt_name_focus = False
+                    _pupatt_filter = ""
+                    _pupatt_pick_scroll = 0
+                    return True
+            if _pupatt_active_slot is not None:
+                for rr, iid in _pupatt_pick_rects:
+                    if rr.collidepoint(mx, my):
+                        if _pupatt_active_slot == "head":
+                            _pupatt_edit["head"] = iid
+                        elif _pupatt_active_slot == "frame":
+                            _pupatt_edit["frame"] = iid
+                        else:
+                            _pupatt_edit["atts"][_pupatt_active_slot[1]] = iid
+                        _pupatt_active_slot = None
+                        return True
+                if _pupatt_filter_rect and _pupatt_filter_rect.collidepoint(mx, my):
+                    return True
+            if _pupatt_capture_rect and _pupatt_capture_rect.collidepoint(mx, my):
+                if _pupatt_current:
+                    _pupatt_edit = {"head": _pupatt_current["head"],
+                                    "frame": _pupatt_current["frame"],
+                                    "atts": list(_pupatt_current["atts"])[:12]}
+                    _pupatt_set_note("Captured live loadout into this set.")
+                else:
+                    _pupatt_request_sync()
+                    _pupatt_set_note("No live loadout yet — try again in a sec.")
+                return True
+            if _pupatt_save_rect and _pupatt_save_rect.collidepoint(mx, my):
+                nm = _pupatt_edit_name.strip().replace("|", "").replace(";", "")
+                if not nm:
+                    _pupatt_set_note("Give the set a name first.")
+                    return True
+                if _pupatt_edit_orig and _pupatt_edit_orig != nm:
+                    _pupatt_sets.pop(_pupatt_edit_orig, None)
+                _pupatt_sets[nm] = _pupatt_norm_set(_pupatt_edit)
+                _pupatt_persist()
+                _pupatt_view = "list"
+                _pupatt_active_slot = None
+                _pupatt_name_focus = False
+                _pupatt_set_note(f'Saved "{nm}".')
+                return True
+            if _pupatt_cancel_rect and _pupatt_cancel_rect.collidepoint(mx, my):
+                _pupatt_view = "list"
+                _pupatt_active_slot = None
+                _pupatt_name_focus = False
+                return True
+        # swallow clicks inside the window so they don't fall through
+        if _pupatt_win_rect and _pupatt_win_rect.collidepoint(mx, my):
+            return True
+    return False
+
+
+# ── BRD Song Sets panel (Loadouts → BRD tab) ──────────────────────────────
+# Build and save named song rotations per character. A set carries four
+# job-ability toggles (Soul Voice / Clarion Call / Nightingale / Troubadour)
+# and an ordered list of songs, each flagged Real or Dummy and optionally
+# Marcato'd. Up to 4 real songs (5 when Clarion Call is on); songs are sung
+# in listed order. The packet-timed Lua singer is a separate engine (the
+# Sing action lands with it); this panel is the editor + persistence.
+_brdset_open        = False
+_brdset_view        = "list"        # "list" | "edit"
+_brdset_sets        = {}            # {name: {"ja": {...}, "songs": [...]}}
+_brdset_loaded_char = None
+_brdset_win_pos     = None
+_brdset_win_drag    = None
+_brdset_note        = None
+_brdset_confirm_del = None
+_brdset_fonts       = {}
+# editor scratch:
+_brdset_edit_name   = ""
+_brdset_edit_orig   = None
+_brdset_edit_ja     = {"soulvoice": False, "clarion": False,
+                       "nightingale": False, "troubadour": False}
+_brdset_edit_songs  = []            # [{"name","mode","marcato"}]
+_brdset_edit_dummy  = False         # editor "Dummy set" checkbox state
+_brdset_edit_dummy_rect = None
+_brdset_name_focus  = False
+_brdset_pick_for    = None
+_brdset_drag_idx    = None
+_brdset_row0_y      = 0
+_brdset_filter      = ""
+_brdset_pick_scroll = 0
+# rects rebuilt each frame:
+_brdset_win_rect    = None
+_brdset_title_rect  = None
+_brdset_close_rect  = None
+_brdset_row_rects   = []            # list view: [(edit_r, del_r, name)]
+_brdset_new_rect    = None
+_brdset_ja_rects    = []            # edit: [(rect, key)]
+_brdset_name_rect   = None
+_brdset_song_rects  = []            # edit: [(up_r, down_r, rd_r, m_r, del_r, idx)]
+_brdset_add_rect    = None
+_brdset_save_rect   = None
+_brdset_cancel_rect = None
+_brdset_pick_rects  = []            # picker: [(rect, songname)]
+_brdset_filter_rect = None
+_brdset_stop_rect   = None
+_brdset_singing      = False        # True while the Lua singer is mid-rotation
+_brdset_singing_name = None         # which saved set is currently singing
+_brdset_active       = None         # last-sung set; the floating Sing button's target
+_brdset_singbtn_rect = None         # "Show floating Sing button" toggle hit rect
+
+_BRDSET_JA = [("soulvoice", "Soul Voice"), ("clarion", "Clarion Call"),
+              ("nightingale", "Nightingale"), ("troubadour", "Troubadour")]
+
+# Curated song list for the picker. Names match the FFXI spell names so the
+# Lua singer can resolve them against resources later.
+_BRDSET_SONGS = [
+    "Advancing March", "Victory March", "Honor March",
+    "Valor Minuet", "Valor Minuet II", "Valor Minuet III",
+    "Valor Minuet IV", "Valor Minuet V",
+    "Sword Madrigal", "Blade Madrigal",
+    "Hunter's Prelude", "Archer's Prelude",
+    "Mage's Ballad", "Mage's Ballad II", "Mage's Ballad III",
+    "Army's Paeon", "Army's Paeon II", "Army's Paeon III", "Army's Paeon IV",
+    "Army's Paeon V", "Army's Paeon VI", "Army's Paeon VII", "Army's Paeon VIII",
+    "Knight's Minne", "Knight's Minne II", "Knight's Minne III",
+    "Knight's Minne IV", "Knight's Minne V",
+    "Sheepfoe Mambo", "Dragonfoe Mambo",
+    "Raptor Mazurka", "Chocobo Mazurka",
+    "Sentinel's Scherzo",
+    "Fire Carol", "Fire Carol II", "Ice Carol", "Ice Carol II",
+    "Wind Carol", "Wind Carol II", "Earth Carol", "Earth Carol II",
+    "Lightning Carol", "Lightning Carol II", "Water Carol", "Water Carol II",
+    "Light Carol", "Light Carol II", "Dark Carol", "Dark Carol II",
+    "Sinewy Etude", "Dextrous Etude", "Vivacious Etude", "Quick Etude",
+    "Learned Etude", "Spirited Etude", "Enchanting Etude",
+    "Herculean Etude", "Uncanny Etude", "Vital Etude", "Swift Etude",
+    "Sage Etude", "Logical Etude", "Bewitching Etude",
+    "Foe Lullaby", "Foe Lullaby II", "Horde Lullaby", "Horde Lullaby II",
+    "Battlefield Elegy", "Carnage Elegy",
+    "Foe Requiem", "Foe Requiem II", "Foe Requiem III", "Foe Requiem IV",
+    "Foe Requiem V", "Foe Requiem VI", "Foe Requiem VII",
+    "Fire Threnody", "Ice Threnody", "Wind Threnody", "Earth Threnody",
+    "Lightning Threnody", "Water Threnody", "Light Threnody", "Dark Threnody",
+    "Gold Capriccio", "Goblin Gavotte", "Fowl Aubade", "Herb Pastoral",
+    "Warding Round", "Maiden's Virelai", "Pining Nocturne", "Scop's Operetta",
+    "Aria of Passion",
+]
+
+
+def _brdset_font(sz, bold=False):
+    key = (sz, bold)
+    f = _brdset_fonts.get(key)
+    if f is None:
+        f = pygame.font.SysFont("Segoe UI", sz, bold=bold)
+        _brdset_fonts[key] = f
+    return f
+
+
+def _brdset_char():
+    try:
+        return _mb_lock_target() or ""
+    except Exception:
+        return ""
+
+
+def _brdset_file_for(char):
+    safe = "".join(c for c in (char or "") if c.isalnum()) or "default"
+    return os.path.join(USER_DIR, f"omniwatch_brd_song_sets_{safe}.json")
+
+
+def _brdset_norm(v):
+    ja = v.get("ja") or {}
+    songs = []
+    for s in (v.get("songs") or []):
+        if isinstance(s, dict) and s.get("name"):
+            songs.append({"name": str(s["name"]),
+                          "mode": _brdset_mode_of(s),
+                          "marcato": bool(s.get("marcato", False))})
+    return {"ja": {k: bool(ja.get(k, False))
+                   for k, _ in _BRDSET_JA}, "songs": songs,
+            "dummy": bool(v.get("dummy", False))}
+
+
+def _brdset_ensure_loaded():
+    global _brdset_sets, _brdset_loaded_char, _brdset_win_pos
+    global _brdset_view, _brdset_confirm_del
+    ch = _brdset_char()
+    if ch == _brdset_loaded_char:
+        return
+    _brdset_loaded_char = ch
+    _brdset_sets = {}
+    _brdset_win_pos = None
+    _brdset_view = "list"
+    _brdset_confirm_del = None
+    try:
+        with open(_brdset_file_for(ch), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        sets = data.get("sets")
+        if isinstance(sets, dict):
+            for k, v in sets.items():
+                if isinstance(v, dict):
+                    _brdset_sets[str(k)] = _brdset_norm(v)
+        wp = data.get("win_pos")
+        if isinstance(wp, list) and len(wp) == 2:
+            _brdset_win_pos = [int(wp[0]), int(wp[1])]
+    except Exception:
+        pass
+
+
+def _brdset_persist():
+    try:
+        with open(_brdset_file_for(_brdset_loaded_char), "w",
+                  encoding="utf-8") as f:
+            json.dump({"sets": _brdset_sets, "win_pos": _brdset_win_pos},
+                      f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] brdset save failed: {e!r}")
+
+
+def _brdset_set_note(text):
+    global _brdset_note
+    _brdset_note = (text, time.time() + 4.0)
+
+
+_BRDSET_MODES = ["none", "fulllength", "dummy", "cheer"]
+_BRDSET_MODE_LABEL = {"none": "None", "fulllength": "Full",
+                      "dummy": "Dummy", "cheer": "Cheer"}
+
+
+def _brdset_mode_of(s):
+    m = s.get("mode")
+    if m in _BRDSET_MODES:
+        return m
+    return "fulllength" if s.get("real", True) else "dummy"
+
+
+def _brdset_real_cap():
+    return 5 if _brdset_edit_ja.get("clarion") else 4
+
+
+def _brdset_real_count():
+    return sum(1 for s in _brdset_edit_songs
+               if s.get("mode", "fulllength") != "dummy")
+
+
+def _brdset_set_singing(on, name=None):
+    global _brdset_singing, _brdset_singing_name, _brdset_active
+    _brdset_singing = bool(on)
+    if not on:
+        _brdset_singing_name = None
+    elif name is not None:
+        _brdset_singing_name = name
+        _brdset_active = name
+
+
+def _brdset_set_active(name):
+    """Mark which saved set the floating Sing button sings (Trust-style
+    Active). Persisted so it survives a restart."""
+    global _brdset_active
+    _brdset_active = name
+    try:
+        save_layout()
+    except Exception:
+        pass
+
+
+def _brdset_send_sing(name):
+    s = _brdset_sets.get(name)
+    if not s:
+        _brdset_set_note("Set not found.")
+        return
+    if not s.get("songs"):
+        _brdset_set_note("Set has no songs.")
+        return
+    ja = s.get("ja", {})
+    parts = ["BRDSET", "sing",
+             "1" if ja.get("soulvoice") else "0",
+             "1" if ja.get("clarion") else "0",
+             "1" if ja.get("nightingale") else "0",
+             "1" if ja.get("troubadour") else "0"]
+    for sg in s.get("songs", []):
+        nm = str(sg.get("name", "")).replace("|", "").replace("^", "")
+        if not nm:
+            continue
+        parts.append(f'{nm}^{sg.get("mode", "fulllength")}^'
+                     f'{"1" if sg.get("marcato") else "0"}')
+    try:
+        sock_cmd_out.sendto("|".join(parts).encode("utf-8"), _cmd_addr())
+        _brdset_set_singing(True, name)
+        _brdset_set_note(f'Singing "{name}" — watch game chat.')
+    except Exception as e:
+        print(f"[OmniWatch] brdset sing send failed: {e!r}")
+
+
+def _brdset_send_stop():
+    _brdset_set_singing(False)
+    try:
+        sock_cmd_out.sendto(b"BRDSET|stop", _cmd_addr())
+        _brdset_set_note("Stop sent.")
+    except Exception as e:
+        print(f"[OmniWatch] brdset stop send failed: {e!r}")
+
+
+def _brdset_show():
+    """Open the Loadouts window on the BRD Song Sets tab."""
+    _loadouts_show("brd")
+
+
+def _brdset_clear_rects():
+    global _brdset_win_rect, _brdset_title_rect, _brdset_close_rect
+    global _brdset_new_rect, _brdset_name_rect, _brdset_add_rect
+    global _brdset_save_rect, _brdset_cancel_rect, _brdset_filter_rect
+    global _brdset_stop_rect, _brdset_singbtn_rect, _brdset_edit_dummy_rect
+    _brdset_edit_dummy_rect = None
+    _brdset_win_rect = None
+    _brdset_title_rect = None
+    _brdset_close_rect = None
+    _brdset_new_rect = None
+    _brdset_name_rect = None
+    _brdset_add_rect = None
+    _brdset_save_rect = None
+    _brdset_cancel_rect = None
+    _brdset_filter_rect = None
+    _brdset_stop_rect = None
+    _brdset_singbtn_rect = None
+    _brdset_row_rects.clear()
+    _brdset_ja_rects.clear()
+    _brdset_song_rects.clear()
+    _brdset_pick_rects.clear()
+
+
+def _brdset_btn(surface, rect, label, font, danger=False, on=False):
+    if danger:
+        bg, bd, fg = (70, 40, 40), (150, 80, 80), (235, 200, 200)
+    elif on:
+        bg, bd, fg = (54, 74, 104), (95, 130, 180), (216, 228, 245)
+    else:
+        bg, bd, fg = (34, 40, 52), (78, 88, 108), (205, 212, 224)
+    pygame.draw.rect(surface, bg, rect, border_radius=3)
+    pygame.draw.rect(surface, bd, rect, 1, border_radius=3)
+    t = font.render(label, True, fg)
+    surface.blit(t, (rect.centerx - t.get_width() // 2,
+                     rect.centery - t.get_height() // 2))
+
+
+def draw_brdset_window(surface):
+    global _brdset_win_pos, _brdset_win_rect, _brdset_title_rect
+    global _brdset_close_rect, _brdset_new_rect, _brdset_name_rect
+    global _brdset_add_rect, _brdset_save_rect, _brdset_cancel_rect
+    global _brdset_filter_rect, _brdset_row0_y
+    global _brdset_singbtn_rect, _brdset_edit_dummy_rect
+    _brdset_clear_rects()
+    if not _brdset_open:
+        return
+    _brdset_ensure_loaded()
+    f = _brdset_font(13)
+    fb = _brdset_font(13, True)
+    fs = _brdset_font(11)
+    pad, title_h, row_h = 8, 22, 24
+    w = 400
+
+    if _brdset_view == "list":
+        _nf = max(1, sum(1 for n in _brdset_sets
+                         if not _brdset_sets[n].get("dummy")))
+        _nd = max(1, sum(1 for n in _brdset_sets
+                         if _brdset_sets[n].get("dummy")))
+        body = 2 * 18 + (_nf + _nd) * row_h + 6 + 24 + 6 + 16
+    else:
+        body = (26 + 6 + 24 + 6 + 22
+                + max(1, len(_brdset_edit_songs)) * 22 + 4 + 24 + 8 + 24)
+        if _brdset_pick_for is not None:
+            body += 6 + 22 + 7 * 19
+    h = title_h + pad + body + pad + 18
+
+    if _brdset_win_pos is None:
+        _brdset_win_pos = [(surface.get_width() - w) // 2, 110]
+    x = max(0, min(int(_brdset_win_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(_brdset_win_pos[1]), surface.get_height() - h))
+    _brdset_win_pos[0], _brdset_win_pos[1] = x, y
+
+    panel = pygame.Rect(x, y, w, h)
+    _brdset_win_rect = panel
+    pygame.draw.rect(surface, COL_PANEL, panel, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel, 1, border_radius=4)
+    pygame.draw.rect(surface, COL_EV_HEADER, (x + 1, y + 1, w - 2, title_h - 1),
+                     border_radius=3)
+    _brdset_title_rect = pygame.Rect(x, y, w - 22, title_h)
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    surface.blit(fb.render("x", True, (220, 180, 180)),
+                 (close_r.x + 4, close_r.y + 1))
+    _brdset_close_rect = close_r
+
+    cy = y + title_h + pad
+    if _brdset_view == "list":
+        names_full = sorted((n for n in _brdset_sets
+                             if not _brdset_sets[n].get("dummy")),
+                            key=str.lower)
+        names_dummy = sorted((n for n in _brdset_sets
+                              if _brdset_sets[n].get("dummy")),
+                             key=str.lower)
+        if not _brdset_sets:
+            surface.blit(fs.render("No sets yet — click  + New set.",
+                                   True, (150, 158, 172)), (x + pad, cy + 4))
+            cy += row_h
+        sec_h = 18
+        for _sec_label, _sec_names in (("Full Strength", names_full),
+                                       ("Dummy", names_dummy)):
+            surface.blit(fb.render(_sec_label, True, (150, 174, 210)),
+                         (x + pad, cy + 1))
+            pygame.draw.line(surface, (58, 64, 82),
+                             (x + pad, cy + sec_h - 1),
+                             (x + w - pad, cy + sec_h - 1), 1)
+            cy += sec_h
+            if not _sec_names:
+                surface.blit(fs.render("(none)", True, (100, 106, 124)),
+                             (x + pad + 18, cy + 3))
+                cy += row_h
+                continue
+            for name in _sec_names:
+                st = _brdset_sets[name]
+                cnt = len(st["songs"])
+                is_active = (name == _brdset_active)
+                del_r = pygame.Rect(x + w - pad - 38, cy + 2, 38, row_h - 6)
+                edit_r = pygame.Rect(del_r.x - 4 - 40, cy + 2, 40, row_h - 6)
+                act_r = pygame.Rect(edit_r.x - 4 - 52, cy + 2, 52, row_h - 6)
+                tx = x + pad
+                ty = cy + (row_h - 4 - fs.get_height()) // 2
+                if is_active:
+                    pygame.draw.circle(surface, (110, 220, 140),
+                                       (tx + 4, cy + (row_h - 4) // 2), 4)
+                    tx += 14
+                label = name if len(name) <= 18 else name[:17] + "\u2026"
+                surface.blit(fs.render(label, True, (220, 224, 236)), (tx, ty))
+                surface.blit(fs.render(f"({cnt})", True, (140, 146, 162)),
+                             (tx + fs.size(label)[0] + 6, ty))
+                _brdset_btn(surface, act_r, "Active" if is_active else "Equip",
+                            fs, on=is_active)
+                _brdset_btn(surface, edit_r, "Edit", fs)
+                danger = (_brdset_confirm_del
+                          and _brdset_confirm_del[0] == name
+                          and _brdset_confirm_del[1] > time.time())
+                _brdset_btn(surface, del_r, "Sure?" if danger else "\u2715",
+                            fs, danger=bool(danger))
+                _brdset_row_rects.append((act_r, edit_r, del_r, name))
+                cy += row_h
+        cy += 6
+        new_r = pygame.Rect(x + pad, cy, 120, 24)
+        _brdset_btn(surface, new_r, "+ New set", f)
+        _brdset_new_rect = new_r
+        _sb_on = bool(setting("show_singbutton"))
+        _sbb = pygame.Rect(new_r.right + 16, cy + 5, 14, 14)
+        pygame.draw.rect(surface, (30, 34, 46), _sbb, border_radius=3)
+        pygame.draw.rect(surface,
+                         (120, 190, 140) if _sb_on else (90, 96, 116),
+                         _sbb, 1, border_radius=3)
+        if _sb_on:
+            pygame.draw.lines(surface, (140, 220, 160), False,
+                              [(_sbb.x + 3, _sbb.y + 7),
+                               (_sbb.x + 6, _sbb.y + 10),
+                               (_sbb.x + 11, _sbb.y + 4)], 2)
+        _sbl = fs.render("Show Sing button", True,
+                         (190, 200, 218) if _sb_on else (140, 146, 162))
+        surface.blit(_sbl, (_sbb.right + 6,
+                            _sbb.centery - _sbl.get_height() // 2))
+        _brdset_singbtn_rect = pygame.Rect(
+            _sbb.x, _sbb.y - 3, _sbb.width + 6 + _sbl.get_width() + 4,
+            _sbb.height + 6)
+        cy += 24 + 6
+        surface.blit(fs.render("Active marks the set the Sing button sings.",
+                               True, (110, 118, 136)), (x + pad, cy))
+    else:
+        # JA toggle row
+        jw = (w - 2 * pad - 3 * 6) // 4
+        jx = x + pad
+        for key, label in _BRDSET_JA:
+            r = pygame.Rect(jx, cy, jw, 26)
+            _brdset_btn(surface, r, label, fs, on=_brdset_edit_ja.get(key))
+            _brdset_ja_rects.append((r, key))
+            jx += jw + 6
+        cy += 26 + 6
+        # name + real-count
+        name_r = pygame.Rect(x + pad, cy, w - 2 * pad - 92, 24)
+        pygame.draw.rect(surface, (20, 22, 28), name_r, border_radius=3)
+        pygame.draw.rect(surface, (195, 160, 80) if _brdset_name_focus
+                         else (90, 100, 120), name_r, 1, border_radius=3)
+        shown = _brdset_edit_name or "set name…"
+        surface.blit(f.render(shown, True, (225, 225, 230) if _brdset_edit_name
+                              else (120, 128, 142)),
+                     (name_r.x + 5, name_r.centery - f.get_height() // 2))
+        _brdset_name_rect = name_r
+        rc = _brdset_real_count()
+        cap = _brdset_real_cap()
+        col = (200, 150, 150) if rc > cap else (170, 200, 170)
+        surface.blit(fs.render(f"Songs {rc}/{cap}", True, col),
+                     (name_r.right + 10, cy + 6))
+        cy += 24 + 6
+        # "Dummy" set toggle — groups this set under the Dummy section.
+        _dchk = pygame.Rect(x + pad, cy + 2, 14, 14)
+        pygame.draw.rect(surface, (30, 34, 46), _dchk, border_radius=3)
+        pygame.draw.rect(surface,
+                         (205, 170, 110) if _brdset_edit_dummy else (90, 96, 116),
+                         _dchk, 1, border_radius=3)
+        if _brdset_edit_dummy:
+            pygame.draw.lines(surface, (225, 190, 130), False,
+                              [(_dchk.x + 3, _dchk.y + 7),
+                               (_dchk.x + 6, _dchk.y + 10),
+                               (_dchk.x + 11, _dchk.y + 4)], 2)
+        _dlbl = fs.render("Dummy", True,
+                          (210, 190, 150) if _brdset_edit_dummy
+                          else (150, 158, 172))
+        surface.blit(_dlbl, (_dchk.right + 6,
+                             _dchk.centery - _dlbl.get_height() // 2))
+        _brdset_edit_dummy_rect = pygame.Rect(
+            _dchk.x, _dchk.y - 3,
+            _dchk.width + 6 + _dlbl.get_width() + 4, _dchk.height + 6)
+        cy += 22
+        # song rows
+        if not _brdset_edit_songs:
+            surface.blit(fs.render("No songs yet — + Add song below.", True,
+                                   (150, 158, 172)), (x + pad, cy + 3))
+            cy += 22
+        _brdset_row0_y = cy
+        for i, sg in enumerate(_brdset_edit_songs):
+            drag_r = pygame.Rect(x + pad, cy + 1, 18, 18)
+            del_r = pygame.Rect(x + w - pad - 18, cy + 1, 18, 18)
+            m_r = pygame.Rect(del_r.x - 4 - 26, cy + 1, 26, 18)
+            rd_r = pygame.Rect(m_r.x - 4 - 52, cy + 1, 52, 18)
+            name_r = pygame.Rect(x + pad + 22, cy + 1,
+                                 rd_r.x - 4 - (x + pad + 22), 18)
+            dragging = (_brdset_drag_idx == i)
+            pygame.draw.rect(surface, (44, 50, 64) if dragging else (30, 34, 44),
+                             drag_r, border_radius=3)
+            for _ln in range(3):
+                _ly = drag_r.y + 5 + _ln * 4
+                pygame.draw.line(surface, (150, 158, 172),
+                                 (drag_r.x + 4, _ly), (drag_r.right - 4, _ly), 1)
+            pygame.draw.rect(surface, (24, 27, 34), name_r, border_radius=3)
+            pygame.draw.rect(surface, (195, 160, 80) if _brdset_pick_for == i
+                             else (70, 78, 94), name_r, 1, border_radius=3)
+            label = sg["name"] or "(pick song)"
+            surface.blit(fs.render(label[:30], True, (225, 228, 234)
+                                   if sg["name"] else (130, 138, 152)),
+                         (name_r.x + 5, name_r.centery - fs.get_height() // 2))
+            surface.blit(fs.render("v", True, (150, 158, 172)),
+                         (name_r.right - 12, name_r.centery - fs.get_height() // 2))
+            _mode = sg.get("mode", "fulllength")
+            _brdset_btn(surface, rd_r, _BRDSET_MODE_LABEL.get(_mode, "Full"), fs,
+                        on=(_mode in ("fulllength", "cheer")),
+                        danger=(_mode == "dummy"))
+            _brdset_btn(surface, m_r, "M", fs, on=sg["marcato"])
+            _brdset_btn(surface, del_r, "x", fs, danger=True)
+            _brdset_song_rects.append((drag_r, name_r, rd_r, m_r, del_r, i))
+            cy += 22
+        cy += 4
+        add_r = pygame.Rect(x + pad, cy, w - 2 * pad, 24)
+        _brdset_btn(surface, add_r, "+ Add song", f)
+        _brdset_add_rect = add_r
+        cy += 24 + 8
+        save_r = pygame.Rect(x + w - pad - 64 - 4 - 64, cy, 64, 24)
+        cancel_r = pygame.Rect(x + w - pad - 64, cy, 64, 24)
+        _brdset_btn(surface, save_r, "Save", f, on=True)
+        _brdset_btn(surface, cancel_r, "Cancel", f)
+        _brdset_save_rect = save_r
+        _brdset_cancel_rect = cancel_r
+        cy += 24
+        if _brdset_pick_for is not None:
+            cy += 6
+            filt_r = pygame.Rect(x + pad, cy, w - 2 * pad, 22)
+            pygame.draw.rect(surface, (20, 22, 28), filt_r, border_radius=3)
+            pygame.draw.rect(surface, (195, 160, 80), filt_r, 1, border_radius=3)
+            ftxt = _brdset_filter or "type to filter songs…"
+            surface.blit(fs.render(ftxt, True, (225, 225, 230) if _brdset_filter
+                                   else (120, 128, 142)),
+                         (filt_r.x + 5, filt_r.centery - fs.get_height() // 2))
+            _brdset_filter_rect = filt_r
+            cy += 22
+            flt = _brdset_filter.lower()
+            shown = [s for s in _BRDSET_SONGS if flt in s.lower()]
+            vis = 7
+            start = max(0, min(_brdset_pick_scroll, max(0, len(shown) - vis)))
+            for nm in shown[start:start + vis]:
+                rr = pygame.Rect(x + pad, cy, w - 2 * pad, 19)
+                pygame.draw.rect(surface, (18, 20, 26), rr)
+                surface.blit(fs.render(nm[:46], True, (205, 214, 226)),
+                             (rr.x + 5, rr.y + 1))
+                _brdset_pick_rects.append((rr, nm))
+                cy += 19
+            if len(shown) > vis:
+                more = fs.render(f"{len(shown)} matches (scroll)", True,
+                                 (130, 138, 152))
+                surface.blit(more, (x + w - pad - more.get_width() - 2, cy))
+
+    if _brdset_note and _brdset_note[1] > time.time():
+        nt = fs.render(_brdset_note[0][:62], True, (180, 210, 170))
+        surface.blit(nt, (x + pad, y + h - 16))
+
+
+def _brdset_handle_event(event):
+    global _brdset_open, _brdset_view, _brdset_win_drag, _brdset_confirm_del
+    global _brdset_edit_name, _brdset_edit_orig, _brdset_edit_songs
+    global _brdset_edit_ja, _brdset_name_focus, _brdset_pick_for, _brdset_drag_idx
+    global _brdset_filter, _brdset_pick_scroll, _brdset_win_pos
+    global _brdset_edit_dummy
+    if not _brdset_open:
+        return False
+
+    if event.type == pygame.KEYDOWN and (_brdset_name_focus or _brdset_pick_for is not None):
+        if event.key == pygame.K_ESCAPE:
+            _brdset_name_focus = False
+            _brdset_pick_for = None
+            return True
+        if event.key == pygame.K_RETURN:
+            _brdset_name_focus = False
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            if _brdset_name_focus:
+                _brdset_edit_name = _brdset_edit_name[:-1]
+            else:
+                _brdset_filter = _brdset_filter[:-1]
+            return True
+        ch = event.unicode
+        if ch and 32 <= ord(ch) < 127:
+            if _brdset_name_focus:
+                _brdset_edit_name = (_brdset_edit_name + ch)[:32]
+            else:
+                _brdset_filter = (_brdset_filter + ch)[:32]
+                _brdset_pick_scroll = 0
+            return True
+        return True
+
+    if event.type == pygame.MOUSEWHEEL:
+        mx, my = pygame.mouse.get_pos()
+        if _brdset_win_rect and _brdset_win_rect.collidepoint(mx, my):
+            if _brdset_pick_for is not None:
+                _brdset_pick_scroll = max(0, _brdset_pick_scroll - event.y)
+            return True
+
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        _was_win_drag = _brdset_win_drag is not None
+        _brdset_win_drag = None
+        _brdset_drag_idx = None
+        if _was_win_drag:
+            # Persist the moved window position so the panel reopens where it
+            # was left (the shared loadouts position is saved by save_layout).
+            try:
+                save_layout()
+            except Exception:
+                pass
+        return False
+
+    if event.type == pygame.MOUSEMOTION and _brdset_drag_idx is not None:
+        n = len(_brdset_edit_songs)
+        tgt = max(0, min((event.pos[1] - _brdset_row0_y) // 22, n - 1))
+        di = _brdset_drag_idx
+        while di < tgt:
+            _brdset_edit_songs[di], _brdset_edit_songs[di + 1] = (
+                _brdset_edit_songs[di + 1], _brdset_edit_songs[di])
+            di += 1
+        while di > tgt:
+            _brdset_edit_songs[di], _brdset_edit_songs[di - 1] = (
+                _brdset_edit_songs[di - 1], _brdset_edit_songs[di])
+            di -= 1
+        _brdset_drag_idx = di
+        return True
+    if event.type == pygame.MOUSEMOTION and _brdset_win_drag is not None:
+        mx, my = event.pos
+        _brdset_win_pos = [mx - _brdset_win_drag[0], my - _brdset_win_drag[1]]
+        return True
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if _brdset_close_rect and _brdset_close_rect.collidepoint(mx, my):
+            _brdset_open = False
+            return True
+        if _brdset_title_rect and _brdset_title_rect.collidepoint(mx, my):
+            _brdset_win_drag = (mx - _brdset_win_pos[0], my - _brdset_win_pos[1])
+            return True
+
+        if _brdset_view == "list":
+            for act_r, edit_r, del_r, name in _brdset_row_rects:
+                if act_r.collidepoint(mx, my):
+                    _brdset_set_active(name)
+                    return True
+                if edit_r.collidepoint(mx, my):
+                    st = _brdset_sets.get(name) or {}
+                    nrm = _brdset_norm(st)
+                    _brdset_edit_ja = dict(nrm["ja"])
+                    _brdset_edit_songs = [dict(s) for s in nrm["songs"]]
+                    _brdset_edit_dummy = bool(nrm.get("dummy"))
+                    _brdset_edit_name = name
+                    _brdset_edit_orig = name
+                    _brdset_name_focus = False
+                    _brdset_pick_for = None
+                    _brdset_filter = ""
+                    _brdset_view = "edit"
+                    return True
+                if del_r.collidepoint(mx, my):
+                    if (_brdset_confirm_del and _brdset_confirm_del[0] == name
+                            and _brdset_confirm_del[1] > time.time()):
+                        _brdset_sets.pop(name, None)
+                        _brdset_persist()
+                        _brdset_confirm_del = None
+                        _brdset_set_note(f'Deleted "{name}".')
+                    else:
+                        _brdset_confirm_del = (name, time.time() + 3.0)
+                    return True
+            if _brdset_new_rect and _brdset_new_rect.collidepoint(mx, my):
+                _brdset_edit_ja = {k: False for k, _ in _BRDSET_JA}
+                _brdset_edit_songs = []
+                _brdset_edit_dummy = False
+                _brdset_edit_name = ""
+                _brdset_edit_orig = None
+                _brdset_name_focus = True
+                _brdset_pick_for = None
+                _brdset_filter = ""
+                _brdset_view = "edit"
+                return True
+            if _brdset_singbtn_rect \
+                    and _brdset_singbtn_rect.collidepoint(mx, my):
+                set_setting("show_singbutton",
+                            not setting("show_singbutton"))
+                return True
+        else:
+            for r, key in _brdset_ja_rects:
+                if r.collidepoint(mx, my):
+                    if (key == "clarion" and _brdset_edit_ja.get("clarion")
+                            and _brdset_real_count() > 4):
+                        _brdset_set_note("Remove a real song before turning "
+                                         "off Clarion Call.")
+                    else:
+                        _brdset_edit_ja[key] = not _brdset_edit_ja.get(key)
+                    return True
+            if _brdset_name_rect and _brdset_name_rect.collidepoint(mx, my):
+                _brdset_name_focus = True
+                _brdset_pick_for = None
+                return True
+            if (_brdset_edit_dummy_rect
+                    and _brdset_edit_dummy_rect.collidepoint(mx, my)):
+                _brdset_edit_dummy = not _brdset_edit_dummy
+                return True
+            for drag_r, name_r, rd_r, m_r, del_r, i in _brdset_song_rects:
+                if drag_r.collidepoint(mx, my):
+                    _brdset_drag_idx = i
+                    _brdset_pick_for = None
+                    return True
+                if name_r.collidepoint(mx, my):
+                    _brdset_pick_for = None if _brdset_pick_for == i else i
+                    _brdset_name_focus = False
+                    _brdset_filter = ""
+                    _brdset_pick_scroll = 0
+                    return True
+                if rd_r.collidepoint(mx, my):
+                    sg = _brdset_edit_songs[i]
+                    cur = sg.get("mode", "fulllength")
+                    j = (_BRDSET_MODES.index(cur) + 1) % len(_BRDSET_MODES) \
+                        if cur in _BRDSET_MODES else 0
+                    sg["mode"] = _BRDSET_MODES[j]
+                    return True
+                if m_r.collidepoint(mx, my):
+                    _brdset_edit_songs[i]["marcato"] = not \
+                        _brdset_edit_songs[i]["marcato"]
+                    return True
+                if del_r.collidepoint(mx, my):
+                    _brdset_edit_songs.pop(i)
+                    _brdset_pick_for = None
+                    return True
+            if _brdset_add_rect and _brdset_add_rect.collidepoint(mx, my):
+                _brdset_edit_songs.append(
+                    {"name": "", "mode": "fulllength", "marcato": False})
+                _brdset_pick_for = len(_brdset_edit_songs) - 1
+                _brdset_name_focus = False
+                _brdset_filter = ""
+                _brdset_pick_scroll = 0
+                return True
+            if _brdset_pick_for is not None:
+                for rr, nm in _brdset_pick_rects:
+                    if rr.collidepoint(mx, my):
+                        if 0 <= _brdset_pick_for < len(_brdset_edit_songs):
+                            _brdset_edit_songs[_brdset_pick_for]["name"] = nm
+                        _brdset_pick_for = None
+                        return True
+                if _brdset_filter_rect and _brdset_filter_rect.collidepoint(mx, my):
+                    return True
+            if _brdset_save_rect and _brdset_save_rect.collidepoint(mx, my):
+                nm = _brdset_edit_name.strip().replace("|", "").replace(";", "")
+                if not nm:
+                    _brdset_set_note("Give the set a name first.")
+                    return True
+                if _brdset_real_count() > _brdset_real_cap():
+                    _brdset_set_note(f"Too many real songs "
+                                     f"(cap {_brdset_real_cap()}).")
+                    return True
+                if _brdset_edit_orig and _brdset_edit_orig != nm:
+                    _brdset_sets.pop(_brdset_edit_orig, None)
+                _brdset_sets[nm] = {"ja": dict(_brdset_edit_ja),
+                                    "songs": [dict(s) for s in _brdset_edit_songs],
+                                    "dummy": bool(_brdset_edit_dummy)}
+                _brdset_persist()
+                _brdset_view = "list"
+                _brdset_pick_for = None
+                _brdset_name_focus = False
+                _brdset_set_note(f'Saved "{nm}".')
+                return True
+            if _brdset_cancel_rect and _brdset_cancel_rect.collidepoint(mx, my):
+                _brdset_view = "list"
+                _brdset_pick_for = None
+                _brdset_name_focus = False
+                return True
+        if _brdset_win_rect and _brdset_win_rect.collidepoint(mx, my):
+            return True
+    return False
+
+
+# ── Loadouts window (tabbed wrapper: BLU / Trusts / PUP) ──────────────────
+# One Settings entry, three tabs. This is a thin coordinator over the three
+# existing panels: it drives their open-flags + a shared window position from
+# one state, delegates draw/input to the active tab's own panel unchanged,
+# and paints the tab strip over that panel's title bar.
+_loadouts_open      = False
+_loadouts_tab       = "blu"      # "blu" | "trust" | "pup"
+_loadouts_pos       = globals().get("_loadouts_pos_loaded")  # shared [x,y], restored by load_layout
+_loadouts_tab_rects = []         # [(rect, key)] rebuilt each frame
+
+
+def _loadouts_pre():
+    """Push shared open/position state down into the active sub-panel."""
+    global _blusets_open, _trustsets_open, _pupatt_open, _brdset_open
+    global _blusets_win_pos, _trustsets_win_pos, _pupatt_win_pos, _brdset_win_pos
+    _blusets_open   = (_loadouts_open and _loadouts_tab == "blu")
+    _trustsets_open = (_loadouts_open and _loadouts_tab == "trust")
+    _pupatt_open    = (_loadouts_open and _loadouts_tab == "pup")
+    _brdset_open    = (_loadouts_open and _loadouts_tab == "brd")
+    if _loadouts_pos is not None:
+        if _blusets_open:   _blusets_win_pos   = list(_loadouts_pos)
+        if _trustsets_open: _trustsets_win_pos = list(_loadouts_pos)
+        if _pupatt_open:    _pupatt_win_pos    = list(_loadouts_pos)
+        if _brdset_open:    _brdset_win_pos    = list(_loadouts_pos)
+
+
+def _loadouts_post():
+    """Read the active sub-panel's (possibly dragged) position back up."""
+    global _loadouts_pos
+    src = (_blusets_win_pos if _loadouts_tab == "blu" else
+           _trustsets_win_pos if _loadouts_tab == "trust" else
+           _brdset_win_pos if _loadouts_tab == "brd" else
+           _pupatt_win_pos)
+    if src is not None:
+        _loadouts_pos = list(src)
+
+
+def _loadouts_draw_tabs_overlay(surface):
+    _loadouts_tab_rects.clear()
+    tr = (_blusets_title_rect if _loadouts_tab == "blu" else
+          _trustsets_title_rect if _loadouts_tab == "trust" else
+          _brdset_title_rect if _loadouts_tab == "brd" else
+          _pupatt_title_rect)
+    if tr is None:
+        return
+    font = _pupatt_font(11, True)
+    th = min(16, tr.height - 4)
+    ty = tr.y + (tr.height - th) // 2
+    tx = tr.x + 8
+    for key, label in (("blu", "BLU"), ("trust", "Trusts"), ("pup", "PUP"), ("brd", "BRD")):
+        r = pygame.Rect(tx, ty, 54, th)
+        on = (_loadouts_tab == key)
+        pygame.draw.rect(surface, (54, 74, 104) if on else (28, 32, 42),
+                         r, border_radius=3)
+        pygame.draw.rect(surface, (95, 130, 180) if on else (62, 68, 82),
+                         r, 1, border_radius=3)
+        t = font.render(label, True,
+                        (216, 228, 245) if on else (150, 158, 172))
+        surface.blit(t, (r.centerx - t.get_width() // 2,
+                         r.centery - t.get_height() // 2))
+        _loadouts_tab_rects.append((r, key))
+        tx += 54 + 3
+
+
+def draw_loadouts_window(surface):
+    if not _loadouts_open:
+        return
+    _loadouts_pre()
+    if _loadouts_tab == "blu":
+        draw_blusets_window(surface)
+    elif _loadouts_tab == "trust":
+        draw_trustsets_window(surface)
+    elif _loadouts_tab == "brd":
+        draw_brdset_window(surface)
+    else:
+        draw_pupatt_window(surface)
+    _loadouts_post()
+    _loadouts_draw_tabs_overlay(surface)
+
+
+def _loadouts_handle_event(event):
+    global _loadouts_open, _loadouts_tab
+    if not _loadouts_open:
+        return False
+    _loadouts_pre()
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        for r, key in _loadouts_tab_rects:
+            if r.collidepoint(mx, my):
+                if key != _loadouts_tab:
+                    _loadouts_tab = key
+                    if key == "pup":
+                        _pupatt_request_sync()
+                return True
+    if _loadouts_tab == "blu":
+        consumed = _blusets_handle_event(event)
+    elif _loadouts_tab == "trust":
+        consumed = _trustsets_handle_event(event)
+    elif _loadouts_tab == "brd":
+        consumed = _brdset_handle_event(event)
+    else:
+        consumed = _pupatt_handle_event(event)
+    _loadouts_post()
+    if ((_loadouts_tab == "blu" and not _blusets_open)
+            or (_loadouts_tab == "trust" and not _trustsets_open)
+            or (_loadouts_tab == "brd" and not _brdset_open)
+            or (_loadouts_tab == "pup" and not _pupatt_open)):
+        _loadouts_open = False
+    return consumed
+
+
+def _loadouts_show(tab="blu"):
+    """Open the Loadouts window (Settings → Misc → Loadouts) on a tab."""
+    global _loadouts_open, _loadouts_tab, settings_menu_open
+    if tab not in ("blu", "trust", "pup", "brd"):
+        tab = "blu"
+    _loadouts_tab = tab
+    _loadouts_open = True
+    settings_menu_open = False
+    try:
+        _blusets_ensure_loaded()
+        _trustsets_ensure_loaded()
+        _pupatt_ensure_loaded()
+        _brdset_ensure_loaded()
+    except Exception:
+        pass
+    if tab == "pup":
+        _pupatt_request_sync()
+
+
 def draw_blusets_window(surface):
     """The main BLU Spellsets window (list view / edit view)."""
     global _blusets_win_rect, _blusets_title_rect, _blusets_close_rect
@@ -22488,6 +24531,27 @@ def _blusets_open_wiki(nm):
     return ok
 
 
+def _dev_panel_input_blocked():
+    """True when an overlay drawn ABOVE the dev panels (BLU Spellsets,
+    Trust Sets, Scan Zone) is open, so those panels must yield input to
+    whatever is painted over them. The dev panels draw first (lowest) but
+    their handlers run early in the event loop, so without this gate they
+    swallow clicks meant for the overlay on top (the recurring 'panel X
+    won't click' bug). Every flag here is something drawn after the dev
+    panels in the main draw order -- add new top overlays here, once."""
+    return bool(
+        settings_menu_open
+        or inventory_dropdown_open
+        or char_view_dropdown_open
+        or sim_window_open or sim_import_open
+        or campaigns_modal_open or checklist_modal_open
+        or clock_modal_open or profile_name_modal_open
+        or currency_settings_modal_open or party_settings_modal_open
+        or display_settings_modal_open or header_settings_modal_open
+        or inventory_settings_modal_open or statistics_settings_modal_open
+    )
+
+
 def _blusets_handle_event(event):
     """All input for the BLU Spellsets launcher + window. Returns True
     when the event was consumed (callers skip their own handling)."""
@@ -22652,6 +24716,851 @@ def _blusets_handle_event(event):
     return False
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Trust Sets — save named groups of up to five trusts and mark one active
+# ════════════════════════════════════════════════════════════════════════
+# Mirrors the BLU Spellsets manager (same window chrome, list/edit views,
+# JSON persistence, hover tooltips) but for trusts: a flat, alphabetical
+# list of the trusts THIS character owns (from the TRUSTS| snapshot), each
+# row showing the trust's job; tick up to five into a named set. "Equip"
+# marks a set active (the green dot) — it designates which set the Phase-2
+# "Call Trust" button will summon; it has no in-game effect on its own.
+# The hover tooltip (job + abilities/traits) is read from the trusts.json
+# DB. Owned trusts live in checklist_known["trusts"]["auto"] as DB keys;
+# sets persist per-character to omniwatch_trust_sets_<char>.json.
+
+_TRUSTSET_MAX = 5
+
+_trustsets_open        = False
+_trustsets_view        = "list"      # "list" | "edit"
+_trustsets_sets        = {}          # name -> [trust display names]
+_trustsets_active      = None        # name of the active/equipped set
+_trustsets_loaded_char = None
+_trustsets_win_pos     = None
+_trustsets_scroll      = 0
+_trustsets_note        = None        # (text, expire_ts)
+_trustsets_confirm_del = None        # (set_name, expire_ts)
+
+_trustsets_edit_name   = ""
+_trustsets_edit_orig   = None
+_trustsets_edit_order  = []          # lowercased selected trust names, IN
+                                     # CALL ORDER (party position = index);
+                                     # appending adds to the next slot
+_trustsets_name_focus  = False
+
+_trustsets_win_drag    = None
+_trustsets_sb_drag     = None
+
+_trustsets_win_rect    = None
+_trustsets_title_rect  = None
+_trustsets_close_rect  = None
+_trustsets_new_rect    = None
+_trustsets_name_rect   = None
+_trustsets_save_rect   = None
+_trustsets_cancel_rect = None
+_trustsets_tt_toggle_rect = None
+_trustsets_calltrust_rect = None
+_trustsets_row_rects   = []          # list view: (r_eq, r_edit, r_del, name)
+_trustsets_trust_rects = []          # edit view: (row_rect, name_rect, name)
+_trustsets_order_rects = []          # edit view right panel:
+                                     # (row_rect, del_rect, key)
+_trustsets_order_drag  = None        # key of the row being dragged, or None
+_trustsets_order_meta  = None        # (rows_top, row_h, count) for drag math
+_trustsets_sb_rect     = None
+_trustsets_sb_meta     = None
+
+
+def _trustsets_file_for(char):
+    safe = "".join(c for c in (char or "") if c.isalnum()) or "default"
+    return os.path.join(USER_DIR, f"omniwatch_trust_sets_{safe}.json")
+
+
+def _trustsets_ensure_loaded():
+    """(Re)load sets + active flag when the locked character changes."""
+    global _trustsets_sets, _trustsets_loaded_char, _trustsets_active
+    global _trustsets_win_pos, _trustsets_view, _trustsets_confirm_del
+    ch = _blusets_char()
+    if ch == _trustsets_loaded_char:
+        return
+    _trustsets_loaded_char = ch
+    _trustsets_sets = {}
+    _trustsets_active = None
+    _trustsets_win_pos = None
+    _trustsets_view = "list"
+    _trustsets_confirm_del = None
+    try:
+        with open(_trustsets_file_for(ch), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        sets = data.get("sets")
+        if isinstance(sets, dict):
+            for k, v in sets.items():
+                if isinstance(v, list):
+                    _trustsets_sets[str(k)] = [str(s) for s in v
+                                               if str(s).strip()]
+        act = data.get("active")
+        if isinstance(act, str) and act in _trustsets_sets:
+            _trustsets_active = act
+        wp = data.get("win_pos")
+        if isinstance(wp, list) and len(wp) == 2:
+            _trustsets_win_pos = [int(wp[0]), int(wp[1])]
+    except Exception:
+        pass
+
+
+def _trustsets_persist():
+    try:
+        with open(_trustsets_file_for(_trustsets_loaded_char), "w",
+                  encoding="utf-8") as f:
+            json.dump({"sets": _trustsets_sets,
+                       "active": _trustsets_active,
+                       "win_pos": _trustsets_win_pos}, f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] trust sets save failed: {e!r}")
+
+
+def _trustsets_set_note(text):
+    global _trustsets_note
+    _trustsets_note = (text, time.time() + 4.0)
+
+
+def _trustsets_owned():
+    """Owned trusts as (display_name, record_or_None), alphabetical.
+
+    checklist_known["trusts"]["auto"] holds trusts.json DB keys (plus raw
+    normalized names for trusts our DB doesn't know). Resolve each to a
+    record for the display name + job; unknown keys fall back to a
+    title-cased label and carry no record (so no tooltip)."""
+    try:
+        keys = checklist_known["trusts"]["auto"]
+    except Exception:
+        keys = set()
+    db = (_trusts_db or {}).get("trusts", {}) or {}
+    seen = {}
+    for k in keys:
+        rec = db.get(k)
+        if rec:
+            disp = rec.get("name") or str(k).replace("_", " ").title()
+        else:
+            disp = str(k).replace("_", " ").title()
+        seen[disp.lower()] = (disp, rec)
+    return [seen[j] for j in sorted(seen.keys())]
+
+
+def _trustsets_record_for(name):
+    """Find a trust record by display name (case-insensitive)."""
+    db = (_trusts_db or {}).get("trusts", {}) or {}
+    low = (name or "").lower()
+    for v in db.values():
+        if (v.get("name") or "").lower() == low:
+            return v
+    try:
+        return lookup_trust(name)
+    except Exception:
+        return None
+
+
+def _trustsets_chunk(items, width_chars=42):
+    """Comma-join items, wrapping into lines under ~width_chars."""
+    out, cur = [], ""
+    for it in items:
+        piece = (", " if cur else "") + it
+        if cur and len(cur) + len(piece) > width_chars:
+            out.append(cur)
+            cur = it
+        else:
+            cur += piece
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _trustsets_tooltip_info(name):
+    """draw_item_tooltip() info dict for a trust: job (+role), then its
+    job abilities and traits, read from the trusts.json DB."""
+    rec = _trustsets_record_for(name)
+    lines = []
+
+    def add(text, color=None):
+        lines.append([(text, color)] if color else text)
+
+    if rec:
+        job = (rec.get("job") or "").strip()
+        role = (rec.get("role") or "").strip()
+        if job and role:
+            add("Job: " + job + "  ·  " + role)
+        elif job:
+            add("Job: " + job)
+        elif role:
+            add("Role: " + role)
+        abils = [str(a) for a in (rec.get("job_abilities") or [])
+                 if str(a).strip()]
+        traits = [str(a) for a in (rec.get("job_traits") or [])
+                  if str(a).strip()]
+        if abils:
+            add("Abilities:", (150, 200, 170))
+            for ln in _trustsets_chunk(abils):
+                add("  " + ln)
+        if traits:
+            add("Traits:", (170, 180, 150))
+            for ln in _trustsets_chunk(traits):
+                add("  " + ln)
+        if not abils and not traits:
+            add("No listed abilities.", (150, 156, 172))
+    else:
+        add("No data for this trust.", (150, 156, 172))
+    return {"name": name, "item_id": 0, "stat_lines": lines,
+            "stat_bonus_lines": [], "footer_lines": []}
+
+
+def _trustsets_open_wiki(nm):
+    """Open a trust's bg-wiki page (same opener BLU sets uses)."""
+    from urllib.parse import quote
+    url = ("https://www.bg-wiki.com/ffxi/"
+           + quote(nm.replace(" ", "_"), safe="_'-.()"))
+    ok = False
+    try:
+        if os.name == "nt":
+            os.startfile(url)
+            ok = True
+    except Exception as e:
+        print(f"[OmniWatch][trustsets] startfile failed: {e}")
+    if not ok:
+        try:
+            import webbrowser
+            ok = bool(webbrowser.open(url))
+        except Exception as e:
+            print(f"[OmniWatch][trustsets] webbrowser failed: {e}")
+    _trustsets_set_note(("bg-wiki: " + nm) if ok
+                        else "Couldn't open browser — see session log")
+    return ok
+
+
+def _trustsets_set_active(name):
+    """Mark a set active (the green dot) — designates which set the
+    Call Trust button summons. No in-game effect on its own."""
+    global _trustsets_active
+    trusts = _trustsets_sets.get(name) or []
+    if not trusts:
+        _trustsets_set_note("Set is empty — nothing to call.")
+        return
+    _trustsets_active = name
+    _trustsets_persist()
+    _trustsets_set_note(f'"{name}" is now the active trust set.')
+
+
+def _trustsets_clear_rects():
+    global _trustsets_win_rect, _trustsets_title_rect, _trustsets_close_rect
+    global _trustsets_new_rect, _trustsets_name_rect, _trustsets_save_rect
+    global _trustsets_cancel_rect, _trustsets_tt_toggle_rect
+    global _trustsets_sb_rect, _trustsets_sb_meta
+    _trustsets_win_rect = None
+    _trustsets_title_rect = None
+    _trustsets_close_rect = None
+    _trustsets_new_rect = None
+    _trustsets_name_rect = None
+    _trustsets_save_rect = None
+    _trustsets_cancel_rect = None
+    _trustsets_tt_toggle_rect = None
+    _trustsets_calltrust_rect = None
+    _trustsets_row_rects.clear()
+    _trustsets_trust_rects.clear()
+    _trustsets_order_rects.clear()
+    _trustsets_sb_rect = None
+    _trustsets_sb_meta = None
+
+
+def _trustsets_show():
+    """Open the Loadouts window on the Trust Sets tab."""
+    _loadouts_show("trust")
+
+
+def _trustsets_open_editor(orig_name=None):
+    global _trustsets_view, _trustsets_edit_name, _trustsets_edit_orig
+    global _trustsets_edit_order, _trustsets_name_focus, _trustsets_scroll
+    global _trustsets_order_drag
+    _trustsets_order_drag = None
+    _trustsets_view = "edit"
+    _trustsets_scroll = 0
+    _trustsets_edit_orig = orig_name
+    if orig_name:
+        _trustsets_edit_name = orig_name
+        # Preserve the saved call order (the list is already ordered).
+        _trustsets_edit_order = [s.lower()
+                                 for s in (_trustsets_sets.get(orig_name) or [])]
+        _trustsets_name_focus = False
+    else:
+        _trustsets_edit_name = ""
+        _trustsets_edit_order = []
+        _trustsets_name_focus = True
+
+
+def _trustsets_editor_save():
+    global _trustsets_view, _trustsets_scroll, _trustsets_active
+    name = _trustsets_edit_name.strip()
+    if not name:
+        _trustsets_set_note("Give the set a name first.")
+        return
+    if len(_trustsets_edit_order) > _TRUSTSET_MAX:
+        _trustsets_set_note(f"A set holds at most {_TRUSTSET_MAX} trusts.")
+        return
+    # Persist with proper display casing from the owned list where we can,
+    # KEEPING the call order (party position) the user arranged.
+    case = {d.lower(): d for d, _ in _trustsets_owned()}
+    chosen = [case.get(s, s) for s in _trustsets_edit_order]
+    if _trustsets_edit_orig and _trustsets_edit_orig != name:
+        _trustsets_sets.pop(_trustsets_edit_orig, None)
+        if _trustsets_active == _trustsets_edit_orig:
+            _trustsets_active = name
+    _trustsets_sets[name] = chosen
+    _trustsets_persist()
+    _trustsets_set_note(f'Saved "{name}" ({len(chosen)} trusts).')
+    _trustsets_view = "list"
+    _trustsets_scroll = 0
+
+
+def draw_trustsets_window(surface):
+    """The Trust Sets window (list view / edit view)."""
+    global _trustsets_win_rect, _trustsets_title_rect, _trustsets_close_rect
+    global _trustsets_new_rect, _trustsets_name_rect, _trustsets_save_rect
+    global _trustsets_cancel_rect, _trustsets_win_pos, _trustsets_scroll
+    global _trustsets_note, _trustsets_tt_toggle_rect
+    global _trustsets_calltrust_rect
+    global _trustsets_sb_rect, _trustsets_sb_meta
+    global _trustsets_order_meta
+    if not _trustsets_open:
+        return
+    _trustsets_ensure_loaded()
+
+    W = 400 if _trustsets_view == "list" else 580
+    title_h, foot_h, note_h = 26, 34, 18
+    f_t = _blusets_font(13, bold=True)
+    f_r = _blusets_font(12)
+    f_s = _blusets_font(11)
+
+    if _trustsets_view == "list":
+        names = sorted(_trustsets_sets.keys(), key=str.lower)
+        row_h = 26
+        content_h = max(row_h, len(names) * row_h) + 6
+        if not names:
+            content_h = 40
+        strip_h = 0
+    else:
+        owned = _trustsets_owned()
+        row_h = 20
+        content_h = max(row_h, len(owned) * row_h) + 6
+        if not owned:
+            content_h = 44
+        # Keep the body tall enough that the right-hand Call Order panel can
+        # always show its header + all five slots, even with few trusts owned.
+        content_h = max(content_h, 18 + _TRUSTSET_MAX * 22 + 6)
+        strip_h = 34
+
+    max_h = min(HEIGHT - 60, 560)
+    body_h = min(content_h, max_h - title_h - strip_h - foot_h - note_h)
+    H = title_h + strip_h + body_h + foot_h + note_h
+
+    if _trustsets_win_pos is None:
+        _trustsets_win_pos = [max(10, (WIDTH - W) // 2),
+                              max(10, (HEIGHT - H) // 3)]
+    x0 = max(0, min(int(_trustsets_win_pos[0]), WIDTH - W))
+    y0 = max(0, min(int(_trustsets_win_pos[1]), HEIGHT - title_h))
+    _trustsets_win_rect = pygame.Rect(x0, y0, W, H)
+
+    draw_panel_shadow(surface, _trustsets_win_rect, radius=6)
+    pygame.draw.rect(surface, (24, 26, 34), _trustsets_win_rect,
+                     border_radius=6)
+    _trustsets_title_rect = pygame.Rect(x0, y0, W, title_h)
+    pygame.draw.rect(surface, (34, 38, 52), _trustsets_title_rect,
+                     border_top_left_radius=6, border_top_right_radius=6)
+    draw_bevel(surface, _trustsets_win_rect, radius=6)
+    pygame.draw.rect(surface, (78, 86, 110), _trustsets_win_rect, 1,
+                     border_radius=6)
+    ttl = "TRUST SETS" if _trustsets_view == "list" else (
+        "EDIT SET" if _trustsets_edit_orig else "NEW SET")
+    surface.blit(f_t.render(ttl, True, (200, 210, 230)), (x0 + 10, y0 + 5))
+    _trustsets_close_rect = pygame.Rect(x0 + W - 22, y0 + 5, 16, 16)
+    hov = _trustsets_close_rect.collidepoint(pygame.mouse.get_pos())
+    pygame.draw.rect(surface, (90, 40, 44) if hov else (50, 36, 40),
+                     _trustsets_close_rect, border_radius=3)
+    xs = f_s.render("\u2715", True, (220, 180, 184))
+    surface.blit(xs, (_trustsets_close_rect.x + (16 - xs.get_width()) // 2,
+                      _trustsets_close_rect.y + (16 - xs.get_height()) // 2))
+
+    _trustsets_row_rects.clear()
+    _trustsets_trust_rects.clear()
+    _trustsets_order_rects.clear()
+    _trustsets_name_rect = None
+    _trustsets_new_rect = None
+    _trustsets_save_rect = None
+    _trustsets_cancel_rect = None
+    _trustsets_tt_toggle_rect = None
+    _trustsets_calltrust_rect = None
+
+    # ── Fixed header strip (edit view): name field + tooltip toggle +
+    # n/5 counter (never scrolls) ──
+    if _trustsets_view == "edit":
+        sy = y0 + title_h
+        pygame.draw.rect(surface, (28, 31, 42), pygame.Rect(x0, sy, W, 34))
+        surface.blit(f_r.render("Name:", True, (190, 196, 210)),
+                     (x0 + 10, sy + 8))
+        _trustsets_name_rect = pygame.Rect(x0 + 62, sy + 5, 196, 24)
+        _tt_on = bool(setting("blusets_tooltips"))
+        _cb = pygame.Rect(_trustsets_name_rect.right + 12, sy + 10, 14, 14)
+        pygame.draw.rect(surface, (30, 34, 46), _cb, border_radius=3)
+        pygame.draw.rect(surface,
+                         (120, 190, 140) if _tt_on else (90, 96, 116),
+                         _cb, 1, border_radius=3)
+        if _tt_on:
+            pygame.draw.lines(surface, (140, 220, 160), False,
+                              [(_cb.x + 3, _cb.y + 7),
+                               (_cb.x + 6, _cb.y + 10),
+                               (_cb.x + 11, _cb.y + 4)], 2)
+        _lbl = _blusets_font(11).render(
+            "Tips", True, (185, 195, 210) if _tt_on else (140, 146, 162))
+        surface.blit(_lbl, (_cb.right + 5,
+                            _cb.centery - _lbl.get_height() // 2))
+        _trustsets_tt_toggle_rect = pygame.Rect(
+            _cb.x, _cb.y - 2, _cb.width + 5 + _lbl.get_width(),
+            _cb.height + 4)
+        focus = _trustsets_name_focus
+        pygame.draw.rect(surface, (18, 20, 28), _trustsets_name_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface,
+                         (120, 160, 230) if focus else (80, 86, 106),
+                         _trustsets_name_rect, 1, border_radius=3)
+        nm_disp = _trustsets_edit_name + ("|" if focus
+                                          and int(time.time() * 2) % 2 else "")
+        surface.blit(_blusets_font(12, bold=True).render(
+            nm_disp, True, (230, 233, 242)),
+            (_trustsets_name_rect.x + 6, _trustsets_name_rect.y + 3))
+        n_sel = len(_trustsets_edit_order)
+        col = (235, 110, 110) if n_sel > _TRUSTSET_MAX else (160, 210, 170)
+        seg = _blusets_font(12, bold=True).render(
+            f"{n_sel}/{_TRUSTSET_MAX}", True, col)
+        surface.blit(seg, (x0 + W - 12 - seg.get_width(), sy + 8))
+
+    # ── Scrollable body ──
+    body = pygame.Rect(x0, y0 + title_h + strip_h, W, body_h)
+    prev_clip = surface.get_clip()
+    surface.set_clip(body)
+    max_scroll = max(0, content_h - body_h)
+    _trustsets_scroll = max(0, min(_trustsets_scroll, max_scroll))
+    cy = body.y - _trustsets_scroll + 4
+
+    if _trustsets_view == "list":
+        names = sorted(_trustsets_sets.keys(), key=str.lower)
+        if not names:
+            surface.blit(f_r.render("No sets yet — click  + New Set.",
+                                    True, (150, 156, 172)), (x0 + 12, cy + 6))
+        for nm in names:
+            trusts = _trustsets_sets.get(nm) or []
+            if body.y - 26 < cy < body.bottom:
+                is_active = (nm == _trustsets_active and bool(trusts))
+                tx = x0 + 10
+                if is_active:
+                    pygame.draw.circle(surface, (110, 220, 140),
+                                       (tx + 4, cy + 12), 4)
+                    tx += 14
+                label = nm if len(nm) <= 18 else nm[:17] + "…"
+                surface.blit(f_r.render(label, True, (220, 224, 236)),
+                             (tx, cy + 4))
+                cnt = f_s.render(f"({len(trusts)})", True, (140, 146, 162))
+                surface.blit(cnt, (tx + f_r.size(label)[0] + 6, cy + 6))
+                del_label = "sure?" if (
+                    _trustsets_confirm_del
+                    and _trustsets_confirm_del[0] == nm
+                    and time.time() < _trustsets_confirm_del[1]) else "\u2715"
+                r_del = _blusets_draw_button_row(
+                    surface, del_label, x0 + W - 48, cy + 2, 38, 20,
+                    danger=True)
+                r_edit = _blusets_draw_button_row(
+                    surface, "Edit", x0 + W - 94, cy + 2, 40, 20)
+                eq_label = "Active" if is_active else "Equip"
+                r_eq = _blusets_draw_button_row(
+                    surface, eq_label, x0 + W - 152, cy + 2, 52, 20,
+                    accent=True)
+                _trustsets_row_rects.append((r_eq, r_edit, r_del, nm))
+            cy += 26
+    else:
+        owned = _trustsets_owned()
+        left_w = 350                       # leaves room for the call-order panel
+        if not owned:
+            surface.blit(f_s.render(
+                "No trusts known yet — is the character logged in?",
+                True, (170, 150, 130)), (x0 + 12, cy + 6))
+        active_set = {t.lower()
+                      for t in (_trustsets_sets.get(_trustsets_active) or [])}
+        for disp, rec in owned:
+            if body.y - 20 < cy < body.bottom:
+                r = pygame.Rect(x0 + 14, cy + 2, left_w - 18, 18)
+                sel = disp.lower() in _trustsets_edit_order
+                hov = r.collidepoint(pygame.mouse.get_pos())
+                if hov:
+                    pygame.draw.rect(surface, (34, 38, 52), r,
+                                     border_radius=3)
+                box = pygame.Rect(r.x + 2, r.y + 2, 13, 13)
+                pygame.draw.rect(surface, (18, 20, 28), box, border_radius=2)
+                pygame.draw.rect(surface, (96, 104, 128), box, 1,
+                                 border_radius=2)
+                if sel:
+                    pygame.draw.rect(
+                        surface, (120, 200, 150),
+                        pygame.Rect(box.x + 3, box.y + 3, 7, 7),
+                        border_radius=1)
+                col = (235, 238, 248) if sel else (185, 191, 206)
+                ns = _blusets_font(11, bold=True).render(disp, True, col)
+                surface.blit(ns, (r.x + 22, r.y + 1))
+                nrect = pygame.Rect(r.x + 22, r.y + 1, ns.get_width(), 15)
+                if nrect.collidepoint(pygame.mouse.get_pos()):
+                    pygame.draw.line(surface, col, (nrect.x, nrect.bottom),
+                                     (nrect.x + nrect.w, nrect.bottom))
+                job = (rec.get("job") if rec else "") or ""
+                if job:
+                    js = _blusets_font(10).render(job, True, (152, 160, 178))
+                    surface.blit(js, (r.right - 14 - js.get_width(),
+                                      r.y + 2))
+                if disp.lower() in active_set:
+                    pygame.draw.circle(surface, (110, 220, 140),
+                                       (r.right - 7, r.centery), 3)
+                _trustsets_trust_rects.append((r, nrect, disp))
+            cy += 20
+    surface.set_clip(prev_clip)
+
+    # ── Edit view: fixed (non-scrolling) Call Order panel, right ──
+    # The picked trusts in the order they'll be summoned — party position is
+    # the index, so slot 1 is called first. Drag a row to reorder; ✕ drops.
+    if _trustsets_view == "edit":
+        rp_x = x0 + 362
+        rp = pygame.Rect(rp_x, body.y + 6, W - 372, body_h - 10)
+        pygame.draw.line(surface, (58, 64, 84), (rp_x - 6, body.y + 4),
+                         (rp_x - 6, body.bottom - 4))
+        surface.set_clip(rp.clip(body))
+        surface.blit(_blusets_font(11, bold=True).render(
+            "CALL ORDER", True, (150, 170, 210)), (rp.x, rp.y))
+        rows_top = rp.y + 18
+        oy = rows_top
+        if not _trustsets_edit_order:
+            surface.blit(f_s.render("Tick trusts on the left.", True,
+                                    (130, 138, 156)), (rp.x, oy + 2))
+        case_o = {d.lower(): d for d, _ in _trustsets_owned()}
+        f_o = _blusets_font(11, bold=True)
+        mpos = pygame.mouse.get_pos()
+        for i, key in enumerate(_trustsets_edit_order):
+            if oy > rp.bottom - 18:
+                break
+            disp = case_o.get(key, key.replace("_", " ").title())
+            row_r = pygame.Rect(rp.x, oy - 1, rp.w, 20)
+            del_r = pygame.Rect(rp.right - 16, oy, 16, 16)
+            dragging = (_trustsets_order_drag == key)
+            hovr = row_r.collidepoint(mpos)
+            if dragging:
+                pygame.draw.rect(surface, (44, 56, 72), row_r, border_radius=3)
+            elif hovr:
+                pygame.draw.rect(surface, (32, 38, 50), row_r, border_radius=3)
+            # grip dots (signals the row is draggable)
+            gcol = (130, 150, 180) if (hovr or dragging) else (88, 94, 114)
+            for gxn in (rp.x + 2, rp.x + 5):
+                for gyn in (oy + 4, oy + 8, oy + 12):
+                    pygame.draw.circle(surface, gcol, (gxn, gyn), 1)
+            lx = rp.x + 12
+            full = f"{i + 1}. {disp}"
+            avail = del_r.x - lx - 4
+            label = full
+            if f_o.size(label)[0] > avail:
+                while label and f_o.size(label + "…")[0] > avail:
+                    label = label[:-1]
+                label += "…"
+            surface.blit(f_o.render(
+                label, True,
+                (230, 234, 246) if dragging else (220, 224, 236)),
+                (lx, oy + 1))
+            hovx = del_r.collidepoint(mpos)
+            pygame.draw.rect(surface, (90, 40, 44) if hovx else (50, 36, 40),
+                             del_r, border_radius=3)
+            xg = f_s.render("\u2715", True, (220, 180, 184))
+            surface.blit(xg, (del_r.x + (16 - xg.get_width()) // 2,
+                              del_r.y + (16 - xg.get_height()) // 2))
+            _trustsets_order_rects.append((row_r, del_r, key))
+            oy += 22
+        _trustsets_order_meta = (rows_top, 22, len(_trustsets_edit_order))
+        surface.set_clip(prev_clip)
+
+    # scrollbar
+    if max_scroll > 0:
+        frac = body_h / float(content_h)
+        bar_h = max(18, int(body_h * frac))
+        bar_y = body.y + int((body_h - bar_h)
+                             * (_trustsets_scroll / float(max_scroll)))
+        bar_x = (x0 + 350) if _trustsets_view == "edit" else (x0 + W - 7)
+        knob = pygame.Rect(bar_x, bar_y, 5, bar_h)
+        hot = _trustsets_sb_drag is not None or knob.inflate(
+            10, 0).collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(surface, (110, 120, 150) if hot else (70, 76, 96),
+                         knob, border_radius=2)
+        _trustsets_sb_rect = knob.inflate(10, 4)
+        _trustsets_sb_meta = (body.y, body_h, bar_h, max_scroll)
+    else:
+        _trustsets_sb_rect = None
+        _trustsets_sb_meta = None
+
+    # ── Footer ──
+    fy = y0 + title_h + strip_h + body_h + 4
+    if _trustsets_view == "list":
+        _trustsets_new_rect = _blusets_draw_button_row(
+            surface, "+ New Set", x0 + 10, fy, 86, 24)
+        # "Show Call Trust button" toggle (moved here from the Settings
+        # menu — this is now the only place it lives). Flips the same
+        # show_calltrust setting that gates draw_calltrust_button.
+        _ct_on = bool(setting("show_calltrust"))
+        _ctb = pygame.Rect(_trustsets_new_rect.right + 16, fy + 5, 14, 14)
+        pygame.draw.rect(surface, (30, 34, 46), _ctb, border_radius=3)
+        pygame.draw.rect(surface,
+                         (120, 190, 140) if _ct_on else (90, 96, 116),
+                         _ctb, 1, border_radius=3)
+        if _ct_on:
+            pygame.draw.lines(surface, (140, 220, 160), False,
+                              [(_ctb.x + 3, _ctb.y + 7),
+                               (_ctb.x + 6, _ctb.y + 10),
+                               (_ctb.x + 11, _ctb.y + 4)], 2)
+        _ctl = f_r.render("Show Call Trust button", True,
+                          (190, 200, 218) if _ct_on else (140, 146, 162))
+        surface.blit(_ctl, (_ctb.right + 6,
+                            _ctb.centery - _ctl.get_height() // 2))
+        _trustsets_calltrust_rect = pygame.Rect(
+            _ctb.x, _ctb.y - 3, _ctb.width + 6 + _ctl.get_width() + 4,
+            _ctb.height + 6)
+    else:
+        _trustsets_save_rect = _blusets_draw_button_row(
+            surface, "Save", x0 + 10, fy, 64, 24, accent=True)
+        _trustsets_cancel_rect = _blusets_draw_button_row(
+            surface, "Cancel", x0 + 84, fy, 64, 24)
+
+    if _trustsets_note and time.time() < _trustsets_note[1]:
+        surface.blit(f_s.render(_trustsets_note[0], True, (170, 180, 150)),
+                     (x0 + 10, fy + 28))
+    elif _trustsets_note:
+        _trustsets_note = None
+    elif _trustsets_view == "edit":
+        surface.blit(f_s.render(
+            f"Tick up to {_TRUSTSET_MAX} · drag rows on the right to set "
+            "call order · click a name for bg-wiki",
+            True, (110, 118, 136)), (x0 + 10, fy + 28))
+    elif _trustsets_sets:
+        surface.blit(f_s.render(
+            "Equip marks the set the Call Trust button summons.",
+            True, (110, 118, 136)), (x0 + 10, fy + 28))
+
+    # ── Hover tooltip (edit view): job + abilities/traits ──
+    if _trustsets_view == "edit" and setting("blusets_tooltips"):
+        _mxy = pygame.mouse.get_pos()
+        _hover = None
+        for _r, _nr, _nm in _trustsets_trust_rects:
+            if _r.collidepoint(_mxy) and body.collidepoint(_mxy):
+                _hover = _nm
+                break
+        if _hover:
+            _sw_, _sh_ = surface.get_size()
+            draw_item_tooltip(surface, _mxy[0], _mxy[1],
+                              _trustsets_tooltip_info(_hover), _sw_, _sh_)
+
+
+def _trustsets_handle_event(event):
+    """All input for the Trust Sets window. Returns True when consumed."""
+    global _trustsets_open, _trustsets_view, _trustsets_scroll
+    global _trustsets_win_drag, _trustsets_win_pos, _trustsets_sb_drag
+    global _trustsets_name_focus, _trustsets_edit_name, _trustsets_confirm_del
+    global _trustsets_active, _trustsets_order_drag
+
+    if event.type == pygame.MOUSEWHEEL:
+        if (_trustsets_open and _trustsets_win_rect is not None
+                and _trustsets_win_rect.collidepoint(
+                    pygame.mouse.get_pos())):
+            _trustsets_scroll = max(0, _trustsets_scroll - event.y * 30)
+            return True
+        return False
+
+    if event.type == pygame.KEYDOWN:
+        if not _trustsets_open:
+            return False
+        if _trustsets_name_focus:
+            if event.key == pygame.K_BACKSPACE:
+                _trustsets_edit_name = _trustsets_edit_name[:-1]
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                               pygame.K_ESCAPE):
+                _trustsets_name_focus = False
+            elif event.unicode and event.unicode.isprintable() \
+                    and event.unicode not in "|;" \
+                    and len(_trustsets_edit_name) < 24:
+                _trustsets_edit_name += event.unicode
+            return True
+        if event.key == pygame.K_ESCAPE:
+            if _trustsets_view == "edit":
+                _trustsets_view = "list"
+                _trustsets_scroll = 0
+            else:
+                _trustsets_open = False
+            return True
+        return False
+
+    if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 3
+            and _trustsets_open and _trustsets_win_rect is not None):
+        mx, my = event.pos
+        if _trustsets_view == "edit":
+            for r, _nr, nm in _trustsets_trust_rects:
+                if r.collidepoint(mx, my):
+                    _trustsets_open_wiki(nm)
+                    return True
+        if _trustsets_win_rect.collidepoint(mx, my):
+            return True
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if not _trustsets_open or _trustsets_win_rect is None:
+            return False
+        if not _trustsets_win_rect.collidepoint(mx, my):
+            _trustsets_name_focus = False
+            return False
+        if _trustsets_close_rect \
+                and _trustsets_close_rect.collidepoint(mx, my):
+            _trustsets_open = False
+            return True
+        if (_trustsets_sb_rect is not None
+                and _trustsets_sb_rect.collidepoint(mx, my)):
+            _trustsets_sb_drag = {"grab_y": my, "scroll0": _trustsets_scroll}
+            return True
+        if _trustsets_title_rect \
+                and _trustsets_title_rect.collidepoint(mx, my):
+            _trustsets_win_drag = {"x": mx, "y": my,
+                                   "ox": _trustsets_win_pos[0],
+                                   "oy": _trustsets_win_pos[1]}
+            return True
+        if _trustsets_view == "list":
+            if _trustsets_new_rect \
+                    and _trustsets_new_rect.collidepoint(mx, my):
+                _trustsets_open_editor(None)
+                return True
+            if _trustsets_calltrust_rect \
+                    and _trustsets_calltrust_rect.collidepoint(mx, my):
+                set_setting("show_calltrust",
+                            not setting("show_calltrust"))
+                return True
+            for r_eq, r_edit, r_del, nm in _trustsets_row_rects:
+                if r_eq.collidepoint(mx, my):
+                    _trustsets_set_active(nm)
+                    return True
+                if r_edit.collidepoint(mx, my):
+                    _trustsets_open_editor(nm)
+                    return True
+                if r_del.collidepoint(mx, my):
+                    now = time.time()
+                    if (_trustsets_confirm_del
+                            and _trustsets_confirm_del[0] == nm
+                            and now < _trustsets_confirm_del[1]):
+                        _trustsets_sets.pop(nm, None)
+                        if _trustsets_active == nm:
+                            _trustsets_active = None
+                        _trustsets_persist()
+                        _trustsets_confirm_del = None
+                        _trustsets_set_note(f'Deleted "{nm}".')
+                    else:
+                        _trustsets_confirm_del = (nm, now + 2.5)
+                    return True
+        else:
+            if (_trustsets_tt_toggle_rect
+                    and _trustsets_tt_toggle_rect.collidepoint(mx, my)):
+                set_setting("blusets_tooltips",
+                            not setting("blusets_tooltips"))
+                return True
+            if _trustsets_name_rect \
+                    and _trustsets_name_rect.collidepoint(mx, my):
+                _trustsets_name_focus = True
+                return True
+            _trustsets_name_focus = False
+            if _trustsets_save_rect \
+                    and _trustsets_save_rect.collidepoint(mx, my):
+                _trustsets_editor_save()
+                return True
+            if _trustsets_cancel_rect \
+                    and _trustsets_cancel_rect.collidepoint(mx, my):
+                _trustsets_view = "list"
+                _trustsets_scroll = 0
+                return True
+            # Call Order panel (right): reorder / remove. Rects don't
+            # overlap the left list, so this claim is unambiguous.
+            for row_r, del_r, key in _trustsets_order_rects:
+                if del_r.collidepoint(mx, my):
+                    if key in _trustsets_edit_order:
+                        _trustsets_edit_order.remove(key)
+                    if _trustsets_order_drag == key:
+                        _trustsets_order_drag = None
+                    return True
+                if row_r.collidepoint(mx, my):
+                    _trustsets_order_drag = key   # begin drag-to-reorder
+                    return True
+            for r, nrect, nm in _trustsets_trust_rects:
+                if nrect.collidepoint(mx, my):
+                    _trustsets_open_wiki(nm)
+                    return True
+                if r.collidepoint(mx, my):
+                    key = nm.lower()
+                    if key in _trustsets_edit_order:
+                        _trustsets_edit_order.remove(key)
+                    elif len(_trustsets_edit_order) >= _TRUSTSET_MAX:
+                        _trustsets_set_note(
+                            f"A set holds at most {_TRUSTSET_MAX} trusts.")
+                    else:
+                        _trustsets_edit_order.append(key)
+                    return True
+        return True
+
+    if event.type == pygame.MOUSEMOTION:
+        if _trustsets_order_drag is not None:
+            order = _trustsets_edit_order
+            if (_trustsets_order_drag in order
+                    and _trustsets_order_meta is not None):
+                rows_top, row_h, _n = _trustsets_order_meta
+                cur = order.index(_trustsets_order_drag)
+                tgt = int((event.pos[1] - rows_top) // max(1, row_h))
+                tgt = max(0, min(len(order) - 1, tgt))
+                if tgt != cur:
+                    order.pop(cur)
+                    order.insert(tgt, _trustsets_order_drag)
+            return True
+        if _trustsets_sb_drag is not None:
+            if _trustsets_sb_meta:
+                _, track_h, bar_h, max_scroll = _trustsets_sb_meta
+                span = max(1, track_h - bar_h)
+                dy = event.pos[1] - _trustsets_sb_drag["grab_y"]
+                _trustsets_scroll = max(0, min(
+                    max_scroll,
+                    _trustsets_sb_drag["scroll0"]
+                    + int(dy * max_scroll / span)))
+            return True
+        if _trustsets_win_drag is not None:
+            _trustsets_win_pos = [
+                _trustsets_win_drag["ox"] + event.pos[0]
+                - _trustsets_win_drag["x"],
+                _trustsets_win_drag["oy"] + event.pos[1]
+                - _trustsets_win_drag["y"]]
+            return True
+        return False
+
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _trustsets_order_drag is not None:
+            _trustsets_order_drag = None
+            return True
+        if _trustsets_sb_drag is not None:
+            _trustsets_sb_drag = None
+            return True
+        if _trustsets_win_drag is not None:
+            _trustsets_win_drag = None
+            _trustsets_persist()
+            return True
+        return False
+
+    return False
+
+
 def draw_cheatsheet_button(surface):
     """Draw the floating, draggable, resizable [CS] button. Click toggles
     the window; dragging the body repositions it; dragging the corner
@@ -22708,6 +25617,4872 @@ def draw_cheatsheet_button(surface):
                 pygame.draw.line(surface, (200, 200, 215),
                                  (x + bw - off, y + bh - 1),
                                  (x + bw - 1, y + bh - off))
+
+
+def _calltrust_invoke():
+    """Summon the active Trust Set: send its trusts (in call order) to the
+    Lua side, which casts them one at a time. No active set → a note."""
+    global _ct_msg
+    _trustsets_ensure_loaded()
+    active = _trustsets_active
+    names = (_trustsets_sets.get(active) if active else None) or []
+    clean = [n.replace("|", "").replace(";", "").strip() for n in names]
+    clean = [n for n in clean if n]
+    if not active or not clean:
+        _ct_msg = ("No active set — Equip one in TrustSets.",
+                   time.time() + 4.0)
+        return
+    try:
+        payload = (f"CALLTRUST|{_blusets_char()}|{active.replace('|', '')}|"
+                   f"{';'.join(clean)}")
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+        _ct_msg = (f'Calling "{active}" — watch game chat.', time.time() + 5.0)
+    except Exception as e:
+        print(f"[OmniWatch] calltrust send failed: {e!r}")
+        _ct_msg = ("Send failed — see session log.", time.time() + 4.0)
+
+
+def draw_calltrust_button(surface):
+    """Draw the floating, draggable, resizable Call Trust button. Click
+    summons the active Trust Set; dragging the body repositions it; the
+    corner handle resizes it (all handled in the event loop). Mirrors the
+    Cheat Sheet button. Sets calltrust_button_rect + ..._handle_rect."""
+    global calltrust_button_pos, calltrust_button_rect
+    global calltrust_button_handle_rect, _ct_btn_draw_pos, _ct_msg
+    calltrust_button_rect = None
+    calltrust_button_handle_rect = None
+    g = _menu_g() * max(0.5, min(5.0, calltrust_button_scale))
+
+    def _bs(v):
+        return max(1, round(v * g))
+    f = get_font("Consolas", _bs(13), bold=True)
+    has_active = bool(_trustsets_active
+                      and _trustsets_sets.get(_trustsets_active))
+    tcol = (210, 235, 215) if has_active else (170, 174, 184)
+    l1 = f.render("Call", True, tcol)
+    l2 = f.render("Trust", True, tcol)
+    pad = _bs(8)
+    padv = _bs(4)
+    lh = f.get_height()
+    bw = max(l1.get_width(), l2.get_width()) + pad * 2
+    bh = lh * 2 + padv * 2
+    sw, shh = surface.get_size()
+    if calltrust_button_pos is None:
+        calltrust_button_pos = [PANEL_X, layout_top() + 64]
+    # Clamp for DISPLAY only (same reasoning as the Cheat Sheet button).
+    x = max(0, min(int(calltrust_button_pos[0]), max(0, sw - bw)))
+    y = max(0, min(int(calltrust_button_pos[1]), max(0, shh - bh)))
+    _ct_btn_draw_pos = [x, y]
+    calltrust_button_rect = pygame.Rect(x, y, bw, bh)
+    mx, my = pygame.mouse.get_pos()
+    hov = calltrust_button_rect.collidepoint(mx, my)
+    bg = (50, 64, 54) if hov else (40, 50, 44)
+    bdr = (120, 190, 140) if has_active else (90, 100, 96)
+    pygame.draw.rect(surface, bg, calltrust_button_rect, border_radius=4)
+    pygame.draw.rect(surface, bdr, calltrust_button_rect, 1, border_radius=4)
+    draw_accent_stripe(surface, x, y, bh, (120, 200, 150), w=max(2, _bs(2)))
+    surface.blit(l1, (x + (bw - l1.get_width()) // 2, y + padv))
+    surface.blit(l2, (x + (bw - l2.get_width()) // 2, y + padv + lh))
+    # Corner resize handle (bottom-right), shown on hover.
+    hsz = max(6, _bs(6))
+    calltrust_button_handle_rect = pygame.Rect(x + bw - hsz, y + bh - hsz,
+                                               hsz, hsz)
+    if hov or _ct_btn_resize is not None:
+        for off in (2, 5):
+            if off < hsz:
+                pygame.draw.line(surface, (200, 215, 205),
+                                 (x + bw - off, y + bh - 1),
+                                 (x + bw - 1, y + bh - off))
+    # Transient note under the button (no active set / calling…).
+    if _ct_msg:
+        if time.time() < _ct_msg[1]:
+            fn = get_font("Consolas", _bs(11))
+            ns = fn.render(_ct_msg[0], True, (180, 200, 170))
+            nx = max(0, min(x, sw - ns.get_width()))
+            ny = min(y + bh + 2, shh - ns.get_height())
+            bgr = pygame.Rect(nx - 2, ny - 1, ns.get_width() + 4,
+                              ns.get_height() + 2)
+            pygame.draw.rect(surface, (20, 26, 22), bgr, border_radius=3)
+            surface.blit(ns, (nx, ny))
+        else:
+            _ct_msg = None
+
+
+def _brdset_resolve_active():
+    """Which set the floating Sing button targets: the last-sung set if it
+    still exists, else the only set if there's exactly one, else None."""
+    if _brdset_active and _brdset_active in _brdset_sets:
+        return _brdset_active
+    if len(_brdset_sets) == 1:
+        return next(iter(_brdset_sets))
+    return None
+
+
+def _sing_button_invoke():
+    """Click action for the floating Sing button: stop if singing, else
+    start the active set (with a note if there's no obvious target)."""
+    global _sing_msg
+    if _brdset_singing:
+        _brdset_send_stop()
+        _sing_msg = ("Stopping...", time.time() + 3.0)
+        return
+    target = _brdset_resolve_active()
+    if not target:
+        _sing_msg = ("Sing a set once from Loadouts -> BRD first.",
+                     time.time() + 4.0)
+        return
+    _brdset_send_sing(target)
+    _sing_msg = (f'Singing "{target}"...', time.time() + 4.0)
+
+
+def draw_sing_button(surface):
+    """Floating, draggable, resizable Sing button — a Start/Stop toggle for
+    the BRD singer. Mirrors the Call Trust button. Body click toggles, drag
+    repositions, corner handle resizes (all handled in the event loop)."""
+    global sing_button_pos, sing_button_rect
+    global sing_button_handle_rect, _sing_btn_draw_pos, _sing_msg
+    sing_button_rect = None
+    sing_button_handle_rect = None
+    g = _menu_g() * max(0.5, min(5.0, sing_button_scale))
+
+    def _bs(v):
+        return max(1, round(v * g))
+    f = get_font("Consolas", _bs(13), bold=True)
+    singing = bool(_brdset_singing)
+    has_target = bool(_brdset_resolve_active())
+    if singing:
+        tcol = (240, 205, 205)
+    elif has_target:
+        tcol = (210, 235, 215)
+    else:
+        tcol = (170, 174, 184)
+    l1 = f.render("Stop" if singing else "Start", True, tcol)
+    l2 = f.render("Sing", True, tcol)
+    pad = _bs(8)
+    padv = _bs(4)
+    lh = f.get_height()
+    bw = max(l1.get_width(), l2.get_width()) + pad * 2
+    bh = lh * 2 + padv * 2
+    sw, shh = surface.get_size()
+    if sing_button_pos is None:
+        sing_button_pos = [PANEL_X, layout_top() + 140]
+    x = max(0, min(int(sing_button_pos[0]), max(0, sw - bw)))
+    y = max(0, min(int(sing_button_pos[1]), max(0, shh - bh)))
+    _sing_btn_draw_pos = [x, y]
+    sing_button_rect = pygame.Rect(x, y, bw, bh)
+    mx, my = pygame.mouse.get_pos()
+    hov = sing_button_rect.collidepoint(mx, my)
+    if singing:
+        bg = (74, 50, 50) if hov else (60, 40, 40)
+        bdr = (210, 120, 120)
+        acc = (220, 120, 120)
+    elif has_target:
+        bg = (50, 64, 54) if hov else (40, 50, 44)
+        bdr = (120, 190, 140)
+        acc = (120, 200, 150)
+    else:
+        bg = (48, 52, 60) if hov else (38, 42, 50)
+        bdr = (90, 100, 96)
+        acc = (110, 120, 116)
+    pygame.draw.rect(surface, bg, sing_button_rect, border_radius=4)
+    pygame.draw.rect(surface, bdr, sing_button_rect, 1, border_radius=4)
+    draw_accent_stripe(surface, x, y, bh, acc, w=max(2, _bs(2)))
+    surface.blit(l1, (x + (bw - l1.get_width()) // 2, y + padv))
+    surface.blit(l2, (x + (bw - l2.get_width()) // 2, y + padv + lh))
+    hsz = max(6, _bs(6))
+    sing_button_handle_rect = pygame.Rect(x + bw - hsz, y + bh - hsz, hsz, hsz)
+    if hov or _sing_btn_resize is not None:
+        for off in (2, 5):
+            if off < hsz:
+                pygame.draw.line(surface, (210, 215, 215),
+                                 (x + bw - off, y + bh - 1),
+                                 (x + bw - 1, y + bh - off))
+    if _sing_msg:
+        if time.time() < _sing_msg[1]:
+            fn = get_font("Consolas", _bs(11))
+            ns = fn.render(_sing_msg[0], True, (200, 200, 180))
+            nx = max(0, min(x, sw - ns.get_width()))
+            ny = min(y + bh + 2, shh - ns.get_height())
+            bgr = pygame.Rect(nx - 2, ny - 1, ns.get_width() + 4,
+                              ns.get_height() + 2)
+            pygame.draw.rect(surface, (24, 22, 20), bgr, border_radius=3)
+            surface.blit(ns, (nx, ny))
+        else:
+            _sing_msg = None
+
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Hidden developer section — Scan Zone  (operator-only)
+# ════════════════════════════════════════════════════════════════════════
+# Operator tooling for a private server you run. The whole section is INERT
+# unless a sentinel is present, so it can ship in every build and does
+# nothing on a normal player's machine. Enable on YOUR machine with either:
+#     • environment variable  OMNIWATCH_GM=1            (preferred), or
+#     • an empty file          omniwatch_gm.enabled      next to the exe/CWD.
+# When enabled, Ctrl+Shift+G toggles the Scan Zone panel (the overlay window
+# must have focus — click any OmniWatch panel first if the game has focus).
+#
+# Scan Zone "find" is a pure client-side lookup: it reads the current zone's
+# NPC-list DAT file(s) off your own FFXI install and lists entities whose
+# name matches — spawned or not. No packets, no server round-trip. (The
+# packet-based per-index scan is a separate, later addition; it needs the
+# Lua side to inject 0x16 / read the 0x0E reply.)
+
+def _dev_sentinel_present():
+    try:
+        if os.environ.get("OMNIWATCH_GM") == "1":
+            return True
+        cand = []
+        try:
+            cand.append(os.getcwd())
+        except Exception:
+            pass
+        try:
+            if getattr(sys, "argv", None):
+                cand.append(os.path.dirname(os.path.abspath(sys.argv[0])))
+        except Exception:
+            pass
+        for dpath in cand:
+            if dpath and os.path.isfile(
+                    os.path.join(dpath, "omniwatch_gm.enabled")):
+                return True
+    except Exception:
+        pass
+    return False
+
+_DEV_ENABLED = _dev_sentinel_present()
+
+def _settings_sections():
+    """Canonical Settings section order, with the hidden 'Developer'
+    section spliced in just below 'HotBar' — but only when the dev
+    sentinel is present. On a normal player's machine the section is
+    absent entirely (schema rows tagged 'Developer' simply never group),
+    so nothing about it renders or reserves height."""
+    secs = list(SETTINGS_SECTIONS)
+    if _DEV_ENABLED and "Developer" not in secs:
+        try:
+            secs.insert(secs.index("HotBar") + 1, "Developer")
+        except ValueError:
+            secs.append("Developer")
+    return secs
+
+# Zone-id -> client NPC-list DAT path(s), normalized to forward slashes.
+# Ported from ScanZone's datmap.lua (Project Tako). Joined against the
+# configured FFXI install dir at scan time.
+_SCANZONE_DATS = {
+    1: ["ROM3/2/111.DAT"],
+    2: ["ROM3/2/112.DAT"],
+    3: ["ROM3/2/113.DAT"],
+    4: ["ROM3/2/114.DAT"],
+    5: ["ROM3/2/115.DAT"],
+    6: ["ROM3/2/116.DAT"],
+    7: ["ROM3/2/117.DAT"],
+    8: ["ROM3/2/118.DAT"],
+    9: ["ROM3/2/119.DAT"],
+    10: ["ROM3/2/120.DAT"],
+    11: ["ROM3/2/121.DAT"],
+    12: ["ROM3/2/122.DAT"],
+    13: ["ROM3/2/123.DAT"],
+    14: ["ROM3/2/124.DAT"],
+    15: ["ROM/25/80.DAT"],
+    16: ["ROM3/2/126.DAT"],
+    17: ["ROM3/2/127.DAT"],
+    18: ["ROM3/3/0.DAT"],
+    19: ["ROM3/3/1.DAT"],
+    20: ["ROM3/3/2.DAT"],
+    21: ["ROM3/3/3.DAT"],
+    22: ["ROM3/3/4.DAT"],
+    23: ["ROM3/3/5.DAT"],
+    24: ["ROM3/3/6.DAT"],
+    25: ["ROM3/3/7.DAT"],
+    26: ["ROM3/3/8.DAT"],
+    27: ["ROM3/3/9.DAT"],
+    28: ["ROM3/3/10.DAT"],
+    29: ["ROM3/3/11.DAT"],
+    30: ["ROM3/3/12.DAT"],
+    31: ["ROM3/3/13.DAT"],
+    32: ["ROM3/3/14.DAT"],
+    33: ["ROM3/3/15.DAT"],
+    34: ["ROM3/3/16.DAT"],
+    35: ["ROM3/3/17.DAT"],
+    36: ["ROM3/3/18.DAT"],
+    37: ["ROM3/3/19.DAT"],
+    38: ["ROM3/3/20.DAT"],
+    39: ["ROM3/3/21.DAT"],
+    40: ["ROM3/3/22.DAT"],
+    41: ["ROM3/3/23.DAT"],
+    42: ["ROM3/3/24.DAT"],
+    43: ["ROM3/3/25.DAT"],
+    44: ["ROM3/3/26.DAT"],
+    45: ["ROM/25/110.DAT"],
+    46: ["ROM4/1/45.DAT"],
+    47: ["ROM4/1/46.DAT"],
+    48: ["ROM4/1/47.DAT"],
+    49: ["ROM4/1/48.DAT"],
+    50: ["ROM4/1/49.DAT"],
+    51: ["ROM4/1/50.DAT"],
+    52: ["ROM4/1/51.DAT"],
+    53: ["ROM4/1/52.DAT"],
+    54: ["ROM4/1/53.DAT"],
+    55: ["ROM4/1/54.DAT"],
+    56: ["ROM4/1/55.DAT"],
+    57: ["ROM4/1/56.DAT"],
+    58: ["ROM4/1/57.DAT"],
+    59: ["ROM4/1/58.DAT"],
+    60: ["ROM4/1/59.DAT"],
+    61: ["ROM4/1/60.DAT"],
+    62: ["ROM4/1/61.DAT"],
+    63: ["ROM4/1/62.DAT"],
+    64: ["ROM4/1/63.DAT"],
+    65: ["ROM4/1/64.DAT"],
+    66: ["ROM4/1/65.DAT"],
+    67: ["ROM4/1/66.DAT"],
+    68: ["ROM4/1/67.DAT"],
+    69: ["ROM4/1/68.DAT"],
+    70: ["ROM4/1/69.DAT"],
+    71: ["ROM4/1/70.DAT"],
+    72: ["ROM4/1/71.DAT"],
+    73: ["ROM4/1/72.DAT"],
+    74: ["ROM4/1/73.DAT"],
+    75: ["ROM4/1/74.DAT"],
+    76: ["ROM4/1/75.DAT"],
+    77: ["ROM4/1/76.DAT"],
+    78: ["ROM4/1/77.DAT"],
+    79: ["ROM4/1/78.DAT"],
+    80: ["ROM/26/17.DAT"],
+    81: ["ROM/26/18.DAT"],
+    82: ["ROM/26/19.DAT"],
+    83: ["ROM/26/20.DAT"],
+    84: ["ROM/26/21.DAT"],
+    85: ["ROM/26/22.DAT"],
+    86: ["ROM/26/23.DAT"],
+    87: ["ROM/26/24.DAT"],
+    88: ["ROM/26/25.DAT"],
+    89: ["ROM/26/26.DAT"],
+    90: ["ROM/26/27.DAT"],
+    91: ["ROM/26/28.DAT"],
+    92: ["ROM/26/29.DAT"],
+    93: ["ROM/26/30.DAT"],
+    94: ["ROM/26/31.DAT"],
+    95: ["ROM/26/32.DAT"],
+    96: ["ROM/26/33.DAT"],
+    97: ["ROM/26/34.DAT"],
+    98: ["ROM/26/35.DAT"],
+    99: ["ROM/26/36.DAT"],
+    100: ["ROM/26/37.DAT"],
+    101: ["ROM/26/38.DAT"],
+    102: ["ROM/26/39.DAT"],
+    103: ["ROM/26/40.DAT"],
+    104: ["ROM/26/41.DAT"],
+    105: ["ROM/26/42.DAT"],
+    106: ["ROM/26/43.DAT"],
+    107: ["ROM/26/44.DAT"],
+    108: ["ROM/26/45.DAT"],
+    109: ["ROM/26/46.DAT"],
+    110: ["ROM/26/47.DAT"],
+    111: ["ROM/26/48.DAT"],
+    112: ["ROM/26/49.DAT"],
+    113: ["ROM2/13/95.DAT"],
+    114: ["ROM2/13/96.DAT"],
+    115: ["ROM/26/52.DAT"],
+    116: ["ROM/26/53.DAT"],
+    117: ["ROM/26/54.DAT"],
+    118: ["ROM/26/55.DAT"],
+    119: ["ROM/26/56.DAT"],
+    120: ["ROM/26/57.DAT"],
+    121: ["ROM2/13/97.DAT"],
+    122: ["ROM2/13/98.DAT"],
+    123: ["ROM2/13/99.DAT"],
+    124: ["ROM2/13/100.DAT"],
+    125: ["ROM2/13/101.DAT"],
+    126: ["ROM/26/63.DAT"],
+    127: ["ROM/26/64.DAT"],
+    128: ["ROM2/13/102.DAT"],
+    129: ["ROM/26/66.DAT"],
+    130: ["ROM2/13/103.DAT"],
+    131: ["ROM/26/68.DAT"],
+    132: ["ROM/26/69.DAT"],
+    133: ["ROM/373/60.DAT"],
+    134: ["ROM2/13/104.DAT"],
+    135: ["ROM2/13/105.DAT"],
+    136: ["ROM/26/73.DAT"],
+    137: ["ROM/26/74.DAT"],
+    138: ["ROM/26/75.DAT"],
+    139: ["ROM/26/76.DAT"],
+    140: ["ROM/26/77.DAT"],
+    141: ["ROM/26/78.DAT"],
+    142: ["ROM/26/79.DAT"],
+    143: ["ROM/26/80.DAT"],
+    144: ["ROM/26/81.DAT"],
+    145: ["ROM/26/82.DAT"],
+    146: ["ROM/26/83.DAT"],
+    147: ["ROM/26/84.DAT"],
+    148: ["ROM/26/85.DAT"],
+    149: ["ROM/26/86.DAT"],
+    150: ["ROM/26/87.DAT"],
+    151: ["ROM/26/88.DAT"],
+    152: ["ROM/26/89.DAT"],
+    153: ["ROM2/13/106.DAT"],
+    154: ["ROM2/13/107.DAT"],
+    155: ["ROM/26/92.DAT"],
+    156: ["ROM/26/93.DAT"],
+    157: ["ROM/26/94.DAT"],
+    158: ["ROM/26/95.DAT"],
+    159: ["ROM2/13/108.DAT"],
+    160: ["ROM2/13/109.DAT"],
+    161: ["ROM/26/98.DAT"],
+    162: ["ROM/26/99.DAT"],
+    163: ["ROM2/13/110.DAT"],
+    164: ["ROM/26/101.DAT"],
+    165: ["ROM/26/102.DAT"],
+    166: ["ROM/26/103.DAT"],
+    167: ["ROM/26/104.DAT"],
+    168: ["ROM2/13/111.DAT"],
+    169: ["ROM/26/106.DAT"],
+    170: ["ROM2/13/112.DAT"],
+    171: ["ROM/26/108.DAT"],
+    172: ["ROM/26/109.DAT"],
+    173: ["ROM2/13/113.DAT"],
+    174: ["ROM2/13/114.DAT"],
+    175: ["ROM/26/112.dat"],
+    176: ["ROM2/13/115.DAT"],
+    177: ["ROM2/13/116.DAT"],
+    178: ["ROM2/13/117.DAT"],
+    179: ["ROM2/13/118.DAT"],
+    180: ["ROM2/13/119.DAT"],
+    181: ["ROM2/13/120.DAT"],
+    182: ["ROM/26/119.DAT"],
+    183: ["ROM/26/120.DAT"],
+    184: ["ROM/26/121.DAT"],
+    185: ["ROM2/13/121.DAT"],
+    186: ["ROM2/13/122.DAT"],
+    187: ["ROM2/13/123.DAT"],
+    188: ["ROM2/13/124.DAT"],
+    190: ["ROM/26/127.DAT"],
+    191: ["ROM/27/0.DAT"],
+    192: ["ROM/27/1.DAT"],
+    193: ["ROM/27/2.DAT"],
+    194: ["ROM/27/3.DAT"],
+    195: ["ROM/27/4.DAT"],
+    196: ["ROM/27/5.DAT"],
+    197: ["ROM/27/6.DAT"],
+    198: ["ROM/27/7.DAT"],
+    200: ["ROM/27/9.DAT"],
+    201: ["ROM2/13/125.DAT"],
+    202: ["ROM2/13/126.DAT"],
+    203: ["ROM2/13/127.DAT"],
+    204: ["ROM/27/13.DAT"],
+    205: ["ROM2/14/0.DAT"],
+    206: ["ROM/27/13.DAT"],
+    207: ["ROM2/14/1.DAT"],
+    208: ["ROM2/14/2.DAT"],
+    209: ["ROM2/14/3.DAT"],
+    211: ["ROM2/14/4.DAT"],
+    212: ["ROM2/14/5.DAT"],
+    213: ["ROM2/14/6.DAT"],
+    214: ["ROM/27/15.DAT"],
+    215: ["ROM/27/24.DAT"],
+    216: ["ROM/27/25.DAT"],
+    217: ["ROM/27/26.DAT"],
+    218: ["ROM/27/27.DAT"],
+    220: ["ROM/27/29.DAT"],
+    221: ["ROM/27/30.DAT"],
+    223: ["ROM/27/32.DAT"],
+    224: ["ROM/27/33.DAT"],
+    225: ["ROM/27/34.DAT"],
+    226: ["ROM2/14/7.DAT"],
+    227: ["ROM/27/36.DAT"],
+    228: ["ROM/27/37.DAT"],
+    230: ["ROM/27/39.DAT"],
+    231: ["ROM/27/40.DAT"],
+    232: ["ROM/27/41.DAT"],
+    233: ["ROM/27/42.DAT"],
+    234: ["ROM/27/43.DAT"],
+    235: ["ROM/27/44.DAT"],
+    236: ["ROM/27/45.DAT"],
+    237: ["ROM/27/46.DAT"],
+    238: ["ROM/27/47.DAT"],
+    239: ["ROM/27/48.DAT"],
+    240: ["ROM/27/49.DAT"],
+    241: ["ROM/27/50.DAT"],
+    242: ["ROM/27/51.DAT"],
+    243: ["ROM/27/52.DAT"],
+    244: ["ROM/27/53.DAT"],
+    245: ["ROM/27/54.DAT"],
+    246: ["ROM/27/55.DAT"],
+    247: ["ROM2/14/8.DAT"],
+    248: ["ROM/27/57.DAT"],
+    249: ["ROM/27/58.DAT"],
+    250: ["ROM2/14/9.DAT"],
+    251: ["ROM2/14/10.DAT"],
+    252: ["ROM2/14/11.DAT"],
+    253: ["ROM/27/62.DAT"],
+    254: ["ROM/27/63.DAT"],
+    255: ["ROM/27/64.DAT"],
+    256: ["ROM9/6/45.DAT"],
+    257: ["ROM9/6/46.DAT"],
+    258: ["ROM9/6/47.DAT"],
+    259: ["ROM9/6/48.DAT"],
+    260: ["ROM9/6/49.DAT"],
+    261: ["ROM9/6/50.DAT"],
+    262: ["ROM9/6/51.DAT"],
+    263: ["ROM9/6/52.DAT"],
+    264: ["ROM9/6/53.DAT"],
+    265: ["ROM9/6/54.DAT"],
+    266: ["ROM9/6/55.DAT"],
+    267: ["ROM9/6/56.DAT"],
+    268: ["ROM9/6/57.DAT"],
+    269: ["ROM9/6/58.DAT"],
+    270: ["ROM9/6/59.DAT"],
+    271: ["ROM9/6/60.DAT"],
+    272: ["ROM9/6/61.DAT"],
+    273: ["ROM9/6/62.DAT"],
+    274: ["ROM9/6/63.DAT"],
+    275: ["ROM9/6/64.DAT", "ROM/373/59.DAT"],
+    276: ["ROM9/6/65.DAT"],
+    277: ["ROM9/6/66.DAT"],
+    278: ["ROM9/6/67.DAT"],
+    279: ["ROM/361/92.DAT", "ROM/363/68.DAT", "ROM/363/70.DAT", "ROM/363/71.DAT"],
+    281: ["ROM/315/114.DAT"],
+    285: ["ROM/306/61.DAT"],
+    288: ["ROM/332/109.DAT"],
+    289: ["ROM/337/66.DAT"],
+    290: ["ROM/342/93.DAT"],
+    291: ["ROM/342/94.DAT"],
+    292: ["ROM/353/61.DAT"],
+    293: ["ROM/342/95.DAT"],
+    294: ["ROM/354/116.DAT"],
+    295: ["ROM/355/5.DAT"],
+    296: ["ROM/355/39.DAT"],
+    297: ["ROM/355/54.DAT"],
+    298: ["ROM/361/92.DAT", "ROM/363/67.DAT", "ROM/363/69.DAT", "ROM/363/71.DAT"],
+}
+
+_SCANZONE_DEFAULT_FFXI = (r"C:\Program Files (x86)\PlayOnline"
+                          r"\SquareEnix\FINAL FANTASY XI")
+
+def _sz_clean_path(s):
+    """Trim whitespace and one layer of surrounding quotes (handles a
+    path that was pasted with quotes around it)."""
+    s = (s or "").strip()
+    if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
+        s = s[1:-1].strip()
+    return s
+
+def _scanzone_ffxi_path():
+    """Resolve the FFXI install root and report where it came from.
+    First match wins:
+       1. env var  OMNIWATCH_FFXI_PATH
+       2. file     <USER_DIR>/ffxi_path.txt   (paste the raw Windows path
+          on one line — no JSON backslash-escaping to get wrong)
+       3. per-character setting  scanzone_ffxi_path
+       4. the default PlayOnline location
+    Returns (path, source_label)."""
+    try:
+        v = _sz_clean_path(os.environ.get("OMNIWATCH_FFXI_PATH", ""))
+        if v:
+            return v, "env"
+    except Exception:
+        pass
+    try:
+        fp = os.path.join(USER_DIR, "ffxi_path.txt")
+        if os.path.isfile(fp):
+            with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+                v = _sz_clean_path(fh.read())
+            if v:
+                return v, "ffxi_path.txt"
+    except Exception:
+        pass
+    try:
+        v = _sz_clean_path(setting("scanzone_ffxi_path") or "")
+        if v:
+            return v, "setting"
+    except Exception:
+        pass
+    return _SCANZONE_DEFAULT_FFXI, "default"
+
+def _scanzone_find(name_query):
+    """Read the current zone's NPC-list DAT(s); return ([(name,id,index)],
+    status_str) for entities whose name contains name_query (ci). Each DAT
+    record is 32 bytes: 28-byte name + 4-byte little-endian server id;
+    target index = id & 0xFFF. Pure client-side file read."""
+    results = []
+    try:
+        zid = int(zone_info.get("zone_id", 0) or 0)
+    except Exception:
+        zid = 0
+    if zid <= 0:
+        return results, "Not in a zone yet (log in / zone first)."
+    dats = _SCANZONE_DATS.get(zid)
+    if not dats:
+        return results, "No DAT mapping for zone %d." % zid
+    q = (name_query or "").strip().lower()
+    if not q:
+        return results, "Type a name fragment to search."
+    base, src = _scanzone_ffxi_path()
+    if not os.path.isdir(base):
+        try:
+            print("[OmniWatch] ScanZone: FFXI path is not a folder: "
+                  "%r (source: %s)" % (base, src))
+        except Exception:
+            pass
+        return results, "FFXI path not found (from %s)" % src
+    opened = 0
+    tried = None
+    for rel in dats:
+        full = os.path.join(base, *rel.split("/"))
+        if tried is None:
+            tried = full
+        try:
+            with open(full, "rb") as fh:
+                opened += 1
+                while True:
+                    rec = fh.read(32)
+                    if not rec or len(rec) < 32:
+                        break
+                    nm = rec[0:28].split(b"\x00")[0].decode(
+                        "latin-1", "replace").rstrip()
+                    if q in nm.lower():
+                        sid = int.from_bytes(rec[28:32], "little")
+                        results.append((nm, sid, sid & 0xFFF))
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+    if opened == 0:
+        try:
+            print("[OmniWatch] ScanZone: no DAT opened under %r "
+                  "(source: %s); tried e.g. %r" % (base, src, tried))
+        except Exception:
+            pass
+        return results, "no DAT opened (path from %s)" % src
+    n = len(results)
+    return results, "%d match%s in zone %d" % (
+        n, "" if n == 1 else "es", zid)
+
+_sz_catalog_cache = {}              # zid -> [index, ...] read from the zone DAT
+_sz_sweep_i       = 0               # cursor into the catalog for the floor pass
+_sz_sweep_last    = 0               # throttle (ms) for the catalog scan sweep
+_sz_sweep_done    = False           # this floor's single discovery pass finished
+_sz_sweep_floor   = -1              # floor the current pass belongs to (-1 = none)
+
+def _scanzone_zone_catalog(zid):
+    """Every entity index in the current zone's DAT (cached). Drives the
+    zone-wide 0x16 scan sweep that discovers live mobs anywhere on the floor
+    -- the same DAT + probe path the Find panel uses, just for all entries."""
+    try:
+        zid = int(zid or 0)
+    except Exception:
+        return []
+    if zid <= 0:
+        return []
+    if zid in _sz_catalog_cache:
+        return _sz_catalog_cache[zid]
+    idxs = []
+    dats = _SCANZONE_DATS.get(zid)
+    if dats:
+        base, _src = _scanzone_ffxi_path()
+        if os.path.isdir(base):
+            seen = set()
+            for rel in dats:
+                full = os.path.join(base, *rel.split("/"))
+                try:
+                    with open(full, "rb") as fh:
+                        while True:
+                            rec = fh.read(32)
+                            if not rec or len(rec) < 32:
+                                break
+                            sid = int.from_bytes(rec[28:32], "little")
+                            ix = sid & 0xFFF
+                            if ix and ix not in seen:
+                                seen.add(ix)
+                                idxs.append(ix)
+                except Exception:
+                    continue
+    _sz_catalog_cache[zid] = idxs
+    return idxs
+
+# ── Scan Zone panel state ────────────────────────────────────────────────
+# Position/size read from globals() so a value restored by load_layout()
+# (which runs earlier at import) survives this default assignment.
+scanzone_panel_open = False
+scanzone_panel_pos  = globals().get("scanzone_panel_pos") or [160, 140]
+scanzone_panel_w    = globals().get("scanzone_panel_w") or 520
+scanzone_panel_h    = globals().get("scanzone_panel_h") or 340
+_SZ_MIN_W, _SZ_MAX_W = 320, 820
+_SZ_MIN_H, _SZ_MAX_H = 200, 760
+_sz_drag_off        = None          # (dx,dy) while dragging the title bar
+_sz_resize_off      = None          # (dx,dy) while dragging the resize grip
+_sz_pan_off         = None          # (mx,my,panx,pany) while panning a view
+_sz_listbar_drag    = None          # (trk_y,trk_h,thumb_h,max,grab) list bar
+_sz_rosterbar_drag  = None          # same tuple, for the tracked-roster bar
+
+# ── DEV · Synergy (furnace minigame) ────────────────────────────────────
+# Fed by the Lua Synergy engine over the gs channel (SYNERGY|...). The panel
+# is sentinel-gated like Scan Zone and toggled with Ctrl+Shift+Y. Element
+# order is fire, ice, wind, earth, thunder, water, light, dark throughout.
+_SYNERGY_ELEMS = ["fire", "ice", "wind", "earth",
+                  "thunder", "water", "light", "dark"]
+_SYNERGY_ELEM_LABEL = {"fire": "Fire", "ice": "Ice", "wind": "Wind",
+                       "earth": "Earth", "thunder": "Thndr", "water": "Water",
+                       "light": "Light", "dark": "Dark"}
+_SYNERGY_ELEM_COL = {
+    "fire": (224, 96, 72),   "ice": (120, 196, 224), "wind": (132, 208, 150),
+    "earth": (198, 168, 110), "thunder": (208, 176, 96),
+    "water": (110, 150, 224), "light": (228, 224, 200), "dark": (170, 130, 210)}
+synergy_state = {
+    "in": False, "target": None, "index": None,
+    "needed": [0] * 8, "current": [0] * 8, "fewell": [0] * 8,
+    "pressure": 0, "ratio": 0, "leak": "", "fix": "",
+    "overload": False, "hpp": 0, "last": 0.0}
+synergy_panel_open = False
+synergy_panel_pos  = globals().get("synergy_panel_pos") or [220, 180]
+
+# Combined Crafting / Synergy panel: one draggable window, two tabs.
+craftsyn_open = globals().get("craftsyn_open") or False
+craftsyn_tab  = globals().get("craftsyn_tab") or "craft"
+craftsyn_pos  = globals().get("craftsyn_pos") or [260, 200]
+
+
+def _craftsyn_draw_tabs(surface, tx, ty, tw, th, rects, fnt_b):
+    """Two-tab strip (Crafting | Synergy) shared by both panel bodies."""
+    half = tw // 2
+    for i, (k, label) in enumerate((("craft", "Crafting"),
+                                    ("synergy", "Synergy"))):
+        r = pygame.Rect(tx + i * half, ty, half - 1, th - 2)
+        on = (craftsyn_tab == k)
+        pygame.draw.rect(surface, (54, 74, 104) if on else (32, 36, 46),
+                         r, border_radius=3)
+        pygame.draw.rect(surface, (95, 130, 180) if on else (64, 70, 84),
+                         r, 1, border_radius=3)
+        t = fnt_b.render(label, True,
+                         (216, 228, 245) if on else (150, 158, 172))
+        surface.blit(t, (r.centerx - t.get_width() // 2,
+                         r.centery - t.get_height() // 2))
+        rects["tab:" + k] = r
+_syn_drag_off = None
+_syn_rects = {}
+
+def _syn_int8(seq):
+    out = []
+    for k in range(8):
+        try:
+            out.append(int(seq[k]))
+        except Exception:
+            out.append(0)
+    return out
+
+def _synergy_send(sub):
+    """Send a SYNERGY|<sub> command to the Lua engine (feed/func/etc.)."""
+    try:
+        sock_cmd_out.sendto(("SYNERGY|" + sub).encode("utf-8"), _cmd_addr())
+    except Exception:
+        pass
+
+def _syn_clear_rects():
+    _syn_rects.clear()
+
+def _syn_btn(surface, rect, label, font, bg, fg, bd=None):
+    pygame.draw.rect(surface, bg, rect, border_radius=3)
+    pygame.draw.rect(surface, bd or (72, 78, 92), rect, 1, border_radius=3)
+    t = font.render(label, True, fg)
+    surface.blit(t, (rect.centerx - t.get_width() // 2,
+                     rect.centery - t.get_height() // 2))
+
+def draw_synergy_window(surface):
+    _syn_clear_rects()
+    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "synergy"):
+        return
+    pad, title_h, tab_h = 8, 22, 18
+    cols = 8
+    col_w, col_gap = 50, 3
+    gutter = 30                      # left label column (Nd/Cur/Fwl)
+    grid_w = cols * col_w + (cols - 1) * col_gap
+    w = gutter + grid_w + 2 * pad
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    line_h = 16
+    hp_h = 14
+    grid_h = 18 + 3 * line_h
+    status_h = 18
+    btn_h = 20
+    btn_rows = 2
+    body_h = (pad + hp_h + pad + grid_h + pad + status_h + pad
+              + btn_rows * btn_h + (btn_rows - 1) * col_gap + pad)
+    h = title_h + tab_h + body_h
+    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
+    craftsyn_pos[0], craftsyn_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _syn_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL,    panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
+    except Exception:
+        pass
+
+    # title bar (drag handle) + close
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("DEV \u00b7 Crafting / Synergy", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _syn_rects["close"] = close_r
+    _syn_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+    _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _syn_rects, fnt_b)
+
+    cy = y + title_h + tab_h + pad
+    _flash = (int(time.time() * 2) % 2 == 0)
+
+    if not synergy_state.get("in"):
+        msg = fnt.render("Trade a Synergy Furnace to begin.",
+                         True, (180, 188, 200))
+        surface.blit(msg, (x + pad, cy))
+        cy += line_h + pad
+        bw = (w - 2 * pad - col_gap) // 2
+        ref_r = pygame.Rect(x + pad, cy, bw, btn_h)
+        rfr_r = pygame.Rect(ref_r.right + col_gap, cy, bw, btn_h)
+        _syn_btn(surface, ref_r, "Re-fewell", fnt_s, (52, 66, 50), (200, 220, 200))
+        _syn_btn(surface, rfr_r, "Refresh", fnt_s, (44, 48, 58), (190, 196, 210))
+        _syn_rects["refewell"] = ref_r
+        _syn_rects["refresh"]  = rfr_r
+        return
+
+    # furnace HP bar
+    hpp = max(0, min(100, int(synergy_state.get("hpp", 0))))
+    bar_r = pygame.Rect(x + pad, cy, w - 2 * pad, hp_h)
+    pygame.draw.rect(surface, (28, 30, 36), bar_r, border_radius=2)
+    fillw = int(bar_r.width * hpp / 100.0)
+    if fillw > 0:
+        _hc = ((200, 80, 80) if hpp < 25 else
+               (210, 180, 90) if hpp < 50 else (110, 180, 110))
+        pygame.draw.rect(surface, _hc,
+                         (bar_r.x, bar_r.y, fillw, bar_r.height), border_radius=2)
+    pygame.draw.rect(surface, (70, 76, 90), bar_r, 1, border_radius=2)
+    _hl = fnt_s.render("Furnace HP %d%%" % hpp, True, (215, 219, 228))
+    surface.blit(_hl, (bar_r.centerx - _hl.get_width() // 2,
+                       bar_r.centery - _hl.get_height() // 2))
+    cy += hp_h + pad
+
+    # row legend in the left gutter
+    for ri, rl in enumerate(("Nd", "Cur", "Fwl")):
+        gl = fnt_s.render(rl, True, (150, 158, 172))
+        surface.blit(gl, (x + pad, cy + 18 + ri * line_h))
+
+    need = synergy_state.get("needed", [0] * 8)
+    cur  = synergy_state.get("current", [0] * 8)
+    fwl  = synergy_state.get("fewell", [0] * 8)
+    leak = synergy_state.get("leak", "")
+    fix  = synergy_state.get("fix", "")
+    gx = x + pad + gutter
+    for ci, elem in enumerate(_SYNERGY_ELEMS):
+        cxr = pygame.Rect(gx + ci * (col_w + col_gap), cy, col_w, grid_h)
+        bg = (24, 26, 32)
+        if elem == fix:
+            bg = (28, 46, 30)               # the element that fixes a leak
+        if elem == leak and _flash:
+            bg = (60, 28, 28)               # the leaking element (flash)
+        pygame.draw.rect(surface, bg, cxr, border_radius=3)
+        pygame.draw.rect(surface, (60, 66, 78), cxr, 1, border_radius=3)
+        lbl = fnt_b.render(_SYNERGY_ELEM_LABEL[elem], True,
+                           _SYNERGY_ELEM_COL[elem])
+        surface.blit(lbl, (cxr.centerx - lbl.get_width() // 2, cxr.y + 2))
+        _nd = need[ci]
+        _cu = cur[ci]
+        t0 = fnt.render(str(_nd), True, (182, 188, 200))
+        surface.blit(t0, (cxr.centerx - t0.get_width() // 2, cxr.y + 18))
+        _cc = ((120, 200, 120) if (_nd and _cu >= _nd) else (222, 212, 150))
+        t1 = fnt.render(str(_cu), True, _cc)
+        surface.blit(t1, (cxr.centerx - t1.get_width() // 2,
+                          cxr.y + 18 + line_h))
+        t2 = fnt.render(str(fwl[ci]), True, (150, 170, 210))
+        surface.blit(t2, (cxr.centerx - t2.get_width() // 2,
+                          cxr.y + 18 + 2 * line_h))
+        _syn_rects.setdefault("feed", []).append((cxr, elem))
+    cy += grid_h + pad
+
+    # status: pressure / impurity / overload
+    pres  = synergy_state.get("pressure", 0)
+    ratio = synergy_state.get("ratio", 0)
+    st = fnt.render("Pressure %d    Impurity %d%%" % (pres, ratio),
+                    True, (220, 120, 120) if ratio >= 50 else (200, 204, 214))
+    surface.blit(st, (x + pad, cy))
+    if synergy_state.get("overload"):
+        ot = fnt_b.render("OVERLOAD", True,
+                          (240, 90, 90) if _flash else (150, 60, 60))
+        surface.blit(ot, (x + w - pad - ot.get_width(), cy))
+    cy += status_h + pad
+
+    # furnace function buttons (two rows of 4)
+    fb_w = (w - 2 * pad - 3 * col_gap) // 4
+    row1 = [("Thwack", "thwack"), ("Pressure", "pressure"),
+            ("Safety", "safety"), ("Repair", "repair")]
+    row2 = [("Recycle", "recycle"), ("Smock", "smock"),
+            ("Refresh", "refresh"), ("End", "end")]
+    for ri, row in enumerate((row1, row2)):
+        by = cy + ri * (btn_h + col_gap)
+        for bi, (label, key) in enumerate(row):
+            br = pygame.Rect(x + pad + bi * (fb_w + col_gap), by, fb_w, btn_h)
+            if key == "end":
+                _syn_btn(surface, br, label, fnt_s, (74, 44, 44),
+                         (228, 188, 188), (120, 70, 70))
+            else:
+                _syn_btn(surface, br, label, fnt_s, (44, 48, 58),
+                         (196, 202, 214))
+            _syn_rects[key] = br
+
+def _synergy_handle_event(event):
+    global craftsyn_open, craftsyn_tab, _syn_drag_off
+    # toggle combo (Ctrl+Shift+Y), gated by the dev sentinel; works
+    # whether the panel is open or closed.
+    if (_DEV_ENABLED and event.type == pygame.KEYDOWN
+            and event.key == pygame.K_y):
+        m = pygame.key.get_mods()
+        if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
+            if craftsyn_open and craftsyn_tab == "synergy":
+                craftsyn_open = False
+            else:
+                craftsyn_open = True; craftsyn_tab = "synergy"
+            return True
+    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "synergy"):
+        return False
+    r = _syn_rects
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            craftsyn_open = False
+            return True
+        for _tk in ("craft", "synergy"):
+            _tr = r.get("tab:" + _tk)
+            if _tr and _tr.collidepoint(mx, my):
+                craftsyn_tab = _tk
+                return True
+        for rect, elem in r.get("feed", []):
+            if rect.collidepoint(mx, my):
+                _synergy_send("feed|" + elem)
+                return True
+        for key, sub in (("thwack", "func|thwack"),
+                         ("pressure", "func|pressure"),
+                         ("safety", "func|safety_lever"),
+                         ("repair", "func|repair_furnace"),
+                         ("recycle", "func|recycle"),
+                         ("smock", "func|smock"),
+                         ("refresh", "refresh"),
+                         ("end", "end"),
+                         ("refewell", "refewell")):
+            rr = r.get(key)
+            if rr and rr.collidepoint(mx, my):
+                _synergy_send(sub)
+                return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            _syn_drag_off = (mx - craftsyn_pos[0],
+                             my - craftsyn_pos[1])
+            return True
+        # swallow any click inside the panel so it doesn't fall through to
+        # panels drawn behind it
+        pr = r.get("panel")
+        if pr and pr.collidepoint(mx, my):
+            return True
+        return False
+    if event.type == pygame.MOUSEMOTION and _syn_drag_off is not None:
+        mx, my = event.pos
+        craftsyn_pos[0] = mx - _syn_drag_off[0]
+        craftsyn_pos[1] = my - _syn_drag_off[1]
+        return True
+    if (event.type == pygame.MOUSEBUTTONUP and event.button == 1
+            and _syn_drag_off is not None):
+        _syn_drag_off = None
+        return True
+    return False
+
+# ── DEV · Craft (auto-synthesis) ────────────────────────────────────────
+# Panel for the embedded Lua craft engine. The panel owns the recipe DB
+# (recipes.json, ~4.2k recipes) and does recipe search locally; on Make it
+# hands the engine the crystal + ingredient short-names. Status/queue/result
+# come back over the gs channel (CRAFT|...). Sentinel-gated; toggle
+# Ctrl+Shift+R.
+def _craft_load_recipes():
+    try:
+        if getattr(sys, "frozen", False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        base_dir = os.getcwd()
+    for cand in (os.path.join(base_dir, "recipes.json"),
+                 os.path.join(base_dir, "data", "recipes.json"),
+                 os.path.join(os.getcwd(), "recipes.json")):
+        try:
+            if os.path.isfile(cand):
+                with open(cand, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                if isinstance(d, dict):
+                    return d
+        except (OSError, ValueError):
+            pass
+    return {}
+
+craft_recipes = _craft_load_recipes()
+craft_state = {
+    "delay": 24, "paused": False, "display": False, "food": "",
+    "support": False, "jiggle": "", "qlen": 0, "hq": False, "busy": False,
+    "last": ""}
+craft_log = []                      # rolling CRAFT|msg lines (most recent last)
+craft_panel_open = False
+craft_panel_pos = globals().get("craft_panel_pos") or [260, 200]
+_craft_drag_off = None
+_craft_rects = {}
+craft_query = ""
+craft_results = []                  # filtered recipe names (sorted)
+craft_sel = None                    # selected recipe name
+craft_count = "1"
+craft_focus = ""                    # "", "search", "count", "food", "jiggle"
+craft_scroll = 0
+
+def _craft_send(sub):
+    try:
+        sock_cmd_out.sendto(("CRAFT|" + sub).encode("utf-8"), _cmd_addr())
+    except Exception:
+        pass
+
+def _craft_clear_rects():
+    _craft_rects.clear()
+
+def _craft_btn(surface, rect, label, font, bg, fg, bd=None):
+    pygame.draw.rect(surface, bg, rect, border_radius=3)
+    pygame.draw.rect(surface, bd or (72, 78, 92), rect, 1, border_radius=3)
+    t = font.render(label, True, fg)
+    surface.blit(t, (rect.centerx - t.get_width() // 2,
+                     rect.centery - t.get_height() // 2))
+
+def _craft_filter():
+    global craft_results, craft_scroll
+    q = craft_query.strip().lower()
+    if not q:
+        craft_results = []
+    else:
+        out = [n for n in craft_recipes if q in n.lower()]
+        out.sort()
+        craft_results = out[:300]
+    craft_scroll = 0
+
+
+# ── DEV · SkillUp panel ───────────────────────────────────────────────────
+# Standalone control panel for the lua SkillUp engine (_ow_su_*). Buttons
+# send SKILLUP|... to the gs channel; SKILLUP|status|... refreshes this state.
+skillup_state = {
+    "type": "None", "running": False, "rate": 0.0, "total": 0.0,
+    "use_trust": False, "use_geo": False, "use_item": False, "stoptype": "Stop",
+}
+skillup_panel_open = False
+skillup_panel_pos = globals().get("skillup_panel_pos") or [320, 240]
+_skillup_rects = {}
+_skillup_drag = {"on": False, "dx": 0, "dy": 0}
+_SKILLUP_SKILLS = ["Healing", "Geomancy", "Enhancing", "Ninjutsu",
+                   "Singing", "Blue", "Summoning"]
+
+def _skillup_clear_rects():
+    _skillup_rects.clear()
+
+def _skillup_send(sub):
+    try:
+        sock_cmd_out.sendto(("SKILLUP|" + sub).encode("utf-8"), _cmd_addr())
+    except Exception:
+        pass
+
+def draw_skillup_window(surface):
+    global skillup_panel_pos
+    _skillup_clear_rects()
+    if not (_DEV_ENABLED and skillup_panel_open):
+        return
+    pad, title_h = 8, 22
+    w = 250
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    btn_h, row_h = 20, 16
+    h = (title_h + pad + 2 * row_h + 6
+         + row_h + 4 * (btn_h + 4) + 6
+         + btn_h + 8
+         + row_h + btn_h + 6
+         + row_h + btn_h + pad)
+    x = max(0, min(int(skillup_panel_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(skillup_panel_pos[1]), surface.get_height() - h))
+    skillup_panel_pos[0], skillup_panel_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _skillup_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
+    except Exception:
+        pass
+
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("DEV \u00b7 SkillUp", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _skillup_rects["close"] = close_r
+    _skillup_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+
+    def button(rect, label, on=False, on_bg=(45, 80, 60), on_bd=(70, 120, 90),
+               on_tx=(200, 235, 210), off_bg=(44, 48, 58), off_bd=(72, 78, 92),
+               off_tx=(170, 178, 190)):
+        pygame.draw.rect(surface, on_bg if on else off_bg, rect, border_radius=3)
+        pygame.draw.rect(surface, on_bd if on else off_bd, rect, 1, border_radius=3)
+        t = fnt_s.render(label, True, on_tx if on else off_tx)
+        surface.blit(t, (rect.centerx - t.get_width() // 2,
+                         rect.centery - t.get_height() // 2))
+
+    st = skillup_state
+    cy = y + title_h + pad
+    mode = str(st.get("type", "None"))
+    runtxt = "Running" if st.get("running") else "Stopped"
+    runcol = (140, 220, 150) if st.get("running") else (210, 140, 140)
+    surface.blit(fnt.render("Mode: " + mode, True, (210, 215, 225)), (x + pad, cy))
+    rt = fnt_b.render(runtxt, True, runcol)
+    surface.blit(rt, (x + w - pad - rt.get_width(), cy))
+    cy += row_h
+    surface.blit(fnt.render("Skillups/hr: %.1f   Total: %.1f"
+                            % (st.get("rate", 0.0), st.get("total", 0.0)),
+                            True, (235, 225, 140)), (x + pad, cy))
+    cy += row_h + 6
+
+    surface.blit(fnt_s.render("Start:", True, (150, 160, 175)), (x + pad, cy))
+    cy += row_h
+    col_w = (w - 2 * pad - 6) // 2
+    for i, sk in enumerate(_SKILLUP_SKILLS):
+        bx = x + pad + (i % 2) * (col_w + 6)
+        by = cy + (i // 2) * (btn_h + 4)
+        r = pygame.Rect(bx, by, col_w, btn_h)
+        active = st.get("running") and mode.lower() == sk.lower()
+        button(r, sk, on=active, on_bg=(80, 70, 40), on_bd=(150, 120, 60),
+               on_tx=(245, 225, 170))
+        _skillup_rects["start:" + sk] = r
+    cy += 4 * (btn_h + 4) + 6
+
+    stop_r = pygame.Rect(x + pad, cy, w - 2 * pad, btn_h)
+    button(stop_r, "Stop", on=not st.get("running"),
+           on_bg=(70, 45, 45), on_bd=(150, 80, 80), on_tx=(240, 200, 200))
+    _skillup_rects["stop"] = stop_r
+    cy += btn_h + 8
+
+    surface.blit(fnt_s.render("Options:", True, (150, 160, 175)), (x + pad, cy))
+    cy += row_h
+    tw = (w - 2 * pad - 8) // 3
+    for i, (lab, key, cmd) in enumerate(
+            [("Trust", "use_trust", "trust"), ("Geo", "use_geo", "geo"),
+             ("Item", "use_item", "item")]):
+        r = pygame.Rect(x + pad + i * (tw + 4), cy, tw, btn_h)
+        button(r, lab, on=st.get(key, False))
+        _skillup_rects["toggle:" + cmd] = r
+    cy += btn_h + 6
+
+    surface.blit(fnt_s.render("When done:", True, (150, 160, 175)), (x + pad, cy))
+    cy += row_h
+    aw = (w - 2 * pad - 8) // 3
+    for i, (lab, val, cmd) in enumerate(
+            [("Stop", "Stop", "stop"), ("Shutdown", "Shutdown", "shutdown"),
+             ("Logoff", "Logoff", "logoff")]):
+        r = pygame.Rect(x + pad + i * (aw + 4), cy, aw, btn_h)
+        button(r, lab, on=(st.get("stoptype") == val),
+               on_bg=(45, 60, 85), on_bd=(90, 120, 170), on_tx=(200, 220, 245))
+        _skillup_rects["after:" + cmd] = r
+
+def _skillup_handle_event(event):
+    if not (_DEV_ENABLED and skillup_panel_open):
+        return False
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        r = _skillup_rects.get("close")
+        if r and r.collidepoint(mx, my):
+            _toggle_skillup_panel()
+            return True
+        r = _skillup_rects.get("title")
+        if r and r.collidepoint(mx, my):
+            _skillup_drag["on"] = True
+            _skillup_drag["dx"] = mx - skillup_panel_pos[0]
+            _skillup_drag["dy"] = my - skillup_panel_pos[1]
+            return True
+        for key, rr in list(_skillup_rects.items()):
+            if rr.collidepoint(mx, my):
+                if key.startswith("start:"):
+                    _skillup_send("start|" + key.split(":", 1)[1].lower())
+                    return True
+                if key == "stop":
+                    _skillup_send("stop")
+                    return True
+                if key.startswith("toggle:"):
+                    _skillup_send("toggle|" + key.split(":", 1)[1])
+                    return True
+                if key.startswith("after:"):
+                    _skillup_send("after|" + key.split(":", 1)[1])
+                    return True
+        r = _skillup_rects.get("panel")
+        if r and r.collidepoint(mx, my):
+            return True
+    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _skillup_drag["on"]:
+            _skillup_drag["on"] = False
+            return True
+    elif event.type == pygame.MOUSEMOTION:
+        if _skillup_drag["on"]:
+            mx, my = event.pos
+            skillup_panel_pos[0] = mx - _skillup_drag["dx"]
+            skillup_panel_pos[1] = my - _skillup_drag["dy"]
+            return True
+    return False
+
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  DEV · Auction House panel
+#  Framework: Buy / Sell / List tabs, a working section (left) + a purchase-
+#  results log (right). Buy tab carries the search box, an AH-style expandable
+#  category tree, a multi-item buy queue (each item has start price / max price
+#  / increment), and a throttle so transactions never outpace the server.
+#  Item data + execution live Lua-side (_ow_ah_*); this panel is display +
+#  control over UDP. AH|items|... fills the result list; AH|result|... and
+#  AH|status|... feed the log + run state.
+# ══════════════════════════════════════════════════════════════════════════
+ah_state = {
+    "search": "",
+    "search_focus": False,
+    "tab": "buy",            # buy | sell
+    "items": [],             # [{"id": int, "name": str}] from AH|items
+    "items_scroll": 0,
+    "sort": "name",         # name | level_asc | level_desc
+    "txns": [],             # persisted recent purchases [{name,price,time}]
+    "iteminfo": {},          # id -> [tooltip lines] (hover cache)
+    "info_seen": set(),      # ids already requested
+    "inv": [],               # sellable inventory [{id,name,count,stack}]
+    "inv_scroll": 0,
+    "sales": [],             # 7 sale slots [{slot,status,name,count,price,ts}]
+    "sell_id": None,
+    "sell_single": 1,        # 1=single, 0=stack
+    "sell_price": 0,
+    "prices": {},            # item_id(str) -> remembered price (persisted)
+    "queue": [],             # [{"id","name","qty","start","max","inc","status"}]
+    "queue_scroll": 0,
+    "throttle": 8.0,         # seconds between transactions (server-respect)
+    "running": False,
+    "results": [],           # purchase-result log lines (newest appended)
+    "results_scroll": 0,
+    "edit": None,            # ("throttle",) | ("q", idx, "start|max|inc|qty")
+    "edit_buf": "",
+}
+ah_panel_open = False
+ah_panel_pos = globals().get("ah_panel_pos") or [260, 170]
+_ah_rects = {}
+_ah_item_tip_rects = []   # [(rect, item_id)] for hover tooltips
+_ah_drag = {"on": False, "dx": 0, "dy": 0}
+
+def _ah_clear_rects():
+    _ah_rects.clear()
+    _ah_item_tip_rects.clear()
+
+def _ah_send(sub):
+    try:
+        sock_cmd_out.sendto(("AH|" + sub).encode("utf-8"), _cmd_addr())
+    except Exception:
+        pass
+
+def _ah_run_search():
+    _ah_send("search|%s|" % ah_state["search"])
+
+def _ah_add_to_queue(item):
+    st = int(item.get("stack", 0))
+    for q in ah_state["queue"]:
+        if q["id"] == item["id"] and q.get("stack", 0) == st:
+            return
+    ah_state["queue"].append({
+        "id": item["id"], "name": item["name"], "qty": 1,
+        "start": 1000, "max": 5000, "inc": 500, "status": "",
+        "stack": st, "ssize": int(item.get("ssize", 1) or 1),
+    })
+
+def _ah_open_ffxiah(item_id):
+    """Open the item's FFXIAH page (recent sales / going rate) in the browser.
+    Just a link — no scraping. FFXIAH shows whichever server you've selected
+    on their site (stored in their `sid` cookie); set it to your world once.
+    Tries several openers because webbrowser.open can silently no-op under the
+    game launcher, and logs the URL either way so it's always reachable."""
+    url = "https://www.ffxiah.com/item/%d" % int(item_id)
+    opened = False
+    try:
+        opened = bool(webbrowser.open(url, new=2))
+    except Exception:
+        opened = False
+    if not opened:
+        try:
+            os.startfile(url)            # Windows shell default handler
+            opened = True
+        except Exception:
+            pass
+    if not opened:
+        try:
+            import subprocess
+            subprocess.Popen('cmd /c start "" "%s"' % url, shell=True)
+            opened = True
+        except Exception:
+            pass
+    try:
+        _ah_log(("FFXIAH: " + url) if opened
+                else ("FFXIAH (open in browser): " + url))
+    except Exception:
+        pass
+
+def _ah_log(line):
+    ah_state["results"].append(line)
+    if len(ah_state["results"]) > 300:
+        ah_state["results"] = ah_state["results"][-300:]
+
+def _ah_draw_tooltip(surface, mx, my, lines, fnt, fnt_b, fnt_s):
+    pad = 6
+    fonts = [fnt_b] + [fnt_s] * max(0, len(lines) - 1)
+    tw = 0
+    th = pad * 2
+    for f, ln in zip(fonts, lines):
+        tw = max(tw, f.size(ln)[0])
+        th += f.get_height()
+    tw += pad * 2
+    x, y = mx + 14, my + 16
+    sw, sh = surface.get_width(), surface.get_height()
+    if x + tw > sw:
+        x = mx - tw - 10
+    if y + th > sh:
+        y = sh - th - 4
+    x = max(2, x)
+    y = max(2, y)
+    box = pygame.Rect(x, y, tw, th)
+    pygame.draw.rect(surface, (12, 14, 20), box, border_radius=4)
+    pygame.draw.rect(surface, (96, 104, 126), box, 1, border_radius=4)
+    yy = y + pad
+    _pzone = False
+    for i, (f, ln) in enumerate(zip(fonts, lines)):
+        _sep = ln.startswith("\u2500 your prices")
+        if _sep:
+            _pzone = True
+        if i == 0:
+            col = (236, 228, 168)
+        elif _sep:
+            col = (140, 150, 168)
+        elif _pzone:
+            col = (150, 214, 162)
+        else:
+            col = (200, 208, 224)
+        surface.blit(f.render(ln, True, col), (x + pad, yy))
+        yy += f.get_height()
+
+def draw_ah_window(surface):
+    global ah_panel_pos
+    _ah_clear_rects()
+    if not ah_panel_open:
+        return
+    pad, title_h, tab_h = 8, 22, 22
+    w, h = 680, 452
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    x = max(0, min(int(ah_panel_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(ah_panel_pos[1]), surface.get_height() - h))
+    ah_panel_pos[0], ah_panel_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _ah_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
+    except Exception:
+        pass
+
+    # title + close
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Auction House", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _ah_rects["close"] = close_r
+    _ah_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+
+    def btn(rect, label, on=False, on_bg=(60, 80, 110), on_bd=(95, 130, 180),
+            on_tx=(210, 225, 245), off_bg=(44, 48, 58), off_bd=(72, 78, 92),
+            off_tx=(170, 178, 190), font=None):
+        font = font or fnt_s
+        pygame.draw.rect(surface, on_bg if on else off_bg, rect, border_radius=3)
+        pygame.draw.rect(surface, on_bd if on else off_bd, rect, 1, border_radius=3)
+        t = font.render(label, True, on_tx if on else off_tx)
+        surface.blit(t, (rect.centerx - t.get_width() // 2,
+                         rect.centery - t.get_height() // 2))
+
+    def field(rect, text, focused, placeholder=""):
+        pygame.draw.rect(surface, (16, 18, 22), rect, border_radius=3)
+        pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
+                         rect, 1, border_radius=3)
+        disp = text
+        while disp and fnt_s.size(disp)[0] > rect.width - 8:
+            disp = disp[1:]
+        shown = disp if text else placeholder
+        col = (228, 228, 233) if text else (118, 126, 140)
+        surface.blit(fnt_s.render(shown, True, col),
+                     (rect.x + 4, rect.centery - fnt_s.get_height() // 2))
+        if focused:
+            cx = rect.x + 4 + (fnt_s.size(disp)[0] if disp else 0)
+            pygame.draw.line(surface, (220, 220, 230),
+                             (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
+
+    # body: working pane | right results log  (buy-only; no tabs)
+    ty = y + title_h
+    body_y = ty + 4
+    body_h = (y + h - pad) - body_y
+    res_w = 196
+    left = pygame.Rect(x + pad, body_y, w - 3 * pad - res_w, body_h)
+    right = pygame.Rect(left.right + pad, body_y, res_w, body_h)
+
+    # ── right: purchase-results log (persistent across tabs) ──
+    pygame.draw.rect(surface, (18, 20, 26), right, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 80), right, 1, border_radius=3)
+    surface.blit(fnt_b.render("Results", True, (200, 208, 222)),
+                 (right.x + 6, right.y + 4))
+    log_clip = surface.get_clip()
+    surface.set_clip(pygame.Rect(right.x + 2, right.y + 20,
+                                 right.width - 4, right.height - 24))
+    line_h = 14
+    visible = max(1, (right.height - 26) // line_h)
+    total = len(ah_state["results"])
+    off = max(0, min(ah_state["results_scroll"], max(0, total - visible)))
+    ah_state["results_scroll"] = off
+    ly = right.y + 22
+    for ln in ah_state["results"][off:off + visible]:
+        d = ln
+        while d and fnt_s.size(d)[0] > right.width - 12:
+            d = d[:-1]
+        surface.blit(fnt_s.render(d, True, (188, 196, 210)), (right.x + 6, ly))
+        ly += line_h
+    surface.set_clip(log_clip)
+    _ah_rects["results"] = right
+
+    # ── Buy / Sell tab bar over the working pane ──
+    tab_h = 20
+    _tw = left.width // 2
+    for _i, (_tk, _tl) in enumerate((("buy", "Buy"), ("sell", "Sell"))):
+        _tr = pygame.Rect(left.x + _i * _tw, left.y, _tw, tab_h)
+        btn(_tr, _tl, on=(ah_state.get("tab", "buy") == _tk), font=fnt_b)
+        _ah_rects["tab:" + _tk] = _tr
+    content = pygame.Rect(left.x, left.y + tab_h + 4,
+                          left.width, left.height - tab_h - 4)
+    if ah_state.get("tab") == "sell":
+        _ah_draw_sell(surface, content, fnt, fnt_b, fnt_s, btn, field)
+    else:
+        _ah_draw_buy(surface, content, fnt, fnt_b, fnt_s, btn, field)
+
+    # ── item hover tooltip (what am I buying / selling) ──
+    mx, my = pygame.mouse.get_pos()
+    _hover_id = None
+    for _rr, _iid in _ah_item_tip_rects:
+        if _rr.collidepoint(mx, my):
+            _hover_id = _iid
+            break
+    if _hover_id is not None:
+        if (_hover_id not in ah_state["iteminfo"]
+                and _hover_id not in ah_state["info_seen"]):
+            ah_state["info_seen"].add(_hover_id)
+            _ah_send("info|%d" % _hover_id)
+        _tip = ah_state["iteminfo"].get(_hover_id)
+        if _tip:
+            _plines = _ah_price_lines(_hover_id, _tip[0] if _tip else "")
+            _ah_draw_tooltip(surface, mx, my, _tip + _plines, fnt, fnt_b, fnt_s)
+
+def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
+    pad = 6
+    # search row: field + Find + sort toggle
+    sr = pygame.Rect(area.x, area.y, area.width - 124, 22)
+    field(sr, ah_state["search"], ah_state["search_focus"], "search items\u2026")
+    _ah_rects["search"] = sr
+    go_r = pygame.Rect(sr.right + 5, area.y, 48, 22)
+    btn(go_r, "Find")
+    _ah_rects["search_go"] = go_r
+    _sort_lbl = {"name": "A-Z", "level_asc": "Lv\u2191",
+                 "level_desc": "Lv\u2193"}.get(ah_state.get("sort", "name"), "A-Z")
+    sort_r = pygame.Rect(go_r.right + 5, area.y, 66, 22)
+    btn(sort_r, "Sort " + _sort_lbl)
+    _ah_rects["ah_sort"] = sort_r
+
+    # middle: item results (full width — categories removed)
+    mid_y = area.y + 28
+    mid_h = area.height - 28 - 150        # leave room for the queue below
+    items_r = pygame.Rect(area.x, mid_y, area.width, mid_h)
+
+    # item results
+    pygame.draw.rect(surface, (16, 18, 22), items_r, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 80), items_r, 1, border_radius=3)
+    iclip = surface.get_clip()
+    surface.set_clip(items_r.inflate(-2, -2))
+    items = list(ah_state["items"])
+    _mode = ah_state.get("sort", "name")
+    if _mode == "level_asc":
+        items.sort(key=lambda it: (it.get("level", 0), it["name"].lower()))
+    elif _mode == "level_desc":
+        items.sort(key=lambda it: (-it.get("level", 0), it["name"].lower()))
+    else:
+        items.sort(key=lambda it: it["name"].lower())
+    ih = 15
+    ivis = max(1, (items_r.height - 4) // ih)
+    ioff = max(0, min(ah_state["items_scroll"], max(0, len(items) - ivis)))
+    ah_state["items_scroll"] = ioff
+    iy = items_r.y + 3
+    if not items:
+        surface.blit(fnt_s.render("search for an item\u2026", True,
+                                  (120, 128, 142)), (items_r.x + 6, iy))
+    for it in items[ioff:ioff + ivis]:
+        irow = pygame.Rect(items_r.x + 2, iy, items_r.width - 4, ih)
+        nm = it["name"]
+        while nm and fnt_s.size(nm)[0] > items_r.width - 48:
+            nm = nm[:-1]
+        surface.blit(fnt_s.render(nm, True, (206, 212, 224)), (irow.x + 4, irow.y))
+        _lv = it.get("level", 0)
+        if _lv:
+            _lvs = fnt_s.render("Lv%d" % _lv, True, (150, 162, 184))
+            surface.blit(_lvs, (irow.right - 16 - _lvs.get_width(), irow.y))
+        surface.blit(fnt_s.render("+", True, (150, 210, 160)),
+                     (irow.right - 12, irow.y))
+        _ah_rects["item:%d:%d" % (it["id"], it.get("stack", 0))] = irow
+        _ah_item_tip_rects.append((irow, it["id"]))
+        iy += ih
+    surface.set_clip(iclip)
+
+    # buy queue
+    q_y = mid_y + mid_h + 6
+    q_r = pygame.Rect(area.x, q_y, area.width, area.height - (q_y - area.y) - 26)
+    pygame.draw.rect(surface, (16, 18, 22), q_r, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 80), q_r, 1, border_radius=3)
+    # header
+    surface.blit(fnt_s.render("Queue", True, (150, 160, 175)), (q_r.x + 6, q_r.y + 3))
+    cols = [("item", q_r.x + 6, 150), ("qty", q_r.x + 158, 30),
+            ("start", q_r.x + 192, 56), ("max", q_r.x + 252, 56),
+            ("inc", q_r.x + 312, 50)]
+    for lab, cx, cw in cols[1:]:
+        surface.blit(fnt_s.render(lab, True, (120, 128, 142)), (cx, q_r.y + 3))
+    qclip = surface.get_clip()
+    surface.set_clip(pygame.Rect(q_r.x + 2, q_r.y + 18, q_r.width - 4, q_r.height - 20))
+    qh = 17
+    qvis = max(1, (q_r.height - 20) // qh)
+    qoff = max(0, min(ah_state["queue_scroll"], max(0, len(ah_state["queue"]) - qvis)))
+    ah_state["queue_scroll"] = qoff
+    qy = q_r.y + 19
+    for qi in range(qoff, min(len(ah_state["queue"]), qoff + qvis)):
+        q = ah_state["queue"][qi]
+        nm = q["name"]
+        while nm and fnt_s.size(nm)[0] > 146:
+            nm = nm[:-1]
+        # link-blue: click the name to open this item's FFXIAH page
+        _nm_s = fnt_s.render(nm, True, (150, 192, 236))
+        surface.blit(_nm_s, (q_r.x + 6, qy + 2))
+        _ah_rects["fx:%d" % qi] = pygame.Rect(q_r.x + 6, qy,
+                                              max(40, _nm_s.get_width()), qh - 3)
+        for key, cx, cw in (("qty", q_r.x + 158, 30), ("start", q_r.x + 192, 56),
+                            ("max", q_r.x + 252, 56), ("inc", q_r.x + 312, 50)):
+            fr = pygame.Rect(cx, qy, cw - 4, qh - 3)
+            editing = ah_state["edit"] == ("q", qi, key)
+            val = ah_state["edit_buf"] if editing else str(q[key])
+            field(fr, val, editing, "")
+            _ah_rects["qf:%d:%s" % (qi, key)] = fr
+        # remove
+        rm = pygame.Rect(q_r.x + 366, qy, 16, qh - 3)
+        btn(rm, "x", off_bg=(70, 40, 40), off_bd=(120, 70, 70), off_tx=(220, 180, 180))
+        _ah_rects["qdel:%d" % qi] = rm
+        # status
+        if q.get("status"):
+            surface.blit(fnt_s.render(q["status"], True, (180, 190, 160)),
+                         (q_r.x + 388, qy + 2))
+        qy += qh
+    surface.set_clip(qclip)
+
+    # bottom: throttle + start/stop
+    by = area.y + area.height - 22
+    surface.blit(fnt_s.render("Throttle", True, (150, 160, 175)), (area.x, by + 4))
+    th_r = pygame.Rect(area.x + 56, by, 44, 20)
+    th_edit = ah_state["edit"] == ("throttle",)
+    field(th_r, (ah_state["edit_buf"] if th_edit else str(ah_state["throttle"])),
+          th_edit, "")
+    _ah_rects["throttle"] = th_r
+    surface.blit(fnt_s.render("s/txn", True, (120, 128, 142)), (th_r.right + 4, by + 4))
+
+    run = ah_state["running"]
+    ss_r = pygame.Rect(area.right - 96, by, 96, 20)
+    btn(ss_r, "Stop buying" if run else "Start buying", on=run,
+        on_bg=(70, 45, 45), on_bd=(150, 80, 80), on_tx=(240, 200, 200),
+        off_bg=(45, 75, 55), off_bd=(80, 140, 95), off_tx=(205, 235, 210))
+    _ah_rects["startstop"] = ss_r
+
+def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
+    # header: title + refresh
+    surface.blit(fnt_b.render("Your inventory", True, (200, 208, 222)),
+                 (area.x + 2, area.y))
+    rf = pygame.Rect(area.right - 60, area.y - 1, 58, 17)
+    btn(rf, "Refresh")
+    _ah_rects["sellrefresh"] = rf
+
+    # sellable-inventory list (top ~45%)
+    inv = ah_state.get("inv", [])
+    inv_h = max(60, int((area.height - 22) * 0.45))
+    inv_r = pygame.Rect(area.x, area.y + 19, area.width, inv_h)
+    pygame.draw.rect(surface, (16, 18, 24), inv_r, border_radius=3)
+    pygame.draw.rect(surface, (54, 60, 74), inv_r, 1, border_radius=3)
+    iclip = surface.get_clip()
+    surface.set_clip(inv_r.inflate(-2, -2))
+    ih = 15
+    ivis = max(1, (inv_r.height - 4) // ih)
+    ioff = max(0, min(ah_state.get("inv_scroll", 0), max(0, len(inv) - ivis)))
+    ah_state["inv_scroll"] = ioff
+    iy = inv_r.y + 2
+    if not inv:
+        surface.blit(fnt_s.render("(empty \u2014 hit Refresh at an Auction House)",
+                                  True, (120, 128, 142)), (inv_r.x + 6, iy))
+    for it in inv[ioff:ioff + ivis]:
+        row = pygame.Rect(inv_r.x + 2, iy, inv_r.width - 4, ih)
+        sel = ah_state.get("sell_id") == it["id"]
+        if sel:
+            pygame.draw.rect(surface, (50, 60, 80), row, border_radius=2)
+        nm = it["name"]
+        while nm and fnt_s.size(nm)[0] > inv_r.width - 54:
+            nm = nm[:-1]
+        surface.blit(fnt_s.render(nm, True,
+                                  (235, 220, 160) if sel else (206, 212, 224)),
+                     (row.x + 4, row.y))
+        _cs = fnt_s.render("x%d" % it.get("count", 0), True, (150, 162, 184))
+        surface.blit(_cs, (row.right - 6 - _cs.get_width(), row.y))
+        _ah_rects["sellitem:%d" % it["id"]] = row
+        _ah_item_tip_rects.append((row, it["id"]))
+        iy += ih
+    surface.set_clip(iclip)
+    _ah_rects["sellinv"] = inv_r
+
+    # sell form for the selected item
+    fy = inv_r.bottom + 6
+    sid = ah_state.get("sell_id")
+    if sid is not None:
+        sel_it = next((x for x in inv if x["id"] == sid), None)
+        nm = sel_it["name"] if sel_it else ("item %d" % sid)
+        surface.blit(fnt_b.render(nm, True, (212, 218, 230)), (area.x + 2, fy))
+        fy += 16
+        single = ah_state.get("sell_single", 1)
+        sgl = pygame.Rect(area.x + 2, fy, 52, 18)
+        stk = pygame.Rect(area.x + 58, fy, 52, 18)
+        btn(sgl, "Single", on=(single == 1))
+        btn(stk, "Stack", on=(single == 0))
+        _ah_rects["sellsingle"] = sgl
+        _ah_rects["sellstack"] = stk
+        pr = pygame.Rect(area.x + 118, fy, area.width - 176, 18)
+        editing = ah_state.get("edit") == ("sellprice",)
+        pval = (ah_state["edit_buf"] if editing
+                else (str(ah_state.get("sell_price", 0))
+                      if ah_state.get("sell_price") else ""))
+        field(pr, pval, editing, "price (gil)")
+        _ah_rects["sellprice"] = pr
+        lb = pygame.Rect(area.right - 52, fy, 50, 18)
+        btn(lb, "List", on=True, on_bg=(50, 80, 55), on_bd=(90, 150, 100),
+            on_tx=(190, 235, 200))
+        _ah_rects["selllist"] = lb
+        fy += 24
+    else:
+        surface.blit(fnt_s.render("select an item above to list it", True,
+                                  (120, 128, 142)), (area.x + 2, fy))
+        fy += 22
+
+    # your 7 sale slots
+    surface.blit(fnt_b.render("Your listings", True, (200, 208, 222)),
+                 (area.x + 2, fy))
+    fy += 16
+    by_slot = {sl["slot"]: sl for sl in ah_state.get("sales", [])}
+    for slot in range(7):
+        row = pygame.Rect(area.x, fy, area.width, 15)
+        sl = by_slot.get(slot)
+        if sl and sl.get("status") and sl["status"] != "Empty":
+            stat = sl["status"]
+            col = ((150, 210, 160) if stat == "Sold"
+                   else (212, 158, 158) if stat == "Not Sold"
+                   else (202, 196, 150))
+            nm = sl.get("name") or "?"
+            while nm and fnt_s.size(nm)[0] > area.width - 150:
+                nm = nm[:-1]
+            surface.blit(fnt_s.render("%d. %s" % (slot + 1, nm), True,
+                                      (200, 206, 218)), (row.x + 4, row.y))
+            _ts = fnt_s.render("%s  %s" % (_ah_fmt_gil(sl.get("price", 0)), stat),
+                               True, col)
+            surface.blit(_ts, (row.right - 6 - _ts.get_width(), row.y))
+        else:
+            surface.blit(fnt_s.render("%d. (empty)" % (slot + 1), True,
+                                      (96, 102, 114)), (row.x + 4, row.y))
+        fy += 15
+
+
+def _ah_txn_file():
+    return os.path.join(_ports_dir(), "ah_transactions.json")
+
+def _ah_load_txns():
+    try:
+        with open(_ah_txn_file(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            ah_state["txns"] = data[-300:]
+    except (OSError, ValueError):
+        pass
+
+def _ah_save_txns():
+    try:
+        fp = _ah_txn_file()
+        tmp = fp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(ah_state["txns"][-300:], f)
+        os.replace(tmp, fp)
+    except OSError:
+        pass
+
+def _ah_record_txn(name, price, ts):
+    ah_state["txns"].append({"name": name, "price": price, "time": ts})
+    if len(ah_state["txns"]) > 300:
+        ah_state["txns"] = ah_state["txns"][-300:]
+    _ah_save_txns()
+
+_ah_load_txns()
+
+def _ah_price_file():
+    return os.path.join(_ports_dir(), "ah_prices.json")
+
+def _ah_load_prices():
+    try:
+        with open(_ah_price_file(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            ah_state["prices"] = {str(k): int(v) for k, v in data.items()}
+    except (OSError, ValueError):
+        pass
+
+def _ah_save_prices():
+    try:
+        fp = _ah_price_file()
+        tmp = fp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(ah_state["prices"], f)
+        os.replace(tmp, fp)
+    except OSError:
+        pass
+
+_ah_load_prices()
+
+def _ah_fmt_gil(n):
+    try:
+        return "{:,}".format(int(n))
+    except (TypeError, ValueError):
+        return str(n)
+
+def _ah_ago(ts):
+    try:
+        d = max(0, int(time.time()) - int(ts))
+    except (TypeError, ValueError):
+        return ""
+    if d < 90:
+        return "just now"
+    if d < 3600:
+        return "%dm ago" % (d // 60)
+    if d < 86400:
+        return "%dh ago" % (d // 3600)
+    return "%dd ago" % (d // 86400)
+
+def _ah_price_lines(item_id, item_name):
+    """Going-rate reference from your own activity: recent prices paid
+    (txns, matched by name) + your last listed sell price (by id)."""
+    nm = (item_name or "").strip().lower()
+    buys = [t for t in ah_state["txns"]
+            if isinstance(t, dict) and str(t.get("name", "")).strip().lower() == nm]
+    listed = ah_state["prices"].get(str(item_id))
+    if not buys and listed is None:
+        return []
+    out = ["\u2500 your prices \u2500"]
+    for t in reversed(buys[-3:]):
+        ago = _ah_ago(t.get("time", 0))
+        out.append("paid %s%s" % (_ah_fmt_gil(t.get("price", 0)),
+                                  ("  (%s)" % ago) if ago else ""))
+    if listed is not None:
+        out.append("you listed %s" % _ah_fmt_gil(listed))
+    return out
+
+def _ah_commit_edit():
+    e = ah_state["edit"]
+    if not e:
+        return
+    buf = ah_state["edit_buf"].strip()
+    try:
+        if e[0] == "throttle":
+            ah_state["throttle"] = max(0.0, float(buf or "0"))
+        elif e[0] == "q":
+            _, qi, key = e
+            if 0 <= qi < len(ah_state["queue"]):
+                ah_state["queue"][qi][key] = max(0, int(float(buf or "0")))
+        elif e[0] == "sellprice":
+            ah_state["sell_price"] = max(0, int(float(buf or "0")))
+    except (ValueError, IndexError):
+        pass
+    ah_state["edit"] = None
+    ah_state["edit_buf"] = ""
+
+def _ah_handle_event(event):
+    if not ah_panel_open:
+        return False
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        r = _ah_rects
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            _toggle_ah_panel(); return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            _ah_drag["on"] = True
+            _ah_drag["dx"] = mx - ah_panel_pos[0]
+            _ah_drag["dy"] = my - ah_panel_pos[1]
+            return True
+        # commit a field edit if clicking off it
+        prev_edit = ah_state["edit"]
+        # search box
+        if r.get("search") and r["search"].collidepoint(mx, my):
+            _ah_commit_edit()
+            ah_state["search_focus"] = True
+            return True
+        else:
+            ah_state["search_focus"] = False
+        if r.get("search_go") and r["search_go"].collidepoint(mx, my):
+            _ah_commit_edit(); _ah_run_search(); return True
+        # category tree
+        for key, rr in list(r.items()):
+            if not rr.collidepoint(mx, my):
+                continue
+            if key.startswith("item:"):
+                _ip = key.split(":")
+                iid = int(_ip[1]); ist = int(_ip[2]) if len(_ip) > 2 else 0
+                for it in ah_state["items"]:
+                    if it["id"] == iid and it.get("stack", 0) == ist:
+                        _ah_add_to_queue(it); break
+                return True
+            if key.startswith("fx:"):
+                qi = int(key.split(":", 1)[1])
+                if 0 <= qi < len(ah_state["queue"]):
+                    _ah_open_ffxiah(ah_state["queue"][qi]["id"])
+                return True
+            if key == "tab:buy" or key == "tab:sell":
+                _ah_commit_edit()
+                _nt = key.split(":")[1]
+                ah_state["tab"] = _nt
+                if _nt == "sell":
+                    _ah_send("inv"); _ah_send("sales")
+                return True
+            if key == "sellrefresh":
+                _ah_send("inv"); _ah_send("sales"); return True
+            if key.startswith("sellitem:"):
+                _ah_commit_edit()
+                _sid = int(key.split(":", 1)[1])
+                ah_state["sell_id"] = _sid
+                ah_state["sell_single"] = 1
+                _rp = ah_state.get("prices", {}).get(str(_sid))
+                ah_state["sell_price"] = int(_rp) if _rp else 0
+                return True
+            if key == "sellsingle":
+                ah_state["sell_single"] = 1; return True
+            if key == "sellstack":
+                ah_state["sell_single"] = 0; return True
+            if key == "sellprice":
+                _ah_commit_edit()
+                ah_state["edit"] = ("sellprice",)
+                ah_state["edit_buf"] = (str(ah_state.get("sell_price", 0))
+                                        if ah_state.get("sell_price") else "")
+                return True
+            if key == "selllist":
+                _ah_commit_edit()
+                _sid = ah_state.get("sell_id")
+                _pr = int(ah_state.get("sell_price", 0) or 0)
+                if _sid is not None and _pr > 0:
+                    _ah_send("sell|%d|%d|%d" % (
+                        _sid, ah_state.get("sell_single", 1), _pr))
+                    ah_state.setdefault("prices", {})[str(_sid)] = _pr
+                return True
+            if key.startswith("qdel:"):
+                qi = int(key.split(":", 1)[1])
+                if 0 <= qi < len(ah_state["queue"]):
+                    _ah_commit_edit()
+                    ah_state["queue"].pop(qi)
+                return True
+            if key.startswith("qf:"):
+                _, qi, fld = key.split(":")
+                _ah_commit_edit()
+                ah_state["edit"] = ("q", int(qi), fld)
+                ah_state["edit_buf"] = str(ah_state["queue"][int(qi)][fld])
+                return True
+            if key == "throttle":
+                _ah_commit_edit()
+                ah_state["edit"] = ("throttle",)
+                ah_state["edit_buf"] = str(ah_state["throttle"])
+                return True
+            if key == "ah_sort":
+                _order = ["name", "level_asc", "level_desc"]
+                _cur = ah_state.get("sort", "name")
+                ah_state["sort"] = (_order[(_order.index(_cur) + 1) % 3]
+                                    if _cur in _order else "name")
+                return True
+            if key == "startstop":
+                _ah_commit_edit()
+                if ah_state["running"]:
+                    _ah_send("stop")
+                else:
+                    _ah_send("buy|%.1f|%s" % (
+                        ah_state["throttle"],
+                        ";".join("%d~%d~%d~%d~%d~%d" % (q["id"], q["qty"],
+                                 q["start"], q["max"], q["inc"],
+                                 1 if q.get("stack") else 0)
+                                 for q in ah_state["queue"])))
+                return True
+        if prev_edit:
+            _ah_commit_edit()
+        if r.get("panel") and r["panel"].collidepoint(mx, my):
+            return True
+    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _ah_drag["on"]:
+            _ah_drag["on"] = False
+            return True
+    elif event.type == pygame.MOUSEMOTION:
+        if _ah_drag["on"]:
+            mx, my = event.pos
+            ah_panel_pos[0] = mx - _ah_drag["dx"]
+            ah_panel_pos[1] = my - _ah_drag["dy"]
+            return True
+    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+        # right-click any item — a search result OR a queued row — to open
+        # its FFXIAH page. Left-click still queues; this is the lookup gesture.
+        mx, my = event.pos
+        for key, rr in list(_ah_rects.items()):
+            if not rr.collidepoint(mx, my):
+                continue
+            if key.startswith("item:"):
+                _ah_open_ffxiah(int(key.split(":")[1]))
+                return True
+            if key.startswith("sellitem:"):
+                _ah_open_ffxiah(int(key.split(":", 1)[1]))
+                return True
+            if key.startswith("fx:"):
+                qi = int(key.split(":", 1)[1])
+                if 0 <= qi < len(ah_state["queue"]):
+                    _ah_open_ffxiah(ah_state["queue"][qi]["id"])
+                return True
+        return False
+    elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
+        mx, my = event.pos
+        d = -1 if event.button == 4 else 1
+        if _ah_rects.get("results") and _ah_rects["results"].collidepoint(mx, my):
+            ah_state["results_scroll"] = max(0, ah_state["results_scroll"] + d)
+            return True
+        if (ah_state.get("tab") == "sell" and _ah_rects.get("sellinv")
+                and _ah_rects["sellinv"].collidepoint(mx, my)):
+            ah_state["inv_scroll"] = max(0, ah_state.get("inv_scroll", 0) + d)
+            return True
+        ah_state["items_scroll"] = max(0, ah_state["items_scroll"] + d)
+        return True
+    elif event.type == pygame.KEYDOWN:
+        if ah_state["edit"] is not None:
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                _ah_commit_edit(); return True
+            if event.key == pygame.K_ESCAPE:
+                ah_state["edit"] = None; ah_state["edit_buf"] = ""; return True
+            if event.key == pygame.K_BACKSPACE:
+                ah_state["edit_buf"] = ah_state["edit_buf"][:-1]; return True
+            ch = getattr(event, "unicode", "")
+            if ch and (ch.isdigit() or ch == "."):
+                ah_state["edit_buf"] += ch
+            return True
+        if ah_state["search_focus"]:
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                _ah_run_search(); return True
+            if event.key == pygame.K_ESCAPE:
+                ah_state["search_focus"] = False; return True
+            if event.key == pygame.K_BACKSPACE:
+                ah_state["search"] = ah_state["search"][:-1]
+                if len(ah_state["search"]) >= 2:
+                    _ah_run_search()
+                return True
+            ch = getattr(event, "unicode", "")
+            if ch and ch.isprintable() and ch not in ("\r", "\n", "\t"):
+                if len(ah_state["search"]) < 40:
+                    ah_state["search"] += ch
+                    if len(ah_state["search"]) >= 2:
+                        _ah_run_search()
+            return True
+    return False
+
+
+def draw_craft_window(surface):
+    global craft_scroll
+    _craft_clear_rects()
+    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "craft"):
+        return
+    pad, title_h, tab_h = 8, 22, 18
+    w = 360
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    row_h = 15
+    res_rows = 7
+    fld_h = 20
+    btn_h = 20
+    h = (title_h + tab_h + pad + fld_h + 4 + res_rows * row_h + 6  # search + results
+         + 34                                                   # selected info (2 lines)
+         + fld_h + 6                                            # count/make/repeat
+         + btn_h + 6                                            # pause/clear/status
+         + btn_h + 6                                            # hq/support/display
+         + fld_h + 6                                            # delay + food
+         + fld_h + 6                                            # jiggle
+         + row_h + 4                                            # status line
+         + 3 * row_h + pad)                                     # log
+    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
+    craftsyn_pos[0], craftsyn_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _craft_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL,    panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
+    except Exception:
+        pass
+
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("DEV \u00b7 Crafting / Synergy", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _craft_rects["close"] = close_r
+    _craft_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+    _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _craft_rects, fnt_b)
+
+    def field(rect, text, focused, placeholder=""):
+        pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=3)
+        pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
+                         rect, 1, border_radius=3)
+        show = text if text else placeholder
+        col = (225, 225, 230) if text else (120, 128, 142)
+        t = fnt.render(show, True, col)
+        surface.blit(t, (rect.x + 5, rect.centery - t.get_height() // 2))
+        if focused:
+            cx = rect.x + 5 + (fnt.render(text, True, col).get_width()
+                               if text else 0)
+            pygame.draw.line(surface, (220, 220, 230),
+                             (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
+
+    cy = y + title_h + tab_h + pad
+    # search field
+    sr = pygame.Rect(x + pad, cy, w - 2 * pad, fld_h)
+    field(sr, craft_query, craft_focus == "search", "search recipes\u2026")
+    _craft_rects["search"] = sr
+    cy += fld_h + 4
+
+    # results list
+    list_r = pygame.Rect(x + pad, cy, w - 2 * pad, res_rows * row_h)
+    pygame.draw.rect(surface, (16, 18, 22), list_r, border_radius=3)
+    total = len(craft_results)
+    maxscroll = max(0, total - res_rows)
+    if craft_scroll > maxscroll:
+        craft_scroll = maxscroll
+    hits = []
+    for i in range(res_rows):
+        ridx = craft_scroll + i
+        if ridx >= total:
+            break
+        nm = craft_results[ridx]
+        ry = list_r.y + i * row_h
+        rr = pygame.Rect(list_r.x, ry, list_r.width, row_h)
+        if nm == craft_sel:
+            pygame.draw.rect(surface, (40, 56, 44), rr)
+        t = fnt_s.render(nm[:46], True,
+                         (210, 230, 210) if nm == craft_sel else (198, 204, 214))
+        surface.blit(t, (rr.x + 4, rr.y + 1))
+        hits.append((rr, nm))
+    _craft_rects["hits"] = hits
+    if total > res_rows:
+        sub = fnt_s.render("%d matches (scroll)" % total, True, (130, 138, 152))
+        surface.blit(sub, (list_r.right - sub.get_width() - 2, list_r.bottom + 1))
+    cy += res_rows * row_h + 6
+
+    # selected recipe info (crystal + ingredients, 2 lines)
+    if craft_sel and craft_sel in craft_recipes:
+        rc = craft_recipes[craft_sel]
+        cl = fnt_s.render("Crystal: %s" % rc.get("crystal", "?"),
+                          True, (170, 200, 230))
+        surface.blit(cl, (x + pad, cy))
+        ings = rc.get("ingredients", [])
+        # group duplicates: "A x2, B, C"
+        seen, order = {}, []
+        for ig in ings:
+            if ig not in seen:
+                seen[ig] = 0; order.append(ig)
+            seen[ig] += 1
+        parts = [("%s x%d" % (g, seen[g]) if seen[g] > 1 else g) for g in order]
+        il = ", ".join(parts)
+        if len(il) > 52:
+            il = il[:51] + "\u2026"
+        it = fnt_s.render(il, True, (180, 186, 198))
+        surface.blit(it, (x + pad, cy + row_h))
+    else:
+        ph = fnt_s.render("(pick a recipe above)", True, (120, 128, 142))
+        surface.blit(ph, (x + pad, cy))
+    cy += 34
+
+    # count + Make + Repeat
+    cnt_r = pygame.Rect(x + pad, cy, 44, fld_h)
+    field(cnt_r, craft_count, craft_focus == "count", "1")
+    _craft_rects["count"] = cnt_r
+    mk_r = pygame.Rect(cnt_r.right + 6, cy, 120, fld_h)
+    rp_r = pygame.Rect(mk_r.right + 6, cy, (x + w - pad) - (mk_r.right + 6), fld_h)
+    can_make = bool(craft_sel)
+    _craft_btn(surface, mk_r, "Make", fnt_s,
+               (46, 64, 50) if can_make else (40, 44, 52),
+               (200, 224, 200) if can_make else (120, 128, 140))
+    _craft_btn(surface, rp_r, "Repeat", fnt_s, (44, 48, 58), (196, 202, 214))
+    _craft_rects["make"] = mk_r
+    _craft_rects["repeat"] = rp_r
+    cy += fld_h + 6
+
+    # pause/resume + clear + status
+    third = (w - 2 * pad - 2 * 6) // 3
+    pr_r = pygame.Rect(x + pad, cy, third, btn_h)
+    cl_r = pygame.Rect(pr_r.right + 6, cy, third, btn_h)
+    st_r = pygame.Rect(cl_r.right + 6, cy, (x + w - pad) - (cl_r.right + 6), btn_h)
+    if craft_state["paused"]:
+        _craft_btn(surface, pr_r, "Resume", fnt_s, (52, 60, 44), (224, 224, 180))
+    else:
+        _craft_btn(surface, pr_r, "Pause", fnt_s, (44, 48, 58), (196, 202, 214))
+    _craft_btn(surface, cl_r, "Clear", fnt_s, (60, 44, 44), (224, 190, 190))
+    _craft_btn(surface, st_r, "Status", fnt_s, (44, 48, 58), (196, 202, 214))
+    _craft_rects["pauseresume"] = pr_r
+    _craft_rects["clear"] = cl_r
+    _craft_rects["status"] = st_r
+    cy += btn_h + 6
+
+    # toggles: HQ / Support / Display
+    def toggle(rect, label, on):
+        _craft_btn(surface, rect, label, fnt_s,
+                   (40, 64, 52) if on else (44, 48, 58),
+                   (190, 230, 200) if on else (150, 158, 172),
+                   (70, 120, 90) if on else (72, 78, 92))
+    tr_w = (w - 2 * pad - 2 * 6) // 3
+    hq_r = pygame.Rect(x + pad, cy, tr_w, btn_h)
+    sp_r = pygame.Rect(hq_r.right + 6, cy, tr_w, btn_h)
+    dp_r = pygame.Rect(sp_r.right + 6, cy, (x + w - pad) - (sp_r.right + 6), btn_h)
+    toggle(hq_r, "HQ", craft_state["hq"])
+    toggle(sp_r, "Support", craft_state["support"])
+    toggle(dp_r, "Display", craft_state["display"])
+    _craft_rects["hq"] = hq_r
+    _craft_rects["support"] = sp_r
+    _craft_rects["display"] = dp_r
+    cy += btn_h + 6
+
+    # delay (- N +) + food field + Set/Clear
+    dl_lbl = fnt_s.render("Delay", True, (170, 176, 188))
+    surface.blit(dl_lbl, (x + pad, cy + 4))
+    dm_r = pygame.Rect(x + pad + 38, cy, 18, fld_h)
+    dval = fnt.render(str(craft_state["delay"]), True, (220, 222, 230))
+    dn_r = pygame.Rect(dm_r.right + 2, cy, 26, fld_h)
+    dpl_r = pygame.Rect(dn_r.right + 2, cy, 18, fld_h)
+    _craft_btn(surface, dm_r, "-", fnt_b, (44, 48, 58), (210, 210, 220))
+    pygame.draw.rect(surface, (20, 22, 28), dn_r, border_radius=3)
+    surface.blit(dval, (dn_r.centerx - dval.get_width() // 2,
+                        dn_r.centery - dval.get_height() // 2))
+    _craft_btn(surface, dpl_r, "+", fnt_b, (44, 48, 58), (210, 210, 220))
+    _craft_rects["delay_dn"] = dm_r
+    _craft_rects["delay_up"] = dpl_r
+    fd_r = pygame.Rect(dpl_r.right + 8, cy, (x + w - pad) - (dpl_r.right + 8) - 44, fld_h)
+    field(fd_r, craft_state["food"], craft_focus == "food", "food item")
+    _craft_rects["food"] = fd_r
+    fs_r = pygame.Rect(fd_r.right + 4, cy, 40, fld_h)
+    _craft_btn(surface, fs_r, "Set", fnt_s, (44, 48, 58), (196, 202, 214))
+    _craft_rects["food_set"] = fs_r
+    cy += fld_h + 6
+
+    # jiggle field + Set
+    jg_lbl = fnt_s.render("Jiggle", True, (170, 176, 188))
+    surface.blit(jg_lbl, (x + pad, cy + 4))
+    jf_r = pygame.Rect(x + pad + 44, cy, (x + w - pad) - (x + pad + 44) - 44, fld_h)
+    field(jf_r, craft_state["jiggle"], craft_focus == "jiggle", "(off) e.g. escape")
+    _craft_rects["jiggle"] = jf_r
+    js_r = pygame.Rect(jf_r.right + 4, cy, 40, fld_h)
+    _craft_btn(surface, js_r, "Set", fnt_s, (44, 48, 58), (196, 202, 214))
+    _craft_rects["jiggle_set"] = js_r
+    cy += fld_h + 6
+
+    # status line
+    busy = "busy" if craft_state["busy"] else "idle"
+    paused = " paused" if craft_state["paused"] else ""
+    sl = fnt_s.render("queue %d  \u00b7  %s%s" % (craft_state["qlen"], busy, paused),
+                      True, (200, 206, 216))
+    surface.blit(sl, (x + pad, cy))
+    if craft_state["last"]:
+        lr = fnt_s.render(craft_state["last"][:30], True, (150, 200, 150))
+        surface.blit(lr, (x + w - pad - lr.get_width(), cy))
+    cy += row_h + 4
+
+    # message log (last 3)
+    for i, line in enumerate(craft_log[-3:]):
+        ml = fnt_s.render(line[:54], True, (150, 156, 168))
+        surface.blit(ml, (x + pad, cy + i * row_h))
+
+def _craft_apply_count(default=1):
+    try:
+        n = int(craft_count)
+        return max(1, n)
+    except Exception:
+        return default
+
+def _craft_handle_event(event):
+    global craftsyn_open, craftsyn_tab, _craft_drag_off, craft_query, craft_focus
+    global craft_count, craft_sel, craft_scroll
+    # toggle (Ctrl+Shift+R), dev-gated
+    if (_DEV_ENABLED and event.type == pygame.KEYDOWN
+            and event.key == pygame.K_r):
+        m = pygame.key.get_mods()
+        if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
+            if craftsyn_open and craftsyn_tab == "craft":
+                craftsyn_open = False
+            else:
+                craftsyn_open = True; craftsyn_tab = "craft"
+            return True
+    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "craft"):
+        return False
+    r = _craft_rects
+
+    # text entry when a field is focused
+    if event.type == pygame.KEYDOWN and craft_focus:
+        if event.key == pygame.K_ESCAPE:
+            craft_focus = ""
+            return True
+        if event.key == pygame.K_RETURN:
+            if craft_focus == "food":
+                _craft_send("food|" + craft_state["food"])
+            elif craft_focus == "jiggle":
+                _craft_send("jiggle|" + craft_state["jiggle"])
+            craft_focus = ""
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            if craft_focus == "search":
+                craft_query = craft_query[:-1]; _craft_filter()
+            elif craft_focus == "count":
+                craft_count = craft_count[:-1]
+            elif craft_focus == "food":
+                craft_state["food"] = craft_state["food"][:-1]
+            elif craft_focus == "jiggle":
+                craft_state["jiggle"] = craft_state["jiggle"][:-1]
+            return True
+        ch = event.unicode
+        if ch and 32 <= ord(ch) < 127:
+            if craft_focus == "search":
+                craft_query += ch; _craft_filter()
+            elif craft_focus == "count" and ch.isdigit():
+                craft_count = (craft_count + ch)[:4]
+            elif craft_focus == "food":
+                craft_state["food"] += ch
+            elif craft_focus == "jiggle":
+                craft_state["jiggle"] += ch
+            return True
+        return True
+
+    if event.type == pygame.MOUSEWHEEL:
+        mx, my = pygame.mouse.get_pos()
+        pr = r.get("panel")
+        if pr and pr.collidepoint(mx, my):
+            craft_scroll = max(0, craft_scroll - event.y)
+            return True
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            craftsyn_open = False
+            return True
+        for _tk in ("craft", "synergy"):
+            _tr = r.get("tab:" + _tk)
+            if _tr and _tr.collidepoint(mx, my):
+                craftsyn_tab = _tk
+                return True
+        # focus fields
+        for key in ("search", "count", "food", "jiggle"):
+            rr = r.get(key)
+            if rr and rr.collidepoint(mx, my):
+                craft_focus = key
+                return True
+        # result selection
+        for rect, nm in r.get("hits", []):
+            if rect.collidepoint(mx, my):
+                craft_sel = nm
+                craft_focus = ""
+                return True
+        # buttons
+        if r.get("make") and r["make"].collidepoint(mx, my):
+            if craft_sel and craft_sel in craft_recipes:
+                rc = craft_recipes[craft_sel]
+                ings = ";".join(rc.get("ingredients", []))
+                _craft_send("make|%d|%s|%s|%s" % (
+                    _craft_apply_count(), craft_sel, rc.get("crystal", ""), ings))
+            return True
+        if r.get("repeat") and r["repeat"].collidepoint(mx, my):
+            _craft_send("repeat|%d" % _craft_apply_count())
+            return True
+        if r.get("pauseresume") and r["pauseresume"].collidepoint(mx, my):
+            _craft_send("resume" if craft_state["paused"] else "pause")
+            return True
+        if r.get("clear") and r["clear"].collidepoint(mx, my):
+            _craft_send("clear")
+            return True
+        if r.get("status") and r["status"].collidepoint(mx, my):
+            _craft_send("status")
+            return True
+        if r.get("hq") and r["hq"].collidepoint(mx, my):
+            _craft_send("hq|" + ("0" if craft_state["hq"] else "1"))
+            return True
+        if r.get("support") and r["support"].collidepoint(mx, my):
+            _craft_send("support|" + ("0" if craft_state["support"] else "1"))
+            return True
+        if r.get("display") and r["display"].collidepoint(mx, my):
+            _craft_send("display|" + ("0" if craft_state["display"] else "1"))
+            return True
+        if r.get("delay_dn") and r["delay_dn"].collidepoint(mx, my):
+            _craft_send("delay|%d" % max(17, craft_state["delay"] - 1))
+            return True
+        if r.get("delay_up") and r["delay_up"].collidepoint(mx, my):
+            _craft_send("delay|%d" % (craft_state["delay"] + 1))
+            return True
+        if r.get("food_set") and r["food_set"].collidepoint(mx, my):
+            _craft_send("food|" + craft_state["food"])
+            return True
+        if r.get("jiggle_set") and r["jiggle_set"].collidepoint(mx, my):
+            _craft_send("jiggle|" + craft_state["jiggle"])
+            return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            _craft_drag_off = (mx - craftsyn_pos[0], my - craftsyn_pos[1])
+            return True
+        pr = r.get("panel")
+        if pr and pr.collidepoint(mx, my):
+            craft_focus = ""
+            return True
+        return False
+    if event.type == pygame.MOUSEMOTION and _craft_drag_off is not None:
+        mx, my = event.pos
+        craftsyn_pos[0] = mx - _craft_drag_off[0]
+        craftsyn_pos[1] = my - _craft_drag_off[1]
+        return True
+    if (event.type == pygame.MOUSEBUTTONUP and event.button == 1
+            and _craft_drag_off is not None):
+        _craft_drag_off = None
+        return True
+    return False
+_sz_area_last_click = 0             # ticks of last view click (dbl=recenter)
+scanzone_map_pan    = [0.0, 0.0]    # map pan offset (screen px)
+scanzone_radar_pan  = [0.0, 0.0]    # radar pan offset (screen px)
+scanzone_input      = ""
+scanzone_results    = []            # [(name, id, index)]  from DAT find
+scanzone_status     = ""
+scanzone_scroll     = 0             # first visible result row
+scanzone_roster_scroll = 0          # first visible tracked-roster entry
+scanzone_scan_info  = ""            # last packet-scan result (live entity)
+scanzone_track_index = None         # currently tracked index (None = off)
+scanzone_track_info  = ""           # live tracked-entity readout
+scanzone_track_pos   = None         # (wx,wy) of tracked entity, for map
+scanzone_pin         = None         # coord-search pin ("world"/"grid",..)
+scanzone_tracks      = {}           # idx -> roster entry (multi-track)
+_sz_poll_last        = 0            # ticks of last spawn-status poll
+scanzone_dot_label   = "none"       # dot labels on radar/map: none/name/id
+scanzone_aliases     = {}           # idx -> custom alias (overrides name)
+scanzone_alias_target = None        # idx being aliased (box in alias mode)
+scanzone_zcache      = {}           # idx -> last-scanned Z (height)
+scanzone_namecache   = {}           # idx -> last-known mob name
+_sz_hover_scan_last  = 0            # throttle for scan-on-hover (z fetch)
+scanzone_track_last  = 0            # ms of last track update (0 = none yet)
+scanzone_track_start = 0            # ms when tracking began
+scanzone_view       = "list"        # "list" or "radar"
+scanzone_spawn_filter = "all"       # list filter: all | spawned | unspawned
+scanzone_type_filter = "any"        # any | mob | pc | npc
+scanzone_wide       = {}            # index -> {type, level, name, x, y} (spawned)
+_scanzone_wide_tmp  = {}            # accumulates during a SZWIDE start..end burst
+_sz_wide_auto       = False         # last widescan was auto-fired (Nyzul track)
+                                    # -> don't yank the view to radar on it
+_sz_nyzul_wide_last = 0             # throttle (ms) for the Nyzul auto widescan
+scanzone_radar      = []            # [(idx,type,dx,dy,hpp,name)] live mob array
+scanzone_radar_heading = 0.0        # player heading (radians, world space)
+scanzone_radar_zoom = 1.0           # radar scroll-zoom multiplier
+_sz_ctx             = None          # right-click menu: {x,y,idx,items}
+_sz_rects           = {}            # built each draw for hit-testing
+_sz_row_h           = 16            # results row height
+ACCENT_DEV          = (120, 200, 150)
+_SZ_TYPE_COL        = {2: (220, 95, 95), 1: (95, 200, 130), 0: (150, 160, 175)}
+scanzone_lamp_mode  = False         # roster shows Nyzul lamps instead of tracks
+scanzone_sortie_mode = False        # right-hand section: Sortie mode
+scanzone_omen_mode   = False        # right-hand section: Omen mode
+scanzone_lamps      = {}            # idx -> {idx,name,pos,z,lit,last,kind}
+scanzone_lamp_order = []            # lit lamp indexes in activation order
+_lamp_reconcile_at  = 0             # ticks: when to auto-refresh lamp lit state
+nyzul_state = {"floor": 0, "timer": 0, "completed": 0, "rate": 100,
+               "tokens": 0, "objstate": "p", "reststate": "w",
+               "objective": "", "restriction": ""}   # NYZUL| from lua
+omen_state = {"floor_obj": "", "omens": "0", "time": 0, "clear": False,
+              "hide": False, "objs": []}   # OMEN| from lua
+
+# Enemy-leader NMs for the Nyzul "Eliminate enemy leader" objective (one of
+# these is the assault's leader). When that objective is up, Scan Zone matches
+# the floor's mobs against this set and tracks the one present. Floors 20/40/
+# 60/80/100 use an HNM in another area (not in this list).
+_NYZUL_LEADERS = {
+    "long-gunned chariot", "long-horned chariot", "battledressed chariot",
+    "shielded chariot",
+    "anise custard", "caraway custard", "cumin custard", "ginger custard",
+    "nutmeg custard",
+    "mokka", "mokke", "mokku",
+    "eriri samariri", "oriri samariri", "uriri samariri",
+    "vile neef", "vile wadaybeea", "vile yabeewa",
+    "gem heister roorooroon", "quick draw sasaroon", "stealth bomber gagaroon",
+}
+_NYZUL_HNM_FLOORS = {20, 40, 60, 80, 100}
+_NYZUL_ZONE = 77        # Nyzul Isle Uncharted Area -- the floor zone (the
+                        # zone id stays the same across every floor of a run)
+
+def _nyzul_objmode():
+    """Classify the current Nyzul floor objective from its text: 'lamp'
+    (activate lamps), 'leader' (eliminate enemy leader), or 'enemies'
+    (kill all / specified / single target -- just list the mobs)."""
+    o = (nyzul_state.get("objective") or "").lower()
+    if "lamp" in o:
+        return "lamp"
+    if "leader" in o:
+        return "leader"
+    if "free" in o:
+        return "free"
+    if "specified" in o and "enemies" in o:
+        return "specified_enemies"     # plural -> pick a name
+    return "enemies"                   # all / specified-singular
+
+def _sz_lamp_active():
+    """Lamp display/scan runs only in Nyzul mode on a lamp-objective floor."""
+    return scanzone_lamp_mode and _nyzul_objmode() == "lamp"
+
+# ── Sortie objectives (Ra'Kaznar [U]) ───────────────────────────────────────
+# Static per-floor/sector reference (these don't come off the wire like Nyzul's
+# objective text — they're the same every run), rendered in the right-hand
+# section in Sortie mode. Floor (Top / Basement) auto-switches from the zone's
+# map_index once _SORTIE_FLOOR_BY_MI is calibrated; until then it's manual.
+_SORTIE_FLOOR_LABEL = {"ground": "Top", "basement": "Basement"}
+_SORTIE_SECTORS = {"ground":   ["A", "B", "C", "D", "Aurum"],
+                   "basement": ["E", "F", "G", "H", "Aurum"]}
+# map_index -> "ground" | "basement".  Empty until the two values are read off
+# the panel's "map idx N" line on each floor; then the Floor button auto-flips.
+_SORTIE_FLOOR_BY_MI = {}
+
+# nav state (dict so it mutates without `global` in draw/handler)
+scanzone_sortie = {"floor": "ground", "sector": "A", "mi": -1,
+                   "gil": 0, "zone": None}
+
+_SORTIE_OBJECTIVES = {
+    "A": {"family": "Abject", "nm": "Abject Obdella", "items": [
+        ("Chest #A1", "Open any unlocked Gate #A.  (D-4) (F-2) (H-2)"),
+        ("Chest #A2", "Cast magic next to Diaphanous Device #A. Any magic "
+                      "works, including summoning an alter-ego/trust."),
+        ("Chest #A3", "Vanquish 3 Abject foes using single-target magic for "
+                      "the killing blow."),
+        ("Chest #A4", "Vanquish 3 more Abject foes using single-target magic "
+                      "for the killing blow."),
+        ("Chest #A5", "Interact with Diaphanous Bitzer #A while naked."),
+        ("Casket #A1", "Vanquish 5 Abject foes (not Abject Obdella)."),
+        ("Casket #A2", "/heal in the area between Gate #A1 and the Abject "
+                       "Leeches."),
+        ("Coffer #A", "Vanquish Abject Obdella."),
+    ]},
+    "B": {"family": "Biune", "nm": "Biune Porxie", "items": [
+        ("Chest #B1", "Open Gates #B1 through #B6 in order."),
+        ("Chest #B2", "/hurray with Diaphanous Device #B."),
+        ("Chest #B3", "Perform a Weapon Skill on 5 Biune foes before "
+                      "defeating them."),
+        ("Chest #B4", "Perform a Weapon Skill on 5 more Biune foes before "
+                      "defeating them."),
+        ("Chest #B5", "Interact with Diaphanous Device #B after traveling "
+                      "from the entrance on foot. If you warp via a Device, "
+                      "return to the start and start over."),
+        ("Casket #B1", "Vanquish 3 Biune foes within 30 sec of gaining "
+                       "enmity."),
+        ("Casket #B2", "Open any Locked Gate #B.  (J-8) (K-8) (M-8)"),
+        ("Coffer #B", "Vanquish Biune Porxie after meeting the objective for "
+                      "Casket #B1."),
+    ]},
+    "C": {"family": "Cachaemic", "nm": "Cachaemic Bhoot", "items": [
+        ("Chest #C1", "Open Gate #C1 or #C2 before defeating any enemies in "
+                      "Sector C."),
+        ("Chest #C2", "Pull a Cachaemic foe to Diaphanous Device #C and "
+                      "defeat it there."),
+        ("Chest #C3", "Perform a Magic Burst on 3 Cachaemic foes before "
+                      "defeating them."),
+        ("Chest #C4", "Perform a Magic Burst on 3 more Cachaemic foes before "
+                      "defeating them."),
+        ("Chest #C5", "Vanquish at least one Cachaemic foe, Materialize "
+                      "Cachaemic foes at Diaphanous Device #C, then interact "
+                      "with Diaphanous Bitzer #C. The same player must "
+                      "Materialize and interact."),
+        ("Casket #C1", "Vanquish 3 Cachaemic foes within 15 sec of gaining "
+                       "enmity."),
+        ("Casket #C2", "Vanquish all Cachaemic foes."),
+        ("Coffer #C", "Vanquish Cachaemic Bhoot within 5 min of its spawn. "
+                      "Timer starts on entering Sector C; defeat it before it "
+                      "rematerializes to reset the timer."),
+    ]},
+    "D": {"family": "Demisang", "nm": "Demisang Deleterious", "items": [
+        ("Chest #D1", "Open Gates #D1 and #D2, in either order, within two "
+                      "minutes of each other."),
+        ("Chest #D2", "Drop your Obsidian Wing at Diaphanous Device #D. You "
+                      "get a new one immediately."),
+        ("Chest #D3", "Perform a 4-step Skillchain on 3 Demisang foes before "
+                      "defeating them."),
+        ("Chest #D4", "Perform a 4-step Skillchain on 3 more Demisang foes "
+                      "before defeating them."),
+        ("Chest #D5", "Vanquish all Demisang foes, then interact with "
+                      "Diaphanous Bitzer #D. Demisang Deleterious not "
+                      "required."),
+        ("Casket #D1", "Vanquish 6 Demisang foes after defeating their jobs."),
+        ("Casket #D2", "Vanquish Demisang foes in job order: WAR, MNK, WHM, "
+                       "BLM, RDM, THF. Defeating Demisang Deleterious does not "
+                       "interrupt the order."),
+        ("Coffer #D", "Vanquish Demisang Deleterious, then any 3 Demisang "
+                      "foes."),
+    ]},
+    "E": {"family": "Esurient", "nm": "Esurient Botulus", "items": [
+        ("Chest #E", "Vanquish Esurient Botulus with a majority of damage "
+                     "from Weapon Skills performed from behind it. Skillchain "
+                     "damage does not count."),
+        ("Casket #E1", "Vanquish 12 Esurient foes in the room containing the "
+                       "Bitzer."),
+        ("Casket #E2", "Vanquish 15 Esurient Flan."),
+        ("Coffer #E", "Vanquish the 6 mini-Naakuals that appear 5 min after "
+                      "entering Sector E. Timer resets if the sector is "
+                      "evacuated before they spawn.  (F/G-6)"),
+    ]},
+    "F": {"family": "Fetid", "nm": "Fetid Ixion", "items": [
+        ("Chest #F", "Vanquish Fetid Ixion while the horn is broken "
+                     "(horn-break conditions still being tested)."),
+        ("Casket #F1", "Interact with the Diaphanous Bitzer while visibly "
+                       "wearing/lockstyling 5/5 Empyrean Armor (any upgrade "
+                       "level) for your current job. Bitzer not always in the "
+                       "same location."),
+        ("Casket #F2", "Vanquish all Fetid Veela."),
+        ("Coffer #F", "Vanquish the 6 mini-Naakuals that appear when any "
+                      "party member who previously left Sector F re-enters "
+                      "it.  (J-6)"),
+    ]},
+    "G": {"family": "Gyvewrapped", "nm": "Gyvewrapped Naraka", "items": [
+        ("Chest #G", "Vanquish Gyvewrapped Naraka."),
+        ("Casket #G1", "Stand still within 6 yalms of the Diaphanous Bitzer "
+                       "while continuously targeting it for 30 sec. Bitzer not "
+                       "always in the same location."),
+        ("Casket #G2", "Vanquish 19 Gyvewrapped Dullahan."),
+        ("Coffer #G", "Vanquish the 6 mini-Naakuals after defeating all "
+                      "enemies in both sides of the split room. They "
+                      "rematerialize unless defeated in order: Bztavian, "
+                      "Rockfin, Gabbrath, Waktza, Yggdreant, Cehuetzi.  "
+                      "(J-10)"),
+    ]},
+    "H": {"family": "Haughty", "nm": "Haughty Tulittia", "items": [
+        ("Chest #H", "Vanquish Haughty Tulittia after dealing ~50% indirect "
+                     "(AoE) damage targeted on another monster. Possibly "
+                     "instead: after enough WS's (count unknown)."),
+        ("Casket #H1", "Leave and re-enter Sector H."),
+        ("Casket #H2", "Killing all Haughty Paladin spawns the chest; other "
+                       "jobs do not."),
+        ("Coffer #H", "Vanquish the 6 mini-Naakuals that appear after "
+                      "defeating 8 Haughty foes of different jobs. They "
+                      "rematerialize unless defeated alphabetically: "
+                      "Bztavian, Cehuetzi, Gabbrath, Rockfin, Waktza, "
+                      "Yggdreant.  (F-10)"),
+    ]},
+}
+
+_SORTIE_AURUM = {
+    "ground": [
+        ("Aurum Coffer", "Vanquish Abject Obdella, Biune Porxie, Cachaemic "
+                         "Bhoot, and Demisang Deleterious. Any rematerialized "
+                         "copies must also be defeated."),
+    ],
+    "basement": [
+        ("Chest", "Vanquish Esurient Botulus, Fetid Ixion, Gyvewrapped "
+                  "Naraka, and Haughty Tulittia, then interact with "
+                  "Diaphanous Gadget west of the 12-Esurient-Flan room in "
+                  "Sector E. The toucher must hold all 4 Ra'Kaznar Fragments."),
+        ("Aurum Coffer", "Vanquish all of: 3x Esurient Slime/Slug/Flan; 2x "
+                         "Fetid Baelfyr/Gefynst/Ungeweder/Byrgen/Veela; 3x "
+                         "Gyvewrapped Hound/Oullahan/Vampyr; 8 Haughty foes "
+                         "of different jobs."),
+    ],
+}
+
+def _sz_tag_marker(surface, x, y, tag):
+    """Distinct blinking marker for a tagged Nyzul track: blue diamond for the
+    Rune of Transfer, purple boxed-X for Archaic Gears. ~2 Hz blink."""
+    if (int(time.time() * 2) % 2) != 0:
+        return
+    x = int(x); y = int(y)
+    if tag == "rune":
+        col = (90, 175, 255)
+        pygame.draw.polygon(surface, col,
+                            [(x, y - 10), (x + 10, y),
+                             (x, y + 10), (x - 10, y)], 2)
+        pygame.draw.circle(surface, col, (x, y), 2)
+    elif tag == "gears":
+        col = (195, 110, 240)
+        pygame.draw.rect(surface, col, pygame.Rect(x - 9, y - 9, 18, 18), 2)
+        pygame.draw.line(surface, col, (x - 9, y - 9), (x + 9, y + 9))
+        pygame.draw.line(surface, col, (x + 9, y - 9), (x - 9, y + 9))
+
+def _scanzone_clear_rects():
+    _sz_rects.clear()
+
+def _scanzone_run_find():
+    global scanzone_results, scanzone_status, scanzone_scroll
+    _hx = _scanzone_try_hex(scanzone_input)
+    if _hx is not None:
+        _scanzone_track(_hx)
+        scanzone_status = "tracking 0x%03X" % (_hx & 0xFFFF)
+        scanzone_scroll = 0
+        return
+    res, status = _scanzone_find(scanzone_input)
+    scanzone_results = res
+    scanzone_status  = status
+    scanzone_scroll  = 0
+
+def _scanzone_list_all():
+    """Scan Zone button: list EVERY entity in the current zone's DAT into the
+    results list (an unfiltered Find), sorted by name."""
+    global scanzone_results, scanzone_status, scanzone_scroll
+    try:
+        zid = int(zone_info.get("zone_id", 0) or 0)
+    except Exception:
+        zid = 0
+    if zid <= 0:
+        scanzone_status = "Not in a zone yet."
+        return
+    dats = _SCANZONE_DATS.get(zid)
+    if not dats:
+        scanzone_status = "No DAT mapping for zone %d." % zid
+        return
+    base, src = _scanzone_ffxi_path()
+    if not os.path.isdir(base):
+        scanzone_status = "FFXI path not found (from %s)" % src
+        return
+    out, seen = [], set()
+    for rel in dats:
+        full = os.path.join(base, *rel.split("/"))
+        try:
+            with open(full, "rb") as fh:
+                while True:
+                    rec = fh.read(32)
+                    if not rec or len(rec) < 32:
+                        break
+                    nm = rec[0:28].split(b"\x00")[0].decode(
+                        "latin-1", "replace").rstrip()
+                    sid = int.from_bytes(rec[28:32], "little")
+                    ix = sid & 0xFFF
+                    if nm and ix and ix not in seen:
+                        seen.add(ix)
+                        out.append((nm, sid, ix))
+        except Exception:
+            continue
+    out.sort(key=lambda e: e[0].lower())
+    scanzone_results = out
+    scanzone_scroll = 0
+    scanzone_status = "%d entities in zone %d" % (len(out), zid)
+
+def _scanzone_real_name(idx):
+    """Resolved mob name (ignores any user alias)."""
+    for (i, t, dx, dy, hpp, nm) in scanzone_radar:
+        if i == idx and nm:
+            return nm
+    _cn = scanzone_namecache.get(idx)
+    if _cn:
+        return _cn
+    d = scanzone_wide.get(idx)
+    if d and d.get("name"):
+        return d["name"]
+    for nm, sid, i in scanzone_results:
+        if i == idx:
+            return nm
+    return "0x%03X" % (idx & 0xFFFF)
+
+def _scanzone_name_for(idx):
+    return scanzone_aliases.get(idx) or _scanzone_real_name(idx)
+
+# radar type ints -> names (1 npc, 2 pc, 3 mob, 0 other)
+_SZ_RT = {1: "npc", 2: "pc", 3: "mob", 0: "object"}
+
+def _scanzone_type_of(idx):
+    """Resolve an index to mob/pc/npc/other from live data, or None."""
+    for (i, t, dx, dy, hpp, nm) in scanzone_radar:
+        if i == idx:
+            return _SZ_RT.get(t, "object")
+    d = scanzone_wide.get(idx)
+    if d:
+        wt = d.get("type", 0)            # widescan: 2 enemy, 1 friendly
+        if wt == 2:
+            return "mob"
+        if wt == 1:
+            return "npc"
+        return "object"
+    return None                          # not seen live -> unknown
+
+def _scanzone_send_scan(index):
+    """Inject a 0x16 entity-update request for `index`; reply -> SZSCAN|."""
+    global scanzone_scan_info
+    try:
+        idx = int(index)
+    except Exception:
+        return
+    scanzone_scan_info = "scanning 0x%03X\u2026" % (idx & 0xFFFF)
+    try:
+        sock_cmd_out.sendto(("SCANZONE|scan|%d" % idx).encode("utf-8"),
+                            _cmd_addr())
+    except Exception as e:
+        scanzone_scan_info = "scan send failed"
+        print("[OmniWatch] ScanZone scan send failed: %r" % e)
+
+def _scanzone_scan_from_input():
+    """Scan the index typed in the box (hex, with or without a 0x prefix)."""
+    global scanzone_scan_info
+    s = (scanzone_input or "").strip().lower()
+    if s.startswith("0x"):
+        s = s[2:]
+    try:
+        idx = int(s, 16)
+    except Exception:
+        scanzone_scan_info = "Scan needs a hex index (e.g. 2A1)"
+        return
+    _scanzone_send_scan(idx)
+
+def _scanzone_request_wide():
+    """Ask the lua side to run a widescan (radar source)."""
+    global scanzone_status, _sz_wide_auto
+    _sz_wide_auto = False
+    try:
+        sock_cmd_out.sendto(b"SCANZONE|wide", _cmd_addr())
+        scanzone_status = "widescan requested\u2026"
+    except Exception as e:
+        scanzone_status = "widescan send failed"
+        print("[OmniWatch] ScanZone wide send failed: %r" % e)
+
+def _scanzone_request_wide_auto():
+    """Fire a widescan for the Nyzul auto-tracker -- no view change, no status
+    spam. Populates the roster zone-wide (vs the radar's near-me range)."""
+    global _sz_wide_auto
+    _sz_wide_auto = True
+    try:
+        sock_cmd_out.sendto(b"SCANZONE|wide", _cmd_addr())
+    except Exception:
+        _sz_wide_auto = False
+
+def _scanzone_set_radar(on):
+    """Tell the lua side to start/stop streaming the live mob-array radar."""
+    try:
+        sock_cmd_out.sendto(
+            ("SCANZONE|radar|%s" % ("on" if on else "off")).encode("utf-8"),
+            _cmd_addr())
+    except Exception:
+        pass
+
+def _scanzone_track(index):
+    """Start a widescan track on `index` (live position stream)."""
+    global scanzone_track_index, scanzone_track_info
+    global scanzone_track_last, scanzone_track_start, scanzone_track_pos
+    try:
+        idx = int(index)
+    except Exception:
+        return
+    scanzone_track_index = idx
+    scanzone_track_pos = None
+    _scanzone_add_track(idx)
+    scanzone_track_info = "tracking %s 0x%03X\u2026" % (
+        _scanzone_name_for(idx), idx & 0xFFFF)
+    scanzone_track_start = pygame.time.get_ticks()
+    scanzone_track_last = 0
+    try:
+        sock_cmd_out.sendto(("SCANZONE|track|%d" % idx).encode("utf-8"),
+                            _cmd_addr())
+    except Exception as e:
+        print("[OmniWatch] ScanZone track send failed: %r" % e)
+    # Also fire a one-shot scan so we get a coordinate snapshot even when the
+    # live widescan track will not stream (entity spawned but out of range).
+    _scanzone_send_scan(idx)
+
+def _scanzone_stop_track():
+    global scanzone_track_index, scanzone_track_info
+    global scanzone_track_last, scanzone_track_start, scanzone_track_pos
+    scanzone_track_index = None
+    scanzone_track_info = ""
+    scanzone_track_last = 0
+    scanzone_track_start = 0
+    scanzone_track_pos = None
+    try:
+        sock_cmd_out.sendto(b"SCANZONE|track|0", _cmd_addr())
+    except Exception:
+        pass
+
+def _scanzone_parse_coord(s):
+    """Parse 'X Y' / 'X, Y' world coords, or a grid like 'F-8'."""
+    s = (s or "").strip()
+    m = re.match(r"^\(?\s*([A-Pa-p])\s*-?\s*(\d{1,2})\s*\)?$", s)
+    if m:
+        c = ord(m.group(1).upper()) - 65
+        r = int(m.group(2)) - 1
+        if 0 <= c < 16 and 0 <= r < 16:
+            return ("grid", c, r)
+    nums = re.findall(r"-?\d+(?:\.\d+)?", s)
+    if len(nums) >= 3:
+        return ("world", float(nums[0]), float(nums[1]), float(nums[2]))
+    if len(nums) >= 2:
+        return ("world", float(nums[0]), float(nums[1]), None)
+    return None
+
+def _scanzone_try_hex(s):
+    """Parse a hex id like '0x1A2' / '#1a2' -> int index, else None."""
+    s = (s or "").strip().lower()
+    m = re.match(r"^(?:0x|#)([0-9a-f]{1,4})$", s)
+    if m:
+        return int(m.group(1), 16)
+    return None
+
+def _scanzone_set_pin(text):
+    """Drop a coord-search pin on the map from typed coords / grid."""
+    global scanzone_pin, scanzone_status, scanzone_view
+    p = _scanzone_parse_coord(text)
+    if not p:
+        scanzone_status = "coord: type 'X Y' or a grid like F-8"
+        return
+    scanzone_pin = p
+    if p[0] == "world":
+        if len(p) > 3 and p[3] is not None:
+            scanzone_status = ("pin at (%.0f, %.0f, %.0f)"
+                               % (p[1], p[2], p[3]))
+        else:
+            scanzone_status = "pin at (%.0f, %.0f)" % (p[1], p[2])
+    else:
+        scanzone_status = "pin at %s-%d" % (chr(65 + p[1]), p[2] + 1)
+    if scanzone_view != "map":
+        scanzone_view = "map"
+        _scanzone_set_radar(True)
+
+def _scanzone_add_track(idx):
+    """Add (or refresh) a roster entry for `idx`."""
+    ent = scanzone_tracks.get(idx)
+    if ent is None:
+        scanzone_tracks[idx] = {
+            "idx": idx, "name": _scanzone_name_for(idx), "pos": None,
+            "z": None, "spawned": False, "last": 0, "prev": False,
+            "flash": 0, "near": False, "perm": False, "tag": None,
+            "hpp": None, "hp_last": 0, "tod": None, "respawned": False}
+    else:
+        ent["name"] = _scanzone_name_for(idx)
+
+def _scanzone_untrack(idx):
+    """Remove a roster entry; stop the live stream if it was active."""
+    scanzone_tracks.pop(idx, None)
+    if idx == scanzone_track_index:
+        _scanzone_stop_track()
+
+def _scanzone_hover_scan(idx, now):
+    """Throttled scan of the hovered entity so its Z (height) fills in."""
+    global _sz_hover_scan_last
+    if now - _sz_hover_scan_last < 700:
+        return
+    _sz_hover_scan_last = now
+    try:
+        sock_cmd_out.sendto(("SCANZONE|scan|%d" % idx).encode("utf-8"),
+                            _cmd_addr())
+    except Exception:
+        pass
+
+def _scanzone_update_tracks(now):
+    """Poll spawn status, flag spawn transitions, and proximity (50y)."""
+    global _sz_poll_last, _lamp_reconcile_at
+    if _lamp_reconcile_at and now >= _lamp_reconcile_at:
+        _lamp_reconcile_at = 0
+        if scanzone_lamp_mode:
+            try:
+                sock_cmd_out.sendto("SCANZONE|lamps|refresh".encode("utf-8"),
+                                    _cmd_addr())
+            except Exception:
+                pass
+    if not scanzone_tracks:
+        return
+    if now - _sz_poll_last > 2500:
+        _sz_poll_last = now
+        # In Nyzul the roster is radar-driven and must never inject -- the 0x16
+        # poll is what was making in-game mobs disappear. Only the standalone
+        # Find feature (non-Nyzul) re-polls its tracks to follow them at range.
+        if not (scanzone_lamp_mode
+                and zone_info.get("zone_id") == _NYZUL_ZONE):
+            for idx, _pent in list(scanzone_tracks.items()):
+                if _pent.get("tag"):
+                    continue
+                try:
+                    sock_cmd_out.sendto(("SCANZONE|scan|%d" % idx).encode(
+                        "utf-8"), _cmd_addr())
+                except Exception:
+                    pass
+    radar_idx = {e[0] for e in scanzone_radar}
+    radar_d   = {e[0]: (e[2], e[3], e[4]) for e in scanzone_radar}  # dx,dy,hpp
+    pxw = zone_info.get("x"); pyw = zone_info.get("y")
+    _nyz = scanzone_lamp_mode and zone_info.get("zone_id") == _NYZUL_ZONE
+    _drop = []
+    for ent in list(scanzone_tracks.values()):
+        # Spawn state from the scan, which works at ANY range: alive if in
+        # radar or the last scan (<=8s) reported HP > 0. A dead/despawned
+        # mob scans back with HP 0/none, so distance never fakes a despawn.
+        _hp = ent.get("hpp")
+        _fresh = now - ent.get("hp_last", 0) < 8000
+        _alive = _hp is not None and _hp > 0
+        if ent.get("tag"):
+            # Rune of Transfer / Archaic Gears: HP-less floor landmarks. They
+            # have no HP to read, so the HP/radar spawn test would mark them
+            # "gone" the moment you walk out of radar range and drop them.
+            # Treat them as always present -- the floor change clears the
+            # roster, which is the only time they should disappear. Keep their
+            # last radar position fresh while they're in range.
+            if ent["idx"] in radar_idx and pxw is not None and pyw is not None:
+                _ldx, _ldy, _ = radar_d.get(ent["idx"], (None, None, None))
+                if _ldx is not None:
+                    ent["pos"] = (float(pxw) + _ldx, float(pyw) + _ldy)
+            sp = True
+        elif _nyz:
+            # Nyzul mobs are radar-driven and STICKY. While the mob is on the
+            # passive radar we follow its live position and HP; once it leaves
+            # radar we pin it at its last spot rather than dropping it, so it
+            # doesn't blink in and out as it (or you) moves. The only auto-
+            # removal is a kill: it was right beside you (<=12y) and vanished
+            # from radar in the same beat.
+            if ent["idx"] in radar_idx:
+                _dx, _dy, _rhp = radar_d.get(ent["idx"], (None, None, None))
+                if _dx is not None and pxw is not None and pyw is not None:
+                    ent["pos"] = (float(pxw) + _dx, float(pyw) + _dy)
+                    ent["last_dist2"] = _dx * _dx + _dy * _dy
+                if _rhp is not None:
+                    ent["hpp"] = _rhp
+                    ent["hp_last"] = now
+                ent["last_radar"] = now
+                sp = True
+            else:
+                _ld2 = ent.get("last_dist2")
+                if (ent.get("prev", False) and _ld2 is not None
+                        and _ld2 <= 144.0
+                        and now - ent.get("last_radar", 0) < 2500):
+                    ent["tod"] = time.time()          # killed right beside you
+                    if not ent.get("perm"):
+                        _drop.append(ent["idx"])
+                    sp = False
+                else:
+                    sp = True                          # sticky: hold last spot
+        else:
+            sp = (ent["idx"] in radar_idx) or (_alive and _fresh)
+        _was = ent.get("prev", False)
+        if sp and not _was:
+            ent["flash"] = now + 2500          # just spawned -> flash red
+            if ent.get("tod"):                 # had a death -> this is a respawn
+                ent["respawned"] = True
+            ent["tod"] = None                  # clear the old death time
+        elif _was and not sp and not _nyz:
+            # Spawned -> not spawned is a death/despawn. Fire on the
+            # transition itself, not only on a fresh HP<=0 scan: when a mob
+            # (especially an NM) dies its index is often freed, so the scan
+            # simply STOPS replying and HP goes stale rather than ever
+            # returning 0 -- the HP-only check missed exactly that case and
+            # never logged a TOD. The transition covers both scanned-dead
+            # AND scan-went-silent. (Nyzul handles its own kill drop above.)
+            ent["tod"] = time.time()           # time of death
+            if not ent.get("perm"):
+                _drop.append(ent["idx"])       # non-perm: was up, now gone
+        ent["prev"] = sp
+        ent["spawned"] = sp
+        near = False
+        if ent.get("pos") and pxw is not None and pyw is not None:
+            ddx = ent["pos"][0] - float(pxw)
+            ddy = ent["pos"][1] - float(pyw)
+            near = (ddx * ddx + ddy * ddy) <= 2500.0     # within 50 yalms
+        ent["near"] = near
+    # Perm gates cleanup: a non-perm entry is dropped when its mob goes from
+    # up to dead/despawned, confirmed by the scan at ANY range -- so leaving
+    # scan range never drops it (it stays on the map at its last spot). Perm
+    # entries are never auto-removed and re-detect their respawn strictly by
+    # hex id (their own entity index).
+    for _di in _drop:
+        _scanzone_untrack(_di)
+
+def _scanzone_set_lamps(on):
+    """Toggle Nyzul lamp mode: repurpose the roster column for the five
+    fixed lamps and start/stop the lua lamp stream (SCANZONE|lamps)."""
+    global scanzone_lamp_mode
+    scanzone_lamp_mode = bool(on)
+    try:
+        sock_cmd_out.sendto(
+            ("SCANZONE|lamps|%s" % ("on" if on else "off")).encode("utf-8"),
+            _cmd_addr())
+    except Exception:
+        pass
+
+def _scanzone_set_mode(mode):
+    """Mode toggles (nyzul/sortie/omen) are mutually exclusive and each drive
+    the right-hand section. Clicking the active mode turns it off. Nyzul also
+    runs the lamp stream; the others do not."""
+    global scanzone_sortie_mode, scanzone_omen_mode
+    cur = ("nyzul" if scanzone_lamp_mode else
+           "sortie" if scanzone_sortie_mode else
+           "omen" if scanzone_omen_mode else "")
+    new = "" if cur == mode else mode
+    _scanzone_set_lamps(new == "nyzul")     # sets scanzone_lamp_mode + stream
+    scanzone_sortie_mode = (new == "sortie")
+    scanzone_omen_mode   = (new == "omen")
+
+def _scanzone_lamp_click(idx):
+    """Left-click a lamp: append it to the click-order list, or remove it
+    (the rest renumber to stay 1..N) if it is already in the order."""
+    if idx in scanzone_lamp_order:
+        scanzone_lamp_order.remove(idx)
+    else:
+        scanzone_lamp_order.append(idx)
+
+def _scanzone_lamp_clear_order():
+    del scanzone_lamp_order[:]
+
+def _scanzone_cardinal(dx, dy):
+    """Compass label for a player->lamp vector (matches NyzulBuddy2)."""
+    a = math.degrees(math.atan2(dy, dx))
+    if a < 0:
+        a += 360
+    if a >= 337.5 or a < 22.5:
+        return "E"
+    if a < 67.5:
+        return "NE"
+    if a < 112.5:
+        return "N"
+    if a < 157.5:
+        return "NW"
+    if a < 202.5:
+        return "W"
+    if a < 247.5:
+        return "SW"
+    if a < 292.5:
+        return "S"
+    return "SE"
+
+def _toggle_scanzone_panel():
+    """Settings -> Developer -> Scan Zone [OPEN]. Toggles the panel; when
+    opening, closes the settings dropdown so the panel isn't stranded
+    behind it (mirrors the other launchers)."""
+    global scanzone_panel_open
+    scanzone_panel_open = not scanzone_panel_open
+    if scanzone_panel_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+
+
+def _toggle_synergy_panel():
+    """Settings -> Developer -> Synergy [OPEN]. Toggles the panel; when
+    opening, closes the settings dropdown so the panel isn't stranded
+    behind it (mirrors the other launchers and the Ctrl+Shift+Y combo)."""
+    global synergy_panel_open
+    synergy_panel_open = not synergy_panel_open
+    if synergy_panel_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+
+
+def _toggle_ah_panel():
+    """Settings -> Misc -> Auction House [OPEN]. Toggles the panel;
+    when opening, closes the settings dropdown (mirrors the other launchers)."""
+    global ah_panel_open
+    ah_panel_open = not ah_panel_open
+    if ah_panel_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+
+
+def _toggle_craftsyn_panel():
+    """Settings -> Developer -> Crafting / Synergy [OPEN]. Toggles the
+    combined panel; closes the settings dropdown so it isn't stranded."""
+    global craftsyn_open
+    craftsyn_open = not craftsyn_open
+    if craftsyn_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+    _scanzone_set_radar(scanzone_panel_open
+                        and scanzone_view in ("radar", "map"))
+
+
+def _toggle_craft_panel():
+    """Settings -> Developer -> Craft [OPEN]. Toggles the panel; when
+    opening, closes the settings dropdown (mirrors the other launchers
+    and the Ctrl+Shift+R combo)."""
+    global craft_panel_open
+    craft_panel_open = not craft_panel_open
+    if craft_panel_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+    _scanzone_set_radar(scanzone_panel_open
+                        and scanzone_view in ("radar", "map"))
+
+def _toggle_skillup_panel():
+    """Settings -> Developer -> SkillUp [OPEN]. Toggles the panel; closes the
+    settings dropdown when opening and asks the lua side for a fresh status."""
+    global skillup_panel_open
+    skillup_panel_open = not skillup_panel_open
+    if skillup_panel_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+        _skillup_send("status")
+
+def _scanzone_save_pos():
+    try:
+        save_layout()
+    except Exception:
+        pass
+
+def _sz_btn(surface, rect, label, fill, fg, fnt):
+    pygame.draw.rect(surface, fill, rect, border_radius=3)
+    s = fnt.render(label, True, fg)
+    surface.blit(s, (rect.centerx - s.get_width() // 2,
+                     rect.y + (rect.height - s.get_height()) // 2))
+
+# ── Scan Zone — map mode (GIF background + auto-grid calibration) ──────────
+# Maps are the Mappy/ffassist image pack (512x512 GIFs named <zone>_<map>.gif,
+# zero-padded to 2 digits). The printed A-P x 1-16 grid sits on a 32px pitch
+# (origin 0), so cell (c,r) centre = (16+32c, 16+32r). We derive a per-(zone,
+# map) world->pixel transform automatically: windower.ffxi.get_position gives
+# the player's grid cell live, paired with the player's world x/y, and a
+# linear least-squares fit converges as you walk across cells. No manual
+# calibration, no external offset table.
+_SZ_GRID_C0   = 16          # px centre of grid cell 0
+_SZ_GRID_CELL = 32          # px per grid cell (512 / 16)
+scanzone_map_surf_cache = {}   # (zone,map) -> Surface or None
+scanzone_map_zoom       = 1.0  # map-view scroll zoom (1.0 = fill area)
+scanzone_map_calib      = {}   # (zone,map) -> (A,B,C,D): px=A*wx+B, py=C*wy+D
+_sz_calib_samples       = {}   # (zone,map) -> {(col,row): (wx,wy)}
+_sz_calib_loaded        = False
+
+def _scanzone_maps_dir():
+    """data/maps next to the addon, or a folder pasted in maps_path.txt."""
+    try:
+        fp = os.path.join(USER_DIR, "maps_path.txt")
+        if os.path.isfile(fp):
+            with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+                p = _sz_clean_path(fh.read())
+            if p and os.path.isdir(p):
+                return p
+    except Exception:
+        pass
+    base = _self_addon_dir()
+    for b in (base, os.path.dirname(base),
+              os.path.dirname(os.path.dirname(base))):
+        if not b or not os.path.isdir(b):
+            continue
+        cand = os.path.join(b, "data", "maps")
+        if os.path.isdir(cand):
+            return cand
+    return os.path.join(base, "data", "maps")
+
+def _scanzone_map_path(zone, mapidx):
+    d = _scanzone_maps_dir()
+    for name in ("%02x_%d.gif" % (zone, mapidx),
+                 "%x_%d.gif" % (zone, mapidx),
+                 "%02x_%d.png" % (zone, mapidx),
+                 "%x_%d.png" % (zone, mapidx)):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+def _scanzone_map_surface(zone, mapidx):
+    key = (zone, mapidx)
+    if key in scanzone_map_surf_cache:
+        return scanzone_map_surf_cache[key]
+    surf = None
+    p = _scanzone_map_path(zone, mapidx)
+    if p:
+        try:
+            surf = pygame.image.load(p).convert()
+        except Exception as e:
+            print("[OmniWatch] map load failed %s: %r" % (p, e))
+    scanzone_map_surf_cache[key] = surf
+    return surf
+
+def _sz_parse_grid(s):
+    """'(J-6)' -> (col0, row0) zero-based, or None."""
+    if not s:
+        return None
+    m = re.match(r"\s*\(?\s*([A-Pa-p])\s*-\s*(\d+)",
+                 s.strip())
+    if not m:
+        return None
+    col = ord(m.group(1).upper()) - ord("A")
+    row = int(m.group(2)) - 1
+    if 0 <= col <= 15 and 0 <= row <= 15:
+        return (col, row)
+    return None
+
+def _sz_fit_axis(pairs):
+    """Least-squares slope/intercept for [(world, pixel), ...]. None if degenerate."""
+    n = len(pairs)
+    if n < 2:
+        return None
+    sx = sum(p[0] for p in pairs); sy = sum(p[1] for p in pairs)
+    sxx = sum(p[0] * p[0] for p in pairs)
+    sxy = sum(p[0] * p[1] for p in pairs)
+    den = n * sxx - sx * sx
+    if abs(den) < 1e-9:
+        return None
+    a = (n * sxy - sx * sy) / den
+    b = (sy - a * sx) / n
+    return (a, b)
+
+def _sz_calib_path():
+    return os.path.join(USER_DIR, "maps_calib.json")
+
+def _sz_calib_load():
+    try:
+        with open(_sz_calib_path(), "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        for k, v in d.items():
+            zs, ms = k.split("_")
+            if isinstance(v, list) and len(v) == 4:
+                scanzone_map_calib[(int(zs), int(ms))] = tuple(
+                    float(x) for x in v)
+    except Exception:
+        pass
+
+def _sz_calib_save():
+    try:
+        d = {("%d_%d" % k): list(v) for k, v in scanzone_map_calib.items()}
+        with open(_sz_calib_path(), "w", encoding="utf-8") as fh:
+            json.dump(d, fh)
+    except Exception:
+        pass
+
+# map.ini (Mappy / KenshiDRK) — authoritative per-zone calibration, keyed by
+# hex zone id. First four numbers are sx,ox,sy,oy mapping world coords to the
+# map's native 256px space (px = sx*wx + ox). We scale that to the GIF's pixel
+# size. Covers retail zones; private/custom zones fall back to the grid fit.
+_SZ_INI_BASE   = 256.0
+_sz_ini_calib  = {}     # (zone_dec, map) -> (sx, ox, sy, oy)
+_sz_ini_bounds = {}     # (zone_dec, map) -> (xlo, xhi, ylo, yhi, zlo, zhi)
+_sz_ini_loaded = False
+
+def _scanzone_load_ini():
+    global _sz_ini_loaded
+    _sz_ini_loaded = True
+    path = os.path.join(_scanzone_maps_dir(), "map.ini")
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"\s*([0-9a-fA-F]+)_(\d+)\s*=\s*(.+)", line)
+                if not m:
+                    continue
+                try:
+                    zid = int(m.group(1), 16)
+                    mi = int(m.group(2))
+                    vals = [float(v) for v in m.group(3).split(",")[:10]]
+                except Exception:
+                    continue
+                if len(vals) < 4:
+                    continue
+                _sz_ini_calib[(zid, mi)] = tuple(vals[0:4])
+                # The next six numbers are the world bounding box this page
+                # covers: x_min, z_min, y_min, x_max, z_max, y_max. Used to pick
+                # the page by position for tiled zones (Nyzul's 8 sub-maps).
+                if len(vals) >= 10:
+                    x1, z1, y1, x2, z2, y2 = vals[4:10]
+                    _sz_ini_bounds[(zid, mi)] = (
+                        min(x1, x2), max(x1, x2),
+                        min(y1, y2), max(y1, y2),
+                        min(z1, z2), max(z1, z2))
+        if _sz_ini_calib:
+            print("[OmniWatch] map.ini: %d calibrations loaded"
+                  % len(_sz_ini_calib))
+    except Exception:
+        pass
+
+def _sz_effective_map_index(zid, default_mi, wx, wy, wz):
+    """Pick the map page by player position when the map.ini bounds call for it
+    -- Nyzul's 8 sub-maps tile one floor, so the page has to follow the player
+    (as the Windower map addon does) rather than trust the often-stale
+    game-reported map_index. z disambiguates stacked-floor zones. Falls back to
+    default_mi when no page's bounds contain the position, or when the game
+    index already matches one."""
+    if not _sz_ini_loaded:
+        _scanzone_load_ini()
+    if wx is None or wy is None:
+        return default_mi
+    matches = []
+    for (z, mi), b in _sz_ini_bounds.items():
+        if z != zid:
+            continue
+        xlo, xhi, ylo, yhi, zlo, zhi = b
+        if not (xlo <= wx <= xhi and ylo <= wy <= yhi):
+            continue
+        if wz is not None and not (zlo <= wz <= zhi):
+            continue
+        matches.append(mi)
+    if not matches or default_mi in matches:
+        return default_mi
+    return matches[0]
+
+def _scanzone_calib_for(zid, mi, iw, ih):
+    """world -> image-pixel transform (A,B,C,D): px=A*wx+B, py=C*wy+D.
+    map.ini first (instant, retail); else the auto-grid fit; else None."""
+    if not _sz_ini_loaded:
+        _scanzone_load_ini()
+    ini = _sz_ini_calib.get((zid, mi))
+    if ini:
+        sx, ox, sy, oy = ini
+        fx = iw / _SZ_INI_BASE; fy = ih / _SZ_INI_BASE
+        return (sx * fx, ox * fx, sy * fy, oy * fy)
+    return scanzone_map_calib.get((zid, mi))
+
+def _scanzone_calib_observe():
+    """Accumulate a (world <-> grid-cell) sample for the current zone/map and
+    refit world->pixel whenever a new cell is seen. Cheap; called from the
+    map-view draw each frame."""
+    global _sz_calib_loaded
+    if not _sz_calib_loaded:
+        _sz_calib_load()
+        _sz_calib_loaded = True
+    zid = zone_info.get("zone_id", 0)
+    mi = zone_info.get("map_index", 0)
+    cell = _sz_parse_grid(zone_info.get("pos_str", ""))
+    if not cell:
+        return
+    wx = zone_info.get("x"); wy = zone_info.get("y")
+    if wx is None or wy is None:
+        return
+    key = (zid, mi)
+    samp = _sz_calib_samples.setdefault(key, {})
+    is_new = cell not in samp
+    samp[cell] = (float(wx), float(wy))
+    if not is_new:
+        return
+    cols = {c for (c, r) in samp}
+    rows = {r for (c, r) in samp}
+    if len(cols) >= 2 and len(rows) >= 2:
+        col_wx = {}; row_wy = {}
+        for (c, r), (xx, yy) in samp.items():
+            col_wx.setdefault(c, []).append(xx)
+            row_wy.setdefault(r, []).append(yy)
+        fx = _sz_fit_axis([(sum(v) / len(v), _SZ_GRID_C0 + _SZ_GRID_CELL * c)
+                           for c, v in col_wx.items()])
+        fy = _sz_fit_axis([(sum(v) / len(v), _SZ_GRID_C0 + _SZ_GRID_CELL * r)
+                           for r, v in row_wy.items()])
+        if fx and fy:
+            scanzone_map_calib[key] = (fx[0], fx[1], fy[0], fy[1])
+            _sz_calib_save()
+
+def draw_scanzone_window(surface):
+    global scanzone_scroll, scanzone_panel_w, scanzone_panel_h
+    global scanzone_roster_scroll
+    _scanzone_clear_rects()
+    if not (_DEV_ENABLED and scanzone_panel_open):
+        return
+    pad, title_h, input_h, btn_h, grip = 8, 22, 22, 20, 14
+    row_h = _sz_row_h
+    w0 = max(_SZ_MIN_W, min(int(scanzone_panel_w), _SZ_MAX_W))
+    h = max(_SZ_MIN_H, min(int(scanzone_panel_h), _SZ_MAX_H))
+    scanzone_panel_w, scanzone_panel_h = w0, h
+    # Nyzul mode widens the panel by a fixed right-hand section. The existing
+    # content keeps its width (bw == w0); the section is added on the right,
+    # and the stored width is left at w0 so toggling Nyzul off reverts.
+    _secmode = ("nyzul" if scanzone_lamp_mode else
+                "sortie" if scanzone_sortie_mode else
+                "omen" if scanzone_omen_mode else "")
+    _nyzul = (_secmode != "")          # any mode -> widen + show the section
+    rs_gap = pad
+    rs_w   = 345 if _nyzul else 0
+    w = min(w0 + (rs_w + rs_gap if _nyzul else 0), surface.get_width())
+    bw = w - (rs_w + rs_gap if _nyzul else 0)
+    x = max(0, min(int(scanzone_panel_pos[0]), surface.get_width()  - w))
+    y = max(0, min(int(scanzone_panel_pos[1]), surface.get_height() - h))
+    scanzone_panel_pos[0], scanzone_panel_pos[1] = x, y
+    maxc = max(20, (bw - 2 * pad) // 6)
+
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    fnt_dot = get_font("Consolas", 13, bold=True)     # radar/map dot labels
+    fnt_hover = get_font("Consolas", 16, bold=True)   # bigger on hover
+
+    pygame.draw.rect(surface, COL_PANEL,    (x, y, w, h), border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, w, h), 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
+    except Exception:
+        pass
+
+    # title bar (drag handle) + close
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("DEV \u00b7 Scan Zone", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _sz_rects["close"] = close_r
+    # mode toggles (right -> left): Nyzul | Sortie | Omen. Mutually exclusive;
+    # each drives the right-hand section (Nyzul also drives lamp tracking).
+    def _sz_tog(rect, label, on, on_bg, on_bd, on_tx):
+        pygame.draw.rect(surface, on_bg if on else (44, 48, 58),
+                         rect, border_radius=3)
+        pygame.draw.rect(surface, on_bd if on else (72, 78, 92),
+                         rect, 1, border_radius=3)
+        _t = fnt_s.render(label, True, on_tx if on else (160, 168, 182))
+        surface.blit(_t, (rect.centerx - _t.get_width() // 2,
+                          rect.centery - _t.get_height() // 2))
+    _MW = 46
+    omen_r   = pygame.Rect(close_r.left - 4 - _MW, y + 4, _MW, 14)
+    sortie_r = pygame.Rect(omen_r.left   - 3 - _MW, y + 4, _MW, 14)
+    nyzul_r  = pygame.Rect(sortie_r.left - 3 - _MW, y + 4, _MW, 14)
+    _sz_tog(nyzul_r,  "Nyzul",  scanzone_lamp_mode,
+            (80, 70, 40), (150, 120, 60), (245, 225, 170))
+    _sz_tog(sortie_r, "Sortie", scanzone_sortie_mode,
+            (45, 60, 85), (90, 120, 170), (200, 220, 245))
+    _sz_tog(omen_r,   "Omen",   scanzone_omen_mode,
+            (70, 45, 75), (140, 90, 150), (235, 200, 240))
+    _sz_rects["nyzul"]  = nyzul_r
+    _sz_rects["sortie"] = sortie_r
+    _sz_rects["omen"]   = omen_r
+    # dot-label toggle moved to the LEFT, just past the title text:
+    # cycle None -> Name -> ID (labels on radar / map dots)
+    names_r = pygame.Rect(x + 8 + ts.get_width() + 8, y + 4, 50, 14)
+    _dl = scanzone_dot_label
+    _dl_on = _dl != "none"
+    pygame.draw.rect(surface, (45, 80, 60) if _dl_on else (44, 48, 58),
+                     names_r, border_radius=3)
+    pygame.draw.rect(surface, (70, 120, 90) if _dl_on else (72, 78, 92),
+                     names_r, 1, border_radius=3)
+    nl = fnt_s.render({"none": "None", "name": "Name", "id": "ID"}[_dl],
+                      True, (200, 235, 210) if _dl_on else (160, 168, 182))
+    surface.blit(nl, (names_r.centerx - nl.get_width() // 2,
+                      names_r.centery - nl.get_height() // 2))
+    _sz_rects["names"] = names_r
+    _sz_rects["title"] = pygame.Rect(
+        names_r.right + 4, y,
+        max(10, nyzul_r.left - 2 - (names_r.right + 4)), title_h)
+
+    # input box
+    cy = y + title_h + pad
+    in_r = pygame.Rect(x + pad, cy, bw - 2 * pad, input_h)
+    _alias_mode = scanzone_alias_target is not None
+    pygame.draw.rect(surface, (30, 25, 16) if _alias_mode else (20, 22, 28),
+                     in_r, border_radius=3)
+    pygame.draw.rect(surface,
+                     (195, 160, 80) if _alias_mode else (90, 100, 120),
+                     in_r, 1, border_radius=3)
+    if _alias_mode:
+        if scanzone_input:
+            isurf = fnt.render(scanzone_input, True, (240, 225, 165))
+        else:
+            isurf = fnt.render(
+                "type an alias\u2026  Enter saves  \u00b7  Esc cancels",
+                True, (175, 150, 110))
+    elif scanzone_input:
+        isurf = fnt.render(scanzone_input, True, (230, 230, 235))
+    else:
+        isurf = fnt.render(
+            "Name  /  Hex ID 0x1A2  /  Coordinates  X Y Z  /  grid F-8",
+            True, (110, 110, 120))
+    surface.blit(isurf, (in_r.x + 6,
+                         in_r.y + (input_h - isurf.get_height()) // 2))
+    caret_x = in_r.x + 6 + fnt.size(scanzone_input)[0] + 1
+    pygame.draw.line(surface,
+                     (235, 210, 140) if _alias_mode else (200, 210, 220),
+                     (caret_x, in_r.y + 4), (caret_x, in_r.y + input_h - 4))
+    _sz_rects["input"] = in_r
+
+    # row A: Find | Scan Zone | Coordinates | Clear  (Scan Zone lists every
+    # entity in the zone; Coordinates pins typed coords on the map)
+    cy += input_h + pad
+    gap = pad
+    b4a = (bw - 2 * pad - 3 * gap) // 4
+    find_r  = pygame.Rect(x + pad, cy, b4a, btn_h)
+    scanz_r = pygame.Rect(find_r.right + gap, cy, b4a, btn_h)
+    coord_r = pygame.Rect(scanz_r.right + gap, cy, b4a, btn_h)
+    clear_r = pygame.Rect(coord_r.right + gap, cy,
+                          (x + bw - pad) - (coord_r.right + gap), btn_h)
+    _sz_btn(surface, find_r,  "Find",  (40, 80, 60), (210, 235, 215), fnt_b)
+    _sz_btn(surface, scanz_r, "Scan Zone", (45, 70, 95), (205, 225, 240), fnt_b)
+    _sz_btn(surface, coord_r, "Coordinates", (80, 70, 45),
+            (235, 225, 200), fnt_b)
+    _sz_btn(surface, clear_r, "Clear", (50, 55, 65), (210, 210, 215), fnt_b)
+    _sz_rects["find"]  = find_r
+    _sz_rects["scanz"] = scanz_r
+    _sz_rects["coord"] = coord_r
+    _sz_rects["clear"] = clear_r
+    _sz_rects.pop("scan", None)
+
+    # row B: Wide | view | Spawn | Type
+    cy += btn_h + gap
+    b4 = (bw - 2 * pad - 3 * gap) // 4
+    wide_r = pygame.Rect(x + pad, cy, b4, btn_h)
+    view_r = pygame.Rect(wide_r.right + gap, cy, b4, btn_h)
+    spwn_r = pygame.Rect(view_r.right + gap, cy, b4, btn_h)
+    type_r = pygame.Rect(spwn_r.right + gap, cy,
+                         (x + bw - pad) - (spwn_r.right + gap), btn_h)
+    _sz_btn(surface, wide_r, "Wide", (40, 70, 95), (210, 225, 240), fnt_b)
+    _sz_btn(surface, view_r,
+            {"list": "List", "radar": "Radar", "map": "Map"}.get(
+                scanzone_view, "List"),
+            (60, 60, 80), (220, 220, 230), fnt_b)
+    _sz_btn(surface, spwn_r,
+            {"all": "All", "spawned": "Spawned",
+             "unspawned": "Unspawn"}.get(scanzone_spawn_filter, "All"),
+            (50, 80, 60) if scanzone_spawn_filter != "all" else (50, 55, 65),
+            (215, 230, 215) if scanzone_spawn_filter != "all"
+            else (190, 190, 200),
+            fnt_b)
+    _tf_lbl = {"any": "Any", "mob": "Mob", "pc": "PC", "npc": "NPC", "object": "Obj"}
+    _tf_on = scanzone_type_filter != "any"
+    _sz_btn(surface, type_r, _tf_lbl.get(scanzone_type_filter, "Any"),
+            (80, 55, 80) if _tf_on else (50, 55, 65),
+            (235, 210, 235) if _tf_on else (190, 190, 200), fnt_b)
+    _sz_rects["wide"]    = wide_r
+    _sz_rects["view"]    = view_r
+    _sz_rects["spawned"] = spwn_r
+    _sz_rects["typef"]   = type_r
+
+    # main area (list/radar/map) on the left, tracked roster on the right
+    cy += btn_h + pad
+    bottom_reserve = 4 + 14 + 14 + 14 + pad     # track + scan + status lines
+    area_h = max(row_h + 6, (y + h - bottom_reserve) - cy)
+    _scanzone_update_tracks(pygame.time.get_ticks())
+    # Nyzul no longer auto-tracks anything. Entity visibility on a Nyzul floor
+    # is the live radar (zone-wide, passive get_mob_array) -- leader, enemies,
+    # Rune of Transfer, Archaic Gears all just show as radar dots. The roster
+    # is reserved for the lamp display on lamp-objective floors; everything
+    # else is read straight off the radar.
+    # Sortie no longer auto-tracks sector NMs. Like Nyzul, entity visibility
+    # is just the passive radar; tracking a specific NM is a manual scan/
+    # search (find box, radar/row click, or context-menu Track).
+    rost_w = 200
+    view_w = max(140, (bw - 2 * pad) - rost_w - pad)
+    area_r = pygame.Rect(x + pad, cy, view_w, area_h)
+    pygame.draw.rect(surface, (14, 16, 20), area_r, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 78), area_r, 1, border_radius=3)
+    _sz_rects["results"] = area_r
+    roster_r = pygame.Rect(area_r.right + pad, cy,
+                           (x + bw - pad) - (area_r.right + pad), area_h)
+    mpos = pygame.mouse.get_pos()
+    hits = []                       # [(rect, index)] for click -> live scan
+    hover_info = None               # entity readout shown in bottom row
+
+    if scanzone_view == "radar":
+        # Player-centred radar from the live mob array (world coords,
+        # north-up). We sit at centre; dots are placed by player-relative
+        # (dx east, dy north). Heading drives the facing arrow.
+        plot = area_r.inflate(-16, -16)
+        cxp = plot.centerx + int(scanzone_radar_pan[0])
+        cyp = plot.centery + int(scanzone_radar_pan[1])
+        rad_px = max(8, min(plot.width, plot.height) // 2)
+        _rprev = surface.get_clip()
+        surface.set_clip(area_r)
+        rng = 50.0 / max(0.04, scanzone_radar_zoom)     # yalms at edge
+        sc = rad_px / rng
+        pygame.draw.circle(surface, (38, 44, 54), (cxp, cyp), rad_px, 1)
+        pygame.draw.circle(surface, (30, 36, 46), (cxp, cyp),
+                           max(1, rad_px // 2), 1)
+        pygame.draw.line(surface, (32, 38, 48),
+                         (cxp, plot.top), (cxp, plot.bottom))
+        pygame.draw.line(surface, (32, 38, 48),
+                         (plot.left, cyp), (plot.right, cyp))
+        hover_name = None
+        for (idx, t, dx, dy, hpp, nm) in scanzone_radar:
+            if (scanzone_type_filter != "any"
+                    and _SZ_RT.get(t, "object") != scanzone_type_filter):
+                continue
+            sxp = int(cxp + dx * sc)
+            syp = int(cyp - dy * sc)                     # north up
+            if (sxp - cxp) ** 2 + (syp - cyp) ** 2 > rad_px * rad_px:
+                continue
+            col = {3: (220, 95, 95), 2: (110, 170, 230),
+                   1: (210, 190, 110)}.get(t, (150, 160, 175))
+            if idx in scanzone_tracks:
+                rc = (130, 200, 230) if idx == scanzone_track_index \
+                    else (95, 150, 175)
+                pygame.draw.circle(surface, rc, (sxp, syp), 7, 1)
+            pygame.draw.circle(surface, col, (sxp, syp), 4)
+            drect = pygame.Rect(sxp - 5, syp - 5, 10, 10)
+            _is_hover = drect.collidepoint(*mpos)
+            if _is_hover or scanzone_dot_label != "none":
+                if _is_hover:
+                    _lt = "%s 0x%03X" % (
+                        scanzone_aliases.get(idx) or (nm or "?"),
+                        idx & 0xFFFF)
+                    _lf, _lcol = fnt_hover, (235, 240, 250)
+                else:
+                    _lt = (scanzone_aliases.get(idx) or nm) \
+                        if scanzone_dot_label == "name" \
+                        else "0x%03X" % (idx & 0xFFFF)
+                    _lf, _lcol = fnt_dot, (205, 212, 224)
+                if _lt:
+                    lab = _lf.render(_lt, True, _lcol)
+                    lx = sxp + 6
+                    if lx + lab.get_width() > area_r.right - 3:
+                        lx = sxp - 6 - lab.get_width()
+                    ly = max(area_r.y + 2,
+                             min(syp - 6,
+                                 area_r.bottom - 2 - lab.get_height()))
+                    surface.blit(_lf.render(_lt, True, (10, 12, 16)),
+                                 (lx + 1, ly + 1))
+                    surface.blit(lab, (lx, ly))
+            if _is_hover:
+                _dn = scanzone_aliases.get(idx) or (nm or "?")
+                hover_name = "%s 0x%03X  %.0fy" % (
+                    _dn, idx & 0xFFFF, math.hypot(dx, dy))
+                _hwx = zone_info.get("x"); _hwy = zone_info.get("y")
+                _te = scanzone_tracks.get(idx)
+                _ez = (_te["z"] if _te and _te.get("z") is not None
+                       else scanzone_zcache.get(idx))
+                _zs = (" Z %.0f" % _ez) if _ez is not None else ""
+                _scanzone_hover_scan(idx, pygame.time.get_ticks())
+                if _hwx is not None and _hwy is not None:
+                    hover_info = ("%s 0x%03X  X %.0f Y %.0f%s  %.0fy"
+                                  % (_dn, idx & 0xFFFF, _hwx + dx,
+                                     _hwy + dy, _zs, math.hypot(dx, dy)))
+                else:
+                    hover_info = ("%s 0x%03X  rel %.0f, %.0f%s"
+                                  % (_dn, idx & 0xFFFF, dx, dy, _zs))
+            hits.append((drect, idx))
+        # player marker: a tinted triangle pointing the way we face.
+        # FFXI heading 0 = east, CW; facing screen vector = (cos, sin).
+        hd = scanzone_radar_heading
+        fdx, fdy = math.cos(hd), math.sin(hd)          # facing (screen)
+        pdx, pdy = -fdy, fdx                           # perpendicular
+        tri = [
+            (int(cxp + fdx * 8),           int(cyp + fdy * 8)),
+            (int(cxp - fdx * 5 + pdx * 5), int(cyp - fdy * 5 + pdy * 5)),
+            (int(cxp - fdx * 5 - pdx * 5), int(cyp - fdy * 5 - pdy * 5)),
+        ]
+        pygame.draw.polygon(surface, (70, 140, 255), tri)
+        pygame.draw.polygon(surface, (15, 20, 35), tri, 1)
+        # tracked roster entries not in the live mob array: crosshair where
+        # each is, or an edge arrow toward it past the radar edge.
+        _pxw = zone_info.get("x"); _pyw = zone_info.get("y")
+        _ridx = {e[0] for e in scanzone_radar}
+        if _pxw is not None and _pyw is not None:
+            for _tidx, _ent in list(scanzone_tracks.items()):
+                if _ent.get("pos") is None or _tidx in _ridx:
+                    continue
+                _tgc = _ent.get("tag")
+                if _tgc == "rune":
+                    _mc = (90, 175, 255)
+                elif _tgc == "gears":
+                    _mc = (195, 110, 240)
+                elif _tidx == scanzone_track_index:
+                    _mc = (230, 90, 90)
+                else:
+                    _mc = (95, 150, 175)
+                tdx = _ent["pos"][0] - float(_pxw)
+                tdy = _ent["pos"][1] - float(_pyw)
+                tsx = int(cxp + tdx * sc); tsy = int(cyp - tdy * sc)
+                if math.hypot(tsx - cxp, tsy - cyp) <= rad_px:
+                    _tg = _ent.get("tag")
+                    if _tg:
+                        _sz_tag_marker(surface, tsx, tsy, _tg)
+                    else:
+                        pygame.draw.circle(surface, _mc, (tsx, tsy), 7, 2)
+                        pygame.draw.line(surface, _mc,
+                                         (tsx - 10, tsy), (tsx + 10, tsy))
+                        pygame.draw.line(surface, _mc,
+                                         (tsx, tsy - 10), (tsx, tsy + 10))
+                else:
+                    ang = math.atan2(tsy - cyp, tsx - cxp)
+                    adx, ady = math.cos(ang), math.sin(ang)
+                    ex_ = cxp + adx * (rad_px - 4)
+                    ey_ = cyp + ady * (rad_px - 4)
+                    apx, apy = -ady, adx
+                    atri = [(int(ex_ + adx * 9), int(ey_ + ady * 9)),
+                            (int(ex_ - adx * 7 + apx * 6),
+                             int(ey_ - ady * 7 + apy * 6)),
+                            (int(ex_ - adx * 7 - apx * 6),
+                             int(ey_ - ady * 7 - apy * 6))]
+                    pygame.draw.polygon(surface, _mc, atri)
+                    pygame.draw.polygon(surface, (15, 25, 35), atri, 1)
+        for lab, (lx, ly) in (("N", (cxp, plot.top + 7)),
+                              ("S", (cxp, plot.bottom - 7)),
+                              ("E", (plot.right - 7, cyp)),
+                              ("W", (plot.left + 7, cyp))):
+            cs = fnt_s.render(lab, True, (140, 152, 172))
+            surface.blit(cs, (lx - cs.get_width() // 2,
+                              ly - cs.get_height() // 2))
+        # live world coordinate under the cursor (any point on the radar)
+        if hover_info is None and area_r.collidepoint(*mpos):
+            _pxw = zone_info.get("x"); _pyw = zone_info.get("y")
+            if _pxw is not None and _pyw is not None:
+                _cdx = (mpos[0] - cxp) / sc
+                _cdy = -(mpos[1] - cyp) / sc
+                _pz = zone_info.get("z")
+                _pzs = ("  Z %.0f (you)" % _pz) if _pz is not None else ""
+                hover_info = "cursor  X %.0f  Y %.0f%s" % (
+                    _pxw + _cdx, _pyw + _cdy, _pzs)
+        if hover_name:
+            hs = fnt_s.render(hover_name[:maxc], True, (220, 225, 235))
+            surface.blit(hs, (area_r.x + 6, area_r.bottom - 16))
+        cnt = fnt_s.render(
+            "%d nearby \u00b7 %.0fy \u00b7 x%.2f"
+            % (len(scanzone_radar), rng, scanzone_radar_zoom),
+            True, (120, 150, 130))
+        surface.blit(cnt, (area_r.x + 6, area_r.y + 3))
+        surface.set_clip(_rprev)
+    elif scanzone_view == "map":
+        _scanzone_calib_observe()
+        zid = zone_info.get("zone_id", 0)
+        mi = _sz_effective_map_index(
+            zid, zone_info.get("map_index", 0),
+            zone_info.get("x"), zone_info.get("y"), zone_info.get("z"))
+        surf = _scanzone_map_surface(zid, mi)
+        if surf is None:
+            m1 = fnt_s.render("no map: %02x_%d.(gif/png) not in data/maps"
+                              % (zid, mi), True, (210, 170, 120))
+            surface.blit(m1, (area_r.x + 8, area_r.y + 8))
+            m2 = fnt_s.render("(or paste the folder into maps_path.txt)",
+                              True, (130, 140, 155))
+            surface.blit(m2, (area_r.x + 8, area_r.y + 24))
+        else:
+            iw, ih = surf.get_size()
+            # Fill the panel area (cover its larger side), player-centred,
+            # with scroll-zoom on top. All map drawing is clipped to the area
+            # so the overflow never spills onto the rest of the panel.
+            base = max(area_r.width, area_r.height)
+            msize = max(8, int(base * scanzone_map_zoom))
+            f = msize / float(iw)                 # image-px -> screen-px
+            calib = _scanzone_calib_for(zid, mi, iw, ih)
+            pwx = zone_info.get("x"); pwy = zone_info.get("y")
+            have_player = bool(calib) and pwx is not None and pwy is not None
+            if have_player:
+                A, B, C, D = calib
+                ox_s = (area_r.centerx - (A * pwx + B) * f
+                        + scanzone_map_pan[0])
+                oy_s = (area_r.centery - (C * pwy + D) * f
+                        + scanzone_map_pan[1])
+            else:
+                ox_s = (area_r.centerx - (iw * 0.5) * f
+                        + scanzone_map_pan[0])
+                oy_s = (area_r.centery - (ih * 0.5) * f
+                        + scanzone_map_pan[1])
+
+            def _img_to_scr(ipx, ipy):
+                return (int(ox_s + ipx * f), int(oy_s + ipy * f))
+
+            prev_clip = surface.get_clip()
+            surface.set_clip(area_r)
+            surface.blit(pygame.transform.smoothscale(surf, (msize, msize)),
+                         (int(ox_s), int(oy_s)))
+            hover_name = None
+            if have_player:
+                for (idx, t, dx, dy, hpp, nm) in scanzone_radar:
+                    if (scanzone_type_filter != "any"
+                            and _SZ_RT.get(t, "object") != scanzone_type_filter):
+                        continue
+                    sx, sy = _img_to_scr(A * (pwx + dx) + B, C * (pwy + dy) + D)
+                    if not area_r.collidepoint(sx, sy):
+                        continue
+                    col = {3: (220, 95, 95), 2: (110, 170, 230),
+                           1: (210, 190, 110)}.get(t, (150, 160, 175))
+                    if idx in scanzone_tracks:
+                        rc = (130, 200, 230) if idx == scanzone_track_index \
+                            else (95, 150, 175)
+                        pygame.draw.circle(surface, rc, (sx, sy), 7, 1)
+                    pygame.draw.circle(surface, col, (sx, sy), 4)
+                    drect = pygame.Rect(sx - 5, sy - 5, 10, 10)
+                    _is_hover = drect.collidepoint(*mpos)
+                    if _is_hover or scanzone_dot_label != "none":
+                        if _is_hover:
+                            _ml = "%s 0x%03X" % (
+                                scanzone_aliases.get(idx) or (nm or "?"),
+                                idx & 0xFFFF)
+                            _mf = fnt_hover
+                        else:
+                            _ml = (scanzone_aliases.get(idx) or nm) \
+                                if scanzone_dot_label == "name" \
+                                else "0x%03X" % (idx & 0xFFFF)
+                            _mf = fnt_dot
+                        if _ml:
+                            surface.blit(_mf.render(_ml, True, (10, 12, 16)),
+                                         (sx + 6, sy - 5))
+                            surface.blit(_mf.render(_ml, True, (235, 238, 245)),
+                                         (sx + 5, sy - 6))
+                    if _is_hover:
+                        _dn = scanzone_aliases.get(idx) or (nm or "?")
+                        hover_name = "%s 0x%03X" % (_dn, idx & 0xFFFF)
+                        _te = scanzone_tracks.get(idx)
+                        _ez = (_te["z"] if _te and _te.get("z") is not None
+                               else scanzone_zcache.get(idx))
+                        _zs = (" Z %.0f" % _ez) if _ez is not None else ""
+                        _scanzone_hover_scan(idx, pygame.time.get_ticks())
+                        hover_info = ("%s 0x%03X  X %.0f Y %.0f%s"
+                                      % (_dn, idx & 0xFFFF,
+                                         pwx + dx, pwy + dy, _zs))
+                    hits.append((drect, idx))
+                px, py = _img_to_scr(A * pwx + B, C * pwy + D)
+                hd = scanzone_radar_heading
+                fdx, fdy = math.cos(hd), math.sin(hd)
+                pdx, pdy = -fdy, fdx
+                tri = [(int(px + fdx * 8), int(py + fdy * 8)),
+                       (int(px - fdx * 5 + pdx * 5), int(py - fdy * 5 + pdy * 5)),
+                       (int(px - fdx * 5 - pdx * 5), int(py - fdy * 5 - pdy * 5))]
+                pygame.draw.polygon(surface, (70, 140, 255), tri)
+                pygame.draw.polygon(surface, (15, 20, 35), tri, 1)
+                # Nyzul lamps: persistent pinned markers at their captured
+                # coords. Filled gold when lit, hollow/dim when dark, with the
+                # activation-order number. pos is stored, so a lamp stays on the
+                # map after it unloads -- the whole floor's set sits here once
+                # you've passed each one.
+                if _sz_lamp_active():
+                    for _lidx in sorted(scanzone_lamps.keys()):
+                        _lent = scanzone_lamps.get(_lidx) or {}
+                        if _lent.get("kind") == "rune":
+                            continue
+                        _lpos = _lent.get("pos")
+                        if not _lpos:
+                            continue
+                        _lsx, _lsy = _img_to_scr(A * _lpos[0] + B,
+                                                 C * _lpos[1] + D)
+                        if not area_r.collidepoint(_lsx, _lsy):
+                            continue
+                        _llit = bool(_lent.get("lit"))
+                        if _llit:
+                            pygame.draw.circle(surface, (240, 205, 70),
+                                               (_lsx, _lsy), 6)
+                            pygame.draw.circle(surface, (70, 56, 20),
+                                               (_lsx, _lsy), 6, 1)
+                        else:
+                            pygame.draw.circle(surface, (26, 28, 36),
+                                               (_lsx, _lsy), 6)
+                            pygame.draw.circle(surface, (120, 122, 132),
+                                               (_lsx, _lsy), 6, 2)
+                        _lord = (scanzone_lamp_order.index(_lidx) + 1
+                                 if _lidx in scanzone_lamp_order else None)
+                        if _lord is not None:
+                            _obc = (20, 18, 8) if _llit else (235, 238, 245)
+                            _obs = fnt_s.render(str(_lord), True, _obc)
+                            surface.blit(_obs,
+                                         (_lsx - _obs.get_width() // 2,
+                                          _lsy - _obs.get_height() // 2))
+                # Rune of Transfer ("home"): a distinct cyan diamond at its
+                # captured spot, drawn on every Nyzul floor (not just lamp ones)
+                # and held no matter how far out of range you are.
+                if scanzone_lamp_mode:
+                    for _runi in sorted(scanzone_lamps.keys()):
+                        _rune = scanzone_lamps.get(_runi) or {}
+                        if _rune.get("kind") != "rune":
+                            continue
+                        _rpos = _rune.get("pos")
+                        if not _rpos:
+                            continue
+                        _rsx, _rsy = _img_to_scr(A * _rpos[0] + B,
+                                                 C * _rpos[1] + D)
+                        if not area_r.collidepoint(_rsx, _rsy):
+                            continue
+                        _dia = [(_rsx, _rsy - 8), (_rsx + 8, _rsy),
+                                (_rsx, _rsy + 8), (_rsx - 8, _rsy)]
+                        pygame.draw.polygon(surface, (70, 150, 240), _dia)
+                        pygame.draw.polygon(surface, (200, 230, 255), _dia, 2)
+                        _hg = fnt_s.render("\u2302", True, (15, 25, 45))
+                        surface.blit(_hg, (_rsx - _hg.get_width() // 2,
+                                           _rsy - _hg.get_height() // 2))
+                # tracked roster: a crosshair where each one is, or an edge
+                # arrow toward it when it sits off the visible map.
+                _ridx = {e[0] for e in scanzone_radar}
+                for _tidx, _ent in list(scanzone_tracks.items()):
+                    if _ent.get("pos") is None or _tidx in _ridx:
+                        continue
+                    _tgc = _ent.get("tag")
+                    if _tgc == "rune":
+                        _mc = (90, 175, 255)
+                    elif _tgc == "gears":
+                        _mc = (195, 110, 240)
+                    elif _tidx == scanzone_track_index:
+                        _mc = (230, 90, 90)
+                    else:
+                        _mc = (95, 150, 175)
+                    twx, twy = _ent["pos"]
+                    tsx, tsy = _img_to_scr(A * twx + B, C * twy + D)
+                    if area_r.collidepoint(tsx, tsy):
+                        _tg = _ent.get("tag")
+                        if _tg:
+                            _sz_tag_marker(surface, tsx, tsy, _tg)
+                        else:
+                            pygame.draw.circle(surface, _mc, (tsx, tsy), 7, 2)
+                            pygame.draw.line(surface, _mc,
+                                             (tsx - 10, tsy), (tsx + 10, tsy))
+                            pygame.draw.line(surface, _mc,
+                                             (tsx, tsy - 10), (tsx, tsy + 10))
+                    else:
+                        ang = math.atan2(tsy - area_r.centery,
+                                         tsx - area_r.centerx)
+                        adx, ady = math.cos(ang), math.sin(ang)
+                        hw = area_r.width / 2.0 - 12
+                        hh = area_r.height / 2.0 - 12
+                        tt = min(hw / abs(adx) if adx else 1e9,
+                                 hh / abs(ady) if ady else 1e9)
+                        ex_ = area_r.centerx + adx * tt
+                        ey_ = area_r.centery + ady * tt
+                        apx, apy = -ady, adx
+                        atri = [(int(ex_ + adx * 9), int(ey_ + ady * 9)),
+                                (int(ex_ - adx * 7 + apx * 6),
+                                 int(ey_ - ady * 7 + apy * 6)),
+                                (int(ex_ - adx * 7 - apx * 6),
+                                 int(ey_ - ady * 7 - apy * 6))]
+                        pygame.draw.polygon(surface, _mc, atri)
+                        pygame.draw.polygon(surface, (15, 25, 35), atri, 1)
+            else:
+                cell = _sz_parse_grid(zone_info.get("pos_str", ""))
+                if cell:
+                    gx, gy = _img_to_scr(_SZ_GRID_C0 + _SZ_GRID_CELL * cell[0],
+                                         _SZ_GRID_C0 + _SZ_GRID_CELL * cell[1])
+                    pygame.draw.circle(surface, (70, 140, 255), (gx, gy), 4)
+                    pygame.draw.circle(surface, (15, 20, 35), (gx, gy), 4, 1)
+            if scanzone_pin is not None:
+                _ppt = None
+                if scanzone_pin[0] == "grid":
+                    _ppt = _img_to_scr(
+                        _SZ_GRID_C0 + _SZ_GRID_CELL * scanzone_pin[1],
+                        _SZ_GRID_C0 + _SZ_GRID_CELL * scanzone_pin[2])
+                elif calib:
+                    _Ap, _Bp, _Cp, _Dp = calib
+                    _ppt = _img_to_scr(_Ap * scanzone_pin[1] + _Bp,
+                                       _Cp * scanzone_pin[2] + _Dp)
+                if _ppt and area_r.collidepoint(*_ppt):
+                    pygame.draw.circle(surface, (245, 150, 70), _ppt, 6, 2)
+                    pygame.draw.line(surface, (245, 150, 70),
+                                     (_ppt[0], _ppt[1] - 9),
+                                     (_ppt[0], _ppt[1] + 9))
+                    pygame.draw.line(surface, (245, 150, 70),
+                                     (_ppt[0] - 9, _ppt[1]),
+                                     (_ppt[0] + 9, _ppt[1]))
+            # live world coordinate under the cursor (any point on the map)
+            if (have_player and hover_info is None
+                    and area_r.collidepoint(*mpos) and A and C):
+                _cwx = ((mpos[0] - ox_s) / f - B) / A
+                _cwy = ((mpos[1] - oy_s) / f - D) / C
+                _pz = zone_info.get("z")
+                _pzs = ("  Z %.0f (you)" % _pz) if _pz is not None else ""
+                hover_info = "cursor  X %.0f  Y %.0f%s" % (
+                    _cwx, _cwy, _pzs)
+            surface.set_clip(prev_clip)
+            zlab = fnt_s.render("map x%.2f" % scanzone_map_zoom,
+                                True, (120, 150, 130))
+            surface.blit(zlab, (area_r.x + 6, area_r.y + 3))
+            # Diagnostic: which (zone,map) calibration we used, its source,
+            # and where the player lands in image pixels. If px/py fall
+            # outside 0..iw / 0..ih the calib is wrong for this (zone,
+            # map_index) — that's the "off the map" smoking gun (e.g. Nyzul).
+            _src = ("ini" if (zid, mi) in _sz_ini_calib else
+                    "grid" if (zid, mi) in scanzone_map_calib else "none")
+            _grid = zone_info.get("pos_str", "") or "?"
+            if calib and pwx is not None and pwy is not None:
+                _pix = calib[0] * pwx + calib[1]
+                _piy = calib[2] * pwy + calib[3]
+                _dbg = "%02x_%d %s g:%s w:%.0f,%.0f img:%.0f,%.0f /%d" % (
+                    zid, mi, _src, _grid, pwx, pwy, _pix, _piy, iw)
+            else:
+                _dbg = "%02x_%d %s g:%s w:%s,%s (no calib)" % (
+                    zid, mi, _src, _grid, pwx, pwy)
+            _ds = fnt_s.render(_dbg, True, (235, 200, 120))
+            surface.blit(_ds, (area_r.x + 6,
+                               area_r.y + 3 + fnt_s.get_height() + 1))
+            if not have_player:
+                s = _sz_calib_samples.get((zid, mi), {})
+                nc = len({c for (c, r) in s}); nr = len({r for (c, r) in s})
+                m = fnt_s.render(
+                    "calibrating\u2026 walk around  (cols %d, rows %d)"
+                    % (nc, nr), True, (210, 180, 110))
+                surface.blit(m, (area_r.x + 6, area_r.bottom - 16))
+            if hover_name:
+                hs = fnt_s.render(hover_name[:maxc], True, (220, 225, 235))
+                surface.blit(hs, (area_r.x + 6, area_r.bottom - 16))
+    else:
+        disp = scanzone_results
+        if scanzone_spawn_filter == "spawned" and scanzone_wide:
+            disp = [e for e in disp if e[2] in scanzone_wide]
+        elif scanzone_spawn_filter == "unspawned":
+            disp = [e for e in disp if e[2] not in scanzone_wide]
+        if scanzone_type_filter != "any":
+            disp = [e for e in disp
+                    if _scanzone_type_of(e[2]) == scanzone_type_filter]
+        rows_vis = max(1, (area_h - 6) // row_h)
+        total = len(disp)
+        max_scroll = max(0, total - rows_vis)
+        scanzone_scroll = max(0, min(scanzone_scroll, max_scroll))
+        ry = area_r.y + 3
+        for i in range(scanzone_scroll, min(total, scanzone_scroll + rows_vis)):
+            nm, sid, idx = disp[i]
+            rrow = pygame.Rect(area_r.x + 2, ry, area_r.width - 8, row_h)
+            if rrow.collidepoint(*mpos):
+                pygame.draw.rect(surface, (30, 38, 48), rrow, border_radius=2)
+            mark = "\u25cf " if idx in scanzone_wide else "  "
+            line = "%s%-20s 0x%03X (%d)" % (mark, nm[:20], idx, sid)
+            tcol = (130, 200, 230) if idx == scanzone_track_index \
+                else (200, 210, 220)
+            surface.blit(fnt_s.render(line, True, tcol),
+                         (area_r.x + 6, ry))
+            hits.append((rrow, idx))
+            ry += row_h
+        if total > rows_vis:
+            track_h = area_h - 6
+            thumb_h = max(12, int(track_h * rows_vis / total))
+            denom = max(1, max_scroll)
+            thumb_y = area_r.y + 3 + int((track_h - thumb_h)
+                                         * (scanzone_scroll / denom))
+            _lbx = area_r.right - 7
+            _lbover = (_lbx - 3 <= mpos[0] <= _lbx + 8
+                       and area_r.y + 3 <= mpos[1] <= area_r.y + 3 + track_h)
+            pygame.draw.rect(surface,
+                             (135, 155, 185)
+                             if (_lbover or _sz_listbar_drag is not None)
+                             else (90, 100, 120),
+                             (_lbx, thumb_y, 5, thumb_h), border_radius=2)
+            _sz_rects["listbar"] = (area_r.y + 3, track_h, thumb_h,
+                                    max_scroll, _lbx, thumb_y)
+        else:
+            _sz_rects.pop("listbar", None)
+    _sz_rects["hits"] = hits
+
+    # ── tracked-entry roster (right column) ──────────────────────────────
+    pygame.draw.rect(surface, (16, 18, 24), roster_r, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 78), roster_r, 1, border_radius=3)
+    _rost_hdr = ("LAMPS" if _sz_lamp_active() else "TRACKED")
+    surface.blit(fnt_s.render(_rost_hdr, True, (150, 170, 190)),
+                 (roster_r.x + 6, roster_r.y + 3))
+    _sz_rects.pop("repick", None)
+    rost_hits = []
+    _now = pygame.time.get_ticks()
+    _blink = (_now // 300) % 2 == 0
+    _ry = roster_r.y + 18
+    # (Rune of Transfer is shown only as the map pin now, not in the roster.)
+    _titems = ([] if _sz_lamp_active()
+               else list(scanzone_tracks.items()))
+    _rtotal = len(_titems)
+    _rvis_est = max(1, (roster_r.bottom - 2 - (roster_r.y + 18)) // 42)
+    _rmax = max(0, _rtotal - _rvis_est)
+    _rscroll = max(0, min(scanzone_roster_scroll, _rmax))
+    scanzone_roster_scroll = _rscroll
+    for _tidx, _ent in _titems[_rscroll:]:
+        _has_alias = bool(scanzone_aliases.get(_tidx))
+        _eh = 55 if _has_alias else 42      # extra line for the alias
+        if _ry + _eh > roster_r.bottom - 2:
+            break
+        er = pygame.Rect(roster_r.x + 3, _ry, roster_r.width - 6, _eh - 3)
+        bg = (24, 27, 34)
+        if _ent.get("flash", 0) > _now:
+            bg = (130, 45, 45) if _blink else (60, 28, 30)     # just spawned
+        elif _ent.get("near") and _ent.get("spawned"):
+            bg = (40, 100, 58) if _blink else (28, 50, 36)     # near+spawned
+        elif _ent.get("spawned"):
+            bg = (28, 42, 34)
+        pygame.draw.rect(surface, bg, er, border_radius=2)
+        if _tidx == scanzone_track_index:
+            pygame.draw.rect(surface, (130, 200, 230), er, 1, border_radius=2)
+        sp = _ent.get("spawned")
+        # L1: spawn dot + name on the left; [P] + hex on the right
+        sdot = fnt_s.render("\u25cf", True,
+                            (130, 220, 150) if sp else (224, 96, 96))
+        surface.blit(sdot, (er.x + 4, er.y + 1))
+        _x1 = er.x + 4 + sdot.get_width() + 5
+        hx = fnt_s.render("0x%03X" % (_tidx & 0xFFFF), True, (150, 160, 175))
+        _rx = er.right - hx.get_width() - 4
+        surface.blit(hx, (_rx, er.y + 1))
+        if _ent.get("perm"):
+            _pb = fnt_s.render("P", True, (240, 215, 120))
+            _rx -= _pb.get_width() + 6
+            surface.blit(_pb, (_rx, er.y + 1))
+        _rmw = max(8, (_rx - 6) - _x1)
+        _rn = _scanzone_real_name(_tidx)
+        while _rn and fnt_s.size(_rn)[0] > _rmw:
+            _rn = _rn[:-1]
+        surface.blit(fnt_s.render(_rn, True, (224, 228, 234)),
+                     (_x1, er.y + 1))
+        # alias on its own orange line (only when one is set)
+        _ly = er.y + 15
+        if _has_alias:
+            surface.blit(fnt_s.render(scanzone_aliases.get(_tidx), True,
+                                      (240, 160, 70)), (er.x + 8, _ly))
+            _ly += 13
+        # coordinates X Y Z
+        if _ent.get("pos"):
+            _cc = (196, 204, 214)
+            _zz = _ent.get("z")
+            _zt = ("Z: %.0f" % _zz) if _zz is not None else "Z: --"
+            _coord = "X: %.0f  Y: %.0f  %s" % (
+                _ent["pos"][0], _ent["pos"][1], _zt)
+        else:
+            _cc = (140, 144, 152)
+            _coord = "X: --  Y: --  Z: --"
+        surface.blit(fnt_s.render(_coord, True, _cc), (er.x + 4, _ly))
+        _ly += 13
+        # HP% (left) + TOD (right)
+        _hpp = _ent.get("hpp")
+        if _hpp is not None:
+            _hpc = ((150, 140, 140) if _hpp <= 0 else
+                    (224, 130, 120) if _hpp <= 20 else
+                    (224, 200, 120) if _hpp <= 50 else (150, 210, 150))
+            surface.blit(fnt_s.render("HP %.0f%%" % _hpp, True, _hpc),
+                         (er.x + 4, _ly))
+        _tod = _ent.get("tod")
+        if _ent.get("spawned") and _ent.get("respawned"):
+            _todtxt, _todcol = "Alive", (130, 220, 150)
+        elif _tod:
+            _todtxt = "TOD " + time.strftime("%H:%M:%S", time.localtime(_tod))
+            _todcol = (176, 162, 196)
+        else:
+            _todtxt, _todcol = "TOD Unknown", (176, 162, 196)
+        _todsurf = fnt_s.render(_todtxt, True, _todcol)
+        surface.blit(_todsurf, (er.right - _todsurf.get_width() - 4, _ly))
+        rost_hits.append((er, _tidx))
+        _ry += _eh
+    # tracked-roster scrollbar (only when the list overflows the panel)
+    if _rtotal > _rvis_est:
+        _rtk_y = roster_r.y + 18
+        _rtk_h = roster_r.bottom - 2 - _rtk_y
+        _rth_h = max(12, int(_rtk_h * _rvis_est / _rtotal))
+        _rden = max(1, _rmax)
+        _rth_y = _rtk_y + int((_rtk_h - _rth_h) * (_rscroll / _rden))
+        _rbx = roster_r.right - 7
+        _rbover = (_rbx - 3 <= mpos[0] <= _rbx + 8
+                   and _rtk_y <= mpos[1] <= _rtk_y + _rtk_h)
+        pygame.draw.rect(surface,
+                         (135, 155, 185)
+                         if (_rbover or _sz_rosterbar_drag is not None)
+                         else (90, 100, 120),
+                         (_rbx, _rth_y, 5, _rth_h), border_radius=2)
+        _sz_rects["rosterbar"] = (_rtk_y, _rtk_h, _rth_h,
+                                  _rmax, _rbx, _rth_y)
+    else:
+        _sz_rects.pop("rosterbar", None)
+    if _sz_lamp_active():
+        _lry = _ry                      # continue below the Rune-of-Transfer row
+        _lkeys = [k for k in sorted(scanzone_lamps.keys())
+                  if (scanzone_lamps.get(k) or {}).get("kind") != "rune"]
+        if not _lkeys:
+            surface.blit(fnt_s.render("waiting for lamps\u2026", True,
+                                      (140, 144, 152)),
+                         (roster_r.x + 6, _lry))
+        _pxw = zone_info.get("x"); _pyw = zone_info.get("y")
+        for _lidx in _lkeys:
+            _lent = scanzone_lamps.get(_lidx) or {}
+            _lh = 30
+            if _lry + _lh > roster_r.bottom - 26:   # leave room for Refresh btn
+                break
+            _lr = pygame.Rect(roster_r.x + 3, _lry,
+                              roster_r.width - 6, _lh - 3)
+            _lit = bool(_lent.get("lit"))
+            _ordn = (scanzone_lamp_order.index(_lidx) + 1
+                     if _lidx in scanzone_lamp_order else None)
+            pygame.draw.rect(surface,
+                             (30, 38, 48) if _lr.collidepoint(*mpos)
+                             else (24, 27, 34), _lr, border_radius=2)
+            # order badge: green = lit (correct slot), red = ordered but
+            # still dark, gray dash = not yet numbered.
+            _bw = 18
+            _br = pygame.Rect(_lr.x + 3, _lr.y + 3, _bw, _lr.height - 6)
+            if _ordn is None:
+                _bc, _btc, _bl = (44, 48, 58), (150, 158, 172), "\u2013"
+            elif _lit:
+                _bc, _btc, _bl = (40, 110, 60), (220, 245, 225), str(_ordn)
+            else:
+                _bc, _btc, _bl = (120, 50, 50), (245, 215, 215), str(_ordn)
+            pygame.draw.rect(surface, _bc, _br, border_radius=3)
+            _bs = fnt_s.render(_bl, True, _btc)
+            surface.blit(_bs, (_br.centerx - _bs.get_width() // 2,
+                               _br.centery - _bs.get_height() // 2))
+            _lx = _br.right + 6
+            _ld = fnt_s.render("\u25cf", True,
+                               (240, 210, 90) if _lit else (90, 84, 70))
+            surface.blit(_ld, (_lx, _lr.y + 2))
+            _lx += _ld.get_width() + 4
+            _hx = fnt_s.render("0x%03X" % (_lidx & 0xFFFF), True,
+                               (150, 160, 175))
+            _hrx = _lr.right - _hx.get_width() - 4
+            surface.blit(_hx, (_hrx, _lr.y + 2))
+            _nm = _lent.get("name") or ("Lamp %d" % (_lidx - 0x2D4 + 1))
+            _nmw = max(8, (_hrx - 4) - _lx)
+            while _nm and fnt_s.size(_nm)[0] > _nmw:
+                _nm = _nm[:-1]
+            surface.blit(fnt_s.render(_nm, True, (224, 228, 234)),
+                         (_lx, _lr.y + 2))
+            _l2 = _lr.y + 16
+            _pos = _lent.get("pos")
+            if _pos and _pxw is not None and _pyw is not None:
+                _ddx = _pos[0] - float(_pxw); _ddy = _pos[1] - float(_pyw)
+                _dist = (_ddx * _ddx + _ddy * _ddy) ** 0.5
+                _info = "%.1fy  %s" % (_dist, _scanzone_cardinal(_ddx, _ddy))
+            else:
+                _info = "--"
+            surface.blit(fnt_s.render(_info, True, (196, 204, 214)),
+                         (_lr.x + 3 + _bw + 6, _l2))
+            _ltxt = "LIT" if _lit else "dark"
+            _lts = fnt_s.render(_ltxt, True,
+                                (240, 210, 90) if _lit else (140, 144, 152))
+            surface.blit(_lts, (_lr.right - _lts.get_width() - 4, _l2))
+            rost_hits.append((_lr, _lidx))
+            _lry += _lh
+    # "Refresh Lamps" button: bottom of the right column, lamp floors only.
+    # Fires a one-shot 0x16 request for the five lamp indices to reconcile lit
+    # state -- e.g. a lamp a party member lit while you were out of range.
+    if _sz_lamp_active():
+        _rfb = pygame.Rect(roster_r.x + 3, roster_r.bottom - 22,
+                           roster_r.width - 6, 19)
+        _rfh = _rfb.collidepoint(*mpos)
+        pygame.draw.rect(surface, (40, 52, 64) if _rfh else (30, 40, 50),
+                         _rfb, border_radius=3)
+        pygame.draw.rect(surface, (90, 120, 150), _rfb, 1, border_radius=3)
+        _rft = fnt_s.render("\u21bb Refresh Lamps", True, (205, 225, 240))
+        surface.blit(_rft, (_rfb.centerx - _rft.get_width() // 2,
+                            _rfb.centery - _rft.get_height() // 2))
+        _sz_rects["lamprefresh"] = _rfb
+    else:
+        _sz_rects.pop("lamprefresh", None)
+    _sz_rects["roster"] = rost_hits
+    _sz_rects["rosterarea"] = roster_r
+
+    # bottom: track line, scan line, status line
+    cy = area_r.bottom + 4
+    if scanzone_track_index is not None:
+        now_ms = pygame.time.get_ticks()
+        _tent = scanzone_tracks.get(scanzone_track_index)
+        if scanzone_track_last > 0:
+            if now_ms - scanzone_track_last < 3000:
+                tline, tcol = scanzone_track_info, (130, 200, 230)
+            elif _tent is not None and not _tent.get("spawned"):
+                tline = scanzone_track_info + "  (despawned)"
+                tcol = (170, 150, 170)
+            else:
+                tline = scanzone_track_info + "  (paused)"
+                tcol = (210, 180, 110)
+        elif now_ms - scanzone_track_start < 2500:
+            tline, tcol = scanzone_track_info, (150, 160, 175)
+        else:
+            tline = "track: no server response (out of range?)"
+            tcol = (210, 180, 110)
+        surface.blit(fnt_s.render(tline[:maxc], True, tcol), (x + pad, cy))
+    cy += 14
+    if scanzone_scan_info:
+        surface.blit(fnt_s.render(scanzone_scan_info[:maxc], True,
+                                  (150, 210, 175)), (x + pad, cy))
+    cy += 14
+    if hover_info:
+        surface.blit(fnt_s.render(hover_info[:maxc], True, (210, 222, 238)),
+                     (x + pad, cy))
+    else:
+        surface.blit(fnt_s.render(scanzone_status[:maxc], True,
+                                  (150, 160, 175)), (x + pad, cy))
+
+    # ── Nyzul section (right band) ───────────────────────────────────────
+    if _nyzul:
+        rs_x = x + bw + rs_gap
+        rs_top = y + title_h + pad
+        rs_rect = pygame.Rect(rs_x, rs_top,
+                              (x + w - pad) - rs_x, (y + h - pad) - rs_top)
+        pygame.draw.rect(surface, (14, 16, 20), rs_rect, border_radius=3)
+        pygame.draw.rect(surface, (110, 95, 55), rs_rect, 1, border_radius=3)
+        _ns = nyzul_state
+        _nx = rs_rect.x + 8
+        _ny = rs_rect.y + 6
+        _pxw = rs_rect.width - 16
+        _szclip = surface.get_clip()
+        surface.set_clip(rs_rect.inflate(-3, -3))
+
+        def _wrapfit(text, font, px):
+            words = (text or "").split()
+            lines, cur = [], ""
+            for wd in words:
+                t = (cur + " " + wd).strip()
+                if font.size(t)[0] <= px or not cur:
+                    cur = t
+                else:
+                    lines.append(cur); cur = wd
+            if cur:
+                lines.append(cur)
+            return lines[:5] or ["-"]
+
+        def _nline(yy, lbl, val, vcol=(225, 228, 236)):
+            ls = fnt_s.render(lbl, True, (150, 158, 172))
+            surface.blit(ls, (_nx, yy))
+            vs = fnt.render(str(val), True, vcol)
+            surface.blit(vs, (_nx, yy + ls.get_height()))
+            return yy + ls.get_height() + vs.get_height() + 4
+
+        _hcol = {"nyzul": (235, 215, 150), "sortie": (200, 220, 245),
+                 "omen": (235, 200, 240)}.get(_secmode, (235, 215, 150))
+        hdr = fnt_b.render(_secmode.upper(), True, _hcol)
+        surface.blit(hdr, (_nx, _ny))
+        _ny += hdr.get_height() + 5
+        if _secmode == "nyzul":
+            _tcol = (235, 110, 110) if _ns["timer"] < 60 else (210, 225, 200)
+            _mm, _ssec = divmod(max(0, int(_ns["timer"])), 60)
+            _ny = _nline(_ny, "Current Floor", _ns["floor"])
+            _ny = _nline(_ny, "Time Remaining", "%d:%02d" % (_mm, _ssec), _tcol)
+            _objc = (120, 235, 130) if _ns["objstate"] == "g" else (245, 230, 130)
+            surface.blit(fnt_s.render("Objective", True, (150, 158, 172)),
+                         (_nx, _ny))
+            _ny += fnt_s.get_height()
+            for _wl in _wrapfit(_ns["objective"] or "-", fnt, _pxw):
+                surface.blit(fnt.render(_wl, True, _objc), (_nx, _ny))
+                _ny += fnt.get_height()
+            _ny += 4
+            _omode = _nyzul_objmode()
+            if _omode == "free":
+                surface.blit(fnt.render("Proceed to the next floor.", True,
+                             (150, 210, 150)), (_nx, _ny))
+                _ny += fnt.get_height() + 4
+            elif _omode == "leader":
+                if int(_ns.get("floor") or 0) in _NYZUL_HNM_FLOORS:
+                    _lt, _lc = "Leader: HNM in another area", (245, 200, 120)
+                else:
+                    _lnm2 = None
+                    for (_i, _t, _dx, _dy, _hpp, _nm) in scanzone_radar:
+                        if (_nm or "").lower() in _NYZUL_LEADERS:
+                            _lnm2 = _nm
+                            break
+                    if _lnm2:
+                        _lt, _lc = "Target: " + _lnm2, (120, 235, 130)
+                    else:
+                        _lt, _lc = "Searching for leader\u2026", (200, 205, 215)
+                for _wl in _wrapfit(_lt, fnt, _pxw):
+                    surface.blit(fnt.render(_wl, True, _lc), (_nx, _ny))
+                    _ny += fnt.get_height()
+                _ny += 4
+            if (_ns["restriction"] or "").strip():
+                _rc = (235, 110, 110) if _ns["reststate"] == "b" else (245, 180, 90)
+                surface.blit(fnt_s.render("Restriction", True, (150, 158, 172)),
+                             (_nx, _ny))
+                _ny += fnt_s.get_height()
+                for _wl in _wrapfit(_ns["restriction"], fnt, _pxw):
+                    surface.blit(fnt.render(_wl, True, _rc), (_nx, _ny))
+                    _ny += fnt.get_height()
+                _ny += 4
+            _ny = _nline(_ny, "Floors Completed", _ns["completed"])
+            _ny = _nline(_ny, "Reward Rate", "%d%%" % _ns["rate"])
+            _ny = _nline(_ny, "Potential Tokens", _ns["tokens"], (235, 225, 150))
+        elif _secmode == "omen":
+            _om = omen_state
+            _fcol = (120, 235, 130) if _om["clear"] else (230, 230, 235)
+            for _wl in _wrapfit(_om["floor_obj"] or "-", fnt, _pxw):
+                surface.blit(fnt.render(_wl, True, _fcol), (_nx, _ny))
+                _ny += fnt.get_height()
+            _ny += 2
+            _ny = _nline(_ny, "Omens", _om["omens"], (235, 225, 150))
+            if not _om["hide"]:
+                _mm, _ssec = divmod(max(0, int(_om["time"])), 60)
+                surface.blit(fnt_s.render(
+                    "Bonus Objectives  %d:%02d" % (_mm, _ssec),
+                    True, (150, 158, 172)), (_nx, _ny))
+                _ny += fnt_s.get_height() + 2
+                for (_sh, _cur, _req, _st) in _om["objs"]:
+                    _oc = ((120, 235, 130) if _st == "g" else
+                           (235, 110, 110) if _st == "b" else
+                           (215, 220, 230))
+                    _cs = "???" if _cur == -1 else str(_cur)
+                    _rs = "???" if _req == -1 else str(_req)
+                    for _wl in _wrapfit("%s [%s/%s]" % (_sh, _cs, _rs),
+                                        fnt, _pxw):
+                        surface.blit(fnt.render(_wl, True, _oc), (_nx, _ny))
+                        _ny += fnt.get_height()
+        else:
+            _floor = scanzone_sortie["floor"]
+            _mi = int(zone_info.get("map_index", 0) or 0)
+            _zid = zone_info.get("zone_id")
+            if _zid != scanzone_sortie.get("zone"):
+                scanzone_sortie["zone"] = _zid
+                scanzone_sortie["gil"] = 0
+            _af = _SORTIE_FLOOR_BY_MI.get(_mi)
+            if _af and _mi != scanzone_sortie.get("mi"):
+                scanzone_sortie["floor"] = _af
+                scanzone_sortie["sector"] = _SORTIE_SECTORS[_af][0]
+                _floor = _af
+            scanzone_sortie["mi"] = _mi
+            _secs = _SORTIE_SECTORS[_floor]
+            _sec = scanzone_sortie["sector"]
+            if _sec not in _secs:
+                _sec = _secs[0]
+                scanzone_sortie["sector"] = _sec
+            # control row: [Top/Basement]  < Sector >
+            _flr_r = pygame.Rect(_nx, _ny, 70, 15)
+            _sz_btn(surface, _flr_r, _SORTIE_FLOOR_LABEL[_floor],
+                    (50, 62, 80), (210, 222, 240), fnt_s)
+            _sz_rects["sortie_floor"] = _flr_r
+            _prev_r = pygame.Rect(_flr_r.right + 6, _ny, 15, 15)
+            _sec_w = max(20, _pxw - (_prev_r.x - _nx) - 15 - 15 - 4)
+            _sec_r = pygame.Rect(_prev_r.right + 2, _ny, _sec_w, 15)
+            _next_r = pygame.Rect(_sec_r.right + 2, _ny, 15, 15)
+            _sz_btn(surface, _prev_r, "\u25c4", (44, 48, 58),
+                    (200, 208, 220), fnt_s)
+            _sz_btn(surface, _sec_r,
+                    ("Sector " + _sec) if _sec != "Aurum" else "Aurum",
+                    (40, 46, 58), (225, 230, 240), fnt_s)
+            _sz_btn(surface, _next_r, "\u25ba", (44, 48, 58),
+                    (200, 208, 220), fnt_s)
+            _sz_rects["sortie_prev"] = _prev_r
+            _sz_rects["sortie_next"] = _next_r
+            _ny += 19
+            surface.blit(fnt_s.render("map idx %d" % _mi, True,
+                         (120, 130, 145)), (_nx, _ny))
+            _ny += fnt_s.get_height() + 3
+            if _sec == "Aurum":
+                for (_lbl, _txt) in _SORTIE_AURUM.get(_floor, []):
+                    surface.blit(fnt_s.render(_lbl, True, (235, 205, 120)),
+                                 (_nx, _ny))
+                    _ny += fnt_s.get_height()
+                    for _wl in _wrapfit(_txt, fnt_s, _pxw):
+                        surface.blit(fnt_s.render(_wl, True, (190, 196, 208)),
+                                     (_nx + 6, _ny))
+                        _ny += fnt_s.get_height()
+                    _ny += fnt_s.get_height()
+            else:
+                _d = _SORTIE_OBJECTIVES.get(_sec, {})
+                surface.blit(fnt_s.render(
+                    "%s  \u2014  %s" % (_d.get("family", ""),
+                                        _d.get("nm", "")),
+                    True, (170, 200, 230)), (_nx, _ny))
+                _ny += fnt_s.get_height() + 2
+                for (_lbl, _txt) in _d.get("items", []):
+                    _lc = ((235, 205, 120) if _lbl.startswith("Coffer")
+                           else (180, 215, 235) if _lbl.startswith("Casket")
+                           else (205, 215, 228))
+                    surface.blit(fnt_s.render(_lbl, True, _lc), (_nx, _ny))
+                    _ny += fnt_s.get_height()
+                    for _wl in _wrapfit(_txt, fnt_s, _pxw):
+                        surface.blit(fnt_s.render(_wl, True, (178, 184, 196)),
+                                     (_nx + 6, _ny))
+                        _ny += fnt_s.get_height()
+                    _ny += fnt_s.get_height()
+            _gy = rs_rect.bottom - 5 - fnt_s.get_height() - fnt.get_height()
+            pygame.draw.rect(surface, (14, 16, 20),
+                             (rs_rect.x + 1, _gy - 3,
+                              rs_rect.width - 2, rs_rect.bottom - _gy - 1))
+            surface.blit(fnt_s.render("Gallimaufry earned", True,
+                         (150, 158, 172)), (_nx, _gy))
+            surface.blit(fnt.render(
+                "{:,}".format(int(scanzone_sortie.get("gil", 0))),
+                True, (235, 225, 150)), (_nx, _gy + fnt_s.get_height()))
+            _sz_rects["sortie_gil"] = pygame.Rect(
+                rs_rect.x + 1, _gy - 3, rs_rect.width - 2,
+                rs_rect.bottom - _gy)
+        surface.set_clip(_szclip)
+
+    # resize grip (bottom-right corner)
+    for k in range(3):
+        off = 4 + k * 4
+        pygame.draw.line(surface, (120, 130, 145),
+                         (x + w - off, y + h - 3),
+                         (x + w - 3, y + h - off))
+    _sz_rects["grip"] = pygame.Rect(x + w - grip, y + h - grip, grip, grip)
+
+    # right-click context menu (drawn on top of everything)
+    if _sz_ctx:
+        items = _sz_ctx.get("items", [])
+        cw = 116
+        chh = 18 * len(items) + 4
+        cxm = min(int(_sz_ctx["x"]), surface.get_width() - cw - 2)
+        cym = min(int(_sz_ctx["y"]), surface.get_height() - chh - 2)
+        pygame.draw.rect(surface, (30, 32, 40), (cxm, cym, cw, chh),
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 120, 140), (cxm, cym, cw, chh), 1,
+                         border_radius=3)
+        crects = []
+        iy = cym + 2
+        for label, act in items:
+            ir = pygame.Rect(cxm + 2, iy, cw - 4, 18)
+            if ir.collidepoint(*mpos):
+                pygame.draw.rect(surface, (50, 55, 70), ir, border_radius=2)
+            surface.blit(fnt_s.render(label, True, (215, 220, 230)),
+                         (ir.x + 6, ir.y + 2))
+            crects.append((ir, act))
+            iy += 18
+        _sz_rects["ctx"] = crects
+
+def _scanzone_handle_event(event):
+    global scanzone_panel_open, _sz_drag_off, _sz_resize_off, scanzone_input
+    global scanzone_scroll, scanzone_status, scanzone_results
+    global scanzone_panel_w, scanzone_panel_h, scanzone_scan_info
+    global scanzone_view, scanzone_spawn_filter, _sz_ctx, scanzone_radar_zoom
+    global scanzone_type_filter, scanzone_map_zoom, scanzone_pin
+    global scanzone_dot_label, scanzone_alias_target
+    global _sz_pan_off, _sz_area_last_click
+    global _sz_listbar_drag, _sz_rosterbar_drag, scanzone_roster_scroll
+    # Toggle combo (works open or closed), gated by the dev sentinel.
+    if (_DEV_ENABLED and event.type == pygame.KEYDOWN
+            and event.key == pygame.K_g):
+        m = pygame.key.get_mods()
+        if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
+            scanzone_panel_open = not scanzone_panel_open
+            _scanzone_set_radar(scanzone_panel_open
+                                and scanzone_view in ("radar", "map"))
+            return True
+    if not (_DEV_ENABLED and scanzone_panel_open):
+        return False
+
+    # right-click on a row / dot -> open context menu
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+        mx, my = event.pos
+        for hrect, hidx in _sz_rects.get("hits", []):
+            if hrect.collidepoint(mx, my):
+                items = [("Track", "track"), ("Scan", "scan")]
+                if scanzone_track_index is not None:
+                    items.append(("Stop track", "stop"))
+                _sz_ctx = {"x": mx, "y": my, "idx": hidx, "items": items}
+                return True
+        for hrect, hidx in _sz_rects.get("roster", []):
+            if hrect.collidepoint(mx, my):
+                if _sz_lamp_active():
+                    _sz_ctx = {"x": mx, "y": my, "idx": hidx,
+                               "items": [("Clear this", "lampclr1"),
+                                         ("Clear all order", "lampclrall")]}
+                    return True
+                _pe = scanzone_tracks.get(hidx)
+                _pl = "Perm \u2713" if (_pe and _pe.get("perm")) else "Perm"
+                _sz_ctx = {"x": mx, "y": my, "idx": hidx,
+                           "items": [("Make active", "track"),
+                                     (_pl, "perm"),
+                                     ("Alias\u2026", "alias"),
+                                     ("Untrack", "untrack")]}
+                return True
+        _sz_ctx = None
+        return False
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        r = _sz_rects
+        # context menu takes priority while open
+        if _sz_ctx:
+            for irect, act in r.get("ctx", []):
+                if irect.collidepoint(mx, my):
+                    idx = _sz_ctx.get("idx")
+                    _sz_ctx = None
+                    if act == "track":
+                        _scanzone_track(idx)
+                    elif act == "scan":
+                        _scanzone_send_scan(idx)
+                    elif act == "stop":
+                        _scanzone_stop_track()
+                    elif act == "alias":
+                        scanzone_alias_target = idx
+                        scanzone_input = scanzone_aliases.get(idx, "")
+                        scanzone_status = (
+                            "alias for %s \u2014 type, Enter saves"
+                            % _scanzone_name_for(idx))
+                    elif act == "perm":
+                        _pe = scanzone_tracks.get(idx)
+                        if _pe is not None:
+                            _pe["perm"] = not _pe.get("perm")
+                    elif act == "untrack":
+                        _scanzone_untrack(idx)
+                    elif act == "lampclr1":
+                        if idx in scanzone_lamp_order:
+                            scanzone_lamp_order.remove(idx)
+                    elif act == "lampclrall":
+                        _scanzone_lamp_clear_order()
+                    return True
+            _sz_ctx = None        # click elsewhere closes the menu
+            return True
+        if scanzone_alias_target is not None:
+            scanzone_alias_target = None
+            scanzone_input = ""
+            scanzone_status = "alias cancelled"
+            return True
+        if r.get("grip") and r["grip"].collidepoint(mx, my):
+            _sz_resize_off = (mx - (scanzone_panel_pos[0] + scanzone_panel_w),
+                              my - (scanzone_panel_pos[1] + scanzone_panel_h))
+            return True
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            scanzone_panel_open = False
+            _scanzone_set_radar(False)
+            return True
+        for _bk, _dragvar in (("listbar", "_sz_listbar_drag"),
+                              ("rosterbar", "_sz_rosterbar_drag")):
+            _bg = _sz_rects.get(_bk)
+            if not _bg:
+                continue
+            _ty, _th, _thh, _mxs, _bx, _thy = _bg
+            if _bx - 3 <= mx <= _bx + 8 and _ty <= my <= _ty + _th:
+                _grab = (my - _thy) if _thy <= my <= _thy + _thh else _thh // 2
+                globals()[_dragvar] = (_ty, _th, _thh, _mxs, _grab)
+                _fy = (my - _grab - _ty) / max(1, (_th - _thh))
+                _val = max(0, min(_mxs, round(_fy * _mxs)))
+                if _bk == "listbar":
+                    scanzone_scroll = _val
+                else:
+                    scanzone_roster_scroll = _val
+                return True
+        if r.get("names") and r["names"].collidepoint(mx, my):
+            _o = ["none", "name", "id"]
+            scanzone_dot_label = _o[(_o.index(scanzone_dot_label) + 1) % 3]
+            return True
+        for _mk in ("nyzul", "sortie", "omen"):
+            if r.get(_mk) and r[_mk].collidepoint(mx, my):
+                _scanzone_set_mode(_mk)
+                return True
+        if r.get("sortie_floor") and r["sortie_floor"].collidepoint(mx, my):
+            _f = ("basement" if scanzone_sortie["floor"] == "ground"
+                  else "ground")
+            scanzone_sortie["floor"] = _f
+            scanzone_sortie["sector"] = _SORTIE_SECTORS[_f][0]
+            return True
+        _sp = r.get("sortie_prev") and r["sortie_prev"].collidepoint(mx, my)
+        _sn = r.get("sortie_next") and r["sortie_next"].collidepoint(mx, my)
+        if _sp or _sn:
+            _secs = _SORTIE_SECTORS[scanzone_sortie["floor"]]
+            _cur = scanzone_sortie["sector"]
+            _i = _secs.index(_cur) if _cur in _secs else 0
+            scanzone_sortie["sector"] = _secs[(_i + (1 if _sn else -1))
+                                              % len(_secs)]
+            return True
+        if r.get("sortie_gil") and r["sortie_gil"].collidepoint(mx, my):
+            scanzone_sortie["gil"] = 0
+            return True
+        if r.get("find") and r["find"].collidepoint(mx, my):
+            _scanzone_run_find()
+            return True
+        if r.get("scanz") and r["scanz"].collidepoint(mx, my):
+            _scanzone_list_all()
+            return True
+        if r.get("coord") and r["coord"].collidepoint(mx, my):
+            _scanzone_set_pin(scanzone_input)
+            return True
+        if r.get("clear") and r["clear"].collidepoint(mx, my):
+            scanzone_input = ""
+            scanzone_results = []
+            scanzone_status = "Cleared."
+            scanzone_scan_info = ""
+            scanzone_scroll = 0
+            scanzone_pin = None
+            return True
+        if r.get("wide") and r["wide"].collidepoint(mx, my):
+            _scanzone_request_wide()
+            return True
+        if r.get("view") and r["view"].collidepoint(mx, my):
+            _vorder = ["list", "radar", "map"]
+            scanzone_view = _vorder[
+                (_vorder.index(scanzone_view) + 1) % len(_vorder)]
+            _scanzone_set_radar(scanzone_view in ("radar", "map"))
+            return True
+        if r.get("spawned") and r["spawned"].collidepoint(mx, my):
+            _o = ["all", "spawned", "unspawned"]
+            scanzone_spawn_filter = _o[
+                (_o.index(scanzone_spawn_filter) + 1) % 3]
+            scanzone_scroll = 0
+            return True
+        if r.get("typef") and r["typef"].collidepoint(mx, my):
+            _order = ["any", "mob", "pc", "npc", "object"]
+            scanzone_type_filter = _order[
+                (_order.index(scanzone_type_filter) + 1) % len(_order)]
+            scanzone_scroll = 0
+            return True
+        if r.get("lamprefresh") and r["lamprefresh"].collidepoint(mx, my):
+            try:
+                sock_cmd_out.sendto("SCANZONE|lamps|refresh".encode("utf-8"),
+                                    _cmd_addr())
+            except Exception:
+                pass
+            scanzone_status = "Refreshing lamps\u2026"
+            return True
+        # left-click a row / radar dot -> live-scan that entity's index
+        for hrect, hidx in r.get("hits", []):
+            if hrect.collidepoint(mx, my):
+                _scanzone_send_scan(hidx)
+                return True
+        for hrect, hidx in r.get("roster", []):
+            if hrect.collidepoint(mx, my):
+                if _sz_lamp_active():
+                    _scanzone_lamp_click(hidx)
+                else:
+                    _scanzone_track(hidx)
+                return True
+        rr = r.get("results")
+        if (rr and rr.collidepoint(mx, my)
+                and scanzone_view in ("map", "radar")):
+            _nowc = pygame.time.get_ticks()
+            if _nowc - _sz_area_last_click < 350:
+                if scanzone_view == "map":
+                    scanzone_map_pan[0] = 0.0; scanzone_map_pan[1] = 0.0
+                else:
+                    scanzone_radar_pan[0] = 0.0; scanzone_radar_pan[1] = 0.0
+                _sz_area_last_click = 0
+            else:
+                _sz_area_last_click = _nowc
+                _p = (scanzone_map_pan if scanzone_view == "map"
+                      else scanzone_radar_pan)
+                _sz_pan_off = (mx, my, _p[0], _p[1])
+            return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            _sz_drag_off = (mx - scanzone_panel_pos[0],
+                            my - scanzone_panel_pos[1])
+            return True
+        win = pygame.Rect(scanzone_panel_pos[0], scanzone_panel_pos[1],
+                          scanzone_panel_w, scanzone_panel_h)
+        if win.collidepoint(mx, my):
+            return True
+        return False
+
+    if event.type == pygame.MOUSEMOTION:
+        if _sz_listbar_drag is not None:
+            mx, my = event.pos
+            _ty, _th, _thh, _mxs, _grab = _sz_listbar_drag
+            _fy = (my - _grab - _ty) / max(1, (_th - _thh))
+            scanzone_scroll = max(0, min(_mxs, round(_fy * _mxs)))
+            return True
+        if _sz_rosterbar_drag is not None:
+            mx, my = event.pos
+            _ty, _th, _thh, _mxs, _grab = _sz_rosterbar_drag
+            _fy = (my - _grab - _ty) / max(1, (_th - _thh))
+            scanzone_roster_scroll = max(0, min(_mxs, round(_fy * _mxs)))
+            return True
+        if _sz_pan_off is not None:
+            mx, my = event.pos
+            _sx0, _sy0, _px0, _py0 = _sz_pan_off
+            _p = (scanzone_map_pan if scanzone_view == "map"
+                  else scanzone_radar_pan)
+            _p[0] = _px0 + (mx - _sx0)
+            _p[1] = _py0 + (my - _sy0)
+            return True
+        if _sz_resize_off is not None:
+            mx, my = event.pos
+            scanzone_panel_w = (mx - _sz_resize_off[0]) - scanzone_panel_pos[0]
+            scanzone_panel_h = (my - _sz_resize_off[1]) - scanzone_panel_pos[1]
+            scanzone_panel_w = max(_SZ_MIN_W, min(scanzone_panel_w, _SZ_MAX_W))
+            scanzone_panel_h = max(_SZ_MIN_H, min(scanzone_panel_h, _SZ_MAX_H))
+            return True
+        if _sz_drag_off is not None:
+            mx, my = event.pos
+            scanzone_panel_pos[0] = mx - _sz_drag_off[0]
+            scanzone_panel_pos[1] = my - _sz_drag_off[1]
+            return True
+
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _sz_listbar_drag is not None:
+            _sz_listbar_drag = None
+            return True
+        if _sz_rosterbar_drag is not None:
+            _sz_rosterbar_drag = None
+            return True
+        if _sz_pan_off is not None:
+            _sz_pan_off = None
+            return True
+        if _sz_resize_off is not None:
+            _sz_resize_off = None
+            _scanzone_save_pos()
+            return True
+        if _sz_drag_off is not None:
+            _sz_drag_off = None
+            _scanzone_save_pos()
+            return True
+
+    if event.type == pygame.MOUSEWHEEL:
+        mx, my = pygame.mouse.get_pos()
+        rr = _sz_rects.get("results")
+        if rr and rr.collidepoint(mx, my):
+            if scanzone_view == "radar":
+                f = 1.15 if event.y > 0 else (1.0 / 1.15)
+                scanzone_radar_zoom = max(0.04, min(32.0,
+                                          scanzone_radar_zoom * f))
+            elif scanzone_view == "map":
+                f = 1.15 if event.y > 0 else (1.0 / 1.15)
+                scanzone_map_zoom = max(0.35, min(32.0,
+                                        scanzone_map_zoom * f))
+            else:
+                scanzone_scroll -= event.y
+            return True
+        _ra = _sz_rects.get("rosterarea")
+        if _ra and _ra.collidepoint(mx, my):
+            scanzone_roster_scroll = max(0, scanzone_roster_scroll - event.y)
+            return True
+
+    if event.type == pygame.KEYDOWN and scanzone_alias_target is not None:
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            _al = scanzone_input.strip()
+            if _al:
+                scanzone_aliases[scanzone_alias_target] = _al
+                scanzone_status = "alias set: " + _al
+            else:
+                scanzone_aliases.pop(scanzone_alias_target, None)
+                scanzone_status = "alias cleared"
+            scanzone_alias_target = None
+            scanzone_input = ""
+            return True
+        if event.key == pygame.K_ESCAPE:
+            scanzone_alias_target = None
+            scanzone_input = ""
+            scanzone_status = "alias cancelled"
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            scanzone_input = scanzone_input[:-1]
+            return True
+        ch = getattr(event, "unicode", "")
+        if ch and ch.isprintable() and ch not in ("\r", "\n", "\t"):
+            if len(scanzone_input) < 32:
+                scanzone_input += ch
+            return True
+        return True
+    if event.type == pygame.KEYDOWN:
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            _scanzone_run_find()
+            return True
+        if event.key == pygame.K_ESCAPE:
+            if _sz_ctx:
+                _sz_ctx = None
+                return True
+            scanzone_panel_open = False
+            _scanzone_set_radar(False)
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            scanzone_input = scanzone_input[:-1]
+            return True
+        ch = getattr(event, "unicode", "")
+        if ch and ch.isprintable() and ch not in ("\r", "\n", "\t"):
+            if len(scanzone_input) < 40:
+                scanzone_input += ch
+            return True
+    return False
 
 
 def draw_cheatsheet_window(surface):
@@ -23186,6 +30961,7 @@ def _warp_load_config():
     except Exception as e:
         print(f"[OmniWatch] warp config load failed: {e!r}")
     wrote_default = False
+    _filled_missing = False
     if cfg is None:
         cfg = json.loads(json.dumps(WARP_DEFAULT_CONFIG))   # deep copy
         wrote_default = True
@@ -23198,6 +30974,13 @@ def _warp_load_config():
         n.setdefault("label",   WARP_DEFAULT_CONFIG[net]["label"])
         n.setdefault("command", WARP_DEFAULT_CONFIG[net]["command"])
         dests = n.get("destinations")
+        if not isinstance(dests, list):
+            # Network absent from a saved config written before this network
+            # existed (e.g. Runic Portal and the other 2026-06-11 additions):
+            # fall back to the built-in defaults so its menu isn't empty. A
+            # network the user actually emptied keeps its [] and is honored.
+            dests = WARP_DEFAULT_CONFIG[net].get("destinations", [])
+            _filled_missing = True
         clean = []
         if isinstance(dests, list):
             for d in dests:
@@ -23225,7 +31008,7 @@ def _warp_load_config():
                         "zone":  str(d.get("zone")),
                     })
         n["destinations"] = clean
-    if wrote_default:
+    if wrote_default or _filled_missing:
         try:
             with open(WARP_FILE, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -24531,7 +32314,8 @@ def settings_menu_size():
     placeholder_h = round(18 * g)  # "(no settings yet)" row for empty sections
     pad   = round(8 * g)
     # Group entries by section so we know which sections are empty.
-    grouped = {sec: [] for sec in SETTINGS_SECTIONS}
+    _secs = _settings_sections()
+    grouped = {sec: [] for sec in _secs}
     for s in SETTINGS_SCHEMA:
         sec = s.get("section")
         # The "Update available" button only appears when the
@@ -24541,7 +32325,7 @@ def settings_menu_size():
         if sec in grouped:
             grouped[sec].append(s)
     height = pad
-    for sec in SETTINGS_SECTIONS:
+    for sec in _secs:
         is_loose = sec.startswith("_")
         entries = grouped[sec]
         if is_loose and not entries:
@@ -26207,9 +33991,10 @@ def _sim_compute_height():
         h += len(SIM_BUFF_BY_JOB.get(chosen_job, [])) * SIM_WIN_ROW_H
         h += SIM_WIN_ROW_H        # cancel
     h += 4
-    # Import Set + Export Set + Reset buttons + bottom pad.
+    # Import Set + Export Set + Refresh + Reset buttons + bottom pad.
     h += SIM_WIN_ROW_H            # import
     h += SIM_WIN_ROW_H            # export
+    h += SIM_WIN_ROW_H            # refresh
     h += SIM_WIN_ROW_H            # reset
     h += SIM_WIN_PAD
     return h
@@ -26956,6 +34741,19 @@ def draw_sim_window(surface):
     surface.blit(e_surf, (export_rect.x + (export_rect.width - e_surf.get_width()) // 2,
                           export_rect.y + (export_rect.height - e_surf.get_height()) // 2))
     sim_window_rects.append((export_rect, {"action": "export_set"}))
+    cy += SIM_WIN_ROW_H
+
+    # Refresh button. Re-pulls live gear into the sim seed (if it never
+    # loaded) and forces a stats recompute, so the equipment panel and
+    # stats reflect the current picks. Useful if the activation snapshot
+    # was dropped, or after changing several slots.
+    refresh_rect = pygame.Rect(wx + SIM_WIN_PAD, cy + 2,
+                               ww - SIM_WIN_PAD * 2, SIM_WIN_ROW_H - 4)
+    pygame.draw.rect(surface, (55, 65, 95), refresh_rect, border_radius=3)
+    rf_surf = value_font.render("REFRESH", True, (225, 230, 245))
+    surface.blit(rf_surf, (refresh_rect.x + (refresh_rect.width - rf_surf.get_width()) // 2,
+                           refresh_rect.y + (refresh_rect.height - rf_surf.get_height()) // 2))
+    sim_window_rects.append((refresh_rect, {"action": "refresh_sim"}))
     cy += SIM_WIN_ROW_H
 
     # Reset button at bottom.
@@ -28269,6 +36067,38 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
             {"action": f"{action_prefix}_action",
              "action_key": action_key}))
 
+    elif kind == "text":
+        focused = (_subdialog_text_focus == (action_prefix, key))
+        shown = _subdialog_text_buffer if focused else str(setting(key) or "")
+        placeholder = schema.get("placeholder", "")
+        box_h = _ms(22)
+        box_w = min(_ms(300), row_rect.w - _ms(8))
+        box_rect = pygame.Rect(
+            row_rect.right - _ms(4) - box_w,
+            row_rect.y + (row_rect.h - box_h) // 2,
+            box_w, box_h)
+        pygame.draw.rect(surface, (30, 30, 40), box_rect, border_radius=3)
+        pygame.draw.rect(surface,
+                         (220, 195, 90) if focused else (110, 130, 170),
+                         box_rect, 1, border_radius=3)
+        if shown:
+            disp, txt_col = shown, (235, 230, 220)
+        else:
+            disp, txt_col = placeholder, (120, 125, 140)
+        avail = box_w - _ms(12)
+        while disp and label_font.size(disp)[0] > avail:
+            disp = disp[1:]
+        ts = label_font.render(disp, True, txt_col)
+        surface.blit(ts, (box_rect.x + _ms(6),
+                          box_rect.y + (box_h - ts.get_height()) // 2))
+        if focused and (pygame.time.get_ticks() // 500) % 2 == 0:
+            caret_x = box_rect.x + _ms(6) + label_font.size(disp)[0] + 1
+            pygame.draw.line(surface, (235, 230, 220),
+                             (caret_x, box_rect.y + _ms(4)),
+                             (caret_x, box_rect.bottom - _ms(4)), 1)
+        click_rects.append((box_rect.copy(),
+            {"action": f"{action_prefix}_textfocus", "key": key}))
+
 
 def _dispatch_modal_row_action(payload, action_prefix):
     """Shared dispatcher for row actions. Returns True if the payload
@@ -28336,6 +36166,15 @@ def _dispatch_modal_row_action(payload, action_prefix):
                 handler()
             except Exception as e:
                 print(f"[OmniWatch] modal action {action_key!r}: {e!r}")
+        return True
+    if suffix == "textfocus":
+        global _subdialog_text_focus, _subdialog_text_buffer
+        _subdialog_text_focus = (action_prefix, payload["key"])
+        _subdialog_text_buffer = str(setting(payload["key"]) or "")
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
         return True
     return False
 
@@ -29272,6 +37111,70 @@ def handle_profile_name_modal_keydown(event):
 # ──────────────────────────────────────────────────────────────────────
 
 _SUBDIALOG_CONFIGS = {
+    "autora": {
+        "title":    "AutoRA",
+        "subtitle": "Auto-repeat ranged attacks (/shoot) while engaged.",
+        "rows": [
+            ("autora_enabled",   "Auto ranged attack",      "bool"),
+            ("autora_stop_tp",   "Stop at TP",              "int"),
+            ("autora_ignore_tp", "Ignore TP (keep firing)", "bool"),
+        ],
+        "helpers": {
+            "autora_stop_tp":
+                "Halt once TP reaches this (1000-3000, step 250).",
+            "autora_ignore_tp":
+                "Never halt on TP - keep shooting until you stop it.",
+        },
+    },
+    "allseeingeye": {
+        "title":    "AllSeeingEye",
+        "subtitle": "Reveal entities the server hides (rewrites 0x0E status).",
+        "rows": [
+            ("ase_enabled",   "AllSeeingEye on",          "bool"),
+            ("ase_dead",      "Reveal dead / corpse (2)", "bool"),
+            ("ase_appearing", "Reveal appearing (6)",     "bool"),
+            ("ase_fading",    "Reveal fading (7)",        "bool"),
+        ],
+        "helpers": {
+            "ase_dead":
+                "Show entities sitting in dead/corpse status.",
+            "ase_appearing":
+                "Show entities in the appearing (spawning-in) status.",
+            "ase_fading":
+                "Show entities in the fading (despawning) status.",
+        },
+    },
+    "fisher": {
+        "title":    "Fisher",
+        "subtitle": "Embedded auto-fishing. Set bait + catch, then flip "
+                    "Fishing on. Names are comma-separated.",
+        "rows": [
+            ("fisher_enabled",                "Fishing on",        "bool"),
+            ("fisher_bait",                   "Bait",              "text"),
+            ("fisher_catch",                  "Catch",             "text"),
+            ("fisher_catch_limit",            "Catch limit",       "int"),
+            ("fisher_opt_recast_delay",       "Recast delay (s)",  "int"),
+            ("fisher_opt_release_delay",      "Release delay (s)", "int"),
+            ("fisher_opt_catch_delay_min",    "Catch delay min",   "int"),
+            ("fisher_opt_catch_delay_tweak",  "Catch delay tweak", "int"),
+            ("fisher_opt_equip_delay",        "Equip delay (s)",   "int"),
+            ("fisher_opt_move_delay",         "Move delay (s)",    "int"),
+            ("fisher_opt_cast_attempt_delay", "Cast retry delay",  "int"),
+            ("fisher_opt_cast_attempt_max",   "Cast retry max",    "int"),
+            ("fisher_opt_no_hook_max",        "No-hook limit",     "int"),
+            ("fisher_debug",                  "Debug messages",    "bool"),
+        ],
+        "helpers": {
+            "fisher_enabled":
+                "Click to cast. Needs bait + at least one catch set, and to be standing still.",
+            "fisher_bait":
+                "Bait name(s), comma-separated. e.g. insect ball, lugworm. Or: all bait.",
+            "fisher_catch":
+                "Fish/item name(s) to keep, comma-separated. Or: all fish / all item.",
+            "fisher_catch_limit":
+                "Stop after this many catches; 0 = run until you stop it.",
+        },
+    },
     "equipment": {
         "title":    "Equipment",
         "subtitle": "Equipment panel visibility and ring cooldown timer.",
@@ -29420,6 +37323,13 @@ _SUBDIALOG_CONFIGS = {
 _subdialog_states = {k: {"open": False, "rects": []}
                      for k in _SUBDIALOG_CONFIGS}
 
+# When a "text" subdialog row is focused, this holds (state_key,
+# setting_key) and _subdialog_text_buffer holds the in-progress edit.
+# The main loop routes keystrokes here until Enter commits / Esc cancels
+# / the dialog closes. None means no text row is being edited.
+_subdialog_text_focus = None
+_subdialog_text_buffer = ""
+
 
 def _open_subdialog(state_key):
     """Open one of the generic Configure subdialogs by key. Closes the
@@ -29429,6 +37339,47 @@ def _open_subdialog(state_key):
     _subdialog_states[state_key]["open"] = True
     global settings_menu_open
     settings_menu_open = False
+
+
+def _open_autora():
+    """Open the AutoRA settings box. Re-push the lua-applied AutoRA values
+    first so a relaunch (no bulk settings sync at boot) can't leave the box
+    and the lua loop disagreeing on the TP threshold / ignore flag."""
+    for _k in ("autora_stop_tp", "autora_ignore_tp"):
+        try:
+            apply_setting_side_effects(_k, settings.get(_k))
+        except Exception:
+            pass
+    _open_subdialog("autora")
+
+
+def _open_allseeingeye():
+    """Open the AllSeeingEye box. Re-push the lua-applied reveal toggles
+    first so a relaunch (no bulk settings sync at boot) can't leave the box
+    and the lua handler disagreeing on which statuses are revealed."""
+    for _k in ("ase_dead", "ase_appearing", "ase_fading"):
+        try:
+            apply_setting_side_effects(_k, settings.get(_k))
+        except Exception:
+            pass
+    _open_subdialog("allseeingeye")
+
+
+def _open_fisher():
+    """Open the Fisher box. Re-push every fisher setting first so a
+    relaunch (no bulk settings sync at boot) leaves the embedded engine
+    and the box agreeing on bait / catch / delays / catch limit."""
+    for _k in ("fisher_bait", "fisher_catch", "fisher_catch_limit",
+               "fisher_debug", "fisher_opt_equip_delay",
+               "fisher_opt_move_delay", "fisher_opt_cast_attempt_delay",
+               "fisher_opt_cast_attempt_max", "fisher_opt_release_delay",
+               "fisher_opt_catch_delay_min", "fisher_opt_catch_delay_tweak",
+               "fisher_opt_recast_delay", "fisher_opt_no_hook_max"):
+        try:
+            apply_setting_side_effects(_k, settings.get(_k))
+        except Exception:
+            pass
+    _open_subdialog("fisher")
 
 
 def _draw_subdialog(surface, state_key):
@@ -29548,6 +37499,37 @@ def _dispatch_subdialog(state_key, mx, my):
             return True
         if _dispatch_modal_row_action(action, state_key):
             return True
+    return False
+
+
+def _subdialog_text_handle_event(event):
+    """Route keystrokes into a focused subdialog 'text' row (e.g. the
+    Fisher bait/catch fields). Returns True if consumed. Characters come
+    via pygame.TEXTINPUT; KEYDOWN handles commit/cancel/backspace and is
+    swallowed while focused so nothing leaks to other handlers."""
+    global _subdialog_text_focus, _subdialog_text_buffer
+    if _subdialog_text_focus is None:
+        return False
+    sk, key = _subdialog_text_focus
+    st = _subdialog_states.get(sk)
+    if st is None or not st.get("open"):
+        _subdialog_text_focus = None
+        return False
+    if event.type == pygame.KEYDOWN:
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            set_setting(key, _subdialog_text_buffer.strip())
+            _subdialog_text_focus = None
+        elif event.key == pygame.K_ESCAPE:
+            _subdialog_text_focus = None
+        elif event.key == pygame.K_BACKSPACE:
+            _subdialog_text_buffer = _subdialog_text_buffer[:-1]
+        return True
+    if event.type == pygame.TEXTINPUT:
+        t = "".join(c for c in (event.text or "")
+                    if c.isprintable() and c not in "|;")
+        if t:
+            _subdialog_text_buffer = (_subdialog_text_buffer + t)[:200]
+        return True
     return False
 
 
@@ -30293,10 +38275,11 @@ def draw_campaigns_modal(surface):
     # leaving it open during play would let the DI location go stale
     # against the website.
     _di_maybe_refresh()
+    _nm_maybe_refresh()
 
     sw, sh = surface.get_size()
     mw = min(540, sw - 60)
-    mh = min(640, sh - 60)
+    mh = min(702, sh - 60)   # +62 (one banner row) for the guild/NM middle row
     mx = (sw - mw) // 2
     my = (sh - mh) // 2
 
@@ -30498,12 +38481,110 @@ def draw_campaigns_modal(surface):
                          (di_rect.x + 10,
                           di_rect.y + banner_h - 16))
 
-    # ── Box 3 & 4: Transport schedules (Airship | Ferry) ──
-    # Same dimensions / styling as the RoE/DI row above so the modal
-    # reads as "two stacked rows of two boxes". Each shows ONE route
-    # at a time; clicking the box cycles to the next route in the
-    # respective list (8 airships, 6 directional ferries).
-    tr_top = banner_top + banner_h + 6     # tight gap below RoE/DI
+    # ── Box 3 & 4: Guild Hours | Where Is NM (middle row) ──
+    # Inserted between the RoE/DI row and the transport row. Both tiles
+    # auto-cycle through their contents on a stateless wall-clock index
+    # (no click state needed): the guild box rotates the nine crafting
+    # guilds; the NM box rotates the active reports for the player's
+    # server. mid_top is where the transport row used to sit; transport
+    # now drops one row below it (and the modal's mh cap grew to match).
+    mid_top  = banner_top + banner_h + 6
+    _now_cyc = time.time()
+    inner_w  = box_w - 20
+
+    def _fit(text, font, col, maxw):
+        """Render text, truncating with a trailing ellipsis to fit maxw."""
+        s = font.render(text, True, col)
+        if s.get_width() <= maxw:
+            return s
+        for i in range(len(text) - 1, 0, -1):
+            ts = font.render(text[:i] + "…", True, col)
+            if ts.get_width() <= maxw:
+                return ts
+        return font.render("…", True, col)
+
+    # Box 3: Crafting Guild Hours (left) — self-contained, no network.
+    # Reads the same Vana'diel clock as the header and resolves
+    # open / closed / holiday for the guild currently in the rotation.
+    guild_rect = pygame.Rect(mx + 8, mid_top, box_w, banner_h)
+    pygame.draw.rect(surface, (60, 52, 45), guild_rect, border_radius=6)
+    pygame.draw.rect(surface, (170, 150, 110), guild_rect, 1, border_radius=6)
+    surface.blit(
+        banner_label_font.render("CRAFTING GUILD HOURS", True, (212, 192, 150)),
+        (guild_rect.x + 10, guild_rect.y + 6))
+    if GUILD_HOURS:
+        _vh, _vm, _vday, _gmp, _gph = get_vana_time()
+        _gidx = int(_now_cyc / GUILD_AUTO_CYCLE_SEC) % len(GUILD_HOURS)
+        _craft, _guild, _oh, _ch, _holiday = GUILD_HOURS[_gidx]
+        _gstatus = _guild_status(_oh, _ch, _holiday, _vh, _vday)
+        if _gstatus == "open":
+            _stat_txt, _stat_col = "OPEN", (140, 222, 140)
+        else:
+            _stat_txt, _stat_col = "CLOSED", (205, 160, 130)
+        surface.blit(
+            _fit(f"{_guild} — {_stat_txt}", banner_value_font, _stat_col, inner_w),
+            (guild_rect.x + 10, guild_rect.y + 22))
+        if _gstatus == "holiday":
+            _detail = f"holiday ({_holiday})"
+        elif _gstatus == "open":
+            _detail = f"open until {_ch}:00"
+        else:
+            _detail = f"closed until {_oh}:00"
+        _gmeta = f"{_craft} · {_detail} · ({_gidx + 1}/{len(GUILD_HOURS)})"
+        _gmeta_surf = banner_meta_font.render(_gmeta, True, (178, 162, 132))
+        if _gmeta_surf.get_width() > inner_w:
+            _gmeta_surf = _fit(f"{_craft} · {_detail}", banner_meta_font,
+                               (178, 162, 132), inner_w)
+        surface.blit(_gmeta_surf,
+                     (guild_rect.x + 10, guild_rect.y + banner_h - 16))
+
+    # Box 4: Where Is NM (right) — whereisnm.com poller, rotating banner.
+    nm_rect = pygame.Rect(mx + 8 + box_w + banner_gap, mid_top, box_w, banner_h)
+    pygame.draw.rect(surface, (45, 50, 62), nm_rect, border_radius=6)
+    pygame.draw.rect(surface, (120, 150, 200), nm_rect, 1, border_radius=6)
+    _nm_srv = nm_state.get("server") or _di_current_server()
+    surface.blit(
+        banner_label_font.render(
+            f"WHERE IS NM • {_nm_srv.upper()}" if _nm_srv else "WHERE IS NM",
+            True, (172, 196, 236)),
+        (nm_rect.x + 10, nm_rect.y + 6))
+    _nm_entries = nm_state.get("entries") or []
+    _nm_meta_txt = ""
+    if not _nm_srv:
+        _nm_val_txt, _nm_val_col = "(set your server in Settings)", (220, 180, 130)
+        _nm_meta_txt = "Settings → Header → Server"
+    elif _nm_entries:
+        _nidx = int(_now_cyc / WHEREISNM_AUTO_CYCLE_SEC) % len(_nm_entries)
+        _e = _nm_entries[_nidx]
+        _nm_val_txt = _e.get("display") or "(unknown spot)"
+        _nm_val_col = (236, 206, 140) if _e.get("is_question") else (172, 226, 172)
+        _age = _nm_age_text(_e.get("mins_update")) or _nm_age_text(_e.get("mins_ago"))
+        _bits = [_e.get("enemy") or "???"]
+        if _age:
+            _bits.append(_age)
+        _bits.append(f"({_nidx + 1}/{len(_nm_entries)})")
+        _nm_meta_txt = " · ".join(_bits)
+    elif nm_fetch_in_flight and not nm_state.get("fetched_at"):
+        _nm_val_txt, _nm_val_col = "fetching…", (190, 190, 210)
+    elif nm_state.get("error") and not nm_state.get("fetched_at"):
+        _nm_val_txt, _nm_val_col = "(fetch failed — try Refresh)", (220, 180, 180)
+    else:
+        _nm_val_txt, _nm_val_col = "No active NMs / ???", (170, 205, 175)
+        _checked = (_nm_age_text((time.time() - nm_state["fetched_at"]) / 60.0)
+                    if nm_state.get("fetched_at") else "")
+        _nm_meta_txt = f"checked {_checked}" if _checked else ""
+    surface.blit(_fit(_nm_val_txt, banner_value_font, _nm_val_col, inner_w),
+                 (nm_rect.x + 10, nm_rect.y + 22))
+    if _nm_meta_txt:
+        surface.blit(_fit(_nm_meta_txt, banner_meta_font, (150, 175, 205), inner_w),
+                     (nm_rect.x + 10, nm_rect.y + banner_h - 16))
+
+    # ── Box 5 & 6: Transport schedules (Airship | Ferry) ──
+    # Same dimensions / styling as the rows above so the modal reads as
+    # three stacked rows of two boxes. Each shows ONE route at a time;
+    # clicking the box cycles to the next route in the respective list
+    # (8 airships, 6 directional ferries).
+    tr_top = mid_top + banner_h + 6        # one row below the guild/NM row
     tr_h   = banner_h                       # same height as row 1
     # Reset transport click rects each render — banner geometry can
     # shift if the modal width changes.
@@ -31132,13 +39213,14 @@ def dispatch_campaigns_modal_click(mx, my):
             campaigns_modal_open = False
             return True
         if what == "cmp_refresh":
-            # Refresh fires BOTH the campaigns list AND the DI banner.
+            # Refresh fires the campaigns list AND the DI + NM banners.
             # The user expects "Refresh" to refresh everything visible
-            # in the modal — they'd be (rightly) confused if the DI
-            # banner kept showing stale data after clicking it just
-            # because our cache TTL hadn't elapsed yet.
+            # in the modal — they'd be (rightly) confused if a banner
+            # kept showing stale data after clicking it just because our
+            # cache TTL hadn't elapsed yet.
             _force_campaigns_refresh()
             _force_di_refresh()
+            _force_nm_refresh()
             return True
         if what == "cmp_card":
             url = payload.get("url")
@@ -31395,6 +39477,17 @@ def dispatch_sim_window_click(mx, my):
                 _sim_send("buff_update",
                           f"{idx + 1}:optimal:{'true' if new_val else 'false'}")
             return True
+        if action == "refresh_sim":
+            # Re-sync sim with live gear + force a stats recompute. Lua
+            # resends the inventory snapshot (which re-seeds equipment only
+            # if it's still empty — e.g. a dropped activation snapshot — so
+            # picks you've already made are preserved) and recomputes stats,
+            # so the equipment panel and stats reflect the current picks.
+            try:
+                sock_cmd_out.sendto(b"SIM|refresh", _cmd_addr())
+            except Exception as e:
+                print(f"[OmniWatch] sim refresh send failed: {e!r}")
+            return True
         if action == "reset":
             sim_state = {
                 "main_job": "", "sub_job": "",
@@ -31501,7 +39594,8 @@ def draw_settings_menu(surface):
     # Group by section so we can render each section in canonical order
     # (regardless of where its entries appear in the schema list) and
     # know which sections are empty.
-    grouped = {sec: [] for sec in SETTINGS_SECTIONS}
+    _secs = _settings_sections()
+    grouped = {sec: [] for sec in _secs}
     for s in SETTINGS_SCHEMA:
         sec = s.get("section")
         # The "Update available" button only appears when the
@@ -31518,7 +39612,7 @@ def draw_settings_menu(surface):
     cy = my + pad - settings_menu_scroll
     mouse_pos = pygame.mouse.get_pos()
 
-    for section in SETTINGS_SECTIONS:
+    for section in _secs:
         # Sections whose name begins with an underscore render an
         # UNNAMED header strip — the underline divider draws but
         # the section name doesn't. Visually separates the loose
@@ -31539,13 +39633,27 @@ def draw_settings_menu(surface):
             cy += sec_h
         else:
             # Section header strip.
+            _collapsible = (section == "Developer")
+            _collapsed = _collapsible and _dev_ui["collapsed"]
+            _hdr_x = mx + pad
+            if _collapsible:
+                _chev = title_font.render(
+                    "\u25b6" if _collapsed else "\u25bc", True, (200, 180, 130))
+                surface.blit(_chev, (_hdr_x, cy + 2))
+                _hdr_x += _chev.get_width() + 6
             sec_surf = title_font.render(section.upper(), True, (200, 180, 130))
-            surface.blit(sec_surf, (mx + pad, cy + 2))
+            surface.blit(sec_surf, (_hdr_x, cy + 2))
             # Underline running across the row.
             pygame.draw.line(surface, (90, 90, 110),
                              (mx + pad, cy + sec_h - 2),
                              (mx + w - pad, cy + sec_h - 2))
+            if _collapsible:
+                _hdr_rect = pygame.Rect(mx + pad, cy, w - pad * 2, sec_h)
+                settings_menu_rects.append(
+                    (_hdr_rect, {"kind": "collapse_toggle"}))
             cy += sec_h
+            if _collapsed:
+                continue
 
         section_entries = grouped[section]
         if not section_entries:
@@ -31856,6 +39964,8 @@ def dispatch_settings_menu_click(mx, my):
                     set_setting(action["key"], opts[new_idx])
             elif akind == "action":
                 dispatch_setting_action(action["key"])
+            elif akind == "collapse_toggle":
+                _dev_ui["collapsed"] = not _dev_ui["collapsed"]
             return True
     return False
 
@@ -39635,13 +47745,28 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     gap     = max(2,  int(STATS_SECTION_GAP * scale))
     panel_w, panel_h = stats_panel_size(_raw_scale, job=job, setup_mode=setup_mode)
 
-    pygame.draw.rect(surface, COL_PANEL,    (x, y, panel_w, panel_h), border_radius=4)
-    pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, panel_w, panel_h), 1, border_radius=4)
+    # In setup mode the panel grows downward by a tray + Save-as block. If
+    # the panel is anchored low enough that this block would fall off the
+    # bottom of the screen, draw it ABOVE the panel instead: shift the
+    # background up by the block height so the title + grid stay exactly
+    # where the user positioned them and the block sits above the header.
+    _setup_extra = 0
+    _setup_flip = False
+    if setup_mode:
+        _tray_h0 = max(20, int(28 * scale))
+        _save_btn_h0 = max(18, int(22 * scale))
+        _setup_extra = gap + _tray_h0 + gap + _save_btn_h0 + pad
+        if y + panel_h > surface.get_height():
+            _setup_flip = True
+    bg_y = (y - _setup_extra) if _setup_flip else y
+
+    pygame.draw.rect(surface, COL_PANEL,    (x, bg_y, panel_w, panel_h), border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, (x, bg_y, panel_w, panel_h), 1, border_radius=4)
 
     # Title bar.
     pygame.draw.rect(surface, COL_EV_HEADER,
                      (x + 1, y + 1, panel_w - 2, title_h - 1), border_radius=3)
-    draw_accent_stripe(surface, x, y, panel_h, ACCENT_STATS)
+    draw_accent_stripe(surface, x, bg_y, panel_h, ACCENT_STATS)
     title_font = get_font("Consolas", 12 * scale, bold=True)
     t_surf = title_font.render("STATISTICS", True, COL_EV_TITLE)
     surface.blit(t_surf, (x + 6, y + (title_h - t_surf.get_height()) // 2))
@@ -39929,7 +48054,12 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
         # currently-hidden cell. Click chip = un-hide that cell.
         tray_h = max(20, int(28 * scale))
         save_btn_h = max(18, int(22 * scale))
-        tray_y = cur_y + gap
+        if _setup_flip:
+            # Panel sits low — draw the tray + Save-as in the shifted-up
+            # background region ABOVE the title bar, where it's visible.
+            tray_y = bg_y + gap
+        else:
+            tray_y = cur_y + gap
         tray_x = x + pad
         tray_w = panel_w - 2 * pad
 
@@ -40011,7 +48141,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
         hint_font = get_font("Consolas", 8 * scale)
         hint_surf = hint_font.render(
             "Click cells to hide \u2022 drag to reorder \u2022 "
-            "use Save as to persist (exit discards)",
+            "exit setup to save to this job (Save as \u25BC for global)",
             True, (140, 140, 140))
         surface.blit(hint_surf, (x + pad, btn_y + (btn_h - hint_surf.get_height()) // 2))
 
@@ -41869,6 +49999,33 @@ while running:
                     pos_grid = parts[7]
                 else:
                     pos_grid = ""
+                if zone_info.get("zone_id") not in (None, zid):
+                    _old_zid = zone_info.get("zone_id")
+                    scanzone_tracks.clear()
+                    scanzone_aliases.clear()
+                    scanzone_zcache.clear()
+                    scanzone_namecache.clear()
+                    scanzone_lamps.clear()
+                    del scanzone_lamp_order[:]
+                    globals()["scanzone_pin"] = None
+                    globals()["scanzone_track_index"] = None
+                    # Reset each right-hand section's tracked state on a zone
+                    # change so it's fresh next visit instead of showing stale
+                    # floor/objective/progress. Nyzul is a single zone (77) and
+                    # its floors don't change zone, so reset it only when we
+                    # actually leave Nyzul. Sortie/Omen are content-specific too.
+                    if _old_zid == _NYZUL_ZONE:
+                        nyzul_state.update({
+                            "floor": 0, "timer": 0, "completed": 0,
+                            "rate": 100, "tokens": 0, "objstate": "p",
+                            "reststate": "w", "objective": "",
+                            "restriction": ""})
+                    scanzone_sortie.update({
+                        "floor": "ground", "sector": "A", "mi": -1,
+                        "gil": 0, "zone": None})
+                    omen_state.update({
+                        "floor_obj": "", "omens": "0", "time": 0,
+                        "clear": False, "hide": False, "objs": []})
                 zone_info["zone_id"]   = zid
                 zone_info["zone_name"] = zname
                 zone_info["map_index"] = mapi
@@ -41943,7 +50100,7 @@ while running:
     # Drain gearswap state socket. Most recent wins.
     try:
         while True:
-            gdata, _ = sock_gs.recvfrom(1024)
+            gdata, _ = sock_gs.recvfrom(65536)   # whole-zone radar can be large
             raw = gdata.decode(errors="replace").strip()
             if not raw:
                 continue
@@ -41964,8 +50121,443 @@ while running:
             # that can run several hundred chars; truncating them
             # silently drops fields, which manifested as "the wizard
             # only remembers all_songs."
-            if tag not in ("CFGWIZ",) and len(value) > 64:
+            if tag not in ("CFGWIZ", "SZSCAN", "SZWIDE", "SZTRACK", "SZRADAR", "SZLAMP", "NYZUL", "OMEN", "SORTIEGIL", "SYNERGY", "CRAFT", "AH", "SKILLUP") and len(value) > 64:
                 value = value[:64]
+            if tag == "CRAFT":
+                cf = value.split("|")
+                csub = cf[0] if cf else ""
+                if csub == "status":
+                    cf += [""] * (10 - len(cf))
+                    try:
+                        craft_state["delay"] = int(cf[1])
+                    except Exception:
+                        pass
+                    craft_state["paused"]  = (cf[2] == "1")
+                    craft_state["display"] = (cf[3] == "1")
+                    craft_state["food"]    = cf[4]
+                    craft_state["support"] = (cf[5] == "1")
+                    craft_state["jiggle"]  = cf[6]
+                    try:
+                        craft_state["qlen"] = int(cf[7])
+                    except Exception:
+                        pass
+                    craft_state["hq"]   = (cf[8] == "1")
+                    craft_state["busy"] = (cf[9] == "1")
+                elif csub == "queue":
+                    try:
+                        craft_state["qlen"] = int(cf[1])
+                    except Exception:
+                        pass
+                elif csub == "result":
+                    cf += [""] * (4 - len(cf))
+                    if cf[1] == "ok":
+                        craft_state["last"] = "OK %s x%s" % (cf[2], cf[3])
+                    else:
+                        craft_state["last"] = "FAILED"
+                elif csub == "msg":
+                    craft_log.append(value[4:])
+                    del craft_log[:-30]
+                continue
+
+            if tag == "SYNERGY":
+                # DEV Synergy engine stream. value = "<sub>|<...>":
+                #   start|<id>|<index>|<zone>|<menu>
+                #   recipe|f|i|w|e|t|wa|l|d        (needed per element)
+                #   current|...                    (in-furnace fewell counts)
+                #   fewell|...                     (player fewell inventory)
+                #   data|<pressure>|<ratio>
+                #   leak|<elem>|<fix>              (empty fields clear it)
+                #   overload|<0|1>   hp|<hpp>   end
+                sf  = value.split("|")
+                sub = sf[0] if sf else ""
+                if sub == "start":
+                    sf += [""] * (5 - len(sf))
+                    synergy_state["in"] = True
+                    try:
+                        synergy_state["target"] = int(sf[1])
+                    except Exception:
+                        synergy_state["target"] = None
+                    try:
+                        synergy_state["index"] = int(sf[2])
+                    except Exception:
+                        synergy_state["index"] = None
+                    synergy_state["leak"] = ""
+                    synergy_state["fix"] = ""
+                    synergy_state["overload"] = False
+                elif sub == "current":
+                    synergy_state["current"] = _syn_int8(sf[1:])
+                elif sub == "fewell":
+                    synergy_state["fewell"] = _syn_int8(sf[1:])
+                elif sub == "recipe":
+                    synergy_state["needed"] = _syn_int8(sf[1:])
+                elif sub == "data":
+                    sf += [""] * (3 - len(sf))
+                    try:
+                        synergy_state["pressure"] = int(sf[1])
+                    except Exception:
+                        pass
+                    try:
+                        synergy_state["ratio"] = int(sf[2])
+                    except Exception:
+                        pass
+                elif sub == "leak":
+                    sf += [""] * (3 - len(sf))
+                    synergy_state["leak"] = sf[1]
+                    synergy_state["fix"] = sf[2]
+                elif sub == "overload":
+                    synergy_state["overload"] = (len(sf) > 1 and sf[1] == "1")
+                elif sub == "hp":
+                    try:
+                        synergy_state["hpp"] = int(sf[1])
+                    except Exception:
+                        pass
+                elif sub == "end":
+                    synergy_state["in"] = False
+                    synergy_state["leak"] = ""
+                    synergy_state["fix"] = ""
+                    synergy_state["overload"] = False
+                synergy_state["last"] = time.time()
+                continue
+
+            if tag == "SZSCAN":
+                # Live entity from the packet scan (lua injected 0x16 and
+                # read the 0x0E reply). value =
+                #   <index>|<id>|<name>|<x>|<y>|<z>|<hpp>|<status>
+                f = value.split("|")
+                f += [""] * (8 - len(f))
+                try:
+                    sidx = int(f[0])
+                except Exception:
+                    sidx = 0
+                if f[2].strip():
+                    scanzone_namecache[sidx] = f[2].strip()
+                _de = scanzone_tracks.get(sidx)
+                if _de is not None:
+                    try:
+                        _de["hpp"] = float(f[6]) if f[6] != "" else None
+                    except Exception:
+                        _de["hpp"] = None
+                    _de["hp_last"] = pygame.time.get_ticks()
+                bits = []
+                if f[2].strip():
+                    bits.append(f[2].strip())
+                bits.append("0x%03X" % (sidx & 0xFFFF))
+                if f[6] != "":
+                    bits.append("HP %s%%" % f[6])
+                if f[7] != "":
+                    bits.append("st %s" % f[7])
+                if f[3] != "" and f[4] != "":
+                    if f[5] != "":
+                        bits.append("X %s Y %s Z %s" % (f[3], f[4], f[5]))
+                    else:
+                        bits.append("X %s Y %s" % (f[3], f[4]))
+                    try:
+                        ex = float(f[3]); ey = float(f[4])
+                        ppx = float(zone_info.get("x", 0.0))
+                        ppy = float(zone_info.get("y", 0.0))
+                        dist = ((ex - ppx) ** 2 + (ey - ppy) ** 2) ** 0.5
+                        bits.append("%.0fy" % dist)
+                    except Exception:
+                        pass
+                # The Nyzul auto-sweep fires ~15 scans/sec, which would make
+                # this status line strobe through every probed entity ("it
+                # constantly scanned"). Only update it for non-auto scans.
+                if not (scanzone_lamp_mode
+                        and zone_info.get("zone_id") == _NYZUL_ZONE):
+                    globals()["scanzone_scan_info"] = "  ".join(bits)
+                if f[5] != "":
+                    try:
+                        scanzone_zcache[sidx] = float(f[5])
+                    except Exception:
+                        pass
+                if f[3] != "" and f[4] != "":
+                    try:
+                        _sxy = (float(f[3]), float(f[4]))
+                        if sidx == scanzone_track_index:
+                            globals()["scanzone_track_pos"] = _sxy
+                        _ent = scanzone_tracks.get(sidx)
+                        if _ent is not None:
+                            _ent["pos"] = _sxy
+                            _ent["last"] = pygame.time.get_ticks()
+                            if f[5] != "":
+                                _ent["z"] = float(f[5])
+                    except Exception:
+                        pass
+                continue
+            if tag == "SZWIDE":
+                # Widescan radar stream from lua: start / m|... / end.
+                if value == "start":
+                    _scanzone_wide_tmp.clear()
+                elif value == "end":
+                    scanzone_wide.clear()
+                    scanzone_wide.update(_scanzone_wide_tmp)
+                    _scanzone_wide_tmp.clear()
+                    # Auto-fired sweeps (Nyzul tracker) must not yank the view.
+                    if not _sz_wide_auto:
+                        globals()["scanzone_view"] = "radar"
+                    globals()["_sz_wide_auto"] = False
+                elif value[:2] == "m|":
+                    mf = value.split("|")
+                    if len(mf) >= 6:
+                        try:
+                            widx = int(mf[1]); mtype = int(mf[2])
+                            lvl = int(mf[3]); wx = int(mf[4]); wy = int(mf[5])
+                            nm2 = mf[6] if len(mf) > 6 else ""
+                            _scanzone_wide_tmp[widx] = {
+                                "type": mtype, "level": lvl,
+                                "name": nm2, "x": wx, "y": wy}
+                        except Exception:
+                            pass
+                continue
+            if tag == "SZRADAR":
+                # <heading>|<n>|i,t,dx,dy,hpp,name;...
+                rf = value.split("|", 2)
+                try:
+                    globals()["scanzone_radar_heading"] = float(rf[0])
+                except Exception:
+                    pass
+                arr = []
+                if len(rf) >= 3 and rf[2]:
+                    for ent in rf[2].split(";"):
+                        c = ent.split(",", 5)
+                        if len(c) >= 5:
+                            try:
+                                arr.append((int(c[0]), int(c[1]),
+                                            float(c[2]), float(c[3]),
+                                            int(c[4]),
+                                            c[5] if len(c) > 5 else ""))
+                            except Exception:
+                                pass
+                globals()["scanzone_radar"] = arr
+                continue
+            if tag == "SZTRACK":
+                tf = value.split("|")
+                if len(tf) >= 5:
+                    try:
+                        tix = int(tf[0])
+                    except Exception:
+                        tix = -1
+                    if tix == scanzone_track_index:
+                        try:
+                            ex = float(tf[1]); ey = float(tf[2])
+                            ez = (float(tf[3]) if len(tf) > 3
+                                  and tf[3] != "" else None)
+                            ppx = float(zone_info.get("x", 0.0))
+                            ppy = float(zone_info.get("y", 0.0))
+                            dist = ((ex - ppx) ** 2 + (ey - ppy) ** 2) ** 0.5
+                            _zs = (" Z %.0f" % ez) if ez is not None else ""
+                            globals()["scanzone_track_info"] = (
+                                "TRACK %s 0x%03X X %.0f Y %.0f%s  %.0fy"
+                                % (_scanzone_name_for(tix), tix & 0xFFFF,
+                                   ex, ey, _zs, dist))
+                            globals()["scanzone_track_last"] = \
+                                pygame.time.get_ticks()
+                            globals()["scanzone_track_pos"] = (ex, ey)
+                            _ent = scanzone_tracks.get(tix)
+                            if _ent is not None:
+                                _ent["pos"] = (ex, ey)
+                                _ent["last"] = pygame.time.get_ticks()
+                                if ez is not None:
+                                    _ent["z"] = ez
+                        except Exception:
+                            pass
+                continue
+            if tag == "OMEN":
+                of = value.split("|")
+                of += [""] * (6 - len(of))
+                omen_state["floor_obj"] = of[0]
+                omen_state["omens"]     = of[1] or "0"
+                try:
+                    omen_state["time"] = int(of[2] or 0)
+                except Exception:
+                    omen_state["time"] = 0
+                omen_state["clear"] = (of[3] == "1")
+                omen_state["hide"]  = (of[4] == "1")
+                _objs = []
+                for _ch in (of[5].split(";") if of[5] else []):
+                    _pp = _ch.split("~")
+                    if len(_pp) == 4:
+                        try:
+                            _cur, _req = int(_pp[1]), int(_pp[2])
+                        except Exception:
+                            _cur, _req = 0, 0
+                        _objs.append((_pp[0], _cur, _req, _pp[3]))
+                omen_state["objs"] = _objs
+                continue
+            if tag == "NYZUL":
+                nf = value.split("|")
+                nf += [""] * (9 - len(nf))
+                _prev_floor = nyzul_state.get("floor")
+                try:
+                    nyzul_state["floor"]     = int(nf[0] or 0)
+                    nyzul_state["timer"]     = int(nf[1] or 0)
+                    nyzul_state["completed"] = int(nf[2] or 0)
+                    nyzul_state["rate"]      = int(nf[3] or 0)
+                    nyzul_state["tokens"]    = int(nf[4] or 0)
+                except Exception:
+                    pass
+                if (nyzul_state.get("floor") != _prev_floor
+                        and _prev_floor is not None):
+                    # New floor -> reset the tracked roster (e.g. any Find
+                    # tracks) so it shows only this floor. The zone stays 77
+                    # across floors, so the zone-change clear never fires here.
+                    scanzone_tracks.clear()
+                    globals()["scanzone_track_index"] = None
+                nyzul_state["objstate"]    = nf[5] or "p"
+                nyzul_state["reststate"]   = nf[6] or "w"
+                nyzul_state["objective"]   = nf[7]
+                nyzul_state["restriction"] = nf[8]
+                continue
+            if tag == "SORTIEGIL":
+                try:
+                    scanzone_sortie["gil"] += int(value)
+                except Exception:
+                    pass
+                continue
+            if tag == "SZLAMP":
+                if value.strip() == "clear":
+                    # Floor changed (or lamp mode (re)started): drop the
+                    # previous floor's lamps so the roster shows only the
+                    # lamps on the floor we just entered.
+                    scanzone_lamps.clear()
+                    del scanzone_lamp_order[:]
+                    continue
+                # Nyzul lamp update from lua: SZLAMP|<index>|<x>|<y>|<z>|
+                #   <lit>|<name>.  lit = 1 when the lamp flag bit is set.
+                f = value.split("|")
+                f += [""] * (6 - len(f))
+                try:
+                    lidx = int(f[0])
+                except Exception:
+                    continue
+                _le = scanzone_lamps.get(lidx)
+                if _le is None:
+                    _le = {"idx": lidx, "name": "", "pos": None,
+                           "z": None, "lit": False, "last": 0,
+                           "kind": ("rune" if lidx in (0x2D2, 0x2D3)
+                                    else "lamp")}
+                    scanzone_lamps[lidx] = _le
+                if f[5].strip():
+                    _le["name"] = f[5].strip()
+                try:
+                    if f[1] != "" and f[2] != "":
+                        _le["pos"] = (float(f[1]), float(f[2]))
+                except Exception:
+                    pass
+                try:
+                    if f[3] != "":
+                        _le["z"] = float(f[3])
+                except Exception:
+                    pass
+                # Lit only changes on a flag-bearing update: f[4] is "1" (lit),
+                # "0" (dark), or "-" (position-only -> keep what we have). That
+                # "-" path is the persistence guard: a passive position refresh
+                # never clears a lit lamp. On a real dark->lit edge we stamp the
+                # activation order; on a lit->dark edge (a reset / wrong-order
+                # penalty) we drop it from the order so the sequence renumbers.
+                # The Rune of Transfer carries the same flag but is never part
+                # of the lamp activation sequence, so it's excluded from order.
+                _litf = f[4].strip()
+                if _litf in ("0", "1"):
+                    _newlit = (_litf == "1")
+                    _oldlit = bool(_le.get("lit"))
+                    _le["lit"] = _newlit
+                    if _le.get("kind") != "rune":
+                        if _newlit and not _oldlit:
+                            if lidx not in scanzone_lamp_order:
+                                scanzone_lamp_order.append(lidx)
+                        elif _oldlit and not _newlit:
+                            if lidx in scanzone_lamp_order:
+                                scanzone_lamp_order.remove(lidx)
+                        if _newlit != _oldlit:
+                            # A lamp just toggled. In the lamp puzzle, lighting
+                            # one can flip others that never push their own
+                            # update to us, leaving stale lit state / numbers.
+                            # Debounce-schedule a full reconcile (the same
+                            # request the Refresh button sends) to pull every
+                            # lamp's true state a beat after things settle.
+                            globals()["_lamp_reconcile_at"] = (
+                                pygame.time.get_ticks() + 700)
+                _le["last"] = pygame.time.get_ticks()
+                continue
+            if tag == "AH":
+                af = value.split("|")
+                ahead = af[0] if af else ""
+                if ahead == "items":
+                    _its = []
+                    for tok in af[2:]:
+                        if "~" in tok:
+                            _pp = tok.split("~")
+                            try:
+                                _id = int(_pp[0]); _nm = _pp[1]
+                                _lv = int(_pp[2]) if len(_pp) > 2 else 0
+                                _ss = int(_pp[3]) if len(_pp) > 3 else 1
+                            except (ValueError, IndexError):
+                                continue
+                            _its.append({"id": _id, "name": _nm, "level": _lv,
+                                         "ssize": _ss, "stack": 0})
+                            if _ss > 1:
+                                _its.append({"id": _id, "name": "%s x %d" % (_nm, _ss),
+                                             "level": _lv, "ssize": _ss, "stack": 1})
+                    ah_state["items"] = _its
+                    ah_state["items_scroll"] = 0
+                elif ahead == "txn":
+                    if len(af) >= 4:
+                        try:
+                            _ah_record_txn(af[1], int(af[2]), int(af[3]))
+                        except ValueError:
+                            pass
+                elif ahead == "inv":
+                    _iv = []
+                    for tok in af[1:]:
+                        _pp = tok.split("~")
+                        if len(_pp) >= 4:
+                            try:
+                                _iv.append({"id": int(_pp[0]), "name": _pp[1],
+                                            "count": int(_pp[2]), "stack": int(_pp[3])})
+                            except ValueError:
+                                pass
+                    _iv.sort(key=lambda it: it["name"].lower())
+                    ah_state["inv"] = _iv
+                    ah_state["inv_scroll"] = 0
+                elif ahead == "sales":
+                    _sl = []
+                    for tok in af[1:]:
+                        _pp = tok.split("~")
+                        if len(_pp) >= 6:
+                            try:
+                                _sl.append({"slot": int(_pp[0]), "status": _pp[1],
+                                            "name": _pp[2], "count": int(_pp[3]),
+                                            "price": int(_pp[4]), "ts": int(_pp[5])})
+                            except ValueError:
+                                pass
+                    ah_state["sales"] = _sl
+                elif ahead == "info":
+                    if len(af) >= 3:
+                        try:
+                            ah_state["iteminfo"][int(af[1])] = af[2].split("~")
+                        except ValueError:
+                            pass
+                elif ahead == "result":
+                    _ah_log("|".join(af[1:]))
+                elif ahead == "status":
+                    if len(af) > 1:
+                        ah_state["running"] = (af[1] == "1")
+            if tag == "SKILLUP":
+                sf = value.split("|")
+                if sf and sf[0] == "status":
+                    sf += [""] * (9 - len(sf))
+                    try:
+                        skillup_state["type"] = sf[1] or "None"
+                        skillup_state["running"] = (sf[2] == "1")
+                        skillup_state["rate"] = float(sf[3] or 0)
+                        skillup_state["total"] = float(sf[4] or 0)
+                        skillup_state["use_trust"] = (sf[5] == "1")
+                        skillup_state["use_geo"] = (sf[6] == "1")
+                        skillup_state["use_item"] = (sf[7] == "1")
+                        skillup_state["stoptype"] = sf[8] or "Stop"
+                    except (ValueError, IndexError):
+                        pass
             if tag == "SET":
                 # Authoritative source: gearswap explicitly told us what
                 # set was equipped. Wins over STATE in the renderer.
@@ -42057,18 +50649,25 @@ while running:
                 #   - Entering setup mode: reload from disk so any
                 #     external edits to omniwatch_stats_layout.json are
                 #     picked up.
-                #   - Exiting setup mode: DISCARD in-memory session
-                #     edits. The only commit path is the "Save as" button
-                #     in setup mode — exiting without clicking it means
-                #     the user wanted to throw away their experimenting.
+                #   - Exiting setup mode: AUTO-SAVE this session's cell
+                #     moves / hides to the CURRENT job's layout (per-job
+                #     saves). Global/other-job targeting is via the "Save
+                #     as ▼" button or by editing the JSON. Auto-save is a
+                #     no-op when there were no cell edits, so just
+                #     repositioning panels saves nothing.
                 try:
                     if prev_setup != setup_mode:
                         if setup_mode:
                             # Entering — fresh load from disk.
                             _load_stats_layout()
                         else:
-                            # Exiting — drop session edits. Subsequent
-                            # rendering falls back to whatever's on disk.
+                            # Exiting — persist session edits to the
+                            # current job, then drop the session layer.
+                            try:
+                                _save_session_to_current_job(player_self_mjob)
+                            except Exception as _e2:
+                                print("[OmniWatch] stats auto-save on exit "
+                                      f"failed: {_e2!r}")
                             stats_layout_config.pop("_setup_pending", None)
                 except Exception as _e:
                     print(f"[OmniWatch] stats layout transition failed: {_e!r}")
@@ -42709,6 +51308,8 @@ while running:
                     except Exception as e:
                         print(f"[OmniWatch] checklist save on SG "
                               f"update failed: {e!r}")
+            elif raw.startswith("PUPATT|"):
+                _pupatt_ingest(raw)
             elif raw.startswith("BLU_SPELLS|"):
                 # Blue Magic snapshot. Format:
                 #   BLU_SPELLS|<learned1>|<learned2>|...||<master1>|<master2>|...
@@ -42754,6 +51355,11 @@ while running:
                         # sorted by Lua, but enforce here defensively).
                         master_names.sort(key=lambda s: s.lower())
                         _BLU_SPELLS_MASTER.extend(master_names)
+            elif raw.startswith("BRDSET|state|"):
+                # Singer run-state push so the Sing/Stop toggle tracks
+                # reality and flips back when a rotation ends by itself.
+                _brdset_set_singing(
+                    raw[len("BRDSET|state|"):].strip().lower() == "singing")
             elif raw.startswith("BLU_CURRENT|"):
                 # Currently equipped BLU set spell names, for the BLU
                 # Spellsets panel ("which saved set is live" indicator).
@@ -45191,8 +53797,9 @@ while running:
     # rest of the overlay while the display is hidden.
     if display_hidden:
         _blusets_clear_rects()
-    else:
-        draw_blusets_window(screen)
+        _trustsets_clear_rects()
+        _pupatt_clear_rects()
+        _brdset_clear_rects()
 
     # ── Warp button + travel menu (floating, pulses when in range) ──────────
     # Floats on the overlay (draggable/resizable); the menu draws above
@@ -45208,6 +53815,57 @@ while running:
         draw_warp_button(screen)
         draw_warp_menu(screen)
         draw_warp_confirm(screen)
+
+    # ── Call Trust button (floating, draggable/resizable) ────────────────
+    # Summons the active Trust Set. Drawn after the warp button (same
+    # paint-order reasoning); the Trust Sets window below draws above it.
+    if display_hidden or not setting("show_calltrust"):
+        calltrust_button_rect = None
+        calltrust_button_handle_rect = None
+    else:
+        draw_calltrust_button(screen)
+
+    # Floating Sing button — Start/Stop toggle for the BRD singer.
+    if display_hidden or not setting("show_singbutton"):
+        sing_button_rect = None
+        sing_button_handle_rect = None
+    else:
+        draw_sing_button(screen)
+
+    # ── Trust Sets window — drawn AFTER the Warp button so the button
+    # never paints over the box when they overlap. Its input is already
+    # claimed ahead of the warp button earlier in the event loop, so
+    # drawing later only fixes paint order. ──────────────────────────────
+    if not display_hidden:
+        draw_loadouts_window(screen)
+
+    # ── DEV · Scan Zone (hidden; sentinel-gated) ───────────────────────
+    if _DEV_ENABLED and not display_hidden:
+        draw_scanzone_window(screen)
+    else:
+        _scanzone_clear_rects()
+
+    # ── DEV · Synergy (hidden; sentinel-gated; draws above Scan Zone) ──
+    if _DEV_ENABLED and not display_hidden:
+        draw_synergy_window(screen)
+    else:
+        _syn_clear_rects()
+
+    # ── DEV · Auction House (hidden; sentinel-gated) ──
+    if _DEV_ENABLED and not display_hidden:
+        draw_ah_window(screen)
+    else:
+        _ah_clear_rects()
+    # ── DEV · SkillUp (hidden; sentinel-gated) ──
+    if _DEV_ENABLED and not display_hidden:
+        draw_skillup_window(screen)
+    else:
+        _skillup_clear_rects()
+    # ── DEV · Craft (hidden; sentinel-gated; draws above Synergy) ──
+    if _DEV_ENABLED and not display_hidden:
+        draw_craft_window(screen)
+    else:
+        _craft_clear_rects()
 
     # ── Settings dropdown (above everything when open) ──────────────────────
     draw_settings_menu(screen)
@@ -45577,10 +54235,40 @@ while running:
             # Anchors handle repositioning automatically on the next frame.
             # No save needed — nothing on disk changes.
 
-        elif _blusets_handle_event(event):
-            # BLU Spellsets panel consumed the event (its window draws
-            # above the cheat sheet and panels, so it gets first claim
-            # on input — mirroring draw order).
+        elif _subdialog_text_handle_event(event):
+            # A focused text row in a Configure subdialog (e.g. the
+            # Fisher bait/catch fields) is capturing keystrokes.
+            pass
+
+        elif (not _dev_panel_input_blocked()
+                and _loadouts_handle_event(event)):
+            # Loadouts window (BLU / Trusts / PUP tabs) consumed the event.
+            pass
+
+        elif (not _dev_panel_input_blocked()
+                and _ah_handle_event(event)):
+            pass
+        elif (not _dev_panel_input_blocked()
+                and _skillup_handle_event(event)):
+            pass
+        elif (not _dev_panel_input_blocked()
+                and _craft_handle_event(event)):
+            # DEV · Craft panel (sentinel-gated) consumed the event,
+            # including its Ctrl+Shift+R toggle combo. Checked before
+            # Synergy because it draws above it.
+            pass
+
+        elif (not _dev_panel_input_blocked()
+                and _synergy_handle_event(event)):
+            # DEV · Synergy panel (sentinel-gated) consumed the event,
+            # including its Ctrl+Shift+Y toggle combo. Checked before Scan
+            # Zone because it draws above it.
+            pass
+
+        elif (not _dev_panel_input_blocked()
+                and _scanzone_handle_event(event)):
+            # DEV · Scan Zone panel (sentinel-gated) consumed the event,
+            # including its Ctrl+Shift+G toggle combo.
             pass
 
         elif event.type == pygame.MOUSEWHEEL:
@@ -46429,9 +55117,15 @@ while running:
                                 _allk = "all " if setting(
                                     "warp_use_sendall") else ""
                                 _subk = (" " + str(_sub)) if _sub else ""
-                                # Confirm label: avoid repeating the zone
-                                # when the leaf label already contains it.
-                                _dest = (_lbl if _lbl.startswith(_zone)
+                                # Confirm label: avoid repeating the zone when
+                                # the leaf label already contains it. Compare
+                                # case-insensitively -- superwarp zone strings
+                                # are lowercase ("nyzul isle") while the menu
+                                # label is title-case ("Nyzul Isle"), so a
+                                # case-sensitive check glued them into
+                                # "nyzul isle Nyzul Isle".
+                                _dest = (_lbl
+                                         if _lbl.lower().startswith(_zone.lower())
                                          else ("%s %s" % (_zone, _lbl)))
                                 # Open the confirm; the warp only fires
                                 # when the user clicks [Warp] there.
@@ -46488,6 +55182,46 @@ while running:
                 # on the first drag frame.
                 bx, by = _cs_btn_draw_pos
                 _cs_btn_drag = {
+                    "grab_dx": mx - bx,
+                    "grab_dy": my - by,
+                    "start_x": bx,
+                    "start_y": by,
+                    "moved":   False,
+                }
+                continue
+
+            # Floating Call Trust button — corner handle resizes; body arms
+            # a click-or-drag (click summons the active set, drag moves it).
+            if (calltrust_button_handle_rect is not None
+                    and calltrust_button_handle_rect.collidepoint(mx, my)):
+                _ct_btn_resize = {"start_scale": calltrust_button_scale,
+                                  "anchor_x": mx, "anchor_y": my}
+                continue
+            if (calltrust_button_rect is not None
+                    and calltrust_button_rect.collidepoint(mx, my)
+                    and _ct_btn_draw_pos is not None):
+                bx, by = _ct_btn_draw_pos
+                _ct_btn_drag = {
+                    "grab_dx": mx - bx,
+                    "grab_dy": my - by,
+                    "start_x": bx,
+                    "start_y": by,
+                    "moved":   False,
+                }
+                continue
+
+            # Floating Sing button — corner handle resizes; body arms a
+            # click-or-drag (click toggles the singer, drag moves it).
+            if (sing_button_handle_rect is not None
+                    and sing_button_handle_rect.collidepoint(mx, my)):
+                _sing_btn_resize = {"start_scale": sing_button_scale,
+                                    "anchor_x": mx, "anchor_y": my}
+                continue
+            if (sing_button_rect is not None
+                    and sing_button_rect.collidepoint(mx, my)
+                    and _sing_btn_draw_pos is not None):
+                bx, by = _sing_btn_draw_pos
+                _sing_btn_drag = {
                     "grab_dx": mx - bx,
                     "grab_dy": my - by,
                     "start_x": bx,
@@ -47616,6 +56350,40 @@ while running:
                     _cheatsheet_toggle()
                 continue
 
+            # ── Floating Call Trust button: end resize ─────────────
+            if _ct_btn_resize is not None:
+                _ct_btn_resize = None
+                save_layout()
+                continue
+
+            # ── Floating Call Trust button: click vs drag ──────────
+            # Unmoved = click → summon the active set. Moved = reposition.
+            if _ct_btn_drag is not None:
+                moved = _ct_btn_drag["moved"]
+                _ct_btn_drag = None
+                if moved:
+                    save_layout()
+                else:
+                    _calltrust_invoke()
+                continue
+
+            # ── Floating Sing button: end resize ───────────────────
+            if _sing_btn_resize is not None:
+                _sing_btn_resize = None
+                save_layout()
+                continue
+
+            # ── Floating Sing button: click vs drag ────────────────
+            # Unmoved = click → toggle the singer. Moved = reposition.
+            if _sing_btn_drag is not None:
+                moved = _sing_btn_drag["moved"]
+                _sing_btn_drag = None
+                if moved:
+                    save_layout()
+                else:
+                    _sing_button_invoke()
+                continue
+
             # ── Floating Warp button: end resize ───────────────────
             if _warp_btn_resize is not None:
                 _warp_btn_resize = None
@@ -48234,6 +57002,44 @@ while running:
                     _cs_btn_drag["moved"] = True
                 cheatsheet_button_pos[0] = nx
                 cheatsheet_button_pos[1] = ny
+
+        elif event.type == pygame.MOUSEMOTION and _ct_btn_resize is not None:
+            # Resize the floating Call Trust button (diagonal-drag scaling).
+            mx, my = event.pos
+            delta = ((mx - _ct_btn_resize["anchor_x"])
+                     + (my - _ct_btn_resize["anchor_y"])) / 2.0
+            calltrust_button_scale = max(
+                0.5, min(5.0, _ct_btn_resize["start_scale"] + delta / 60.0))
+
+        elif event.type == pygame.MOUSEMOTION and _ct_btn_drag is not None:
+            # Drag the floating Call Trust button (same click-vs-drag logic).
+            mx, my = event.pos
+            if calltrust_button_pos is not None:
+                nx = mx - _ct_btn_drag["grab_dx"]
+                ny = my - _ct_btn_drag["grab_dy"]
+                if (abs(nx - _ct_btn_drag["start_x"]) > 3
+                        or abs(ny - _ct_btn_drag["start_y"]) > 3):
+                    _ct_btn_drag["moved"] = True
+                calltrust_button_pos[0] = nx
+                calltrust_button_pos[1] = ny
+
+        elif event.type == pygame.MOUSEMOTION and _sing_btn_resize is not None:
+            mx, my = event.pos
+            delta = ((mx - _sing_btn_resize["anchor_x"])
+                     + (my - _sing_btn_resize["anchor_y"])) / 2.0
+            sing_button_scale = max(
+                0.5, min(5.0, _sing_btn_resize["start_scale"] + delta / 60.0))
+
+        elif event.type == pygame.MOUSEMOTION and _sing_btn_drag is not None:
+            mx, my = event.pos
+            if sing_button_pos is not None:
+                nx = mx - _sing_btn_drag["grab_dx"]
+                ny = my - _sing_btn_drag["grab_dy"]
+                if (abs(nx - _sing_btn_drag["start_x"]) > 3
+                        or abs(ny - _sing_btn_drag["start_y"]) > 3):
+                    _sing_btn_drag["moved"] = True
+                sing_button_pos[0] = nx
+                sing_button_pos[1] = ny
 
         elif event.type == pygame.MOUSEMOTION and _warp_btn_drag is not None:
             # Drag the floating Warp button (same click-vs-drag logic as the

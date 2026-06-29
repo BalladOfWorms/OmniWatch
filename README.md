@@ -24,6 +24,7 @@ OmniWatch puts the live state of your character and party in one place:
 - **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB, elemental affinity, fast cast, store TP, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses
 - **Hotbar** — customizable button panel for slash commands, items, gearswap calls, and macros
 - **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection
+- **Auction House panel** — Buy and Sell tabs in one window. Buy: live item search (singles and stacks listed separately, in-game style), a multi-item bid queue with per-item start / max / increment prices and a throttle, and a results log. Sell: your inventory with a single/stack + price form and your seven active listings. Right-click any item to open its FFXIAH price page.
 - **Header strip** — Vana'diel game clock with element/moon phase, current zone + region, character switcher, settings gear
 - **Sim mode** — what-if calculator: change job, level, JP, ML, gear, food, BRD songs (marches/minuets/madrigals), and COR rolls (Chaos/Samurai/Tactician's with optional Crooked Cards + optimal job toggles) and see the resulting stats live without applying anything in-game. While open it takes over the equipment panel to preview your picked gear, with hover tooltips on sim items.
 
@@ -272,6 +273,86 @@ survive; progress and any skipped spells report in game chat),
 **Edit**, and **✕** (click twice to confirm). A green dot marks the
 set matching what's equipped right now. Sets are saved per character.
 
+### Trust Sets
+
+Named groups of up to five trusts, for organizing who you call. Open
+the manager from **Settings → Misc → TrustSets** (the window is
+draggable and its position is remembered, same chrome as BLU
+Spellsets). **+ New Set** opens the editor — type a name, then tick
+trusts from a flat, alphabetical list of the trusts *this character
+owns* (the same owned list the collection checklist uses), capped at
+five per set. Each row shows the trust's job on the right; **hover a
+trust for its job and abilities** — job abilities and traits read
+from the trust database — and the **Tips** checkbox toggles those
+tooltips (shared with the BLU window's toggle). Click a trust's name
+to open its bg-wiki page in your browser (it underlines on hover);
+click the checkbox or anywhere else on the row to tick it. Ticked
+trusts appear in a **Call Order** panel on the right, numbered in the
+order they'll be summoned — **the order is the party position**, so
+slot 1 is called first. Drag a row by its grip to reorder it, or hit
+the ✕ to drop one. The name field and the `n/5` counter stay
+pinned while the owned list scrolls.
+
+Each saved set has **Equip**, **Edit**, and **✕** (click twice to
+confirm). **Equip** marks the set *active* (a green dot, and the
+button reads **Active**) — it designates which set the **Call Trust**
+button summons; it has no in-game effect on its own. Sets are
+saved per character.
+
+The **Call Trust** button is a floating, draggable, resizable button
+(styled like the Cheat Sheet and Warp buttons; toggle it under
+**Settings → Misc → Show Call Trust button**, and its position/size
+are remembered). Click it to **reconcile your party to your active
+set**: trusts already up that aren't in the set are released
+(`/retr`), then the missing ones are summoned in call order, so the
+party ends up matching the set. Casting is paced off the game's own
+action event (each trust waits for its cast to finish before the next
+is called), it respects your trust limit from key items, and it skips
+any trust that's on recast or you haven't unlocked (telling you
+which). It dims when no set is active and shows a brief status line
+when clicked. *(The casting/pacing approach is modelled on the Trusts
+addon by from20020516.)*
+
+### BRD Song Sets
+
+Named song rotations for Bard, sung in one click. Open the manager
+from the **Loadouts** window's **BRD** tab (its position is remembered,
+same chrome as the BLU Spellsets and Trust Sets managers). Build a set
+in the editor — name it, add the songs in the order they should be
+sung, and tick **Dummy** (under the name field) if the set is a
+dummy-song set rather than a real rotation. Saved sets list with a
+green dot on the active set, the set name and its song count, and
+**Active/Equip · Edit · ✕** per row, split under **Full Strength** and
+**Dummy** headers so dummy sets group apart from your live rotations.
+The Dummy flag is organizational only — it tidies the list and doesn't
+change how the set is sung. **Equip** marks a set active (green dot,
+the button reads **Active**) — the active set is the one the Sing
+button performs. Sets are saved per character.
+
+The **Sing** button is a floating, draggable, resizable button (same
+chrome as the Call Trust and Cheat Sheet buttons; its position and
+size are remembered). Click it to perform your active set: the addon
+casts each song in order on packet timing and toggles the song job
+abilities the set calls for (Clarion Call, Troubadour, Nightingale,
+Soul Voice). Song modes map to GearSwap's `ExtraSongsMode` (none /
+dummy / fulllength / cheer); while a rotation is running OmniWatch
+sends the *locked* form of each mode so a Mote-style GearSwap won't
+auto-reset it between casts and drop a song.
+
+**No GearSwap?** If you don't run a GearSwap that exposes
+`ExtraSongsMode`, OmniWatch can equip the song gear itself. Run
+`//ow brdgear omniwatch` (or set `source = 'omniwatch'` in
+`%APPDATA%\OmniWatch\<character>\brd_songgear.lua`, written with a
+commented template the first time you use the command). In that file,
+map each mode (none / dummy / fulllength / cheer) to the gear it needs
+— usually just the instrument in the `range` slot, e.g.
+`dummy = { range = 'Daurdabla' }`. OmniWatch snapshots your gear when a
+rotation starts and restores it when singing ends. **This path is
+untested** — the addon author uses Selindrile's GearSwap, so the
+default (`gearswap`, which hands the mode to GearSwap as before) ships
+verified and this one does not; treat it as a starting point and check
+it does what you expect.
+
 ### Recast tracker
 
 Two columns — **magic** and **abilities** — with horizontal timer bars per recast.
@@ -418,6 +499,8 @@ While sim mode is open, the **EQUIPMENT panel is taken over** to show the gear y
 
 **Import Set** — pull any named set out of any GearSwap gear file straight into the sim, regardless of what job you're currently on. Click **IMPORT SET**, then **Browse…** to pick a gear `.lua` file (native file picker — browse anywhere), type the set path (e.g. `sets.engaged.HighHaste`, with or without the leading `sets.`, including nested paths like `sets.engaged.DT.HighHaste`), and click **IMPORT**. OmniWatch sandbox-executes the gear file, resolves the named set to its items, and loads it into the sim equipment so you can tweak and compare. Items referenced indirectly through `gear.*` helper tables may not resolve a name (they show as unresolved); sets that name items directly resolve fully. Use **EXPORT SET** to write the current sim equipment back out as a GearSwap-style `.lua`. Exports land in `…\addons\OmniWatch\simulation\export\` as `<CharName>_<timestamp>.lua` (timestamped so they never overwrite). The file is a ready-to-use GearSwap set — plain pieces as `slot="Name"` and augmented pieces as `slot={name="Name", augments={…}}` with the real augments decoded from each item — so you can paste it straight into a gear file and rename `sets.exported` to whatever you want.
 
+**Refresh** — re-syncs the sim with your live gear and recomputes stats. Sim mode seeds your currently-equipped gear when it opens; if it ever opens without it, or you want the equipment panel and stats re-pulled after changing several slots, click **REFRESH**. Slots you haven't changed are re-seeded from live gear (picks you've made are kept) and the stats recompute immediately.
+
 ### Hotbar (button panel)
 
 Customizable row of buttons for slash commands, items, gearswap calls, or macros. Each button can have:
@@ -470,7 +553,7 @@ Top of the overlay, always visible. Left to right:
 
 - **Vana'diel game clock** — day-of-week, HH:MM time, current element of day, and moon phase. Hide the whole cluster with **Show time** in the Header Configure modal.
 - **Weather** — current and next weather symbols for your zone. Hide with **Show weather**.
-- **Events button** — opens the events modal (campaign / Domain Invasion phases, plus airship and ferry schedules with auto-cycling countdowns). Hide with **Show events**.
+- **Events button** — opens the events modal. Its fixed banner area carries three rows of two boxes above the scrollable campaign / event list: the rotating limited-time **Records of Eminence** objective and the current **Domain Invasion** zone (from whereisdi.com) on top; **crafting guild hours** — cycles the nine guilds, showing OPEN / CLOSED plus an "open until" / "closed until" / "holiday" line computed from the Vana'diel clock — and **Where Is NM** — Limbus (Apollyon / Temenos) NM & ??? spawns for your server from whereisnm.com — in the middle; and **airship / ferry** schedules with auto-cycling countdowns at the bottom. The Domain Invasion and Where Is NM boxes both follow your **Header → Server** setting. Hide with **Show events**.
 - **Points tracker** — one of EXP / CP / Exemplar at a time; pick which in the Header Configure modal.
 - **Currency cycler** — auto-rotates through enabled currencies (Gil, Sparks, Accolades, Gallimaufry, Temenos, Apollyon, Beads, Tokens, Ichor). Pick which to show and the rotation interval (2–10 seconds) in the **Currency cycler** Configure modal.
 - **Inventory button** — opens the inventory dropdown.
@@ -684,7 +767,7 @@ The lua addon hooks Windower events (`prerender`, `incoming chunk`, `incoming te
 - **Lanun roll-proc accuracy** — when COR's Lanun gear set procs a bonus on a Phantom Roll's accuracy effect, OmniWatch may not always reflect the boosted value. The server doesn't reliably push the relevant stat packet for this case, and there's no clean way to detect the proc client-side.
 - **BLU spell-trait coverage** handles the major categories (DW, Fast Cast, MAB, Acc Bonus, Atk Bonus, Def Bonus, MDB, Store TP, Conserve MP, Counter, Auto Refresh, Auto Regen, MAcc Bonus, MEv Bonus, Magic Burst Bonus, Skillchain Bonus, Crit Atk Bonus, Inquartata, Tenacity, Max HP, Max MP, Zanshin, Resist Silence/Gravity/Sleep/Slow, Killer traits, DA/TA, Gilfinder/TH, Rapid Shot) sourced from the canonical bluguide tables. JP-category linear bonuses for MAB/MAcc are not yet wired separately.
 - **Running multiple FFXI clients with OmniWatch on the same machine is not supported** — the two halves rendezvous through a single per-machine port-discovery file in `%APPDATA%\OmniWatch\`, so a second overlay/addon pair would overwrite the first's port handoff. Single-client multi-character config support via the character dropdown in the header works normally — you can pre-tweak layout, settings, and blacklists for any of your characters while logged in on a different one.
-- **Mog Wardrobes 5-8** require an active subscription to populate.
+- **Mog Wardrobes 5-8** requires an active FFXI wardrobe subscription to populate.
 
 ## Development
 

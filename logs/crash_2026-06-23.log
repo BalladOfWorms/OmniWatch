@@ -1,0 +1,340 @@
+2026-06-23 15:16:34 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:34 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:34 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:34 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:39 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:39 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:39 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:45 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:46 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:47 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:47 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:52 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:52 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:52 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:53 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:53 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:53 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:53 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:54 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:54 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:54 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:54 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:54 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:16:54 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
+2026-06-23 15:17:01 [event:prerender] ...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: attempt to perform arithmetic on local 'mask' (a table value)
+    stack traceback:
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8012: in function '_ow_ah_jobs_str'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8045: in function '_ow_ah_iteminfo'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8077: in function '_ow_ah_command'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:8301: in function '_ow_drain_inbound'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20864: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:20855>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:330: in function <...x/SquareEnix/Windower/addons/omniwatch/omniwatch.lua:324>
