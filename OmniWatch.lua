@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.8.0'
+_addon.version  = '1.8.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -54,7 +54,7 @@ function ow_chat(...)
     if not _ow_log_started then
         _ow_log_started = true
         _ow_log_write(os.date(
-            '\n===== OmniWatch 1.8.0 log started %Y-%m-%d %H:%M:%S =====\n'))
+            '\n===== OmniWatch 1.8.1 log started %Y-%m-%d %H:%M:%S =====\n'))
     end
     _ow_log_write(os.date('[%Y-%m-%d %H:%M:%S] ') .. text .. '\n')
 end
@@ -7725,6 +7725,34 @@ function _ow_ah_search(query, category)
     _ow_ah_emit('AH|items|' .. query .. '|' .. table.concat(out, '|'))
 end
 
+-- Resolve a comma-separated list of item ids (sent by the panel's category
+-- browser) to name/level/stack rows, replying in the same AH|items format the
+-- search uses so the result list renders them identically.
+function _ow_ah_resolve(idstr)
+    local out = {}
+    for tok in (tostring(idstr) .. ','):gmatch('([^,]*),') do
+        local id = tonumber(tok)
+        if id and res.items then
+            local it = res.items[id]
+            if it and it.en and it.en ~= ''
+               and not (it.flags and it.flags['No Auction']) then
+                out[#out + 1] = tostring(id) .. '~' .. it.en .. '~'
+                    .. tostring(it.level or 0) .. '~' .. tostring(it.stack or 1)
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        return (a:match('~([^~]*)') or '') < (b:match('~([^~]*)') or '')
+    end)
+    local used, keep = 16, #out
+    for i = 1, #out do
+        used = used + #out[i] + 1
+        if used > 60000 then keep = i - 1; break end
+    end
+    for i = #out, keep + 1, -1 do out[i] = nil end
+    _ow_ah_emit('AH|items||' .. table.concat(out, '|'))
+end
+
 -- resolve a bid response (called from the 0x04C handler with the raw status)
 function _ow_ah_on_result(status)
     if status == 0x02 then return end          -- Placing: wait for the real result
@@ -8797,6 +8825,8 @@ function _ow_ah_command(rest)
     local cmd = (a[1] or ''):lower()
     if cmd == 'search' then
         _ow_ah_search(a[2] or '', a[3] or '')
+    elseif cmd == 'resolve' then
+        _ow_ah_resolve(a[2] or '')
     elseif cmd == 'buy' then
         _ow_ah_buy(a[2], a[3])
     elseif cmd == 'stop' then

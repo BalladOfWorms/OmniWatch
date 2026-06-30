@@ -1,6 +1,20 @@
 # Changelog
 
-## [1.8.0] — 2026-06-28
+## [1.8.1] — 2026-06-30
+
+### Added
+
+- **Auction House live sales history & listing counts, in-panel** — Click the **$** on any AH item to pull, straight from your world's search server, both its **current listing counts** (how many singles / stacks are for sale right now) and its **last ~10 sales** — each shown as *date · seller → buyer · price* under a coloured item-name header in the results log, for the single or stack you clicked. This is the same live data FFXIAH reads, but in-game with no website: OmniWatch speaks the search-server protocol directly (a reverse-engineered Blowfish/MD5 packet format) on a background thread so the overlay never blocks, and auto-detects the per-world search server from the game client's own connection — no server IP to configure, and it follows whatever world you're logged into. Right-clicking an item still opens its FFXIAH page.
+
+- **Resizable, position-remembering Auction House window** — drag the **bottom-right corner grip** to resize the AH window (the working pane and results log reflow to fit); its position **and** size now persist across restarts, saved the moment you finish dragging or resizing.
+
+- **Clear buttons on the Auction House panel** — a **Clear** beside Find / Sort empties the Buy search field and its result list, and a **Clear** on the Results pane header wipes the results / history log.
+
+### Fixed
+
+- **Scroll-wheel (and click) over a party panel no longer crashes the overlay** — scrolling the mouse wheel over any non-header panel could throw `KeyError: '<name>'` and take the whole app down with it. At startup the saved draw order (`panel_order`) is restored from your layout, but on-screen panel positions are derived fresh each frame and aren't populated until the first draw — so a wheel (or click) event landing on a saved party member before that first frame indexed a position that didn't exist yet. The wheel handler and the click/drag hit-test now skip any member whose position hasn't been resolved yet instead of hard-indexing it. *Reported by **rainbowdash36** ([#30](https://github.com/BalladOfWorms/OmniWatch/issues/30)).*
+
+## [1.8.0] — 2026-06-26
 
 ### Added
 

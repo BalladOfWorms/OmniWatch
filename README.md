@@ -24,7 +24,7 @@ OmniWatch puts the live state of your character and party in one place:
 - **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB, elemental affinity, fast cast, store TP, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses
 - **Hotbar** — customizable button panel for slash commands, items, gearswap calls, and macros
 - **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection
-- **Auction House panel** — Buy and Sell tabs in one window. Buy: live item search (singles and stacks listed separately, in-game style), a multi-item bid queue with per-item start / max / increment prices and a throttle, and a results log. Sell: your inventory with a single/stack + price form and your seven active listings. Right-click any item to open its FFXIAH price page.
+- **Auction House panel** — Buy and Sell tabs in one window. Buy: live item search (singles and stacks listed separately, in-game style), a multi-item bid queue with per-item start / max / increment prices and a throttle, and a results log. Sell: your inventory with a single/stack + price form and your seven active listings. **Click an item's `$`** to pull its current listing counts and last ~10 real sales (date · seller → buyer · price) straight from your world's search server — the same data FFXIAH shows, in-game with no website. Right-click any item to open its FFXIAH price page.
 - **Header strip** — Vana'diel game clock with element/moon phase, current zone + region, character switcher, settings gear
 - **Sim mode** — what-if calculator: change job, level, JP, ML, gear, food, BRD songs (marches/minuets/madrigals), and COR rolls (Chaos/Samurai/Tactician's with optional Crooked Cards + optimal job toggles) and see the resulting stats live without applying anything in-game. While open it takes over the equipment panel to preview your picked gear, with hover tooltips on sim items.
 
@@ -525,6 +525,20 @@ Items are grouped by bag and searchable by name. **GearSwap reference detection*
 - **Auto-drop (Treasury)** — runs `tr drop add <name>`: the item joins Treasury's auto-drop list, and with Treasury's AutoDrop on, the copy in your bag drops immediately and every future copy keeps dropping
 
 Both actions are multibox-guarded: they're tagged with the displayed character and only that client acts, so you can't drop from the wrong box. Esc or clicking elsewhere closes the menu.
+
+### Auction House
+
+A Buy/Sell tool in one window. Drag the title bar to move it; drag the **bottom-right corner grip** to resize it — both position and size persist across restarts.
+
+**Buy tab** — type two or more characters to search. Stackable items are listed twice, once as the single and once as the stack (e.g. *Fire Crystal* and *Fire Crystal x 12*), mirroring the in-game AH; click either to queue that exact variant. Queued rows form a **bid queue** with per-item **Quantity / Start / Max / Increment** — the bidder walks each item's bids upward by the increment toward the max, repeating until the quantity is filled, paced by the **throttle** (seconds per transaction). **Clear** (beside Find / Sort) empties the search field and result list.
+
+**Sell tab** — hit **Refresh** at an Auction House to pull your sellable inventory, pick a single/stack + price, and **List** runs the real two-step AH list handshake. Your seven active listings show below with live status (On auction / Sold / Not Sold) and price.
+
+**Live prices — the `$` button.** Click the gold **`$`** on any item (a buy result or a sell row) to look it up live on your world's search server — the same source FFXIAH reads, but in-game and with no website. The Results pane shows a coloured item-name header with the **current listing counts** (singles / stacks for sale), then the **last ~10 sales** as *date · seller → buyer · price*, for the single or stack you clicked. **Clear** on the Results header wipes the log. Lookups run on a background thread, so the overlay never blocks.
+
+**One-time setup — do an in-game Search first.** Your world's search-server address is handed to the client at login and never travels in a packet OmniWatch can read, so OmniWatch picks it up from the game client's *own* connection to that server — which only exists once you've used the game's **Search** feature in the current session. If a `$` lookup reports **"search server not found,"** open Search once in-game (the in-app prompt calls this `/search` — use the Search menu to look up a player, party, or linkshell), then click `$` again. The detected address is cached to `%APPDATA%\OmniWatch\search_server_cache.txt` and reused on future launches, so this is normally a one-time step. To pin it manually, put `IP:port` (e.g. `124.150.154.63:54002`) in `%APPDATA%\OmniWatch\search_server.txt`.
+
+**Right-click** any item (search result, queued row, or sell-inventory item) to open its **FFXIAH** page in your browser; set your server once on ffxiah.com and every link lands on your world's prices.
 
 ### NPC dialog "continue" arrow
 

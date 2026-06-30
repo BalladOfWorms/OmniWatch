@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.8.0 (2026-06-26)"
+OMNIWATCH_BUILD_STAMP = "v1.8.1 (2026-06-28)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.8.0"
+OMNIWATCH_VERSION = "1.8.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -9730,7 +9730,9 @@ SETTINGS_SCHEMA = [
                    "start / max / increment and a bid throttle, and a results "
                    "log. Sell lists your inventory with a single/stack + price "
                    "form and your active listings. Right-click any item to "
-                   "open its FFXIAH price page.",
+                   "open its FFXIAH price page; the $ button on a search result "
+                   "pulls that item's recent sales from your world's search "
+                   "server into the results pane.",
     },
     {
         "key":     "sim_mode",
@@ -26864,6 +26866,8 @@ ah_state = {
     "search_focus": False,
     "tab": "buy",            # buy | sell
     "items": [],             # [{"id": int, "name": str}] from AH|items
+    "browse": False,         # category-browse mode in the Buy tab
+    "browse_group": None,    # selected top-level group while browsing
     "items_scroll": 0,
     "sort": "name",         # name | level_asc | level_desc
     "txns": [],             # persisted recent purchases [{name,price,time}]
@@ -26886,10 +26890,29 @@ ah_state = {
     "edit_buf": "",
 }
 ah_panel_open = False
-ah_panel_pos = globals().get("ah_panel_pos") or [260, 170]
+ah_panel_pos = globals().get("ah_panel_pos") or [
+    int(settings.get("ah_panel_x", 260)), int(settings.get("ah_panel_y", 170))]
+ah_panel_size = globals().get("ah_panel_size") or [
+    int(settings.get("ah_panel_w", 820)), int(settings.get("ah_panel_h", 452))]
+_AH_MIN_W, _AH_MIN_H = 600, 320
+_AH_MAX_W, _AH_MAX_H = 1500, 1100
 _ah_rects = {}
 _ah_item_tip_rects = []   # [(rect, item_id)] for hover tooltips
 _ah_drag = {"on": False, "dx": 0, "dy": 0}
+_ah_resize = {"on": False, "x0": 0, "y0": 0, "w0": 0, "h0": 0}
+
+
+def _ah_save_geometry():
+    """Persist the AH panel position + size (drag/resize driven, stored
+    directly in settings like the hide-nub geometry)."""
+    try:
+        settings["ah_panel_x"] = int(ah_panel_pos[0])
+        settings["ah_panel_y"] = int(ah_panel_pos[1])
+        settings["ah_panel_w"] = int(ah_panel_size[0])
+        settings["ah_panel_h"] = int(ah_panel_size[1])
+        save_settings()
+    except Exception:
+        pass
 
 def _ah_clear_rects():
     _ah_rects.clear()
@@ -26914,6 +26937,1323 @@ def _ah_add_to_queue(item):
         "start": 1000, "max": 5000, "inc": 500, "status": "",
         "stack": st, "ssize": int(item.get("ssize", 1) or 1),
     })
+
+# === AHSRCH BEGIN ===
+# AH sale-history via the world's search server. Queries the retail/LSB search
+# server directly (the same protocol FFXIAH uses) for an item's recent AH sales:
+# Blowfish (FFXI's non-standard F-function) + MD5 framing, no handshake. The
+# search server is per-world; its IP is auto-detected from the FFXI client's own
+# TCP connection on the search port (54002), so it follows whatever world you're
+# logged into. Author: BalladOfWorms.
+import struct as _ahsrch_struct
+import hashlib as _ahsrch_hashlib
+
+_AHSRCH_PORT = 54002
+_AHSRCH_MASK = 0xFFFFFFFF
+_AHSRCH_KEY_SEED = bytes((0x30, 0x73, 0x3D, 0x6D, 0x3C, 0x31, 0x49, 0x5A,
+                          0x32, 0x7A, 0x42, 0x43, 0x63, 0x38, 0x7B, 0x7E))
+_AHSRCH_IXFF = 0x46465849
+_AHSRCH_HIST_SINGLE = 0x05
+_AHSRCH_HIST_STACK = 0x06
+_AHSRCH_SUBKEY = base64.b64decode(
+    "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"
+    "349X5nLDOg=="
+)
+
+
+def _ahsrch_load_ps():
+    P = list(_ahsrch_struct.unpack("<18I", _AHSRCH_SUBKEY[0:72]))
+    S = list(_ahsrch_struct.unpack("<1024I", _AHSRCH_SUBKEY[72:72 + 4096]))
+    return P, S
+
+
+def _ahsrch_TT(x, S):
+    return ((((S[256 + ((x >> 8) & 0xFF)] & 1) ^ 32)
+             + ((S[768 + ((x >> 24) & 0xFF)] & 1) ^ 32)
+             + S[512 + ((x >> 16) & 0xFF)]
+             + S[x & 0xFF]) & _AHSRCH_MASK)
+
+
+def _ahsrch_encipher(xl, xr, P, S):
+    for i in range(16):
+        xl = (xl ^ P[i]) & _AHSRCH_MASK
+        xr = (_ahsrch_TT(xl, S) ^ xr) & _AHSRCH_MASK
+        xl, xr = xr, xl
+    xl, xr = xr, xl
+    xr = (xr ^ P[16]) & _AHSRCH_MASK
+    xl = (xl ^ P[17]) & _AHSRCH_MASK
+    return xl, xr
+
+
+def _ahsrch_decipher(xl, xr, P, S):
+    for i in range(17, 1, -1):
+        xl = (xl ^ P[i]) & _AHSRCH_MASK
+        xr = (_ahsrch_TT(xl, S) ^ xr) & _AHSRCH_MASK
+        xl, xr = xr, xl
+    xl, xr = xr, xl
+    xr = (xr ^ P[1]) & _AHSRCH_MASK
+    xl = (xl ^ P[0]) & _AHSRCH_MASK
+    return xl, xr
+
+
+def _ahsrch_blowfish_init(key_bytes):
+    # The server treats the key as SIGNED int8, so digest bytes >= 0x80
+    # sign-extend when folded into the P-array. Replicate exactly.
+    P, S = _ahsrch_load_ps()
+    n = len(key_bytes)
+    j = 0
+    for i in range(18):
+        data = 0
+        for _ in range(4):
+            b = key_bytes[j]
+            sb = b - 256 if b >= 128 else b
+            data = ((data << 8) | (sb & _AHSRCH_MASK)) & _AHSRCH_MASK
+            j += 1
+            if j >= n:
+                j = 0
+        P[i] = (P[i] ^ data) & _AHSRCH_MASK
+    dl, dr = 0, 0
+    for i in range(0, 18, 2):
+        dl, dr = _ahsrch_encipher(dl, dr, P, S)
+        P[i], P[i + 1] = dl, dr
+    for i in range(4):
+        for k in range(0, 256, 2):
+            dl, dr = _ahsrch_encipher(dl, dr, P, S)
+            S[i * 256 + k], S[i * 256 + k + 1] = dl, dr
+    return P, S
+
+
+def _ahsrch_cipher_blocks(buf, length, P, S, decrypt):
+    tmp = (length - 12) // 4
+    tmp -= tmp % 2
+    i = 0
+    while i < tmp:
+        o = 8 + i * 4
+        xl, xr = _ahsrch_struct.unpack_from("<II", buf, o)
+        xl, xr = (_ahsrch_decipher if decrypt else _ahsrch_encipher)(xl, xr, P, S)
+        _ahsrch_struct.pack_into("<II", buf, o, xl, xr)
+        i += 2
+
+
+def _ahsrch_md5(b):
+    return _ahsrch_hashlib.md5(b).digest()
+
+
+def _ahsrch_build_request(item_id, stack=False, key_tail=None):
+    # Matches the real retail client packet family (from a live capture): 76
+    # bytes; size@0x00, IXFF@0x04, then [u16 size][0x80 flag][type] at 0x08.
+    # The 0x80 flag byte at 0x0A is required — without it the server stays
+    # silent. itemid@0x12, stack@0x15. md5 hash + key tail footer.
+    if key_tail is None:
+        key_tail = os.urandom(4)
+    length = 76
+    buf = bytearray(length)
+    _ahsrch_struct.pack_into("<H", buf, 0x00, length)
+    _ahsrch_struct.pack_into("<I", buf, 0x04, _AHSRCH_IXFF)
+    _ahsrch_struct.pack_into("<H", buf, 0x08, 16)
+    buf[0x0A] = 0x80
+    buf[0x0B] = _AHSRCH_HIST_STACK if stack else _AHSRCH_HIST_SINGLE
+    _ahsrch_struct.pack_into("<H", buf, 0x12, item_id & 0xFFFF)
+    buf[0x15] = 1 if stack else 0
+    buf[length - 0x14:length - 0x04] = _ahsrch_md5(bytes(buf[0x08:length - 0x14]))
+    buf[length - 0x04:length] = key_tail
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=False)
+    return bytes(buf), key_tail
+
+
+def _ahsrch_req_key20_24(item_id, stack):
+    # We zero the key2 region (length-0x18) in the request, so the server
+    # derives key2 = 0 for response encryption; mirror that here.
+    return b"\x00\x00\x00\x00"
+
+
+def _ahsrch_decode_name(raw):
+    z = raw.find(b"\x00")
+    if z >= 0:
+        raw = raw[:z]
+    return raw.decode("latin-1", "replace").strip()
+
+
+def _ahsrch_parse_response(buf, key_tail, req_key20_24):
+    buf = bytearray(buf)
+    length = _ahsrch_struct.unpack_from("<H", buf, 0x00)[0]
+    if length < 28 or length > len(buf):
+        raise ValueError("bad response length %d (have %d bytes)" % (length, len(buf)))
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail + req_key20_24))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=True)
+    item_id = _ahsrch_struct.unpack_from("<H", buf, 0x18)[0]
+    amount = _ahsrch_struct.unpack_from("<I", buf, 0x1A)[0]
+    category = _ahsrch_struct.unpack_from("<H", buf, 0x1E)[0]
+    marker = _ahsrch_struct.unpack_from("<H", buf, 0x08)[0]
+    n = max(0, (marker - 0x20) // 40)
+    sales = []
+    for i in range(n):
+        o = 0x20 + 40 * i
+        if o + 40 > length:
+            break
+        price = _ahsrch_struct.unpack_from("<I", buf, o + 0x00)[0]
+        date = _ahsrch_struct.unpack_from("<I", buf, o + 0x04)[0]
+        seller = _ahsrch_decode_name(bytes(buf[o + 0x08:o + 0x08 + 15]))
+        buyer = _ahsrch_decode_name(bytes(buf[o + 0x18:o + 0x18 + 15]))
+        sales.append({"price": price, "date": date, "seller": seller, "buyer": buyer})
+    return {"item_id": item_id, "amount": amount, "category": category, "sales": sales}
+
+
+class _AhsrchProto(Exception):
+    def __init__(self, msg, data=b"", sent=0):
+        self.data = data
+        self.sent = sent
+        super().__init__(msg)
+
+
+def _ahsrch_query(host, port, item_id, stack=False, timeout=8.0):
+    req, key_tail = _ahsrch_build_request(item_id, stack)
+    key20_24 = _ahsrch_req_key20_24(item_id, stack)
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.sendall(req)
+        s.settimeout(timeout)
+        data = b""
+        try:
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if len(data) >= 2 and len(data) >= _ahsrch_struct.unpack_from("<H", data, 0)[0]:
+                    break
+        except socket.timeout:
+            pass
+    if len(data) < 2 or len(data) < _ahsrch_struct.unpack_from("<H", data, 0)[0]:
+        raise _AhsrchProto("short response", data, len(req))
+    return _ahsrch_parse_response(data, key_tail, key20_24)
+
+
+def _ahsrch_no_window_kw():
+    # Keep netstat from flashing a console window on Windows.
+    import subprocess
+    kw = {}
+    try:
+        if os.name == "nt":
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+            kw["startupinfo"] = si
+            kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    except Exception:
+        pass
+    return kw
+
+
+def _ahsrch_manual_server():
+    """Optional manual override: %APPDATA%/OmniWatch/search_server.txt holding
+    'ip' or 'ip:port'. Lets you point at a world's search server by hand if
+    auto-detect can't find it. Returns (ip, port) or None."""
+    try:
+        path = os.path.join(os.environ.get("APPDATA", ""), "OmniWatch", "search_server.txt")
+        with open(path, "r") as f:
+            txt = f.read().strip()
+        if not txt:
+            return None
+        if ":" in txt:
+            ip, _, pp = txt.partition(":")
+            return ip.strip(), int(pp.strip() or _AHSRCH_PORT)
+        return txt, _AHSRCH_PORT
+    except Exception:
+        return None
+
+
+def _ahsrch_cache_path():
+    return os.path.join(os.environ.get("APPDATA", ""), "OmniWatch", "search_server_cache.txt")
+
+
+def _ahsrch_load_cached():
+    try:
+        with open(_ahsrch_cache_path(), "r") as f:
+            ip = f.read().strip()
+        return ip or None
+    except Exception:
+        return None
+
+
+def _ahsrch_save_cached(ip):
+    try:
+        path = _ahsrch_cache_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(ip)
+    except Exception:
+        pass
+
+
+def _ahsrch_clear_cached():
+    try:
+        os.remove(_ahsrch_cache_path())
+    except Exception:
+        pass
+
+
+def _ahsrch_find_server(port=_AHSRCH_PORT):
+    """Auto-detect the current world's search server from this PC's TCP table.
+    The FFXI client opens a connection to it on the search port when you /search
+    (or browse the AH); we match any state, so a recent (TIME_WAIT) connection
+    still counts. Returns IP or None."""
+    import subprocess
+    try:
+        import psutil
+        for c in psutil.net_connections(kind="tcp"):
+            if (c.raddr and c.raddr.port == port
+                    and c.raddr.ip not in ("0.0.0.0", "127.0.0.1")):
+                return c.raddr.ip
+    except Exception:
+        pass
+    out = ""
+    for cmd in (["netstat", "-ano", "-p", "TCP"], ["netstat", "-an"]):
+        try:
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL,
+                                          **_ahsrch_no_window_kw())
+            break
+        except Exception:
+            continue
+    pat = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3}):%d\b" % port)
+    for line in out.splitlines():
+        if ("LISTEN" in line.upper()) or ((":%d" % port) not in line):
+            continue
+        m = pat.search(line)
+        if m and m.group(1) not in ("0.0.0.0", "127.0.0.1"):
+            return m.group(1)
+    return None
+
+
+def _ahsrch_fmtdate(ts):
+    try:
+        return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+    except Exception:
+        return str(ts)
+
+
+def _ahsrch_build_category_request(cat, key2=b"\x00\x00\x00\x00", key_tail=None):
+    # 0x15 AH category listing request, byte-for-byte matching the real retail
+    # client packet (verified against a live capture): 268 bytes, category at
+    # 0x16, one sort param (by level) at 0x18.
+    if key_tail is None:
+        key_tail = os.urandom(4)
+    length = 268
+    buf = bytearray(length)
+    _ahsrch_struct.pack_into("<H", buf, 0x00, length)
+    _ahsrch_struct.pack_into("<I", buf, 0x04, _AHSRCH_IXFF)
+    _ahsrch_struct.pack_into("<H", buf, 0x08, 184)
+    buf[0x0A] = 0x80
+    buf[0x0B] = 0x15
+    _ahsrch_struct.pack_into("<H", buf, 0x0E, 1)
+    buf[0x12] = 1                       # paramCount
+    _ahsrch_struct.pack_into("<H", buf, 0x14, 4)
+    buf[0x16] = cat & 0xFF              # AHCatID
+    _ahsrch_struct.pack_into("<I", buf, 0x18, 2)
+    _ahsrch_struct.pack_into("<I", buf, 0x1C, 2)
+    buf[length - 0x18:length - 0x14] = key2
+    buf[length - 0x14:length - 0x04] = _ahsrch_md5(bytes(buf[0x08:length - 0x14]))
+    buf[length - 0x04:length] = key_tail
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=False)
+    return bytes(buf)
+
+
+def _ahsrch_build_more_request(key2=b"\x00\x00\x00\x00", key_tail=None):
+    # 0x10 "next page" request (the server tracks the query state per
+    # connection, so this just advances the current category listing).
+    if key_tail is None:
+        key_tail = os.urandom(4)
+    length = 76
+    buf = bytearray(length)
+    _ahsrch_struct.pack_into("<H", buf, 0x00, length)
+    _ahsrch_struct.pack_into("<I", buf, 0x04, _AHSRCH_IXFF)
+    _ahsrch_struct.pack_into("<H", buf, 0x08, 16)
+    buf[0x0A] = 0x80
+    buf[0x0B] = 0x10
+    _ahsrch_struct.pack_into("<H", buf, 0x10, 3)
+    _ahsrch_struct.pack_into("<H", buf, 0x12, 1)
+    buf[length - 0x18:length - 0x14] = key2
+    buf[length - 0x14:length - 0x04] = _ahsrch_md5(bytes(buf[0x08:length - 0x14]))
+    buf[length - 0x04:length] = key_tail
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=False)
+    return bytes(buf)
+
+
+def _ahsrch_recv_packet(s, timeout):
+    data = b""
+    try:
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if len(data) >= 2 and len(data) >= _ahsrch_struct.unpack_from("<H", data, 0)[0]:
+                break
+    except socket.timeout:
+        pass
+    return data
+
+
+def _ahsrch_parse_listing(data, key2):
+    # Decrypt + parse one 0x95 AH listing page. Returns (items, total, is_last)
+    # where items is {itemid: (single_count, stack_count)}; 0xFFFFFFFF means the
+    # item has no listing of that form (e.g. doesn't stack). None on failure.
+    if len(data) < 2:
+        return None
+    buf = bytearray(data)
+    length = _ahsrch_struct.unpack_from("<H", buf, 0)[0]
+    if length < 28 or length > len(buf):
+        return None
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + bytes(buf[length - 4:length]) + key2))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=True)
+    if buf[0x0B] != 0x95:
+        return None
+    total = _ahsrch_struct.unpack_from("<H", buf, 0x0E)[0]
+    end = _ahsrch_struct.unpack_from("<H", buf, 0x08)[0]
+    is_last = (buf[0x0A] == 0x80)
+    items = {}
+    n = max(0, (end - 0x18) // 10)
+    for i in range(n):
+        o = 0x18 + 10 * i
+        if o + 10 > length:
+            break
+        iid = _ahsrch_struct.unpack_from("<H", buf, o)[0]
+        single = _ahsrch_struct.unpack_from("<I", buf, o + 2)[0]
+        stack = _ahsrch_struct.unpack_from("<I", buf, o + 6)[0]
+        items[iid] = (single, stack)
+    return items, total, is_last
+
+
+def _ahsrch_query_category(host, port, cat, timeout=8.0):
+    # Query one AH category: send 0x15, then page with 0x10 until the last-page
+    # flag. Returns {"items": {itemid:(single,stack)}, "total": int}.
+    key2 = b"\x00\x00\x00\x00"
+    items = {}
+    total = 0
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall(_ahsrch_build_category_request(cat, key2))
+        guard = 0
+        is_last = False
+        while not is_last and guard < 80:
+            page = _ahsrch_parse_listing(_ahsrch_recv_packet(s, timeout), key2)
+            if page is None:
+                break
+            pitems, ptotal, is_last = page
+            items.update(pitems)
+            total = ptotal
+            if is_last or len(items) >= total:
+                break
+            s.sendall(_ahsrch_build_more_request(key2))
+            guard += 1
+    return {"items": items, "total": total}
+
+# --- panel glue: session-cached IP, threaded fetch, main-thread drain ---
+_ah_search_ip = None
+_ah_hist_inbox = _collections.deque()
+_ah_hist_busy = False
+
+
+def _ah_hist_emit(line):
+    """Show an AH-history line in the panel results pane AND mirror it (full,
+    untruncated) to the session log. `line` is a plain str, or a list of
+    (text, color) segments for coloured rendering."""
+    _ah_hist_inbox.append(line)
+    try:
+        flat = line if isinstance(line, str) else "".join(t for t, _c in line)
+        print("[AH-history] " + flat)
+    except Exception:
+        pass
+
+
+def _ah_item_name(item_id):
+    try:
+        for it in ah_state.get("items", []):
+            if it.get("id") == item_id:
+                return it.get("name") or ("item %d" % item_id)
+    except Exception:
+        pass
+    return "item %d" % item_id
+
+
+def _ahsrch_build_history_request(item_id, stack, key2=b"\x00\x00\x00\x00", key_tail=None):
+    # Exact real-client AH-history request (verified byte-for-byte against a
+    # live capture): itemid as u16 @0x12, constant 0x04 @0x14, stack flag @0x15,
+    # opcode 0x05 single / 0x06 stack. No 0x0E / param framing (the listing
+    # request uses those; history does not).
+    if key_tail is None:
+        key_tail = os.urandom(4)
+    length = 268
+    buf = bytearray(length)
+    _ahsrch_struct.pack_into("<H", buf, 0x00, length)
+    _ahsrch_struct.pack_into("<I", buf, 0x04, _AHSRCH_IXFF)
+    _ahsrch_struct.pack_into("<H", buf, 0x08, 184)
+    buf[0x0A] = 0x80
+    buf[0x0B] = 0x06 if stack else 0x05
+    _ahsrch_struct.pack_into("<H", buf, 0x12, item_id & 0xFFFF)
+    buf[0x14] = 0x04
+    buf[0x15] = 0x01 if stack else 0x00
+    buf[length - 0x18:length - 0x14] = key2
+    buf[length - 0x14:length - 0x04] = _ahsrch_md5(bytes(buf[0x08:length - 0x14]))
+    buf[length - 0x04:length] = key_tail
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=False)
+    return bytes(buf)
+
+
+def _ahsrch_query_history(host, port, item_id, stack, timeout=8.0):
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall(_ahsrch_build_history_request(item_id, stack))
+        return _ahsrch_recv_packet(s, timeout)
+
+
+def _ahsrch_parse_history(data, key2=b"\x00\x00\x00\x00"):
+    # Decrypt + parse a history reply (0x85 single / 0x86 stack). Item header at
+    # 0x18 (itemid u16, total-sold u32 @0x1A, category u16 @0x1E); up to 10 sale
+    # records from 0x20, 40 bytes each: price u32, date u32 (unix), seller 16B,
+    # buyer 16B.
+    if len(data) < 28:
+        return {"ok": False, "raw": data}
+    buf = bytearray(data)
+    length = _ahsrch_struct.unpack_from("<H", buf, 0)[0]
+    if length < 28 or length > len(buf):
+        return {"ok": False, "raw": data}
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(
+        _AHSRCH_KEY_SEED + bytes(buf[length - 4:length]) + key2))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=True)
+    if _ahsrch_md5(bytes(buf[8:length - 0x14])) != bytes(buf[length - 0x14:length - 0x04]):
+        return {"ok": False, "raw": data, "badhash": True}
+    if (buf[0x0B] & 0x1F) not in (0x05, 0x06):
+        return {"ok": False, "raw": data, "type": buf[0x0B]}
+    item = _ahsrch_struct.unpack_from("<H", buf, 0x18)[0]
+    count = _ahsrch_struct.unpack_from("<I", buf, 0x1A)[0]
+    cat = _ahsrch_struct.unpack_from("<H", buf, 0x1E)[0]
+    marker = _ahsrch_struct.unpack_from("<H", buf, 0x08)[0]
+    nrec = max(0, (marker - 0x20) // 40)
+    sales = []
+    for i in range(nrec):
+        o = 0x20 + 40 * i
+        if o + 40 > length - 0x14:
+            break
+        sales.append({
+            "price": _ahsrch_struct.unpack_from("<I", buf, o + 0x00)[0],
+            "date": _ahsrch_struct.unpack_from("<I", buf, o + 0x04)[0],
+            "seller": _ahsrch_decode_name(bytes(buf[o + 0x08:o + 0x18])),
+            "buyer": _ahsrch_decode_name(bytes(buf[o + 0x18:o + 0x28])),
+        })
+    return {"ok": True, "item": item, "count": count, "cat": cat,
+            "marker": marker, "sales": sales}
+
+def _ah_fetch_history(item_id, stack):
+    # Fetch an item's recent AH sale history from the world's search server and
+    # show it in the panel (with a raw dump while the record layout is verified).
+    global _ah_hist_busy
+    item_id = int(item_id)
+    stack = int(stack)
+    if _ah_hist_busy:
+        _ah_hist_emit("AH: a lookup is already running\u2026")
+        return
+    _ah_hist_busy = True
+    name = _ah_item_name(item_id)
+    tag = "stack" if stack else "single"
+
+    def _worker():
+        global _ah_hist_busy, _ah_search_ip
+        try:
+            ip, port = _ah_resolve_server()
+            if not ip:
+                _ah_hist_emit("AH: search server not found. Use /search in-game once, then retry.")
+                return
+            _ah_hist_emit("History: %s (%s)\u2026" % (name, tag))
+            res = _ahsrch_parse_history(_ahsrch_query_history(ip, port, item_id, stack, timeout=8.0))
+            if not res.get("ok"):
+                _ah_hist_emit("  no valid reply (%d bytes%s)" % (
+                    len(res.get("raw", b"")),
+                    ", bad hash" if res.get("badhash") else
+                    (", type 0x%02x" % res["type"]) if res.get("type") else ""))
+                return
+            _ah_hist_emit("%s (%s) \u2014 records: %d bytes (marker=0x%x)" % (
+                name, tag, res["nbytes"], res["marker"]))
+            if res["nbytes"]:
+                _ah_hist_emit("  raw: %s" % res["rec"][:120].hex(" "))
+            else:
+                _ah_hist_emit("  (no recent sales)")
+            for sale in res["sales"]:
+                _ah_hist_emit("  %s g   %s   %s \u2192 %s" % (
+                    "{:,}".format(sale["price"]), _ahsrch_fmtdate(sale["date"]),
+                    sale["seller"] or "?", sale["buyer"] or "?"))
+        except OSError as e:
+            _ah_hist_emit("History error: %s" % e)
+            _ah_search_ip = None
+            _ahsrch_clear_cached()
+        except Exception as e:
+            _ah_hist_emit("History error: %s" % e)
+        finally:
+            _ah_hist_busy = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+def _ah_fetch_combined(item_id, stack):
+    # One click on $ : show current availability AND recent sale history,
+    # formatted with a coloured item-name header. History auto-tries several
+    # subject layouts and uses the first that returns records.
+    global _ah_hist_busy
+    item_id = int(item_id)
+    stack = int(stack)
+    if _ah_hist_busy:
+        _ah_hist_emit("AH: a lookup is already running\u2026")
+        return
+    name = _ah_item_name(item_id)
+    cat = _ah_item_cat(item_id)
+    if not cat:
+        _ah_hist_emit("%s can't be listed on the Auction House." % name)
+        return
+    catname = _AH_CATNAMES.get(cat, "category %d" % cat)
+    _ah_hist_busy = True
+
+    def _worker():
+        global _ah_hist_busy, _ah_search_ip
+        try:
+            ip, port = _ah_resolve_server()
+            if not ip:
+                _ah_hist_emit("AH: search server not found. Use /search in-game once, then retry.")
+                return
+            items = _ah_cat_cache.get(cat)
+            if items is None:
+                _ah_hist_emit("Checking %s\u2026" % catname)
+                items = _ahsrch_query_category(ip, port, cat, timeout=8.0)["items"]
+                _ah_cat_cache[cat] = items
+            sa, st = items.get(item_id, (0xFFFFFFFF, 0xFFFFFFFF))
+            sd = "0" if sa == 0xFFFFFFFF else str(sa)
+            kd = "0" if st == 0xFFFFFFFF else str(st)
+            _ah_hist_emit([
+                ("%s " % name, (235, 205, 120)),
+                ("(%d) \u2014 %s Singles, %s Stacks For Sale" % (item_id, sd, kd),
+                 (190, 198, 212))])
+            res = _ahsrch_parse_history(_ahsrch_query_history(ip, port, item_id, stack))
+            if not res.get("ok") or not res["sales"]:
+                _ah_hist_emit([("    no recent sales found", (150, 156, 168))])
+            else:
+                for sale in reversed(res["sales"]):
+                    _ah_hist_emit([
+                        ("    %s  -  %s > %s  -  " % (
+                            _ahsrch_fmtdate(sale["date"]),
+                            sale["seller"] or "?", sale["buyer"] or "?"),
+                         (190, 198, 212)),
+                        ("{:,} g".format(sale["price"]), (235, 205, 120))])
+        except OSError as e:
+            _ah_hist_emit("AH error: %s" % e)
+            _ah_search_ip = None
+            _ahsrch_clear_cached()
+        except Exception as e:
+            _ah_hist_emit("AH error: %s" % e)
+        finally:
+            _ah_hist_busy = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+_AH_CATNAMES = {
+    1: 'Hand-to-Hand', 2: 'Dagger', 3: 'Sword', 4: 'Great Sword', 5: 'Axe', 6: 'Great Axe',
+    7: 'Scythe', 8: 'Polearm', 9: 'Katana', 10: 'Great Katana', 11: 'Club', 12: 'Staff',
+    13: 'Bow', 14: 'Instruments', 15: 'Ammunition', 16: 'Shield', 17: 'Head', 18: 'Body',
+    19: 'Hands', 20: 'Legs', 21: 'Feet', 22: 'Neck', 23: 'Waist', 24: 'Earrings',
+    25: 'Rings', 26: 'Back', 28: 'White Magic', 29: 'Black Magic', 30: 'Summoning', 31: 'Ninjutsu',
+    32: 'Songs', 33: 'Medicines', 34: 'Furnishings', 35: 'Crystals', 36: 'Cards', 37: 'Cursed Items',
+    38: 'Smithing', 39: 'Goldsmithing', 40: 'Clothcraft', 41: 'Leathercraft', 42: 'Bonecraft', 43: 'Woodworking',
+    44: 'Alchemy', 45: 'Geomancy', 46: 'Misc.', 47: 'Fishing Gear', 48: 'Pet Items', 49: 'Ninja Tools',
+    50: 'Beast-made', 51: 'Fish', 52: 'Meat & Eggs', 53: 'Seafood', 54: 'Vegetables', 55: 'Soups',
+    56: 'Breads & Rice', 57: 'Sweets', 58: 'Drinks', 59: 'Ingredients', 60: 'Dice', 61: 'Automaton',
+    62: 'Grips', 63: 'Alchemy 2', 64: 'Misc. 2', 65: 'Misc. 3',
+}
+
+# In-game AH category tree: top-level group -> leaf category ids (grouping
+# confirmed against the live AH; leaf names/ids are from the search server).
+_AH_CAT_TREE = [
+    ("Weapons", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 62]),
+    ("Armor", [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]),
+    ("Scrolls", [28, 29, 30, 31, 32, 45]),
+    ("Medicines", [33]),
+    ("Items", [34, 35, 36, 37, 60, 61, 48, 49, 46, 64, 65]),
+    ("Materials", [38, 39, 40, 41, 42, 43, 44, 63, 47, 50]),
+    ("Food", [51, 52, 53, 54, 55, 56, 57, 58, 59]),
+]
+
+_AH_CATMAP_B64 = (
+    "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"
+    "TmkpSk9TNqQaLNXgqAZPNQSqIVINiWpkqEaW0vtQHW2Unac6CpSOKLtE6RrlGJRjUo5FNWyqUaYamGq0Uw2HarhUo4NqdFJmF6XVKK1O2d2U"
+    "7VNqD2U3KPtwCvdSTpNyAso5gsJHUuZRlH40ZR9D2f0opz/lDKCcgZQziHIGU86plDOEcoZSzjDKOY1yhlPOCMoZSTmjKGc05YyhnLGUM47C"
+    "Z1D4TAqfReHxFJ5AmROpxiSqMZlqTKEaU6nGNKoxnWrMoBozKe1sSptFabMpcw5lzqW0eZQxn9IXUPpCyjyHMhdRxlJKuZRSllHKZZRyOaVc"
+    "QSlXUspVlLKcUq6mlBWUcg2lXEsp11HK9ZRyA6XcSCkrKeUmSrmZUm6h7Fsp+zYKr6Lw7RS+g7LvpOy7KHs1Zd9N2fdQ9r2Udh+l3U9pD1Da"
+    "g5S2hrLXUvojFN5I4U0U3kzhrVSwlzL3UcZ+Sj9AmY9TjSeoxpOU/xTV8TTV8QylP0vZz1Ha85T9AtVxkOp4kTJeouyXKfsVynyVMl+njDeo"
+    "jjepjrco821Kf4cy3qXsjyjjY8r4hFI/pazPKOtzyvqCsr6ktK8o/WvK+IbSv6c6fqA6DlEdP1IdP1HWz5T1C2X9Stm/UcbvlPYH5f5J4b8o"
+    "N5z0ySROJB0q6SSTxqCkeUISn5jEJyXdk5PuKUl3cNIfmrSGJa3TktbwpDUi2TEy2TEqaY5O6lcl/eVJ4+qkviKpX5O0r03a1yXt65P2DUn/"
+    "xqS6MmnflLQfSNrrksb6pPlw0tiSNLcmzR1Jc2fS3JW0dyeNPUljb9LelzT3J80DSeOxpPF00nomaT2bVJ9Lqs8ntReS2sGk9mLSfilpvpzE"
+    "ryTxq0n8WtJ4PWm/kcRvJvFbSfvtpP5h0v4oaX+ctD9J2p8m7c+S9udJ+4uk/WXSPpS0f07avyTtX5P2b0n796QdT6mJlEGl9GRKS6X0dMpo"
+    "SemtKZNOaUzKBCkTpgw2pXMpg08ZQkoXU4aUsjMpLZvSDkvpckrLpew+KastpeVTaiFlopRWTJmllKqkNDVlailLT+lGSrVSmp1S/ZTdk9Ia"
+    "Ke3wlN6bMpsp7ZiUemxKOy6Fj0/hvincL4X7p/CAFB6YwoNS+IQUPjGFT0rhk1P4lBQenMKnpvCQFB6awsNS+LQUHp7CI1J4ZAqPSuHRKTwm"
+    "hcem8OkpPC6Fz0jhM1P4rBQen8ITUnhiCk9K4ckpPCWFp6bwtBS+MIUvSuGLU3hxCl+SwktS+NJU4eqUfXPKvSXl3ppyb0u5q1Kl21M4lMbh"
+    "NCbSmEzjSBpH0ziWxvE0TqQxlcbJNE6lcTqNW9K4NY3pNGbSGKQxTGM2jbk05tNYSGMxjaU0zqRxNo0PS2M5jXNp3CeN29I4n8aFNEZpXEzj"
+    "UhorabwqjW9P4zvS+M40viuNV6fx3Wl8Txrfm8b3pfH9afxAGj+YxmvSeG0ar0vjh9J4fRpvSOOH0/iRNN6YxpvSeHMaP5rGW9J4axpvS+Pt"
+    "abwjjXem8a403p3Ge9J4bxrvS+P9aXwgjR9L48fT+Ik0fjKNn0rjp9P4mTT+KK19nNY+SWufprXP0trnae2LtPZlWvsqbX2dtr5JN75NN75L"
+    "N75PN35INw6lGz+mGz+lG7+ktV/T2m9p7fe09r+09kda+zOt/ZXWJrXgyS14Sgue2oJnt5hzWoy5Lca8FnV+i7mgRV/Ygm9vMe9oMe9sUe9q"
+    "UVe32He3qPe0BPe2BPe1BPe3BA+0BA+2BGtagodagvUtwYYW/eEW65EWa2OLtbkl2Nui7WvR9rdoB1q0x1q0x1u0J1q0J1u0N1v0t1r0t1vM"
+    "d1qMd1uM91rs91v0D1r0D1uMUCsiWhHZiiKtKNqKYq0o3opSrSjdiphWJLWiTCvKtqLDWpHcinKtqE8r6mhFXiuqtKJqK+psRV2t6OhWdGwr"
+    "Oq4VHd+K+raifq2ofysa0IoGtqJBreiEVnRiKzqpFZ3cik5pRYNb0amtaEgrGtqKhrWi01rR8FY0qhXNaEUzW9GsVjS7Fc1pRXNb0bxWNL8V"
+    "ndeKzm9FF7SiFa3omlZ0bSsK0ThMY4LGJI0jNI7SOEbjOI0TNKZonKRxisZpGjM0PozGMo1ztNmH1vO06dDYpXEHjT0aV2mzkza76GaNbtbp"
+    "Zjfd9OlmD91s0M3D6WYv3WzSzYBuHkE3j6SbR9HNo+nmMXTzWLp5HN08nm72pZv9aLs/7Q+g7YG0OohWT6DVE2ntJFo7mdZOobXBtHYqbQ2h"
+    "raF0xzC64zRaH07bI2hzJG2Oos3RtD2GtsfS9um0OY42z6DNM2n9LNofT1sTaGsibU2ircm0NYW2ptLWdBrPoPFMGp9N41k0nk3juTSeTzcX"
+    "0M2FdPMcWl1Ea+fS3hIaL6XxpTReRpuX0f7ltHkFbV9J61fReDmNr6Px9TS+gcY30ngljW+i8c00voXGt9L4NhqvovHtNL6DxnfS+C4ar6bx"
+    "3TS+h8b30vg+Gt9P4wdo/CCN19B4LW2uo/WHaGs9bW+g9Ydp+xHa2khbm2h1M60+SqtbaHUrrW6j1e20voPWd9L6btreQ+t7aX0fjffT+ACN"
+    "H6ebT9DNJ+nmU3Tzabr5DK0+S2vP0erztP4CrR6k9Vdo/CqNX6PxW7T2Nq2+Qwfv0sF7dPA1bX9D29/S9ne0+j2t/0Abh2jrR1r7jca/0/h/"
+    "NP6PVkNMMcwUCaZIMsUIU4wyxRhTjDPFBFOkmGKSKaaYYpoptjDFVqZIM0WGKQCmAJkCyxQ4psAzBYEpiExBYgoZppBlCocxBZkp5JhCH6bQ"
+    "xhTyTKHAFBBTKDKFElNQmILKFDSmoDMFgymYTMFiCjZTKDMFzBTamYLDFFymUGEKVabQyRS6mEKdKXQzBZ8p9DCFBlM4nCn0MoUmUwiYwhFM"
+    "4UimcBRTOJopHMMUjmV6j2N6j2d6+zK9/ZhCf6YwgCkMZAqDmMIQpnco0zuM6T2N6T2Doc9k6PFMYSJTmMwUpjKF6UxhJlOYxRTmMIV5TO98"
+    "pncB07uQ6T2HoRcx9LkMfR5Dn8/QFzD0hQx9EUNfzNCLGfoShr6MUS5nlBuY3puZ3luY3luZ3tuY3juY3juZ3geZ2hqmupaprWPqDzH19Uxt"
+    "A+M/zPiPMP5GprqJqW5mao8ytS1M51amto2pbWc6dzDdO5nKLqZrN9O9h6nvZbx9jLef8Q4w3mNM7Qmm+hTT9TTT9QzT9SzT/RzT/TzT/QLT"
+    "fZDpfpHxXmK8lxnvFcZ7lfFeY7zXGe8NxnuT8d5ivLcZ7x3Ge5fx3mO89xnvA8b7kKl/xHR+zFQ+Ybo+ZeqfMdXPmcoXTNeXTO0rpvI1U/uG"
+    "qXzL1L9jur5nOn9gKoeY+o9M109M9Wem/gvT9SvT9RtT/Z3p/B/T9QdT/ZOp/sVU/2Zq/zCVf5lKCPhhUCWAR4JaBNSiwI8BPw78BPAo4CWB"
+    "nwJ+GtRagN8KfBr4EPgsqHDA54EvAF8EvgQqGeBngX8Y8GRQzYFKH+C3AS8PvALwEPCLwC8BXwG+CnwN1HTgG6BugroFKjaolUEdg2o78Bzg"
+    "u8DrAJ4HvAqoVkGtE9S7QK0GanVQ6QadPqj0AL8B6oeDei/obIKuAHQdAbqOBF1Hga6jQf0Y0H0s6D4OdB8PuvsCrx/w+gNvAPAGgq5BwD8B"
+    "+CeCrpNA7WTgnwI6B4PKqaAyBFSGgq5hoPs00D0ceCOAPxL4o0B9NPDHAH8s8E8H/jjgnQG6zgRdZwFvPOiaAKoTQXUSqE0G1SnAnwq8acCb"
+    "DrwZwJsJus4GtVmgNhv4c4A3F3jzgDcfeAuAtxB45wBvEfDOBd55wDsfeBcA70LgXQS8i4G3GHiXAG8J8JeCyqWgcxmoXQaqlwP/CtB1Jei+"
+    "CnQvB/WrQX0FqF8Duq8FteuAdwOo3wj8lcC/Cfg3g9otoHIb8FeB+h2g+y7grQbe3aByD+i6F1TuA5X7Qf0B0PUg6FoD6mtB9zpQXw/8DcB7"
+    "GPiPAH8j8DeBymbQ9SiobQHVraCyDVS3g+oOUN0JqrtA927QtQd07gVd+4CzH9QOgMrjoOsJUHsSVJ8ClWdA9VnQ+RyoPw+qL4Dug6D6Iuh6"
+    "CXS9AuqvgsprwH8d+G8A/01Qexv47wD/XdD5Hqi9DyofgOqHoP4RqH8MKp8A71PgfQYqn4PqF6D6Jah+Bapfg+o3oPotqH4Hur4HtR9A7RDo"
+    "+hH4P4H6z6DyC/B/Bf5vwP8dVP4AXX8C/y/Q/Teo/QNqYSgTUCahHIFyFMoxKMehnIAyBeUklFNQTkO5BcqtUKahzEAZQBlCmYUyB2UeygKU"
+    "RShLUM5AWYZyDsp9oFyAsgplDcoWlG0ol6GModwOZQfKLpQ7oOxBuQLlKpQ7odwF5RqU61DuhrIP5R4oN6B8OJR7odyEcgDlI6B8JJSPgvLR"
+    "UD4GysdC+TgoHw/lvlDuB+X+UB4A5YFQHgTlE6B8IpRPgvLJUD4VykOgPBTKw6B8GpSHQ3kElEdCeRSUR0N5DJTHQvl0KI+DuTOgfCaUz4Ly"
+    "eChPgPJEKE+C8mQoT4HyVChPg/J0KM+A8kwonw3lWVCeDeU5UJ4L5XlQng/lBVBeCOVzoLwIyudC+Twonw/lC6B8IZQvgvLFUF4M5UugvATK"
+    "S6F8KZSXQfkyKF8O5SugfCWUr4LycihfDXMrYO4amLsW5q6Dueth7gaYuxHmVsLcTTB3M8zdAnO3wtxtMLcK5m6HuTtg7k6YuwvmVsPc3TB3"
+    "D8zdC3P3wdz9MPcAzD0Ic2tgbi3MrYO5h2BuPcxtgLmNMLcJ5jbD3FaY2wZz22FuF8zthrk9MLcf5g7A3GMw9yTMPQVzT8PcczD3PMy9AHMH"
+    "Ye5FmHsJ5l6GuVdg7lWYew3mXoe5N2DuTZh7C+begbl3Ye49mPsI5j6Guc9h7guY+xLmvoG5b2HuO5j7HuZ+gLlDMPcjlH+C8s8w9yvM/QZz"
+    "v8Pc/2DuD5j7E+b+grm/Ye4fmPsX5v6DOYLNkWwuwuaibC7G5uJsLsHmKDaXZHMpNpdmcy1srpXN0WyOYXOAzUE2x7I5js3xbE5gcyKby7C5"
+    "LJs7jM3JbC7H5vqwuTY2l2f7FNg+iO1TZPuU2D4K20dl+2hsnwqbq7K5TjbXxeZqbK7O5rrZnM/methcg80dzuZ62VyTbQvYtiPYtiPZtqPY"
+    "tqPZtmPYtmPZtuPYtuPZtr5sWz+2rT/bNoBtG8i2DWLbTmDbTmTbTmLbTmbbBrNtQ9m2YWzbcLZtBNs2im0by7adzradwbadybadxbaNZ9sm"
+    "sG0T2bYZbH4mmz+bzc9i87PZ/Bw2P5fNz2fzC9j8QjZ/DptfxObPZfPnsfnz2fxFbP5iNr+YzV/C5pew+aVs/lI2v4zNX8bmL2fzV7D5K9n8"
+    "VWx+OZu/ms2vYPPXsPlr2fx1bP56Nn8Dm1/J5m9i8zez+VvZ/Co2fzubX83m72bz97D5e9n8/Wz+ATb/IJtfw+bXsvl1bP4hNr+ezW9g8w+z"
+    "+UfY/EY2v4nNb2bzj7L5LWx+K5vfxua3s/kdbH4nm9/F5nez+T1sfi+b38fm97P5A2z+MTb/OJt/gs0/yeafYvNPs/ln2PyzbP45Nv88m3+B"
+    "zR9k8y+y+ZfY/Mts/hU2/yqbf43Nv87m32Dzb7L5t1n5HVZ+j5XfZ+UPWPlDVv6IlT9m5U9Y+VNW/oyVP2flL1j5S1b+ipW/ZuVvWPlbVv6O"
+    "lb9n5R9Y+SdWDnFemPMIziM5L8J5Uc6LcV6c8xKcR3FekvNSnJfmvBbOa+U8mvMYzgOcBzmP5TyO83jOE7iKyHVKXD3DVbNc5TCuLnPVHFft"
+    "w1XbuGqe8wtctcjVS1xF4SoqV9e4qs5VDa7T5KoWV7U5v8zZmKu1czWH63S5zg6u0+M6K1xnlevs5KpdXLXGVetctZur+ly1h+tqcLXDuVov"
+    "Vw24ziO42pGcfxRXO5qrHcPVjuVqx3G147laX87vx/n9ucoArjaQqw3iaidwtRO52klcbQhXGc7VRnC1kVxtFFcbzVXHcNWxXPV0rjqOq57B"
+    "Vadx9elcfQbnz+T8szl/FufP5vw5nD+X65rHdc3nui7hCku4wlKucCXXexXXu5zrvZorrOC0a7jKtZx9HVe4l+u9j+u9n+t9gOt9kOtdw/Wu"
+    "5XrXcb2PcIWNnL+dK+zgCjs5dxfn7ubcPZy7l3P3ce5+zj3AuY9x7uOc+wTnPsm5B7nCi1zhFY5+laNf4+jXOfoNjn6To9/i6Lc5+h2Ofpej"
+    "3+Po9zn6c673C673S673K47+hit8yxW+4wrfc4UfOPoQ1/sj1/sTV/iZo7N86TC+JPOlHF/qw5fa+FKeLxX4UpEvlHhT52mDd02+0MkXAr73"
+    "KN45hveO5b3jeO943uvLe/14rz/vDeC9gbw3iPdO4L0Tee8k3juZ907hvcG8dyrvDeG9obw3jPdO473hvDeC90by3ijeG817Y3hvLO+dznvj"
+    "eO8M3juT7zmL7xnP90zgeybyPZP4nsl8zxS+ZyrfM43vmc73zOB7ZvI9Z/M9s/ie2XzPHL5nLt8zj++Zz/cs4HsW8j3n8D2L+J5z+Z7z+J7z"
+    "+Z4L+J4L+Z5beP9WvncV793Oe3fw3p28dxfvrea9u3nvHt6/l6/fx9fv57se4Lse5LvW8F1r+a51fNdDfH09X9/A1x/m64/w9Y18fRNf38zX"
+    "H+XrW/j6Vr6+nfd38P5O3t/F+7t5fw9f38v7+3h/P999gPcf4+uP8/Un+PqTvP8U3/00X3+Grz/Ldz3Hdz3P+y/wnQf5zhf52kt87WW+8gpf"
+    "eZXvfI3vfJ2vvcHX3uS73+K73+a73+G73uVr7/G19/nKB3zlQ776EV/9mK98wlc+5f3PeOdz3vmCd77kna/4ytd85Ru+61u+63u+/gNfP8TX"
+    "f+TrP/FdP/Ndv/O1//G1P/j6n3z9L77+N1//h6//y9f/4+shoR4W6oRQJ4VaRKhFhVpMqCWFSkqopIV6i1BvFeq0UGWEKhB8KPis4HNClRfq"
+    "glAXhbok1DNCLSvUDhNqslDJCX4fwW8TqnmhWhCqSKgWBb8k+IpQVYWqJlR1oW4IdVvoxEJnu9DpCL4r1DsE3xMqFcGvCpVOodYl1GqCXxcq"
+    "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"
+    "NYVtprDDFHaZwm5T2GMK+0xhvykcMIXnTeEFUzhoCi+Zwsum8IopvGpmXzOzr5vZN8zsm2b2LTP7rpl9z8y+b2Y/NLMfmdmPzewnZvZTM/uZ"
+    "mf3czH5hZr80s1+Z2a/N7Ddm9lsz+52Z/d7M/mBmD5nZH83sT2b2ZzP7i5n91cz+ZmZ/N7P/M7N/mNk/zexfZvZvM/uPmf3XzEasbMyS4paU"
+    "sCTKkpKWlLKktCW1WFKrJdGWxFgSsCRoSawlcZbEW5JgSaIlSZaUsaSsJcmWlLOkPpbUZknIkoqWVLIkxZJUS9IsSbckw5JMS7Isqd2SHEty"
+    "LanDynhWpmJJVUvqtDJdVoa3oWBD0YaSDTM2xDZst2HNhn1t2M+G/W04wIYn2PBEG55kw5NteIoNB9vwVBsOseFQGw6z4Zk2P8nmJ9v8FJuf"
+    "avPTbH66zc+y+dk2f57Nn2/zy23+Opu/3uZvsPkbbf5mm7/F5m+1+dtsfpXN327zd9j8nTZ/l82vtvm7bf4em99k85tt/lGb32LzW21+m81v"
+    "t/kdNr/T5nfZ/G6b32Pze21+n80fsPknbP4lG7xsg09t8JkNPrfBFzb42gY/2OCQDX60QbQMYmUQL4NEOZssZ9PlLF3OgnKWLWe5cpYvZ4Vy"
+    "VixnS+WsUs6q5axWzurlrFHOmuWsVc7a5Wy5nMXlbHs565SzbjnbUc565WylnK2Ws53lbFc5Wytnu8uCXxZ6ykKjLBxeFnrLQrMsnFoWhpSF"
+    "oWVhWFk4rSwMLwsjysLIsjCqLIwvCxPKwrxyZn45s6CcWVjOnFPOLCpnzi1nzitnzi9nLihnLixnLipnFpczl5QzS8qZpeXMpeXMsnLmsnLm"
+    "8nLminLmynLmqnJmeTlzdTmzopy5tpy5rpy5sZxZWc7cVM7cUs7cWs6sKku3l6U7ytKdZemusrS6LN1dlu4pS/eWpfvK0v1l6YGy9GBZWlOW"
+    "1paldWXpobK0vixtKEuby9KjZenZsvRcWXq+LL1Qlg6WpXfL4ntl8f2y+EFZ/LAsflQWPy6Ln5TFT8viZ2Xxq7L4dVn8uSz+UhZ/LYu/lcU/"
+    "y+JfZfHvsvhPWfyvLIawGMYigQGJQQSDKAYxDOL/B9OAhEEGgywGh2EgY5DDoA8GbRjkMShggDBQMLAxKGOAMWjHwMHAxaADAw+DCoZVDDsx"
+    "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"
+    "cJsEFkpgkQQWS+B2CdwhgSUSWCqBOyVwlwSWSeBuCdwjgXslsFwCKyWwSgKrJXCfBO6XwAMSWCOBByXwkAQelsAjElgrgUcl8JgEHpfAExJ4"
+    "UgJPSeBpCTwjgWcl8JwE1kngBQm8JIGXJfCKBN6VwHsSeF8CH0jgQwl8JIGPJfCJBD6VwGcS+FwCX0hgowQ2SeBLCXwlga8l8I0EvpXAdxLY"
+    "LIHvJfCDBH6UwE8S+FkCv0jgVwn8JoHfJfCHBLZI4E8J/CWBvyWwVQLbJbBDAjsl8K8EdklggsxCMgvLLCKzIZkNy2xEZqMyG5PZuMwmZBaV"
+    "WUxmcZltkVlCZltllpRZWmYZmQUyy8ksL7OCzIoyu5vM7i6ze8jsnjK7l8zuLbP7yOxEmd1XZveT2aTMTpLZA2R2ssxOkdkDZfYgmT1YZg+R"
+    "2TaZTclsu8xKMivLrCKzqsxqMqvLbFpmDZnNyP+tqjmZzcusKbMFmbVk1pVZT2Z9mQ1ktiizJZkty2xFZqsyO1VmO2R2msweKrNdMluT2eky"
+    "e5jMHi6zR8jskTI7U2aPktmjZXaWzB4js7Nlti6z/TLbkNkBmR2U2SGZHZbZEZkdldk5Mjsms+My25TZY2X2OJk9XmZPkNkTZfYkmT1ZZk+R"
+    "2VNl9myZnStz58rc+TJ3gcxdKHPzZO4imbtY5i6RuUtl7jKZu1zmrpC5K2XuKpm7WuaukblrZe46mbte5m6QuRtl7n8yd5PM3Sxzt8jcrTI3"
+    "X+YWyNxtMneHzC2RuaUyd6fM3SVzy2Tubpm7R+bulbnlMrdC5lbK3CqZWy1z98nc/TL3gMytkbkHZe4hmXtY5h6Ruadk7mmZe0bmnpW552Ru"
+    "ncw9L3MvyNx6mXtR5jbI3Esy97LMvSJzr8rcazL3usy9IXNvytxbMve2zL0jc+/K3Hsy977MfSBzH8rcRzL3scx9InOfytxnMve5zH0hCxtl"
+    "YZMsfCkLX8nC17LwjSx8KwvfycJmWfheFn6QhR9l4SdZ+FkWfpGFX2XhN1n4XRb+kIUtsrBVFrbJwnZZ2CELO2XhH1n4VxZ2ycIEhYcUHlZ4"
+    "ROFDCh9W+IjCRxU+pvBxhU8oPKrwmMLjCt+i8ITCtyo8qfCUwtMKzyg8UHhW4TmF5xVeUHhR4XdT+N0Vfg+F31Ph91L4vRV+H4WfqPD7Kvx+"
+    "Cp9U+EkKv7/CH6DwkxV+isIfqPAHKfzBCt+m8CmFb1d4SeFlhVcUXlV4TeF1hU8rvKHwGYXPKnxO4fMKbyp8QeEthbcV3lF4V+E9hfcVPlD4"
+    "osKXFL6s8BWFryr8VIXvUPhpCn+owncqfJfCdyt8TeF7FL5X4fsU/jCFP1zhj1D4GQp/pMLPVPijFP5ohZ+l8Mco/GyFryt8v8I3FH5A4YcU"
+    "fljhRxR+VOHnKPyYwo8rfFPhj1X44xT+eIU/QeFPVPiTFP5khT9F4U9V+NMU/nSFP0Phz1T4sxT+bIU/R+HnKsK5inCeIpyvCBcowoWKME8R"
+    "LlKEixXhEkW4VBEuU4TLFeEKRbhSEa5ShKsV4RpFuFYRrlOE6xXhBkW4URH+pwg3KcLNinCLItyqCPMVYYEi3KYICxVhkSIsVoTbFeEORVii"
+    "CEsV4U5FuEsRlinC3YpwjyLcqwjLFWGFIqxUhFWKsFoR7lOE+xXhAUVYowgPKsJDivCoIjymCI8rwhOK8KQiPKUITyvCs4rwnCKsU4TnFeEF"
+    "RVivCC8qwgZFeEkRXlaEVxThNUV4XRHeUIQ3FeEtRXhbEd5RhHcV4T1FeF8RPlCEDxXhI0X4WBE+UYRPFeEzRfhcEb5QhI2KsEkRvlSErxTh"
+    "a0X4RhG+VYTvFGGzInyvCD8owo+K8JMi/KwIvyrCb4rwuyL8oQhbFGGCSsKqiKhiRCWjqhhTxbgqJlQRVUVCFVtVkVRFShVpVWRUEagiq5Kc"
+    "KvKqKKiiqIq7qeLuqriHKu6pinup4t6quI8qTlTFfVVxP1VMquL+qniAKk5WxSmqeKAqHqSKB6viIarYpoopVWxXRUkVZVVUVFFVRU0VdVVM"
+    "q6KhihlVzKpiThXzqmiqYkEVLVW0VdFRRVcVPVX0VTFQxaIqllSxrIoVVayq4lRV7FDFaap4qCp2qmKXKnarYk0Ve1SxVxX7VHG6Kh6mioer"
+    "4gxVPFIVZ6riUap4tCrOUsVjVHG2KtZVsV8VG6o4oIqDqjikisOqOKKKo6o4RxXHVHFcFZuqeLwqnqCKJ6riSap4siqeooqnquJpqni6Kp6h"
+    "imeq4tmqeI4qzlWpc1XqPJU8X6UuUOkLVXKeCi5SqYtV8hKVulSlL1Opy1VwhUpdqVJXqeTVKnWNSl+rUtep4HqVukGlblSp/6nUTSp1s0rd"
+    "olK3qtR8lVqgUotUarFK3a5Sd6jUEpW6U6XuUqllKnWPSt2rUstVaoVKrVSpVSq1WqXuU6n7VeoBlVqjUg+q1EMq9bBKPaJSa1XqUZV6TKUe"
+    "V6knVOpJlXpKpZ5WqWdU6lmVek6l1qnU8yr1gkqtV6kXVWqDSr2kUi+r1Csq9apKvaZSr6vUGyr1pkq9pVJvq9Q7KvW+Sn2gUh+q1Ecq9alK"
+    "faZSX6jURpXapFJfqtRXKvW1Sn2jUt+q1HcqtVmlvlepn1XqF5X6VaV+U6nfVeoPldqiUn+q1F8q9bdKbVWpbSq1XaV2qdQEjYQ0EtZIRCND"
+    "GhnWyIhGRjUyrpGoRmIaiWtki0YSGtmqkaRG0hoJNJLVSE4jeY0UNFLUyN00ck+NnKiR+2rkfhqZ1MhJGrm/Rh6gkZM1copGHqiRbRqZ0sh2"
+    "jZQ0UtZITSN1jTQ0MqORWY3MaWReI02NLGikpZG2Rjoa6Wqkp5G+RgYaWdTIkkaWNbKikVWNnKqRHRo5TSMP1chOjezSyG6NrGlkn0YepZFH"
+    "a+QsjTxGI2drZF0jGxo5oJHDGjmikaMaOUcjj9XI4zTyeI08QSNP1MiTNPJkjTxFI0/VyLM08myNPEcj52r0uRp9nkafr9EXaPSFGj1Poy/S"
+    "6Is1+iaNvlmjb9HoWzV6vkYv0OjbNHqhRi/S6MUafbtG36HRSzR6qUbfqdF3afQyjb5bo+/R6Hs1erlGr9DolRq9SqNXa/R9Gn2/Rj+g0Ws0"
+    "+kGNfkSj12r0oxr9mEY/rtHPavRzGr1Oo5/X6Bc0er1Gv6jRGzT6JY1+WaNf0ehXNfo1jX5do9/Q6Dc1+i2Nfluj39HodzX6PY1+X6M/0OiP"
+    "NfoTjf5Uoz/T6M81+guN3qjRmzT6S43+SqO/1uhvNPpbjf5Oozdr9G8a/btG/6HRWzT6T43+S6P/1uitGr1No7dr9L8avUujJ+gA0gGsA0QH"
+    "IR1EdBDVQUwHvA4EHYg62E0Hu+tgDx3sqYO9dLC3DvbRwUQd7KuD/XSQ1MEkHeyvgwN0MFkHU3RwsA7adJDSQbsOJB3IOlB0oOpA04Gug7QO"
+    "DB1kdJDVQU4HeR2YOijowNKBrQNHB64OPB34Ogh0UNRBSQdlHVR0UNXBVB106GCaDg7VQY8OenXQp4PpOjhcB0foYIYOjtTBTB0cpYNZOjhG"
+    "B7N1UNfBgA4GdTCig1EdzNHBmA7GddDUwbE6OE4Hx+vgRB2cpIOTdXCKDk7VwWk6OF0HZ+jgTB2cpYOzdXCODubqzLk6c57OnK8zF+jMhTpz"
+    "g87cqDP/05mbdOZmnblFZ27Vmfk6s0BnbtOZhTqzSGdu15k7dGaJzizVmTt15m6duUdnluvMCp1ZqTOrdGa1ztynM/frzAM6s0ZnHtSZh3Tm"
+    "YZ15RGfW6syjOvOYzjyuM0/ozJM685TOPK0zz+jMszrznM6s05nndeYFnVmvM6/o1Bs686bOvKUzb+vMOzrzrs68pzPv68yHOvORznysM5/o"
+    "zKc685nObNSZTTrzpc58ozPf6sx3OrNZZ77XmR905ked+UlnftaZX3TmV535TWd+15k/dGaLzvypM3/pzN86s1VntunMdp3ZoTM7deYfnflX"
+    "Z3bpzIQ0BacpJE2F0lQ4TUXSVDRNxdJUPE0l0hSaprA0haepljRFpKnWNEWmKSpN0WmKSVMgTbFpiktTfJoS0pSYpnZL/yec7Jmm9ktTyTQ1"
+    "KU3tn6YOSFOT09RBaergNHVImmpLU6k01Z6m1DSlpSk9TU1LU4emqc401ZWmutNULU31pKneNNWXpqanqcPS1OFp6og0NSNNHZ2mZqWpY9LU"
+    "7DRVT1P9aaqRpgbS1GCaGkpTw2lqJE2Npqk5aWosTY2nqWaaOjZNHZemzk1T89LULWnq1jQ1P00tSFO3pamFaWpRmlqcpm5PU4+nqSfT1NNp"
+    "6pk09VyaejFNbUhTL6Wpl9PUK2nq1TT1Wpp6PU29kabeTFPfpKlv09QPaerHNPVnmvorTf2dpramqW1panua2pGmJhgCZAiwISCGEDKEsCFE"
+    "DCFqCDFDiBtCwhBQQ8AMATeEFuM/QqvVEEhDoAyBNgTGEIAhsIbAGQJvCIIhiIawmyHsbgh7GMKehrCXIextCBMNYV9DmGQI+xvCAYYw2RCm"
+    "GMKBhnCQIRxsCIcYQpshpAyh3RAkQ5ANQTEE1RAMQ8gYQtYQTEMoGIJlCI4huIbgGYJvCIEhFA2hZAhlQ6gYwjRD6DKEbkOoGUKPIcwy+GMM"
+    "frbB1w2+3+AbBj9g8IMGP2TwwwY/YvCjBj/H4McMftzgmwZ/rMEfZ/DHG/wJBn+iwZ9k8Ccb/CkGf6rBn2bwpxv8GQZ/psGfZfBnG/w5Bj/X"
+    "4M81+PMM/nyDv9Dg5xn8RQZ/scFfYvCXGvxlBn+5wV9h8Fca/FUGf7XBX2Pw1xr8TQZ/s8HfYvC3Gvx8g19g8LcZ/EKDX2Twiw3+doO/w+CX"
+    "GPxSg7/T4O8y+GUGf7fB32Pwyw1+hcGvNPhVBr/a4O8z+PsN/gGDX2PwDxr8Qwb/sME/YvBrDf5Rg3/M4B83+CcM/kmDf8rgnzb4Fwz+HYN/"
+    "1+DfN/iNBr3JoL806K8M+luD/s6gNxv09wb9g0H/aNA/GfRvBv27Qf9h0FsM+k+D/sug/zborQa9zaC3G/QOg95p0P8Y9L8GvcugJ2RoKEPD"
+    "GRrJ0KEMHc7QkQwdzdCxDB3P0IkMjWZoLEPjGbolQxMZujVDkxmaytB0hgYZms3QXIbmM7SYoXfL0Ltn/lNu9szQe2XovTP0Phl6YobeN0Mn"
+    "M/SkDJ3N0D0Zui9DH5GhZ2TomRn6qAw9K0Mfk6FnZ+h6hu7P0I0MPZChRzP0nAw9lqEvzNDzMvRlGfryDH1Fhr4yQ1+Voa/O0Ndk6Gsz9IIM"
+    "fVuGXpih78zQyzL02gz9SoZ+NUO/lqFfz9BvZei3M/S7Gfq9DP1+hv4gQ3+YoT/PtB6YJQ/KkgdnyUOyZFuWTGXJ9iwpZUk5SypZUs3+Z13q"
+    "WTKdJY0smcmS2SyZy5L5LGlmyUKWtLKknSWdLOlmSS9L+lkyyJLFLDk1S3Zkya4s2Z0la1myJ0v2Zsm+LDk9Sx6WJQ/PkjOy5JFZcmaWbGTJ"
+    "wSw5lCWHs+RIlhzNkpdmycuy5JIsuTRL3pXllmW5u7PcPVnu3iy3PMutyHIrs9yqLLc6y92X5e7Pcg9kuTVZ7sEs91CWezjLPZLl1ma5R7Pc"
+    "Y1nu8Sz3RJZ7Mss9leWez3IvZLn1WfBiFmzIgpey4OUseCULXs2C17Lg9Sx4IwvezIK3suDtLHgnC97Ngvey4P0s+CALPsyCj7Lg4yz4JAs+"
+    "z4IvsmBjFmzKgi+z4Kss+DoLvsmCb7PguyzYnAXfZ8EPWfBjFvyUBT9nwS9Z8GsW/JYFv2fBH1mwJQuiOSaWY+I5JpFj0ByD5Rg8x7TkmN1y"
+    "zB45Zs8cs1eO2TvH7JNjJuaYfXPMfjkmmWMm5Zj9c8wBOWZyjpmSYw7OMYfkmLYcY+YYP8cUc1wpx5VzXCXH1XLczBx3VI6r57j+HNfIcQM5"
+    "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"
+    "z7ejF9jRC+3oPDt6kR292I5eYkcvtaOX2dHL7egVdvRKO3qVHb3ajl5jR6+1o9fZ0evt6A129CY7eosdnW9HF9jRhXZ0kY0stpHbbeQOG1li"
+    "I0tt5E4buctGltnI3TZyj43cayPLbWSFjay0kVU2cp+N3G8jD9jIGht50EYespGHbeQRG1lrI4/ZyOM28qSNPGUjT9uxZ+zYs3bsOTu2zo49"
+    "b8fW27EX7dgGO/aSHXvFjr1qx16zY6/bsTfs2Jt27C079rYde8eOvWvH3rdjH9ixD+3YR3bsYzv2iR371I59Zsc+t2Nf2LGNdmyTHfvSjn1l"
+    "x762Y9/YsW/t2Hd2bLMd+96O/WTHfrFjv9qx3+zYH3bsLzu21Y5tt2M77Ng/duxfO7bLjk1w4pATh514yImHnXjEiUedeMyJx514womjThxz"
+    "4rgTb3HipBOnnDjtxBknDpw468Q5J847ccGJi058Nye+uxPfw4nv6cT3cuJ7O6F9nNBEJ7SvE9rPCSWd0CQntL8TOsAJTXZCU5zQgU7oECeU"
+    "ckKSE5KdkOKEVCekOSHdCRlOKOOEsk4o74RMJ1RwQpaTsJ2E4yRcJ+E5Cd9JBE6i6CTKTqLiJKpOYqqT6HAS05zEoU6i00l0O4leJ9HnJKY7"
+    "icOcxOFO4ggnMcNJHOkkZjqJo5zE0U5iltN2jNM222mrO239TlvDaRtw2gadtiGnbdhpG3HaRp22MaftZKftFKftVCd1mpM63Umd4aTOdFJn"
+    "OamzndQ5Tmqug57roOc56PkOeoGDXuig8xz0Ege91EEvc9DLHfQKB73SQa9y0Ksd9BoHvdZBr3PQ6x30Bge90UFvctCbHfQWB73VQec76AIH"
+    "vc1BFznoYge9w0GXOOhSB73TQe9y0GUOereD3uugyx10hYOudNBVDrraQe9z0AccdI2DPuKgax30UQd9zEGfcNAnHfQpB33awZ5xsGcd7DkH"
+    "W+dgzzvYCw623sFedLANDvaSg73sYK842KsO9pqDve5gbzjYWw72joO976AfONhHDvqxg37iYJ862BcOttFBNznYlw72lYN97WDfONi3Dvad"
+    "g212sO8d7AcH+9HBfnKwnx3sFwf71UF/c9DfHfQPB93ioH866F8O+reDbnXQbQ663UF3Oug/Dvqvg+5y0AkuDrk47OKIi4dcPOziERePunjM"
+    "xeMunnBx1MUxF8ddvMXFCRenXJxxceDinIvzLi64uOjiu7v4Hi6+p4vv5eJ7u/hEF9/XxZMuPsnF93fxyS4+xcUPdPGDXPxgFz/ExVMu3u7i"
+    "kovLLq64uOrimosbLp5x8ayL51284OKWi9su7ri46+Kei/suHrh40cVLLl528YqLT3XxDhef5uKHunini3e5eLeL11y8x8X7XHy6ix/m4oe7"
+    "+BEuPsPFZ7r4US5+tIvPcvFjXHy2i9ddvN/FGy4+6OJDLj7s4iMuPuriYy4+7uJNFz/WxY9z8eNd/AQXP8nFT3bxU1z8VBc/3cXPdImzXOJs"
+    "lzjHxee6+Lkufp6Ln+/iF7j4hS4+z8UvcvGLXfwSF7/UxS9z8ctd/AoXv9LFr3Lxq13iGpe41iWuc4nrXeIGl7jRJf7nEje5xM0ucYtL3OoS"
+    "811igUvc5hILXWKRSyx2idtd4g6XWOISS13iTpe4yyWWucTdLnGPS9zrEstdYoVL3O8SD7jEGpd40CUecomHXeIRl1jrEo+6xGMu8bhLPOES"
+    "T7rEUy7xtNvyjNvyrNvynNuyzm153m15wW1Z77a86LZscFtecltedltecVtedVtec1ted1vedFveclvecVvedVvec1ved1s+cFs+dFs+cls+"
+    "dls+cVs+dVs+c1s+d1u+cFs2ui1fui1fuW1fu23fuG3fum3fuW2b3bbv3bYf3LYf3baf3Laf3bZf3LZf3bbf3Lbf3bY/3LYtbtufbttfbtvf"
+    "bttWt22b27bdbdvhtu102/5x23a5bRM8FPJQ2EMRDw15aNhDIx4a9dCYh8Y9NOGhqIdiHop7aKuHkR5GeSjjocBDWQ/lPJT3UMFDRQ/dzUN3"
+    "99C9PXQfD53ooft66H4emvTQSR66v4ce4KGTPXSKhx7koQd7aLuHSh4qe6jioaqHah6qe2jaQw0PzXpozkPzHmp6aMFDLQ+yPcjzIN+Dih5U"
+    "8qCyB1U8qOpBUz2ow4OmedChHtTpQV0e1O1BNQ/q9aA+D5ruQYd50OEedIQHzfCgIz1opgcd5UHHeNBsD+r3oCEPGvagEQ8a9aA5HjTmQU0P"
+    "OtbDjvOw4z3sBA870cNO9rBTPew0Dzvdw87ysLM97BwPm+th53rYeR52vodd4GEXetg8D7vIwy72sEs87FIPu8zDLvewKzzsSg+7ysOu9rBr"
+    "POxaD7vOw673sBs87EYP+5+H3eRhN3vYLR622MNu97A7PGyJhy31sDs97C4PW+Zhd3vYPR52r4ct97AVHrbSwx7ysIc97BEPW+thj3vY0x78"
+    "jAc/68HrPPh5D37Bg9d78IsevMGDX/Lglz34FQ9+1YNf8+DXPfhND37Lg9/x4Hc9+AMP/tCDP/HgTz34Mw/+3IO/8JCNHrLJQ770kK895BsP"
+    "+dZDvvOQzR7yk4f87CG/eMivHvK3h2z1kG0est1DdnrIvx6yy0Mm+AjsI4iPRHwk6iMxH4n7SMJHUB/BfAT3kRYfIXyk1UdIH6F8hPYR1kc4"
+    "H+F9RPAR0Ud285HdfWQPH9nTR/bykb19ZB8fmegj+/lI0kcm+cj+/n/PCpN9ZIqPHOgjKR9p9xHJRxQf0XxE95G0j2R8JOcjeR8p+IjlI7aP"
+    "OD7i+ojnI76PBD5S9JGSj1R9ZKqPdPtIzUf6fGS6jxzpIzN95Bgfme0jdR8Z8uPDfnzEjzf9+LF+/Dg/frwfP8GPn+jHT/LjJ/vxU/z4qX78"
+    "ND9+uh8/w4+f6cfP8uNn+/Fz/PhcP36+H7/Aj1/ox+f58Yv8+MV+4lI/cZmfuMpP3OgnbvITN/uJW/zErX5ivp9Y4Cdu8xML/cQiP7HYT9zu"
+    "J5b4iaV+Ypnfcrffcq/fstxvWeG3rPRbVvktq/2W+/yW+/2WB/yWNX7Lg37LQ37Lw37LI37LWr/lUb/lcb/lCb/lKb/lab9lnZ963k+94KfW"
+    "+6kX/dQGP/WSn3rZT73ip171U6/5qdf91Bt+6k0/9ZafettPveOn3vVT7/mp9/3UB37qQz/1kZ/62E994qc+9VOf+anP/dQXfmqjn9rkp770"
+    "U1/5qa/91Dd+6ls/9Z2f2uynvvdTP/ipH/3UT37qZz/1i5/61U/95qd+91N/+KktfupPP/W3n9rqp7b5qe1+aoef2umn/vFT//qpXX5qQpCC"
+    "ghQcpGJBOB6EE0EYDcJYEG4JwkQQbg3CZBCmgjAdhJkgDIIwG4S5ICwEYTEI7xGE9w7C+wThiUF43+C/iP+kILx/EJ4ShA8MwocE4bYgnArC"
+    "SgCrAawFsB7A6QA2AjgTwNkAtgLYDmAngN0A9gLYD+AggIsBXArgcgBXArgawFMDuCOApwXwoQHcGcBdAdwTwH0BfFgAHx7ARwTwjAA+MoBn"
+    "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"
+    "r++Eb+iEF3bCizrh2zvhJZ3wt53Id53IH53Ilk7k705kayeyrRPZ3olEu5BYF0J1heiu0F5dof26Qsmu0KSu0IFdoYO6Qm1doVRXqL0rJHWF"
+    "lK6Q2hVyusJuV3haV/jQrnB3V7jWFT66KzyrK3xcV+T4rsh5XZFLuyKXdUWu7Ipc1RVZ1BVd3BVd2RVd1RV9uCv6SFf00a7oY13RV7pir3bF"
+    "3uuKvd8V+7gr9klX7NOu2Hddsc1dsa1d8W1d8Wh3PNYdb+mOE91xsjtOdcfp7jjTHT+gOzG5O9HenZC6E2p3QutOWN0JuzvR6EYHutG53egl"
+    "3eil3egV3eiV3ejSbuzObuzpbuyZbmx9N/ZiN7ahG3ujG3uzG3urG3u7G3uvG3u/G9vYjW/qxn/txv/uxrd24zu68Z3dOFTD4RoequGJGo7W"
+    "8Ik1fHINn1LDD6rhB9dwpUaoNUKvEekaYdSIXI3I1wirRtg1wqkRbo3wa0RQI4o1olIjqjViao3orBHdNaKnRvTWiOk14ogaMaNGHFnDZ9aI"
+    "wRoxVCOGa8RIjWjWiGNrxHE14vgacUKNOLFmnlQzz6sR59eIC2rEvBpxcY24pEZcWiOurRHX1YibavjNNXx1zby/Zj5ZSz1VSz1dSz1TSz1b"
+    "Sz1XS62rpZ6vpV6opdbXUi/WUhtqqZdqqZdrqTdq+Tdr+bdq+bdr+fdr+Ae11Ie11Ee11Me11Ce11Ke11Ge11Oe11Be11MZa6psa/l0N31zD"
+    "f62lfqulfq+lttRSf9ZSf9VSf9dSW2upbbXU9lpqRy0F9UBIDxTvgRI9kNQDyz2w0gOrPbDWA+s9cLoH9nvgoAcu9sClHrjcA1d64P4epNGD"
+    "DPQggz3ISA8y2oPM6UHGepDxHqTZg9zYE/pfT+imntDNPaFbe0Lze0ILekK39YQW9oTu6Akt6Qkt7Qmt6wk93xN6sSe8oSf8Uk/45Z7wKz3h"
+    "V3vCr/WEX+8Jv90Tfqcn/G5PGO6NIL2RcG8k0huJ9kZivRGsN4L3Rlp6I0pvVO2N6r3RdG/U6I1meqPZ3mihN2r1Ru3e6HBvbKQ3NtYbG++N"
+    "NXtjx/bGTuyNndQbO7k3dkNv/Mbe+K298fm98QW98Tt640t64y/2Jjb0Jl7uTbzSm3ijN/Fmb+Kt3sSuXnRCHxruQyN9aLQPjfWh8T400YeS"
+    "fSjVh9J9KNOHgj6U7UMzfVi2D8v1Yfk+zOzDCn2Y1YfZfVi1D5vah3X0YdP6sEP7sM4+rKsP6+7Dan3YSB8+2oeP9eHjfXizDz+2Dz+lDz+1"
+    "Dz+tDz+9Dz+/D7+gD7+wD3+kz1zbZz7aZz7WZz7eZz7RZz7ZZz7VZz7dZz7TZz7bZz7XZ4amE+HpRGQ6EZ1O4NMJYjpRrrOVOluts4fW2c46"
+    "21Vne+tsX52dXmdn1Nkj6+zMOntMnZ1dZ+t1drDODtXZ4To7VmfH62yzzp5QZ0+ssyfV2dPq7Ol19ow6e06dnVtnz62zF9bZeXX2ojp7WZ29"
+    "vM5eUWevqbPX1tnr6uz/6uxNdfbmOrugzt5WZxfW2Tvq7JI6u7TO3l1n76mz99bZVXV2dZ29r84+WGcfqrMP19nH6uzjdfaJOvtMnX22zj5X"
+    "Z9fX2Rfr7IY6+2qdfK1Ovl4n36iTb9bJt+rk23XynTr5bp18r06+Xyc/qJMf1smP6uTHdfKTOvlpnfysTn5eJ7+ok9vqJN2fZPqToD/J9ie5"
+    "/iTfnxT6k2J/crf+5O79ySP7kzP7k0f1J4/uT87qTx7Tn5zdn6z3J/v7k43+ZKzB7NNgJjaYfRvMfg0m2WAmNZj9G8wBDWZyg5nSYA5sMAc1"
+    "mIMbzCENpq3BpBpMe4ORGozcYJQG098AjQYYaIDBBhhqgOEGGGmA0QaY0wBjDTDeAM0GOLYBjmuA4xvghAY4sQFOaoCTG+CUBji1QZ/WoE9v"
+    "0Gc06DMb9FkN+uwGfU6Dntugz23Q5zXo8xv0BQ36wgY9r0Ff1KAvbtCXNOhLG/RlDfryBn1Fg17VYFc32Psa7P0N9oEGu6bBPthgP2vwnzf4"
+    "Lxr8xgb/TYOFB3hkgHcHBG9A8AeEYEAoDgilAaFjQJg2IAwMCIMDwviA0BwQjh0Q5g+ICwbEjwe4Twa4Twe4zwa4zwe4Lwa4jQPcpgHuywHu"
+    "qwHu6wHulwFuywD35wC3dYDbNsDtHOAWDFK3DVILB6lFg9TiQer2QeqOQWrJILV0kLpzkLprkFo2SN09SN0zSN07SC0fpFYMUisHqVWD1OpB"
+    "Kj2UNIaSmaFkdiiZG0rmh5LmULIwlLSG/osHOUNJdyhZHCJLQ2R5iKwMkdUhcuoQ2TFEzh4i60Nk/xDZGCIHhsjBIfK7oeTmoeT3Q8kfhpI/"
+    "DiV/Gkr+PJT8ZSj561Dyt6Hk70PJP4aSO4aonUPUP0PUv0PUriFqwjAFDVPwMIUMU6FhKjxMRYapm4aTNw8nbxlO3jqcnD+cXDCcvG04uXA4"
+    "uWg4uXg4eftw8o7h5B/DyS3DyT+Hk38NJ/8eTm4dTm4bTm4fTu4YTu4cTpZGkuWRZGUkWR1JTh1Jdowkp40kDx1Jdo4ku0aS3SPJ2kjysBHm"
+    "8BHmiBFmxghz5Agzc4RZPpJcMZJcOZJcNZJcPZK8byR5/0jygZHkmpHkgyPJrSPJbSPJ7SPJHSPJnSPJf0aS/44kd40kJ4wmodEkPJpERpOh"
+    "URAeBZFREB0FsVEQHwXTR5OHjSYPH00eMZqcMZo8cjQ5czR51Gjy6NHkrNHk8lFhxaiwclRYNSqsHhXuGxXuHxUeGBXWjAoPjgoPjQoPjwqP"
+    "jAprR4VHR4XHRoVXR8XXRsXXR8W3R8V3RsWfRlt/Hm3dMdq6c7R1+hxy9hyyPofsn0M25pADc8jBOeRvc6jf51B/zKG2zKH+nEP9NYdqHaPI"
+    "Mao2RveM0b1jdN8YPX2MPmyMPn2MPmOMvmCMvnCMnjdGXzRGXzxGXzJG/zLG/DrG/DbG/D7GhMeZ1nGGHGeocYYeZ5hxBowzp42D08fBGePg"
+    "zHFw9Ti4ZRzcOg7mj4MF4+C2cbBwHDwxzm4YZ18aZ18eZ18ZZ18dZ98bZ98fZz8fZ78YZzeOs5vG2S/H2a/G2S3j7J/j7F/j7N/jbLzJkU2O"
+    "anJ0k2OaHGhybJPjmhzf5PZscns1uf2b3AFNbnKTm9LkDmxyBzW5VJNrb3JSk5ObXLoplJr8tCY/q8kf0+RnN/nxJt9s8sc1heObwglN4dSm"
+    "cFpTOLspnNMU5jaFc5vCBU3hpqZwa1OY3xQWNIXbmsLCprCoKSxuCnc1hWVNYXlTXNEUVzbFVU1xdVO8ryne3xQfaIprmuKDTfGhpvhwU1zb"
+    "FB9tik82xaea4tNN8Zmm+GxTfK4prmuKzzfFF5ri+qb4VVP8uil+0xS/bYq/NVt/b7ZubbZua7buaLbubLb+02zd1Wz9PxLcgB78ewAA"
+)
+
+
+_AH_CATMAP = None          # lazily-decoded {itemid: aH category}
+_ah_cat_cache = {}         # {cat: {itemid: (single, stack)}} for this session
+
+
+def _ah_catmap():
+    global _AH_CATMAP
+    if _AH_CATMAP is None:
+        d = {}
+        try:
+            import gzip
+            raw = gzip.decompress(base64.b64decode(_AH_CATMAP_B64))
+            for o in range(0, len(raw), 3):
+                iid, cat = _ahsrch_struct.unpack_from("<HB", raw, o)
+                d[iid] = cat
+        except Exception:
+            d = {}
+        _AH_CATMAP = d
+    return _AH_CATMAP
+
+
+def _ah_item_cat(item_id):
+    return _ah_catmap().get(int(item_id))
+
+
+_ah_cat_items_cache = {}
+
+
+def _ah_cat_items(cat):
+    # All itemids whose bundled AH category equals `cat` (inverted catmap).
+    if cat in _ah_cat_items_cache:
+        return _ah_cat_items_cache[cat]
+    ids = sorted(iid for iid, c in _ah_catmap().items() if c == cat)
+    _ah_cat_items_cache[cat] = ids
+    return ids
+
+
+def _ah_send_resolve(ids):
+    # Ask the lua side to resolve itemids -> names/levels; the reply arrives as
+    # AH|items|... and fills the normal result list (same path as search).
+    _ah_send("resolve|%s|" % ",".join(str(i) for i in ids))
+
+
+def _ah_browse_category(cat):
+    ids = _ah_cat_items(cat)
+    if not ids:
+        _ah_hist_emit("No listable items in %s." % _AH_CATNAMES.get(cat, "category %d" % cat))
+        return
+    ah_state["browse"] = False
+    ah_state["browse_group"] = None
+    ah_state["items_scroll"] = 0
+    ah_state["search"] = ""
+    _ah_send_resolve(ids)
+
+def _ahsrch_build_hist(item_id, stack, length=76, u08=16, itemid_off=0x12,
+                       count12=False, set_0e=False, key2=b"\x00\x00\x00\x00"):
+    # Flexible AH-history request builder for probing the real retail format.
+    key_tail = os.urandom(4)
+    buf = bytearray(length)
+    _ahsrch_struct.pack_into("<H", buf, 0x00, length)
+    _ahsrch_struct.pack_into("<I", buf, 0x04, _AHSRCH_IXFF)
+    _ahsrch_struct.pack_into("<H", buf, 0x08, u08)
+    buf[0x0A] = 0x80
+    buf[0x0B] = 0x06 if stack else 0x05
+    if set_0e:
+        _ahsrch_struct.pack_into("<H", buf, 0x0E, 1)
+    if count12:
+        buf[0x12] = 1
+    _ahsrch_struct.pack_into("<H", buf, itemid_off, item_id & 0xFFFF)
+    if itemid_off == 0x12:
+        buf[0x15] = 1 if stack else 0
+    buf[length - 0x18:length - 0x14] = key2
+    buf[length - 0x14:length - 0x04] = _ahsrch_md5(bytes(buf[0x08:length - 0x14]))
+    buf[length - 0x04:length] = key_tail
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=False)
+    return bytes(buf)
+
+
+def _ahsrch_probe_decode(data):
+    # Decrypt a probe response (key2=0) and describe it: type byte, hash, and if
+    # it's a history packet (0x85), the itemid / count / sale count / first price.
+    if len(data) < 2:
+        return "0 bytes"
+    buf = bytearray(data)
+    length = _ahsrch_struct.unpack_from("<H", buf, 0)[0]
+    if length < 28 or length > len(buf):
+        return "%d bytes, bad length field (%d)" % (len(data), length)
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(
+        _AHSRCH_KEY_SEED + bytes(buf[length - 4:length]) + b"\x00\x00\x00\x00"))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=True)
+    ok = _ahsrch_md5(bytes(buf[8:length - 0x14])) == bytes(buf[length - 0x14:length - 0x04])
+    t = buf[0x0B]
+    out = "%d bytes type=0x%02x hash=%s" % (len(data), t, "ok" if ok else "BAD")
+    if ok and t == 0x85:
+        iid = _ahsrch_struct.unpack_from("<H", buf, 0x18)[0]
+        amt = _ahsrch_struct.unpack_from("<I", buf, 0x1A)[0]
+        mark = _ahsrch_struct.unpack_from("<H", buf, 0x08)[0]
+        nsales = max(0, (mark - 0x20) // 40)
+        out += " HISTORY! item=%d count=%d sales=%d" % (iid, amt, nsales)
+        if nsales > 0 and 0x20 + 4 <= length:
+            out += " first=%dg" % _ahsrch_struct.unpack_from("<I", buf, 0x20)[0]
+    return out
+
+
+def _ah_probe_history(item_id, stack):
+    # Try several plausible 0x05 history-request layouts against the live server
+    # and report which (if any) gets a real reply. One-shot diagnostic.
+    global _ah_hist_busy
+    item_id = int(item_id)
+    if _ah_hist_busy:
+        _ah_hist_emit("AH: a lookup is already running\u2026")
+        return
+    _ah_hist_busy = True
+    name = _ah_item_name(item_id)
+
+    def _worker():
+        global _ah_hist_busy, _ah_search_ip
+        try:
+            ip, port = _ah_resolve_server()
+            if not ip:
+                _ah_hist_emit("AH: search server not found. Use /search in-game once, then retry.")
+                return
+            cat = _ah_item_cat(item_id) or 1
+            _ah_hist_emit("History probe: %s (id %d, cat %d)\u2026" % (name, item_id, cat))
+            variants = [
+                ("A id@0x12 (LSB)",
+                 [_ahsrch_build_hist(item_id, stack, itemid_off=0x12)]),
+                ("B id@0x16 +cnt",
+                 [_ahsrch_build_hist(item_id, stack, itemid_off=0x16, count12=True)]),
+                ("C id@0x16 +cnt+0E",
+                 [_ahsrch_build_hist(item_id, stack, itemid_off=0x16, count12=True, set_0e=True)]),
+                ("D 268B id@0x16",
+                 [_ahsrch_build_hist(item_id, stack, length=268, u08=184,
+                                     itemid_off=0x16, count12=True, set_0e=True)]),
+                ("E 0x15 then id@0x12",
+                 [_ahsrch_build_category_request(cat), _ahsrch_build_hist(item_id, stack, itemid_off=0x12)]),
+                ("F id@0x12 +cnt+0E",
+                 [_ahsrch_build_hist(item_id, stack, itemid_off=0x12, count12=True, set_0e=True)]),
+            ]
+            for label, pkts in variants:
+                data = b""
+                try:
+                    with socket.create_connection((ip, port), timeout=6.0) as s:
+                        s.settimeout(6.0)
+                        for pk in pkts:
+                            s.sendall(pk)
+                            data = _ahsrch_recv_packet(s, 6.0)
+                    _ah_hist_emit("  %s: %s" % (label, _ahsrch_probe_decode(data)))
+                except Exception as e:
+                    _ah_hist_emit("  %s: error %s" % (label, e))
+            _ah_hist_emit("History probe done. (A 'HISTORY!' line = the winning format.)")
+        except OSError as e:
+            _ah_hist_emit("AH error: %s" % e)
+            _ah_search_ip = None
+            _ahsrch_clear_cached()
+        except Exception as e:
+            _ah_hist_emit("AH error: %s" % e)
+        finally:
+            _ah_hist_busy = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+def _ah_resolve_server():
+    # Resolve the search-server IP: in-memory cache -> manual override ->
+    # remembered (disk) -> auto-detect (and remember). Returns (ip, port).
+    global _ah_search_ip
+    port = _AHSRCH_PORT
+    ip = _ah_search_ip
+    if not ip:
+        manual = _ahsrch_manual_server()
+        if manual:
+            ip, port = manual
+            _ah_search_ip = ip
+            _ah_hist_emit("AH: using search server %s:%d (manual)" % (ip, port))
+            return ip, port
+    if not ip:
+        cached = _ahsrch_load_cached()
+        if cached:
+            ip = cached
+            _ah_search_ip = ip
+            _ah_hist_emit("AH: using remembered search server %s" % ip)
+            return ip, port
+    if not ip:
+        ip = _ahsrch_find_server()
+        if ip:
+            _ah_search_ip = ip
+            _ahsrch_save_cached(ip)
+            _ah_hist_emit("AH: found search server %s (remembered for next time)" % ip)
+    return ip, port
+
+
+def _ah_fetch_avail(item_id, stack):
+    # Show an item's current AH availability. Looks up the item's real AH
+    # category from the bundled map, queries that one category live (0x15),
+    # and reports how many singles / stacks are listed right now. Items with no
+    # AH category are reported as not listable.
+    global _ah_hist_busy
+    item_id = int(item_id)
+    if _ah_hist_busy:
+        _ah_hist_emit("AH: a lookup is already running\u2026")
+        return
+    name = _ah_item_name(item_id)
+    cat = _ah_item_cat(item_id)
+    if not cat:
+        _ah_hist_emit("%s can't be listed on the Auction House." % name)
+        return
+    catname = _AH_CATNAMES.get(cat, "category %d" % cat)
+    _ah_hist_busy = True
+
+    def _worker():
+        global _ah_hist_busy, _ah_search_ip
+        try:
+            ip, port = _ah_resolve_server()
+            if not ip:
+                _ah_hist_emit("AH: search server not found. Use /search in-game once, then retry.")
+                return
+            items = _ah_cat_cache.get(cat)
+            if items is None:
+                _ah_hist_emit("AH: checking %s listings\u2026" % catname)
+                items = _ahsrch_query_category(ip, port, cat, timeout=8.0)["items"]
+                _ah_cat_cache[cat] = items
+            sa, st = items.get(item_id, (0, 0xFFFFFFFF))
+            sd = "n/a" if sa == 0xFFFFFFFF else str(sa)
+            kd = "n/a" if st == 0xFFFFFFFF else str(st)
+            _ah_hist_emit("%s [%s] \u2014 on AH now: %s single / %s stack" % (name, catname, sd, kd))
+        except OSError as e:
+            _ah_hist_emit("AH error: %s" % e)
+            _ah_search_ip = None
+            _ahsrch_clear_cached()
+        except Exception as e:
+            _ah_hist_emit("AH error: %s" % e)
+        finally:
+            _ah_hist_busy = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+def _ah_drain_history():
+    drained = 0
+    while _ah_hist_inbox and drained < 200:
+        try:
+            _ah_log(_ah_hist_inbox.popleft())
+        except Exception:
+            break
+        drained += 1
+# === AHSRCH END ===
 
 def _ah_open_ffxiah(item_id):
     """Open the item's FFXIAH page (recent sales / going rate) in the browser.
@@ -26993,8 +28333,10 @@ def draw_ah_window(surface):
     _ah_clear_rects()
     if not ah_panel_open:
         return
+    _ah_drain_history()
     pad, title_h, tab_h = 8, 22, 22
-    w, h = 680, 452
+    w = max(_AH_MIN_W, min(_AH_MAX_W, int(ah_panel_size[0])))
+    h = max(_AH_MIN_H, min(_AH_MAX_H, int(ah_panel_size[1])))
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
@@ -27054,8 +28396,10 @@ def draw_ah_window(surface):
     ty = y + title_h
     body_y = ty + 4
     body_h = (y + h - pad) - body_y
-    res_w = 196
-    left = pygame.Rect(x + pad, body_y, w - 3 * pad - res_w, body_h)
+    avail_w = w - 3 * pad
+    left_w = max(360, int(avail_w * 0.50))
+    res_w = avail_w - left_w
+    left = pygame.Rect(x + pad, body_y, left_w, body_h)
     right = pygame.Rect(left.right + pad, body_y, res_w, body_h)
 
     # ── right: purchase-results log (persistent across tabs) ──
@@ -27063,6 +28407,9 @@ def draw_ah_window(surface):
     pygame.draw.rect(surface, (60, 66, 80), right, 1, border_radius=3)
     surface.blit(fnt_b.render("Results", True, (200, 208, 222)),
                  (right.x + 6, right.y + 4))
+    rclr_r = pygame.Rect(right.right - 50, right.y + 2, 46, 16)
+    btn(rclr_r, "Clear")
+    _ah_rects["results_clear"] = rclr_r
     log_clip = surface.get_clip()
     surface.set_clip(pygame.Rect(right.x + 2, right.y + 20,
                                  right.width - 4, right.height - 24))
@@ -27073,10 +28420,23 @@ def draw_ah_window(surface):
     ah_state["results_scroll"] = off
     ly = right.y + 22
     for ln in ah_state["results"][off:off + visible]:
-        d = ln
-        while d and fnt_s.size(d)[0] > right.width - 12:
-            d = d[:-1]
-        surface.blit(fnt_s.render(d, True, (188, 196, 210)), (right.x + 6, ly))
+        if isinstance(ln, str):
+            d = ln
+            while d and fnt_s.size(d)[0] > right.width - 12:
+                d = d[:-1]
+            surface.blit(fnt_s.render(d, True, (188, 196, 210)), (right.x + 6, ly))
+        else:
+            cx = right.x + 6
+            x_lim = right.x + right.width - 6
+            for seg_text, seg_col in ln:
+                t = seg_text
+                while t and fnt_s.size(t)[0] > (x_lim - cx):
+                    t = t[:-1]
+                if not t:
+                    break
+                surf = fnt_s.render(t, True, seg_col)
+                surface.blit(surf, (cx, ly))
+                cx += surf.get_width()
         ly += line_h
     surface.set_clip(log_clip)
     _ah_rects["results"] = right
@@ -27112,10 +28472,51 @@ def draw_ah_window(surface):
             _plines = _ah_price_lines(_hover_id, _tip[0] if _tip else "")
             _ah_draw_tooltip(surface, mx, my, _tip + _plines, fnt, fnt_b, fnt_s)
 
+    # ── resize grip (bottom-right corner) ──
+    grip = pygame.Rect(x + w - 16, y + h - 16, 16, 16)
+    for _gi in range(3):
+        _go = 3 + _gi * 4
+        pygame.draw.line(surface, (120, 130, 150),
+                         (x + w - 3, y + h - 3 - _go),
+                         (x + w - 3 - _go, y + h - 3), 1)
+    _ah_rects["resize"] = grip
+
+def _ah_draw_cat_browser(surface, items_r, fnt_s):
+    # Render the in-game-style category tree inside the buy item area: a list of
+    # top-level groups, then a group's leaf categories. Clicking a leaf fills the
+    # normal item list with that category's items.
+    rows = []  # (key_or_None, label, color)
+    grp = ah_state.get("browse_group")
+    if grp is None or grp >= len(_AH_CAT_TREE):
+        rows.append((None, "Auction House categories \u2014 pick a group:", (150, 160, 175)))
+        for gi, (gname, _cats) in enumerate(_AH_CAT_TREE):
+            rows.append(("bgrp:%d" % gi, "\u25b8  " + gname, (206, 212, 224)))
+    else:
+        gname, cats = _AH_CAT_TREE[grp]
+        rows.append(("bback", "\u2039  Back  \u00b7  %s" % gname, (150, 192, 236)))
+        for catid in cats:
+            rows.append(("bcat:%d" % catid,
+                         "    " + _AH_CATNAMES.get(catid, "category %d" % catid),
+                         (206, 212, 224)))
+    bh = 16
+    bvis = max(1, (items_r.height - 4) // bh)
+    boff = max(0, min(ah_state["items_scroll"], max(0, len(rows) - bvis)))
+    ah_state["items_scroll"] = boff
+    by = items_r.y + 3
+    for key, label, col in rows[boff:boff + bvis]:
+        lbl = label
+        while lbl and fnt_s.size(lbl)[0] > items_r.width - 12:
+            lbl = lbl[:-1]
+        surface.blit(fnt_s.render(lbl, True, col), (items_r.x + 6, by))
+        if key:
+            _ah_rects[key] = pygame.Rect(items_r.x + 2, by, items_r.width - 4, bh)
+        by += bh
+
+
 def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
     pad = 6
     # search row: field + Find + sort toggle
-    sr = pygame.Rect(area.x, area.y, area.width - 124, 22)
+    sr = pygame.Rect(area.x, area.y, area.width - 222, 22)
     field(sr, ah_state["search"], ah_state["search_focus"], "search items\u2026")
     _ah_rects["search"] = sr
     go_r = pygame.Rect(sr.right + 5, area.y, 48, 22)
@@ -27126,6 +28527,12 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
     sort_r = pygame.Rect(go_r.right + 5, area.y, 66, 22)
     btn(sort_r, "Sort " + _sort_lbl)
     _ah_rects["ah_sort"] = sort_r
+    clr_r = pygame.Rect(sort_r.right + 5, area.y, 44, 22)
+    btn(clr_r, "Clear")
+    _ah_rects["ah_clear"] = clr_r
+    cats_r = pygame.Rect(clr_r.right + 5, area.y, 44, 22)
+    btn(cats_r, "Cats", on=ah_state.get("browse", False))
+    _ah_rects["ah_cats"] = cats_r
 
     # middle: item results (full width — categories removed)
     mid_y = area.y + 28
@@ -27137,37 +28544,43 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
     pygame.draw.rect(surface, (60, 66, 80), items_r, 1, border_radius=3)
     iclip = surface.get_clip()
     surface.set_clip(items_r.inflate(-2, -2))
-    items = list(ah_state["items"])
-    _mode = ah_state.get("sort", "name")
-    if _mode == "level_asc":
-        items.sort(key=lambda it: (it.get("level", 0), it["name"].lower()))
-    elif _mode == "level_desc":
-        items.sort(key=lambda it: (-it.get("level", 0), it["name"].lower()))
+    if ah_state.get("browse"):
+        _ah_draw_cat_browser(surface, items_r, fnt_s)
     else:
-        items.sort(key=lambda it: it["name"].lower())
-    ih = 15
-    ivis = max(1, (items_r.height - 4) // ih)
-    ioff = max(0, min(ah_state["items_scroll"], max(0, len(items) - ivis)))
-    ah_state["items_scroll"] = ioff
-    iy = items_r.y + 3
-    if not items:
-        surface.blit(fnt_s.render("search for an item\u2026", True,
-                                  (120, 128, 142)), (items_r.x + 6, iy))
-    for it in items[ioff:ioff + ivis]:
-        irow = pygame.Rect(items_r.x + 2, iy, items_r.width - 4, ih)
-        nm = it["name"]
-        while nm and fnt_s.size(nm)[0] > items_r.width - 48:
-            nm = nm[:-1]
-        surface.blit(fnt_s.render(nm, True, (206, 212, 224)), (irow.x + 4, irow.y))
-        _lv = it.get("level", 0)
-        if _lv:
-            _lvs = fnt_s.render("Lv%d" % _lv, True, (150, 162, 184))
-            surface.blit(_lvs, (irow.right - 16 - _lvs.get_width(), irow.y))
-        surface.blit(fnt_s.render("+", True, (150, 210, 160)),
-                     (irow.right - 12, irow.y))
-        _ah_rects["item:%d:%d" % (it["id"], it.get("stack", 0))] = irow
-        _ah_item_tip_rects.append((irow, it["id"]))
-        iy += ih
+        items = list(ah_state["items"])
+        _mode = ah_state.get("sort", "name")
+        if _mode == "level_asc":
+            items.sort(key=lambda it: (it.get("level", 0), it["name"].lower()))
+        elif _mode == "level_desc":
+            items.sort(key=lambda it: (-it.get("level", 0), it["name"].lower()))
+        else:
+            items.sort(key=lambda it: it["name"].lower())
+        ih = 15
+        ivis = max(1, (items_r.height - 4) // ih)
+        ioff = max(0, min(ah_state["items_scroll"], max(0, len(items) - ivis)))
+        ah_state["items_scroll"] = ioff
+        iy = items_r.y + 3
+        if not items:
+            surface.blit(fnt_s.render("search for an item\u2026", True,
+                                      (120, 128, 142)), (items_r.x + 6, iy))
+        for it in items[ioff:ioff + ivis]:
+            irow = pygame.Rect(items_r.x + 2, iy, items_r.width - 4, ih)
+            nm = it["name"]
+            while nm and fnt_s.size(nm)[0] > items_r.width - 70:
+                nm = nm[:-1]
+            surface.blit(fnt_s.render(nm, True, (206, 212, 224)), (irow.x + 4, irow.y))
+            _lv = it.get("level", 0)
+            if _lv:
+                _lvs = fnt_s.render("Lv%d" % _lv, True, (150, 162, 184))
+                surface.blit(_lvs, (irow.right - 32 - _lvs.get_width(), irow.y))
+            surface.blit(fnt_s.render("+", True, (150, 210, 160)),
+                         (irow.right - 12, irow.y))
+            _hb = pygame.Rect(irow.right - 28, irow.y, 14, ih)
+            surface.blit(fnt_s.render("$", True, (224, 196, 120)), (_hb.x + 3, irow.y))
+            _ah_rects["hist:%d:%d" % (it["id"], it.get("stack", 0))] = _hb
+            _ah_rects["item:%d:%d" % (it["id"], it.get("stack", 0))] = irow
+            _ah_item_tip_rects.append((irow, it["id"]))
+            iy += ih
     surface.set_clip(iclip)
 
     # buy queue
@@ -27264,13 +28677,16 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
         if sel:
             pygame.draw.rect(surface, (50, 60, 80), row, border_radius=2)
         nm = it["name"]
-        while nm and fnt_s.size(nm)[0] > inv_r.width - 54:
+        while nm and fnt_s.size(nm)[0] > inv_r.width - 72:
             nm = nm[:-1]
         surface.blit(fnt_s.render(nm, True,
                                   (235, 220, 160) if sel else (206, 212, 224)),
                      (row.x + 4, row.y))
+        _hbx = pygame.Rect(row.right - 16, row.y, 14, ih)
+        surface.blit(fnt_s.render("$", True, (224, 196, 120)), (_hbx.x + 2, row.y))
         _cs = fnt_s.render("x%d" % it.get("count", 0), True, (150, 162, 184))
-        surface.blit(_cs, (row.right - 6 - _cs.get_width(), row.y))
+        surface.blit(_cs, (_hbx.x - 4 - _cs.get_width(), row.y))
+        _ah_rects["hist:%d:0" % it["id"]] = _hbx
         _ah_rects["sellitem:%d" % it["id"]] = row
         _ah_item_tip_rects.append((row, it["id"]))
         iy += ih
@@ -27283,7 +28699,15 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
     if sid is not None:
         sel_it = next((x for x in inv if x["id"] == sid), None)
         nm = sel_it["name"] if sel_it else ("item %d" % sid)
+        while nm and fnt_b.size(nm)[0] > area.width - 26:
+            nm = nm[:-1]
         surface.blit(fnt_b.render(nm, True, (212, 218, 230)), (area.x + 2, fy))
+        _xc = pygame.Rect(area.right - 18, fy, 15, 15)
+        pygame.draw.rect(surface, (70, 40, 40), _xc, border_radius=3)
+        _xcs = fnt_s.render("x", True, (220, 180, 180))
+        surface.blit(_xcs, (_xc.x + (15 - _xcs.get_width()) // 2,
+                            _xc.y + (15 - _xcs.get_height()) // 2))
+        _ah_rects["sellcancel"] = _xc
         fy += 16
         single = ah_state.get("sell_single", 1)
         sgl = pygame.Rect(area.x + 2, fy, 52, 18)
@@ -27454,10 +28878,21 @@ def _ah_handle_event(event):
         r = _ah_rects
         if r.get("close") and r["close"].collidepoint(mx, my):
             _toggle_ah_panel(); return True
+        if r.get("resize") and r["resize"].collidepoint(mx, my):
+            _ah_resize["on"] = True
+            _ah_resize["x0"] = mx
+            _ah_resize["y0"] = my
+            _ah_resize["w0"] = int(ah_panel_size[0])
+            _ah_resize["h0"] = int(ah_panel_size[1])
+            return True
         if r.get("title") and r["title"].collidepoint(mx, my):
             _ah_drag["on"] = True
             _ah_drag["dx"] = mx - ah_panel_pos[0]
             _ah_drag["dy"] = my - ah_panel_pos[1]
+            return True
+        if r.get("results_clear") and r["results_clear"].collidepoint(mx, my):
+            ah_state["results"] = []
+            ah_state["results_scroll"] = 0
             return True
         # commit a field edit if clicking off it
         prev_edit = ah_state["edit"]
@@ -27470,10 +28905,39 @@ def _ah_handle_event(event):
             ah_state["search_focus"] = False
         if r.get("search_go") and r["search_go"].collidepoint(mx, my):
             _ah_commit_edit(); _ah_run_search(); return True
+        if r.get("ah_clear") and r["ah_clear"].collidepoint(mx, my):
+            _ah_commit_edit()
+            ah_state["search"] = ""
+            ah_state["items"] = []
+            ah_state["items_scroll"] = 0
+            ah_state["search_focus"] = True
+            return True
+        if r.get("ah_cats") and r["ah_cats"].collidepoint(mx, my):
+            _ah_commit_edit()
+            ah_state["browse"] = not ah_state.get("browse", False)
+            ah_state["browse_group"] = None
+            ah_state["items_scroll"] = 0
+            return True
         # category tree
         for key, rr in list(r.items()):
             if not rr.collidepoint(mx, my):
                 continue
+            if key.startswith("bgrp:"):
+                ah_state["browse_group"] = int(key.split(":")[1])
+                ah_state["items_scroll"] = 0
+                return True
+            if key == "bback":
+                ah_state["browse_group"] = None
+                ah_state["items_scroll"] = 0
+                return True
+            if key.startswith("bcat:"):
+                _ah_browse_category(int(key.split(":")[1]))
+                return True
+            if key.startswith("hist:"):
+                _hp = key.split(":")
+                _hid = int(_hp[1]); _hst = int(_hp[2]) if len(_hp) > 2 else 0
+                _ah_fetch_combined(_hid, _hst)
+                return True
             if key.startswith("item:"):
                 _ip = key.split(":")
                 iid = int(_ip[1]); ist = int(_ip[2]) if len(_ip) > 2 else 0
@@ -27495,6 +28959,12 @@ def _ah_handle_event(event):
                 return True
             if key == "sellrefresh":
                 _ah_send("inv"); _ah_send("sales"); return True
+            if key == "sellcancel":
+                _ah_commit_edit()
+                ah_state["sell_id"] = None
+                ah_state["sell_price"] = 0
+                ah_state["edit"] = None
+                return True
             if key.startswith("sellitem:"):
                 _ah_commit_edit()
                 _sid = int(key.split(":", 1)[1])
@@ -27562,14 +29032,24 @@ def _ah_handle_event(event):
         if r.get("panel") and r["panel"].collidepoint(mx, my):
             return True
     elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _ah_resize["on"]:
+            _ah_resize["on"] = False
+            _ah_save_geometry()
+            return True
         if _ah_drag["on"]:
             _ah_drag["on"] = False
+            _ah_save_geometry()
             return True
     elif event.type == pygame.MOUSEMOTION:
         if _ah_drag["on"]:
             mx, my = event.pos
             ah_panel_pos[0] = mx - _ah_drag["dx"]
             ah_panel_pos[1] = my - _ah_drag["dy"]
+            return True
+        if _ah_resize["on"]:
+            mx, my = event.pos
+            ah_panel_size[0] = max(_AH_MIN_W, min(_AH_MAX_W, _ah_resize["w0"] + (mx - _ah_resize["x0"])))
+            ah_panel_size[1] = max(_AH_MIN_H, min(_AH_MAX_H, _ah_resize["h0"] + (my - _ah_resize["y0"])))
             return True
     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
         # right-click any item — a search result OR a queued row — to open
@@ -54403,7 +55883,15 @@ while running:
                 m = members_by_name.get(name)
                 if not m:
                     continue
-                px, py = panel_positions[name]
+                ppos = panel_positions.get(name)
+                if ppos is None:
+                    # Member is in the draw order but its on-screen position
+                    # hasn't been resolved yet (a saved-layout name before the
+                    # first draw frame, or a member who just joined). Skip
+                    # rather than KeyError-crash the app on a wheel event.
+                    # (Issue #30)
+                    continue
+                px, py = ppos
                 scale  = panel_scales.get(name, 1.0)
                 d      = scaled_panel_dims(scale)
                 rh     = row_height(m, scale)
@@ -56102,7 +57590,14 @@ while running:
                     m = members_by_name.get(name)
                     if not m:
                         continue
-                    px, py = panel_positions[name]
+                    ppos = panel_positions.get(name)
+                    if ppos is None:
+                        # Position not resolved yet (saved-layout name before
+                        # the first draw, or a just-joined member) — skip
+                        # instead of KeyError-crashing on the click hit-test.
+                        # Twin of the wheel-handler guard. (Issue #30)
+                        continue
+                    px, py = ppos
                     scale  = panel_scales.get(name, 1.0)
                     d      = scaled_panel_dims(scale)
                     rh     = row_height(m, scale)
