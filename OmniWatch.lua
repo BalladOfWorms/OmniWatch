@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.8.1'
+_addon.version  = '1.8.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -17238,8 +17238,17 @@ local ow_integrate = {
     ['mag dmg'] = 'magic damage',
     ['crithit rate'] = 'critical hit rate',
     ['phys dmg taken'] = 'physical damage taken',
-    ['occ. quickens spellcasting'] = 'quick cast',
-    ['occassionally quickens spellcasting'] = 'quick cast',
+    -- "Occ. quickens spellcasting" IS the Quick Magic stat; map it to the
+    -- 'quick magic' cell the panel sums. NOTE: the parser lowercases and
+    -- strips ALL periods before this lookup, so the key here must be the
+    -- period-stripped form ('occ quickens...', not 'occ. quickens...') or
+    -- it never matches. (Also requires the gear text to carry a number; a
+    -- value-less inherent "Occ. quickens spellcasting" line has no +N for
+    -- the parser to attach and is instead added via ow_enhanced by item id.)
+    ['occ quickens spellcasting'] = 'quick magic',
+    ['occ quicken spellcasting'] = 'quick magic',
+    ['occassionally quickens spellcasting'] = 'quick magic',
+    ['occasionally quickens spellcasting'] = 'quick magic',
     ['song duration'] = 'song effect duration',
 }
 
@@ -19534,6 +19543,14 @@ function ow_compute_stats()
                     -- Gear_info uses correct "Triple Attack" (its typo
                     -- "Tripple" is only in the Buffs_inform reset, not the
                     -- gear stat_table).
+                    -- Fast Cast is intentionally NOT in this copy-through.
+                    -- Unlike the multi-hit / crit / subtle-blow extras below
+                    -- (which GI accumulates into its stat_table but does NOT
+                    -- return from compute_player_stats), gear Fast Cast IS
+                    -- already returned in stats['fast cast']. Copying
+                    -- Gear_info['Fast Cast'] on top double-counted the gear FC
+                    -- (2026-06-30 fix). Job/trait/gift FC come from the
+                    -- JOB_TRAITS + gift paths and are unaffected.
                     local _GI_GEAR_EXTRA = {
                         ['double attack']       = 'Double Attack',
                         ['triple attack']       = 'Triple Attack',
@@ -19541,7 +19558,6 @@ function ow_compute_stats()
                         ['critical hit rate']   = 'Critical hit rate',
                         ['critical hit damage'] = 'Critical hit damage',
                         ['subtle blow']         = 'Subtle Blow',
-                        ['fast cast']           = 'Fast Cast',
                     }
                     for panel_key, gi_key in pairs(_GI_GEAR_EXTRA) do
                         if type(Gear_info[gi_key]) == 'number'
@@ -20530,6 +20546,134 @@ function ow_send_stats(stats)
                 local jse = (_ow_jse_primary_overlay
                              and _ow_jse_primary_overlay[lower_k]) or 0
                 stats[lower_k] = Gear_info[upper_k] + jse
+            end
+        end
+    end
+
+    -- ── Gain (RDM) / Boost (WHM) enhancing buffs → attributes + derived ──
+    -- Gain-<stat> (RDM, self) and Boost-<stat> (WHM, self + 10' AoE) apply
+    -- the "<STAT> Boost" status and raise that base attribute. Both share
+    -- the Enhancing-Magic-Skill potency formula (BG-wiki):
+    --   base = floor((Enhancing Magic Skill - 300) / 10) + 5
+    --   floored at +5 (below 300 skill), capped at +25 (500+ skill).
+    -- "Gain Stat +" gear (RDM-only, e.g. Vitiation Gloves) ADDS to the Gain
+    -- effect ON TOP of the +25 cap; we detect it by name and add its bonus.
+    -- The boosted attribute is then converted into its derived combat stats
+    -- (attack/acc/etc.) with the same /checkparam-verified rates the Unity-
+    -- augment overlay above uses. Skill = base/merit (combat_skills) + gear
+    -- (GearInfo). Caveats: a Boost cast on you by ANOTHER player used their
+    -- cast-time skill (unknowable — approximated from yours); and the "Gain
+    -- Stat +" gear bonus is applied whenever that gear is worn (you'd be
+    -- RDM), since the status alone can't distinguish Gain from a foreign
+    -- Boost.
+    do
+        local p = windower.ffxi.get_player()
+        if p and p.buffs and res and res.buffs then
+            local _BOOST_STATUS = {
+                ['str boost'] = 'str', ['dex boost'] = 'dex',
+                ['vit boost'] = 'vit', ['agi boost'] = 'agi',
+                ['int boost'] = 'int', ['mnd boost'] = 'mnd',
+                ['chr boost'] = 'chr',
+            }
+            local any = false
+            for _, bid in ipairs(p.buffs) do
+                local bd = res.buffs[bid]
+                if bd and _BOOST_STATUS[
+                    tostring(bd.en or bd.name or ''):lower()] then
+                    any = true
+                    break
+                end
+            end
+            if any then
+                -- A boost's magnitude is locked at CAST time from the caster's
+                -- Enhancing Magic skill, and we can't reconstruct it: for a
+                -- foreign cast we don't know their skill, and even for our own
+                -- cast the enhancing set worn at cast time is normally swapped
+                -- out by the time we read gear here -- so a current-gear skill
+                -- read undercounts what the buff actually granted (that's the
+                -- "capped WHM shows +19 while the game shows +25" case). Endgame
+                -- Gain/Boost is cast at 500+ effective Enhancing (the +25 cap),
+                -- so we assume the cap and show the full +25 base for any active
+                -- boost. can_self only gates our own "Gain Stat +" gear below.
+                -- (If you ever want the true sub-cap formula for low-skill
+                -- casts, this is where it would branch on can_self + skill.)
+                local mj = tostring(p.main_job or ''):upper()
+                local sj = tostring(p.sub_job or ''):upper()
+                local can_self = (mj == 'RDM' or mj == 'WHM'
+                                  or sj == 'RDM' or sj == 'WHM')
+                local base_pot = 25
+
+                -- "Gain Stat +" gear (adds on top of the cap). Match equipped
+                -- pieces by name; extend with any other Gain-effect gear.
+                local _GAIN_EFFECT_GEAR = {
+                    ['vitiation gloves +2'] = 20,
+                    ['vitiation gloves +3'] = 30,
+                    ['vitiation gloves +4'] = 30,
+                }
+                -- "Gain Stat +" gear is OUR gear and only matters for a
+                -- Gain we cast; skip it for a foreign cast.
+                local gain_gear = 0
+                local eq = can_self and windower.ffxi.get_items
+                           and windower.ffxi.get_items('equipment')
+                if eq then
+                    local _slots = {'main','sub','range','ammo','head',
+                        'neck','left_ear','right_ear','body','hands',
+                        'left_ring','right_ring','back','waist','legs','feet'}
+                    for _, sn in ipairs(_slots) do
+                        local bag = eq[sn..'_bag']
+                        local idx = eq[sn]
+                        if idx and idx ~= 0 and bag then
+                            local idata = windower.ffxi.get_items(bag, idx)
+                            local ri = idata and idata.id and res.items
+                                       and res.items[idata.id]
+                            local nm = ri and tostring(ri.en or ''):lower()
+                            if nm and _GAIN_EFFECT_GEAR[nm] then
+                                gain_gear = gain_gear + _GAIN_EFFECT_GEAR[nm]
+                            end
+                        end
+                    end
+                end
+
+                local boost = base_pot + gain_gear
+
+                -- STR→Att main-hand multiplier (H2H / unarmed = 0.75).
+                local _str_mul = 1.0
+                local _msk = (Gear_info and Gear_info['main']
+                              and Gear_info['main'].skill) or ''
+                if _msk == '' or _msk == 'Hand-to-Hand' then
+                    _str_mul = 0.75
+                end
+
+                local seen = {}
+                for _, bid in ipairs(p.buffs) do
+                    local bd = res.buffs[bid]
+                    local cell = bd and _BOOST_STATUS[
+                        tostring(bd.en or bd.name or ''):lower()]
+                    if cell and not seen[cell] then
+                        seen[cell] = true
+                        stats[cell] = (stats[cell] or 0) + boost
+                        -- Derived combat stats (Unity-overlay rates).
+                        if cell == 'str' then
+                            stats['attack']        = (stats['attack']        or 0) + math.floor(boost * _str_mul)
+                            stats['attack2']       = (stats['attack2']       or 0) + math.floor(boost * 0.5)
+                            stats['ranged attack'] = (stats['ranged attack'] or 0) + boost
+                        elseif cell == 'dex' then
+                            local _da = math.floor(boost * 0.75)
+                            stats['accuracy']  = (stats['accuracy']  or 0) + _da
+                            stats['accuracy2'] = (stats['accuracy2'] or 0) + _da
+                        elseif cell == 'agi' then
+                            stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + math.floor(boost * 0.75)
+                            stats['evasion']         = (stats['evasion']         or 0) + math.floor(boost / 2)
+                        elseif cell == 'int' then
+                            stats['magic accuracy']     = (stats['magic accuracy']     or 0) + math.floor(boost / 2)
+                            stats['magic attack bonus'] = (stats['magic attack bonus'] or 0) + math.floor(boost / 2)
+                        elseif cell == 'vit' then
+                            stats['defense'] = (stats['defense'] or 0) + math.floor(boost * 1.5)
+                        elseif cell == 'mnd' then
+                            stats['magic def. bonus'] = (stats['magic def. bonus'] or 0) + math.floor(boost / 2)
+                        end
+                    end
+                end
             end
         end
     end

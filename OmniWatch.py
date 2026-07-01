@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.8.1 (2026-06-28)"
+OMNIWATCH_BUILD_STAMP = "v1.8.2 (2026-06-30)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.8.1"
+OMNIWATCH_VERSION = "1.8.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -4788,6 +4788,22 @@ def _ingest_chat_packet(raw, stream_label):
         # for typical sessions (50 events is reached in seconds during
         # busy chat).
         global _chat_route_trace_count
+        # Targeted, cap-exempt trace to pin down the warp-ring "fails to
+        # activate" message (mode / actor / channel) so it can be routed like
+        # cast interrupts. Logs every matching event regardless of the cap.
+        _rt = (ev.get("text") or "").lower()
+        if "fails to activate" in _rt or "warp ring" in _rt:
+            try:
+                _rac, _rch = _chat_classify_event(ev)
+                _rtn = [chat_tab_names[i][0] for i in sorted(_chat_route_event(ev))
+                        if 0 <= i < len(chat_tab_names)]
+                print(f"[ring-trace] mode={ev.get('mode', 0)} "
+                      f"source={ev.get('source', '?')} "
+                      f"actor={ev.get('actor_name', '?')!r}[{_rac}] "
+                      f"channel={_rch} -> tabs={_rtn} "
+                      f"text={(ev.get('text', '') or '')!r}")
+            except Exception:
+                pass
         if _chat_route_trace_count < _CHAT_ROUTE_TRACE_CAP:
             _chat_route_trace_count += 1
             try:
@@ -26879,7 +26895,7 @@ ah_state = {
     "sell_id": None,
     "sell_single": 1,        # 1=single, 0=stack
     "sell_price": 0,
-    "prices": {},            # item_id(str) -> remembered price (persisted)
+    "prices": {},            # (unused; price memory removed)
     "queue": [],             # [{"id","name","qty","start","max","inc","status"}]
     "queue_scroll": 0,
     "throttle": 8.0,         # seconds between transactions (server-respect)
@@ -26895,6 +26911,7 @@ ah_panel_pos = globals().get("ah_panel_pos") or [
 ah_panel_size = globals().get("ah_panel_size") or [
     int(settings.get("ah_panel_w", 820)), int(settings.get("ah_panel_h", 452))]
 _AH_MIN_W, _AH_MIN_H = 600, 320
+_AH_STRIPE = (26, 30, 38)   # alternating row shade for AH lists
 _AH_MAX_W, _AH_MAX_H = 1500, 1100
 _ah_rects = {}
 _ah_item_tip_rects = []   # [(rect, item_id)] for hover tooltips
@@ -28419,7 +28436,10 @@ def draw_ah_window(surface):
     off = max(0, min(ah_state["results_scroll"], max(0, total - visible)))
     ah_state["results_scroll"] = off
     ly = right.y + 22
-    for ln in ah_state["results"][off:off + visible]:
+    for _ri, ln in enumerate(ah_state["results"][off:off + visible]):
+        if (off + _ri) % 2:
+            pygame.draw.rect(surface, _AH_STRIPE,
+                             pygame.Rect(right.x + 2, ly, right.width - 4, line_h))
         if isinstance(ln, str):
             d = ln
             while d and fnt_s.size(d)[0] > right.width - 12:
@@ -28469,8 +28489,7 @@ def draw_ah_window(surface):
             _ah_send("info|%d" % _hover_id)
         _tip = ah_state["iteminfo"].get(_hover_id)
         if _tip:
-            _plines = _ah_price_lines(_hover_id, _tip[0] if _tip else "")
-            _ah_draw_tooltip(surface, mx, my, _tip + _plines, fnt, fnt_b, fnt_s)
+            _ah_draw_tooltip(surface, mx, my, _tip, fnt, fnt_b, fnt_s)
 
     # ── resize grip (bottom-right corner) ──
     grip = pygame.Rect(x + w - 16, y + h - 16, 16, 16)
@@ -28503,7 +28522,10 @@ def _ah_draw_cat_browser(surface, items_r, fnt_s):
     boff = max(0, min(ah_state["items_scroll"], max(0, len(rows) - bvis)))
     ah_state["items_scroll"] = boff
     by = items_r.y + 3
-    for key, label, col in rows[boff:boff + bvis]:
+    for _bi, (key, label, col) in enumerate(rows[boff:boff + bvis]):
+        if (boff + _bi) % 2:
+            pygame.draw.rect(surface, _AH_STRIPE,
+                             pygame.Rect(items_r.x + 2, by, items_r.width - 4, bh))
         lbl = label
         while lbl and fnt_s.size(lbl)[0] > items_r.width - 12:
             lbl = lbl[:-1]
@@ -28563,8 +28585,10 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
         if not items:
             surface.blit(fnt_s.render("search for an item\u2026", True,
                                       (120, 128, 142)), (items_r.x + 6, iy))
-        for it in items[ioff:ioff + ivis]:
+        for _vi, it in enumerate(items[ioff:ioff + ivis]):
             irow = pygame.Rect(items_r.x + 2, iy, items_r.width - 4, ih)
+            if (ioff + _vi) % 2:
+                pygame.draw.rect(surface, _AH_STRIPE, irow)
             nm = it["name"]
             while nm and fnt_s.size(nm)[0] > items_r.width - 70:
                 nm = nm[:-1]
@@ -28604,6 +28628,9 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
     qy = q_r.y + 19
     for qi in range(qoff, min(len(ah_state["queue"]), qoff + qvis)):
         q = ah_state["queue"][qi]
+        if qi % 2:
+            pygame.draw.rect(surface, _AH_STRIPE,
+                             pygame.Rect(q_r.x + 2, qy, q_r.width - 4, qh - 1))
         nm = q["name"]
         while nm and fnt_s.size(nm)[0] > 146:
             nm = nm[:-1]
@@ -28671,11 +28698,13 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
     if not inv:
         surface.blit(fnt_s.render("(empty \u2014 hit Refresh at an Auction House)",
                                   True, (120, 128, 142)), (inv_r.x + 6, iy))
-    for it in inv[ioff:ioff + ivis]:
+    for _vi, it in enumerate(inv[ioff:ioff + ivis]):
         row = pygame.Rect(inv_r.x + 2, iy, inv_r.width - 4, ih)
         sel = ah_state.get("sell_id") == it["id"]
         if sel:
             pygame.draw.rect(surface, (50, 60, 80), row, border_radius=2)
+        elif (ioff + _vi) % 2:
+            pygame.draw.rect(surface, _AH_STRIPE, row)
         nm = it["name"]
         while nm and fnt_s.size(nm)[0] > inv_r.width - 72:
             nm = nm[:-1]
@@ -28794,21 +28823,11 @@ def _ah_price_file():
     return os.path.join(_ports_dir(), "ah_prices.json")
 
 def _ah_load_prices():
+    # Past-sale price memory was removed at the user's request. Wipe any
+    # ah_prices.json left by older versions so no remnants remain on disk.
+    ah_state["prices"] = {}
     try:
-        with open(_ah_price_file(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            ah_state["prices"] = {str(k): int(v) for k, v in data.items()}
-    except (OSError, ValueError):
-        pass
-
-def _ah_save_prices():
-    try:
-        fp = _ah_price_file()
-        tmp = fp + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(ah_state["prices"], f)
-        os.replace(tmp, fp)
+        os.remove(_ah_price_file())
     except OSError:
         pass
 
@@ -28832,24 +28851,6 @@ def _ah_ago(ts):
     if d < 86400:
         return "%dh ago" % (d // 3600)
     return "%dd ago" % (d // 86400)
-
-def _ah_price_lines(item_id, item_name):
-    """Going-rate reference from your own activity: recent prices paid
-    (txns, matched by name) + your last listed sell price (by id)."""
-    nm = (item_name or "").strip().lower()
-    buys = [t for t in ah_state["txns"]
-            if isinstance(t, dict) and str(t.get("name", "")).strip().lower() == nm]
-    listed = ah_state["prices"].get(str(item_id))
-    if not buys and listed is None:
-        return []
-    out = ["\u2500 your prices \u2500"]
-    for t in reversed(buys[-3:]):
-        ago = _ah_ago(t.get("time", 0))
-        out.append("paid %s%s" % (_ah_fmt_gil(t.get("price", 0)),
-                                  ("  (%s)" % ago) if ago else ""))
-    if listed is not None:
-        out.append("you listed %s" % _ah_fmt_gil(listed))
-    return out
 
 def _ah_commit_edit():
     e = ah_state["edit"]
@@ -28970,8 +28971,7 @@ def _ah_handle_event(event):
                 _sid = int(key.split(":", 1)[1])
                 ah_state["sell_id"] = _sid
                 ah_state["sell_single"] = 1
-                _rp = ah_state.get("prices", {}).get(str(_sid))
-                ah_state["sell_price"] = int(_rp) if _rp else 0
+                ah_state["sell_price"] = 0
                 return True
             if key == "sellsingle":
                 ah_state["sell_single"] = 1; return True
@@ -28990,7 +28990,6 @@ def _ah_handle_event(event):
                 if _sid is not None and _pr > 0:
                     _ah_send("sell|%d|%d|%d" % (
                         _sid, ah_state.get("sell_single", 1), _pr))
-                    ah_state.setdefault("prices", {})[str(_sid)] = _pr
                 return True
             if key.startswith("qdel:"):
                 qi = int(key.split(":", 1)[1])

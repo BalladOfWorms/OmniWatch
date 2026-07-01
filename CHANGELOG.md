@@ -1,8 +1,26 @@
 # Changelog
 
+## [1.8.2] — 2026-06-30
+
+### Added
+
+- **Gain / Boost enhancing buffs now feed the stats panel** — with a **Gain-<stat>** (RDM) or **Boost-<stat>** (WHM) buff active, the panel adds its bonus to that base attribute (STR / DEX / VIT / AGI / INT / MND / CHR) and carries it through to the combat stats that attribute drives — STR into Attack (main / off-hand / ranged), DEX into Accuracy, AGI into Ranged Accuracy and Evasion, INT into Magic Accuracy / Magic Atk. Bonus, VIT into Defense, MND into Magic Def. Bonus — using the same conversion rates the rest of the panel is pinned to. Both spells share the Enhancing-Magic-Skill potency formula, which caps at **+25** (at 500 skill); because a buff's real magnitude is locked in at cast time (in your enhancing set) and can't be read back once you swap gear, the panel assumes the cap and shows the full value, matching `/checkparam` for endgame play. RDM **"Gain Stat +"** gear that boosts the Gain effect past the cap (e.g. Vitiation Gloves +2/+3/+4 → +20/+30/+30) is detected by name and stacked on top. Buffs you couldn't have cast yourself (no RDM/WHM in your main or sub) are treated as a party member's cast at max skill.
+
+### Changed
+
+- **Striped Auction House lists** — the search/browse results, the buy queue, the results log, and the sell inventory now use alternating row shading so dense lists are easier to scan.
+
+### Fixed
+
+- **Gear Fast Cast no longer counted twice** — the stats panel was pulling gear Fast Cast from two places at once: GearInfo's own returned total *and* an extra copy-through that exists for the stats GearInfo doesn't return (Double/Triple Attack, crit, Subtle Blow). Fast Cast was the one entry in that copy-through GearInfo already returns, so a Fast Cast set read exactly double. It now comes from the single correct source; job-trait and JP-gift Fast Cast were never involved and are unchanged.
+
+- **"Occ. quickens spellcasting" gear now counts as Quick Magic** — gear that labels Quick Magic with the wording *"Occ. quickens spellcasting"* was being routed to a dead stat key (and, after a first pass, missed a period-stripping quirk in the parser), so it never reached the panel. That wording now maps to the Quick Magic total like any other source. (Pieces that carry the effect with no number printed in their description — the inherent, value-less kind — are still added by item ID instead.)
+
 ## [1.8.1] — 2026-06-30
 
 ### Added
+
+- **Auction House category browsing** — a **Cats** button (beside Find / Sort / Clear) flips the Buy list into an in-game-style category tree: pick a top-level group (Weapons, Armor, Scrolls, Medicines, Items, Materials, Food), then a leaf category, and the list fills with every item in it. From there everything works exactly as a name search does — **$** for listing counts and recent sales, **+** to queue, right-click for the FFXIAH page, and the sort toggle. Click **Cats** again or start typing to return to search. Category membership comes from the bundled item→category map; names/levels are resolved by the addon's own item data.
 
 - **Auction House live sales history & listing counts, in-panel** — Click the **$** on any AH item to pull, straight from your world's search server, both its **current listing counts** (how many singles / stacks are for sale right now) and its **last ~10 sales** — each shown as *date · seller → buyer · price* under a coloured item-name header in the results log, for the single or stack you clicked. This is the same live data FFXIAH reads, but in-game with no website: OmniWatch speaks the search-server protocol directly (a reverse-engineered Blowfish/MD5 packet format) on a background thread so the overlay never blocks, and auto-detects the per-world search server from the game client's own connection — no server IP to configure, and it follows whatever world you're logged into. Right-clicking an item still opens its FFXIAH page.
 
