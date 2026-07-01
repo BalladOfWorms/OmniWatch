@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.8.3] — 2026-07-01
+
+### Added
+
+- **Auction House is now available to all users** — the AH panel's button and toggle had been opened up, but its render was still behind the developer gate, so a non-developer's OPEN flipped the state without ever painting the window (and its click targets were cleared). The panel now renders for everyone. The other developer panels (Scan Zone, Synergy, SkillUp, Craft) remain hidden. Note: the live sales-history "$" button still needs the client to have used the in-game Search menu once per session so your world's search server can be auto-detected.
+
+### Changed
+
+- **Tighter Bard singer rotation** — the pause between songs (after a cast finishes, before the next `/ma`) dropped from 0.5s to 0.3s. The job-ability pauses are unchanged, since they're bounded by the game's ~1-second ability lockout.
+
+### Fixed
+
+- **Ongoing Events feed recovered** — PlayOnline's topics feed began returning malformed XML (an unescaped ampersand), which made the entire document fail to parse, so Refresh silently kept stale data and the footer sat on an old "updated N days ago". The parser now repairs the feed (escapes bare ampersands, strips illegal control characters) and retries, and reads items by local tag name so a future RSS/Atom change won't break it. A failed refresh now shows the reason in the modal footer instead of doing nothing, and the raw response is saved alongside the cache for diagnosis.
+
 ## [1.8.2] — 2026-06-30
 
 ### Added

@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.8.2'
+_addon.version  = '1.8.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -8531,8 +8531,16 @@ end
 
 do
     local BRD_JOB = 10
+    -- Timing knobs. SETTLE is the gap after a song's cast FINISHES
+    -- (category-4 action) before the next /ma; songs chain back-to-back in
+    -- game so 0.3 is enough not to outrun the client. JA_DELAY / MARCATO_DELAY
+    -- are the waits after a job ability (Nightingale/Troubadour/Soul Voice)
+    -- and after Marcato: FFXI enforces a ~1-second lockout between job
+    -- abilities, so 1.0 is the practical floor -- lower and chained JAs at the
+    -- start of a rotation can get dropped. If you see a JA skipped on higher
+    -- latency, nudge these back to 1.1-1.2.
     local SETTLE, JA_DELAY, MARCATO_DELAY, MODE_DELAY, SONG_TIMEOUT, MAX_RETRY =
-        0.5, 1.3, 1.3, 0.5, 9.0, 2
+        0.3, 1.3, 1.3, 0.5, 9.0, 2
     local IDLE_MODE = 'none'   -- extrasongsmode restored after a rotation/stop
     local st = { active = false, steps = {}, idx = 1, wait_sid = nil,
                  wait_idx = 0, retries = 0, skip_dummies = false, token = 0 }

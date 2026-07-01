@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.8.2 (2026-06-30)"
+OMNIWATCH_BUILD_STAMP = "v1.8.3 (2026-07-01)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.8.2"
+OMNIWATCH_VERSION = "1.8.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -17109,6 +17109,7 @@ campaigns_last_fetched   = 0.0     # unix ts; 0 = never
 campaigns_last_attempt   = 0.0     # unix ts; gates retries on failure
 campaigns_fetch_in_flight = False
 campaigns_fetch_failed   = False   # True if last attempt failed and we have no fallback
+campaigns_last_error     = ""      # reason the last attempt failed (empty on success)
 campaigns_modal_open     = False
 campaigns_scroll         = 0       # pixel offset
 _campaigns_click_rects   = []      # hit-test targets, refilled each frame
@@ -17962,6 +17963,22 @@ def _campaigns_phase_groups(parent_title, sub_campaigns):
     return result
 
 
+def _campaigns_sanitize_xml(xml_bytes):
+    """Best-effort repair of a not-well-formed topics feed so ElementTree
+    can parse it. PlayOnline's RSS intermittently contains bare ampersands,
+    stray control characters, or a bad byte that trips strict XML parsing
+    (e.g. ParseError 'not well-formed (invalid token)'). We only call this
+    as a fallback after a raw parse has already failed."""
+    text = xml_bytes.decode("utf-8", "replace")
+    # Strip control characters that are illegal in XML 1.0 (keep tab/LF/CR).
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    # Escape bare & that aren't already the start of a valid entity ref.
+    text = re.sub(
+        r"&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9A-Fa-f]+);)",
+        "&amp;", text)
+    return text.encode("utf-8")
+
+
 def _campaigns_parse_xml(xml_bytes):
     """Parse the topics.xml byte string into a list of entry dicts.
 
@@ -17975,28 +17992,49 @@ def _campaigns_parse_xml(xml_bytes):
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError as e:
-        print(f"[OmniWatch] campaigns XML parse failed: {e!r}")
-        return []
+        # The feed is malformed (bare &, stray control char, bad byte).
+        # Sanitize and retry once before giving up.
+        print(f"[OmniWatch] campaigns XML parse failed: {e!r}; "
+              f"retrying sanitized")
+        try:
+            root = ET.fromstring(_campaigns_sanitize_xml(xml_bytes))
+            print("[OmniWatch] campaigns: sanitized parse succeeded")
+        except ET.ParseError as e2:
+            print(f"[OmniWatch] campaigns sanitized parse also failed: "
+                  f"{e2!r}")
+            return []
 
-    ns = {"rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-          "rss": "http://purl.org/rss/1.0/",
-          "dc":  "http://purl.org/dc/elements/1.1/"}
+    # Namespace-agnostic parsing. PlayOnline changed the topics feed's
+    # wrapper/namespace (~2026-06), so the old RSS-1.0 lookup
+    # findall("rss:item", rss-1.0-ns) matched 0 items even though the
+    # fetch succeeded. Match by LOCAL tag name instead, which handles
+    # RSS 1.0 (rss:item), RSS 2.0 (<item> under <channel>), and Atom
+    # (<entry>) alike, and pull fields the same way.
+    def _local(tag):
+        return str(tag).rsplit("}", 1)[-1].lower()
+
+    def _ftext(parent, *names):
+        want = {n.lower() for n in names}
+        for ch in parent:
+            if _local(ch.tag) in want:
+                return ch.text or ""
+        return ""
 
     out = []
     seen_titles = set()  # the feed sometimes lists "Almost Here!" /
                          # "Is Now Underway!" pairs for the same event;
                          # keep the first (most recent) only.
-    all_items = root.findall("rss:item", ns)
-    print(f"[OmniWatch] campaigns: RSS has {len(all_items)} items total")
+    all_items = [el for el in root.iter() if _local(el.tag) in ("item", "entry")]
+    print(f"[OmniWatch] campaigns: feed has {len(all_items)} items total")
     for idx, item in enumerate(all_items):
-        title_for_log = (item.findtext("rss:title", "", ns) or "").strip()
+        title_for_log = _ftext(item, "title").strip()
         print(f"[OmniWatch] campaigns: item {idx+1}/{len(all_items)}: "
               f"{title_for_log[:70]!r}")
     for item in all_items:
-        title = (item.findtext("rss:title", "", ns) or "").strip()
-        link  = (item.findtext("rss:link",  "", ns) or "").strip()
-        desc  = (item.findtext("rss:description", "", ns) or "")
-        date  = (item.findtext("dc:date",   "", ns) or "").strip()
+        title = _ftext(item, "title").strip()
+        link  = _ftext(item, "link").strip()
+        desc  = _ftext(item, "description", "summary")
+        date  = _ftext(item, "date", "pubdate", "published", "updated").strip()
         if not title:
             continue
 
@@ -18188,6 +18226,7 @@ def _campaigns_fetch_now():
     """Synchronous fetch + parse. Returns the new entries list or
     None on failure. Called from the background thread; never call
     from the main thread because the network can stall for seconds."""
+    global campaigns_last_error
     try:
         req = urllib.request.Request(
             CAMPAIGNS_TOPICS_URL,
@@ -18200,9 +18239,29 @@ def _campaigns_fetch_now():
         )
         with urllib.request.urlopen(req, timeout=CAMPAIGNS_FETCH_TIMEOUT_SEC) as r:
             body = r.read()
+            _status = getattr(r, "status", None) or r.getcode()
+            _ctype  = r.headers.get("Content-Type", "?")
+            _final  = r.geturl()
     except Exception as e:
+        campaigns_last_error = f"{type(e).__name__}: {e}"[:80]
         print(f"[OmniWatch] campaigns fetch failed: {e!r}")
         return None
+    # Diagnostic: log what the server actually returned + dump the raw body
+    # next to the cache, so a format/URL change can be inspected directly.
+    try:
+        _head = body[:220].decode("utf-8", "replace").replace("\r", " ").replace("\n", " ")
+        print(f"[OmniWatch] campaigns: HTTP {_status}  type={_ctype}  "
+              f"final_url={_final}  bytes={len(body)}")
+        print(f"[OmniWatch] campaigns: body head: {_head!r}")
+        _cp = _campaigns_cache_path()
+        if _cp:
+            _rawp = os.path.join(os.path.dirname(_cp),
+                                 "omniwatch_campaigns_raw.xml")
+            with open(_rawp, "wb") as _f:
+                _f.write(body)
+            print(f"[OmniWatch] campaigns: raw response saved to {_rawp}")
+    except Exception as _de:
+        print(f"[OmniWatch] campaigns: debug dump failed: {_de!r}")
     entries = _campaigns_parse_xml(body)
     return entries
 
@@ -18221,7 +18280,7 @@ def _campaigns_background_fetch():
     def _worker():
         global campaigns_fetch_in_flight, campaigns_entries
         global campaigns_last_fetched, campaigns_last_attempt
-        global campaigns_fetch_failed
+        global campaigns_fetch_failed, campaigns_last_error
         try:
             print(f"[OmniWatch] campaigns: background fetch starting")
             campaigns_last_attempt = time.time()
@@ -18241,10 +18300,12 @@ def _campaigns_background_fetch():
                 campaigns_fetch_failed = not bool(campaigns_entries)
                 print(f"[OmniWatch] campaigns: fetch returned 0 entries "
                       f"(empty result)")
+                campaigns_last_error = "feed had 0 events (format change?)"
                 return
             campaigns_entries = entries
             campaigns_last_fetched = time.time()
             campaigns_fetch_failed = False
+            campaigns_last_error = ""
             _campaigns_save_cache()
             print(f"[OmniWatch] campaigns refreshed: "
                   f"{len(entries)} active events")
@@ -18260,6 +18321,7 @@ def _campaigns_background_fetch():
             print(f"[OmniWatch] campaigns worker CRASHED: {e!r}")
             traceback.print_exc()
             campaigns_fetch_failed = True
+            campaigns_last_error = f"{type(e).__name__}: {e}"[:80]
         finally:
             campaigns_fetch_in_flight = False
 
@@ -40569,7 +40631,9 @@ def _draw_campaigns_footer(surface, mx, my, mw, mh, font):
         else:
             stamp = f"{int(age // 86400)} d ago"
         msg = f"Last updated: {stamp}"
-        if campaigns_fetch_failed:
+        if campaigns_last_error:
+            msg += f"  •  refresh failed: {campaigns_last_error}"
+        elif campaigns_fetch_failed:
             msg += "  •  (refresh failed)"
     elif campaigns_fetch_in_flight:
         msg = "Fetching…"
@@ -55330,8 +55394,8 @@ while running:
     else:
         _syn_clear_rects()
 
-    # ── DEV · Auction House (hidden; sentinel-gated) ──
-    if _DEV_ENABLED and not display_hidden:
+    # ── Auction House (general feature; ungated for all users) ──
+    if not display_hidden:
         draw_ah_window(screen)
     else:
         _ah_clear_rects()
