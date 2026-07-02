@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.8.3'
+_addon.version  = '1.9.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2598,7 +2598,8 @@ local function _ow_emit_inventory_snapshot()
                     end
                     if nm == '' then nm = '#' .. tostring(it.id) end
                     nm = _ow_sanitize_item_name(nm)
-                    entries[#entries + 1] = string.format('%d,%d,%s', it.id, cnt, nm)
+                    entries[#entries + 1] = string.format('%d,%d,%d,%s',
+                        it.id, cnt, tonumber(it.bazaar) or 0, nm)
                 end
             end
         end
@@ -5241,6 +5242,67 @@ local function _ow_inv_autodrop_by_id(item_id)
     ow_chat(207, '[OmniWatch] Auto-drop -> Treasury: ' .. nm)
 end
 
+-- Set a bazaar price on an inventory item by id. Resolves the item's slot
+-- in the main inventory and injects the game's Set Bazaar Price packet
+-- (outgoing 0x10A), which puts the item into your bazaar at that price.
+local function _ow_inv_bazaar_by_id(item_id, price)
+    if not (item_id and price and price >= 0) then
+        ow_chat(123, '[OmniWatch] Bazaar: bad item or price'); return
+    end
+    local inv = windower.ffxi.get_items and windower.ffxi.get_items('inventory')
+    if not inv then ow_chat(123, '[OmniWatch] Bazaar: no inventory'); return end
+    local idx
+    for i = 1, (inv.max or 80) do
+        local it = inv[i]
+        if it and it.id == item_id and (it.count or 0) > 0 then
+            idx = it.slot or i
+            break
+        end
+    end
+    if not idx then
+        ow_chat(123, '[OmniWatch] Bazaar: item not in main inventory'); return
+    end
+    local nm = (res and res.items and res.items[item_id]
+                and (res.items[item_id].en or res.items[item_id].name))
+               or tostring(item_id)
+    -- Use packets.new + packets.inject (NOT raw inject_outgoing): the
+    -- managed API fills the outgoing SYNC counter. A capture of the real
+    -- client showed our raw injects had sync=0000 while the client sends a
+    -- live sync -- the bazaar packet is sync-checked, so 0000 was silently
+    -- rejected (that's why every raw attempt failed). Layout confirmed from
+    -- the capture: ItemIndex (u8) @ 0x04, Price (u32) @ 0x08, and ItemIndex
+    -- == the Windower inventory index (not 0-based). 0x109 "Bazaar Open"
+    -- opens the bazaar after the price is set.
+    local ok = pcall(function()
+        if price == 0 then
+            -- Remove flow (confirmed from a capture of the client's own
+            -- remove): CLOSE the bazaar (0x10B) before setting price 0.
+            -- Injecting 0x10A price 0 alone -- the set flow -- does not
+            -- unlist the item.
+            packets.inject(packets.new('outgoing', 0x10B, {}))
+        end
+        local pp = packets.new('outgoing', 0x10A, {})
+        pp['Price'] = price
+        pp['Item Index'] = idx
+        pp['ItemIndex'] = idx
+        pp['Inventory Index'] = idx
+        pp['Index'] = idx
+        pp['Slot'] = idx
+        packets.inject(pp)
+    end)
+    -- re-open so any OTHER bazaared items stay listed (the removed one is
+    -- now at price 0 = unlisted, so it does not come back)
+    local ok2 = pcall(function()
+        packets.inject(packets.new('outgoing', 0x109, {}))
+    end)
+    if ok then
+        ow_chat(207, string.format(
+            '[OmniWatch] Bazaar: %s @ %d gil (slot %d)', nm, price, idx))
+    else
+        ow_chat(123, '[OmniWatch] Bazaar: packet inject failed')
+    end
+end
+
 -- Drain helper: pulls all queued packets off udp_cmd_in and routes each
 -- to the appropriate handler. Called from the prerender loop. Wrapped
 -- in a single pcall so a malformed packet can't kill the addon.
@@ -5336,39 +5398,6 @@ ow_safe_register('action', function(act)
     if pid and act.actor_id == pid then
         coroutine.schedule(_ow_autora_check, _ow_autora_delay)
     end
-end)
-
--- ════════════════════════════════════════════════════════════════════
---  AllSeeingEye — reveal hidden entities  (dev-mode feature)
--- ════════════════════════════════════════════════════════════════════
--- Rewrites incoming 0x0E (NPC Update) packets whose status byte marks an
--- entity the server is hiding (2 dead/corpse, 6 appearing, 7 fading) so
--- the client renders it. Same byte rewrite as AllSeeingEye (Project Tako).
--- Uses a DIRECT register_event (not ow_safe_register): the modified packet
--- is returned to replace the original, and the safe wrapper discards return
--- values. Driven by SETTING|ase_* from the dev-menu box (default off).
-_ow_ase_enabled   = false
-_ow_ase_dead      = true
-_ow_ase_appearing = true
-_ow_ase_fading    = true
-
-function _ow_ase_reveal(data)
-    if #data < 43 then return nil end
-    local status = data:byte(0x21)
-    local on = (status == 2 and _ow_ase_dead)
-            or (status == 6 and _ow_ase_appearing)
-            or (status == 7 and _ow_ase_fading)
-    if on then
-        return data:sub(1, 32) .. '0' .. data:sub(34, 34)
-               .. '0' .. data:sub(36, 41) .. '0' .. data:sub(43)
-    end
-    return nil
-end
-
-windower.register_event('incoming chunk', function(id, data)
-    if id ~= 0x0E or not _ow_ase_enabled then return end
-    local ok, res = pcall(_ow_ase_reveal, data)
-    if ok then return res end
 end)
 
 -- ════════════════════════════════════════════════════════════════════
@@ -7200,12 +7229,35 @@ local function _ow_su_rate()
     return total
 end
 
+-- Emit every skill (name~value~capped) for the SkillUp panel's skill list.
+-- The cached 0x062 packet names VALUES as "<Skill> Level" and caps as
+-- "<Skill> Capped" (verified from the live packet). We iterate the Level
+-- fields for the value and pair each with its Capped flag. Python filters to
+-- combat/magic and drops crafting skills. Updates live on every skillup.
+function _ow_su_emit_skills()
+    local sk = _ow_su.skill
+    local parts = {}
+    if type(sk) == 'table' then
+        for k, v in pairs(sk) do
+            if type(k) == 'string' and #k > 6 and k:sub(-6) == ' Level'
+               and type(v) == 'number' then
+                local base = k:sub(1, -7)               -- strip ' Level'
+                local cap = (sk[base .. ' Capped'] == true)
+                parts[#parts + 1] = string.format('%s~%d~%d',
+                    base:gsub('[~;|]', ' '), v, cap and 1 or 0)
+            end
+        end
+    end
+    _ow_su_emit('SKILLUP|skills|' .. table.concat(parts, ';'))
+end
+
 function _ow_su_emit_status()
     local s = _ow_su
     _ow_su_emit(string.format('SKILLUP|status|%s|%d|%.1f|%.1f|%s|%s|%s|%s',
         s.type, s.running and 1 or 0, _ow_su_rate()/10, (s.total or 0)/10,
         s.use_trust and '1' or '0', s.use_geo and '1' or '0',
         s.use_item and '1' or '0', s.stoptype))
+    _ow_su_emit_skills()
 end
 
 -- ── spell helpers ─────────────────────────────────────────────────────────
@@ -9136,22 +9188,6 @@ local function _ow_drain_inbound()
                            or (sval == '1')
                 _ow_autora_halt_tp = not ig
             end
-            if skey == 'ase_enabled' then
-                _ow_ase_enabled = ((sval or ''):lower() == 'true')
-                                  or (sval == '1')
-            end
-            if skey == 'ase_dead' then
-                _ow_ase_dead = ((sval or ''):lower() == 'true')
-                               or (sval == '1')
-            end
-            if skey == 'ase_appearing' then
-                _ow_ase_appearing = ((sval or ''):lower() == 'true')
-                                    or (sval == '1')
-            end
-            if skey == 'ase_fading' then
-                _ow_ase_fading = ((sval or ''):lower() == 'true')
-                                 or (sval == '1')
-            end
             if skey == 'fisher_catch_limit' then
                 if _ow_fisher_set_opt then
                     _ow_fisher_set_opt('catch_limit', tonumber(sval) or 0)
@@ -9318,6 +9354,13 @@ local function _ow_drain_inbound()
                 local a2     = tail:find('|', 1, true)
                 local who    = a2 and tail:sub(1, a2 - 1) or ''
                 local id_str = a2 and tail:sub(a2 + 1) or ''
+                -- bazaar carries an extra |<price> field after the item id
+                local bz_price
+                local a3 = id_str:find('|', 1, true)
+                if a3 then
+                    bz_price = tonumber(id_str:sub(a3 + 1))
+                    id_str   = id_str:sub(1, a3 - 1)
+                end
                 local item_id = tonumber(id_str)
                 local me      = windower.ffxi.get_player
                                 and windower.ffxi.get_player()
@@ -9342,6 +9385,13 @@ local function _ow_drain_inbound()
                         if not ok then
                             ow_chat(123,
                                 '[OmniWatch] autodrop error: ' .. tostring(err))
+                        end
+                    elseif action == 'bazaar' then
+                        local ok, err = pcall(_ow_inv_bazaar_by_id,
+                                              item_id, bz_price)
+                        if not ok then
+                            ow_chat(123,
+                                '[OmniWatch] bazaar error: ' .. tostring(err))
                         end
                     end
                 end

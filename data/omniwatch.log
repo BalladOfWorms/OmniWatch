@@ -1,0 +1,60 @@
+[2026-06-28 12:39:28] [OmniWatch] loaded v1.8.0. Type //ow help for commands.
+[2026-06-28 13:14:42] [OmniWatch] loaded v1.8.0. Type //ow help for commands.
+[2026-06-28 13:15:23] [BRD] Singing 12 step(s)...
+[2026-06-28 13:15:24] [OW] JA WIRE: Troubadour bid=348 dur=60s (cat=6 self)
+[2026-06-28 13:15:25] [OW] JA WIRE: Nightingale bid=347 dur=60s (cat=6 self)
+[2026-06-28 13:15:26] [OW] JA WIRE: Marcato bid=231 dur=60s (cat=6 self)
+[2026-06-28 13:15:28] [OW] Honor March: Marcato active, potency x1.5 = 20.21%
+[2026-06-28 13:15:28] [OW] Honor March: gear March+1 (cap 4), potency 20.21%
+[2026-06-28 13:15:28] [OW] march sources now: [Honor March=20.21484375%]
+[2026-06-28 13:15:28] [OW] Honor March: Marcato active, potency x1.5 = 25.49%
+[2026-06-28 13:15:28] [OW] Honor March: gear March+4 (cap 4), potency 25.49%
+[2026-06-28 13:15:28] [OW] march sources now: [Honor March=25.48828125%, Honor March=-%]
+[2026-06-28 13:15:43] [OW] Victory March: gear March+2 (cap 8), potency 19.04%
+[2026-06-28 13:15:43] [OW] march sources now: [Honor March=25.48828125%, Honor March=-%, Victory March=19.04296875%]
+[2026-06-28 13:15:43] [OW] Victory March: gear March+8 (cap 8), potency 28.61%
+[2026-06-28 13:15:43] [OW] march sources now: [Honor March=25.48828125%, Honor March=-%, Victory March=28.61328125%, Victory March=-%]
+[2026-06-28 13:15:53] [OW] Victory March: gear March+2 (cap 8), potency 19.04%
+[2026-06-28 13:15:53] [OW] march sources now: [Honor March=25.48828125%, Honor March=-%, Victory March=28.61328125%, Victory March=-%]
+[2026-06-28 13:15:54] [OW] Victory March: gear March+8 (cap 8), potency 28.61%
+[2026-06-28 13:15:54] [OW] march sources now: [Honor March=25.48828125%, Honor March=-%, Victory March=28.61328125%, Victory March=-%]
+[2026-06-28 13:15:54] [BRD] Rotation complete.
+
+===== OmniWatch 1.8.0 log started 2026-06-28 13:23:32 =====
+[2026-06-28 13:23:36] [OmniWatch] loaded v1.8.0. Type //ow help for commands.
+[2026-06-28 13:25:30] [BRD] Singing 12 step(s)...
+[2026-06-28 13:25:31] [OW] JA WIRE: Troubadour bid=348 dur=60s (cat=6 self)
+[2026-06-28 13:25:32] [OW] JA WIRE: Nightingale bid=347 dur=60s (cat=6 self)
+[2026-06-28 13:25:34] [OW] JA WIRE: Marcato bid=231 dur=60s (cat=6 self)
+[2026-06-28 13:25:35] [OW] Honor March: Marcato active, potency x1.5 = 20.21%
+[2026-06-28 13:25:35] [OW] Honor March: gear March+1 (cap 4), potency 20.21%
+[2026-06-28 13:25:35] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:25:35] [OW] Honor March: Marcato active, potency x1.5 = 25.49%
+[2026-06-28 13:25:35] [OW] Honor March: gear March+4 (cap 4), potency 25.49%
+[2026-06-28 13:25:35] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:25:50] [OW] Victory March: gear March+2 (cap 8), potency 19.04%
+[2026-06-28 13:25:50] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:25:51] [OW] Victory March: gear March+8 (cap 8), potency 28.61%
+[2026-06-28 13:25:51] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:26:00] [OW] Victory March: gear March+2 (cap 8), potency 19.04%
+[2026-06-28 13:26:00] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:26:01] [OW] Victory March: gear March+8 (cap 8), potency 28.61%
+[2026-06-28 13:26:01] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:26:01] [BRD] Rotation complete.
+[2026-06-28 13:35:06] [OW] debug = true
+[2026-06-28 13:35:12] [OW] debug = false
+[2026-06-28 13:35:39] [BRD] Singing 8 step(s)...
+[2026-06-28 13:35:40] [OW] JA WIRE: Troubadour bid=348 dur=60s (cat=6 self)
+[2026-06-28 13:35:41] [OW] JA WIRE: Nightingale bid=347 dur=60s (cat=6 self)
+[2026-06-28 13:35:43] [OW] JA WIRE: Marcato bid=231 dur=60s (cat=6 self)
+[2026-06-28 13:35:44] [OW] Honor March: Marcato active, potency x1.5 = 20.21%
+[2026-06-28 13:35:44] [OW] Honor March: gear March+1 (cap 4), potency 20.21%
+[2026-06-28 13:35:44] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:35:44] [OW] Honor March: Marcato active, potency x1.5 = 25.49%
+[2026-06-28 13:35:44] [OW] Honor March: gear March+4 (cap 4), potency 25.49%
+[2026-06-28 13:35:44] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:35:49] [OW] Victory March: gear March+2 (cap 8), potency 19.04%
+[2026-06-28 13:35:49] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:35:49] [OW] Victory March: gear March+8 (cap 8), potency 28.61%
+[2026-06-28 13:35:49] [OW] march sources now: [Honor March=25.48828125%, Honor March=0%, Victory March=28.61328125%, Victory March=0%]
+[2026-06-28 13:36:00] [BRD] Rotation complete.

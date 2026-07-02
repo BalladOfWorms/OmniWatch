@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.8.3 (2026-07-01)"
+OMNIWATCH_BUILD_STAMP = "v1.9.0 (2026-07-01)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.8.3"
+OMNIWATCH_VERSION = "1.9.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1986,6 +1986,18 @@ def _inv_send_autodrop(item_id):
         sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] inv autodrop send failed: {e!r}")
+
+
+def _inv_send_bazaar(item_id, price):
+    """Ask Lua to set a bazaar price on <item_id> for the locked character
+    (INVACT|bazaar). Lua resolves the item's inventory slot and injects the
+    game's Set Bazaar Price packet."""
+    try:
+        target = _mb_lock_target() or ""
+        payload = f"INVACT|bazaar|{target}|{int(item_id)}|{int(price)}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] inv bazaar send failed: {e!r}")
 
 
 def _sim_format_equip_ref(ref):
@@ -5516,6 +5528,11 @@ inventory_slip_nickname_editor = None
 #         "item_count": int, "bag": str} or None.
 inventory_item_ctx_menu  = None
 inventory_item_ctx_rects = []      # [(pygame.Rect, action_str)] per frame
+
+# Bazaar price popup, opened from the inventory right-click "Bazaar" action.
+# Shape: {"item_id": int, "item_name": str, "buf": str} or None.
+inventory_bazaar_popup = None
+inventory_bazaar_popup_rects = []  # [(pygame.Rect, action)] per frame
 
 # dps_state: per-source bucket dicts, keyed by src tag ('me', 'pet',
 # '<party_member>'). Replaced wholesale on each batch.
@@ -9064,39 +9081,12 @@ SETTINGS_SCHEMA = [
                    "encounter, JSON Lines format).",
     },
 
-    # ── Developer (hidden; only rendered when the dev sentinel is set) ─
-    {
-        "key":     "open_scanzone",
-        "label":   "Scan Zone",
-        "kind":    "button",
-        "button_text": "OPEN",
-        "section": "Developer",
-        "applies": "python",
-        "action":  "open_scanzone",
-        "help":    "Open the Scan Zone panel: search the current zone's "
-                   "NPC-list DAT files by name and list matching entities "
-                   "with their target index. Operator tooling.",
-    },
-    {
-        "key":     "open_craftsyn",
-        "label":   "Crafting / Synergy",
-        "kind":    "button",
-        "button_text": "OPEN",
-        "section": "Developer",
-        "applies": "python",
-        "action":  "open_craftsyn",
-        "help":    "Open the combined Crafting / Synergy panel (two tabs in "
-                   "one window): Crafting searches recipes and "
-                   "auto-synthesizes; Synergy drives the furnace minigame. "
-                   "Switch tabs with Ctrl+Shift+R (Craft) / Ctrl+Shift+Y "
-                   "(Synergy). Operator tooling.",
-    },
     {
         "key":     "open_skillup",
         "label":   "SkillUp",
         "kind":    "button",
         "button_text": "OPEN",
-        "section": "Developer",
+        "section": "Statistics",
         "applies": "python",
         "action":  "open_skillup",
         "help":    "Open the SkillUp panel: auto-skill the out-of-combat "
@@ -9105,19 +9095,7 @@ SETTINGS_SCHEMA = [
                    "spells and loops with MP rest, wind/string swap, Unbridled "
                    "Learning, ninja-tool unpack and avatar Favor/Siphon/"
                    "Release; skillups/hr + total; auto-stops on cap. Ported "
-                   "from smd111's GearSwap SkillUp. Operator automation.",
-    },
-    {
-        "key":     "open_autora",
-        "label":   "AutoRA",
-        "kind":    "button",
-        "button_text": "OPEN",
-        "section": "Developer",
-        "applies": "python",
-        "action":  "open_autora",
-        "help":    "Open the AutoRA settings box: auto-repeat ranged "
-                   "attacks (/shoot) on your target while engaged, with a "
-                   "configurable TP halt. Operator automation.",
+                   "from smd111's GearSwap SkillUp.",
     },
     {
         "key":     "autora_enabled",
@@ -9148,66 +9126,6 @@ SETTINGS_SCHEMA = [
         "section": "_Hidden",
         "applies": "lua",
         "help":    "When on, AutoRA never halts on TP.",
-    },
-    {
-        "key":     "open_allseeingeye",
-        "label":   "AllSeeingEye",
-        "kind":    "button",
-        "button_text": "OPEN",
-        "section": "Developer",
-        "applies": "python",
-        "action":  "open_allseeingeye",
-        "help":    "Open the AllSeeingEye settings box: reveal entities the "
-                   "server hides (dead/corpse, appearing, fading) by "
-                   "rewriting the 0x0E status byte. Operator visibility tooling.",
-    },
-    {
-        "key":     "ase_enabled",
-        "label":   "(internal) AllSeeingEye on/off",
-        "kind":    "bool",
-        "default": False,
-        "section": "_Hidden",
-        "applies": "lua",
-        "help":    "Toggle the lua-side AllSeeingEye reveal.",
-    },
-    {
-        "key":     "ase_dead",
-        "label":   "(internal) ASE reveal dead/corpse",
-        "kind":    "bool",
-        "default": True,
-        "section": "_Hidden",
-        "applies": "lua",
-        "help":    "Reveal entities in dead/corpse status (2).",
-    },
-    {
-        "key":     "ase_appearing",
-        "label":   "(internal) ASE reveal appearing",
-        "kind":    "bool",
-        "default": True,
-        "section": "_Hidden",
-        "applies": "lua",
-        "help":    "Reveal entities in appearing status (6).",
-    },
-    {
-        "key":     "ase_fading",
-        "label":   "(internal) ASE reveal fading",
-        "kind":    "bool",
-        "default": True,
-        "section": "_Hidden",
-        "applies": "lua",
-        "help":    "Reveal entities in fading status (7).",
-    },
-    {
-        "key":     "open_fisher",
-        "label":   "Fisher",
-        "kind":    "button",
-        "button_text": "OPEN",
-        "section": "Developer",
-        "applies": "python",
-        "action":  "open_fisher",
-        "help":    "Open the Fisher box: embedded auto-fishing engine. Set "
-                   "bait + catch (comma-separated names), delays and a catch "
-                   "limit, then flip Fishing on.",
     },
     {
         "key":     "fisher_enabled",
@@ -9749,6 +9667,47 @@ SETTINGS_SCHEMA = [
                    "open its FFXIAH price page; the $ button on a search result "
                    "pulls that item's recent sales from your world's search "
                    "server into the results pane.",
+    },
+    {
+        "key":     "open_craftsyn",
+        "label":   "Crafting / Synergy / Fishing",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_craftsyn",
+        "help":    "Open the combined Crafting / Synergy / Fishing panel "
+                   "(three tabs in one window): Crafting searches recipes "
+                   "and auto-synthesizes; Synergy drives the furnace "
+                   "minigame; Fishing runs the auto-fisher. Switch tabs with "
+                   "Ctrl+Shift+R (Craft) / Ctrl+Shift+Y (Synergy) / "
+                   "Ctrl+Shift+F (Fishing).",
+    },
+    {
+        "key":     "open_scanzone",
+        "label":   "Tracker",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_scanzone",
+        "help":    "Open the Tracker panel: a live widescan / radar for the "
+                   "current zone. Search entities by name, track spawns and "
+                   "watch their HP and time-of-death, drop coordinate pins, "
+                   "and see targets on a zone map. Toggle any time with "
+                   "Ctrl+Shift+G.",
+    },
+    {
+        "key":     "open_autora",
+        "label":   "AutoRA",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_autora",
+        "help":    "Open the AutoRA settings box: auto-repeat ranged "
+                   "attacks (/shoot) on your target while engaged, with a "
+                   "configurable TP halt.",
     },
     {
         "key":     "sim_mode",
@@ -11246,8 +11205,6 @@ _SETTINGS_ACTIONS = {
     "open_skillup":            lambda: _toggle_skillup_panel(),
     "open_auction":            lambda: _toggle_ah_panel(),
     "open_autora":             lambda: _open_autora(),
-    "open_allseeingeye":       lambda: _open_allseeingeye(),
-    "open_fisher":             lambda: _open_fisher(),
 }
 
 
@@ -20203,9 +20160,6 @@ settings = load_settings()
 # force it off on load so it can't start firing ranged attacks on login.
 # The Developer toggle re-arms it live (sending SETTING|autora_enabled).
 settings["autora_enabled"] = False
-# AllSeeingEye (dev visibility) also starts off each launch so it can't
-# silently keep rewriting packets across sessions; the box re-arms it live.
-settings["ase_enabled"] = False
 # Fisher control toggle starts off each launch (it just drives the fisher
 # addon; the box re-fires fisher start when you flip it on).
 settings["fisher_enabled"] = False
@@ -25940,11 +25894,6 @@ def _settings_sections():
     absent entirely (schema rows tagged 'Developer' simply never group),
     so nothing about it renders or reserves height."""
     secs = list(SETTINGS_SECTIONS)
-    if _DEV_ENABLED and "Developer" not in secs:
-        try:
-            secs.insert(secs.index("HotBar") + 1, "Developer")
-        except ValueError:
-            secs.append("Developer")
     return secs
 
 # Zone-id -> client NPC-list DAT path(s), normalized to forward slashes.
@@ -26426,11 +26375,12 @@ craftsyn_pos  = globals().get("craftsyn_pos") or [260, 200]
 
 
 def _craftsyn_draw_tabs(surface, tx, ty, tw, th, rects, fnt_b):
-    """Two-tab strip (Crafting | Synergy) shared by both panel bodies."""
-    half = tw // 2
+    """Three-tab strip (Crafting | Synergy | Fisher) shared by the bodies."""
+    third = tw // 3
     for i, (k, label) in enumerate((("craft", "Crafting"),
-                                    ("synergy", "Synergy"))):
-        r = pygame.Rect(tx + i * half, ty, half - 1, th - 2)
+                                    ("synergy", "Synergy"),
+                                    ("fisher", "Fishing"))):
+        r = pygame.Rect(tx + i * third, ty, third - 1, th - 2)
         on = (craftsyn_tab == k)
         pygame.draw.rect(surface, (54, 74, 104) if on else (32, 36, 46),
                          r, border_radius=3)
@@ -26470,16 +26420,55 @@ def _syn_btn(surface, rect, label, font, bg, fg, bd=None):
     surface.blit(t, (rect.centerx - t.get_width() // 2,
                      rect.centery - t.get_height() // 2))
 
+def _craftsyn_poll_skills():
+    """Refresh the shared skill feed while any craft/synergy/fisher tab is
+    open (also updates live on skillups via the 0x062 emit)."""
+    global _skillup_last_poll
+    now = pygame.time.get_ticks()
+    if now - _skillup_last_poll > 3000:
+        _skillup_last_poll = now
+        try:
+            _skillup_send("status")
+        except Exception:
+            pass
+
+def _draw_craftsyn_skills(surface, rx, top_y, bottom_y, right_w):
+    """Right-hand Craft Skills column, shared by all three panel tabs so it
+    stays put when switching Crafting / Synergy / Fishing."""
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    pygame.draw.line(surface, COL_SLOT_BDR, (rx, top_y), (rx, bottom_y))
+    ry = top_y + 8
+    surface.blit(fnt_b.render("Craft Skills", True, (210, 200, 150)),
+                 (rx + 8, ry))
+    ry += 18
+    crows = sorted((sk for sk in skillup_skills if _skillup_is_craft(sk[0])),
+                   key=lambda sk: sk[0].lower())
+    if not crows:
+        surface.blit(fnt_s.render("(waiting for skill data\u2026)", True,
+                                  (150, 155, 170)), (rx + 8, ry))
+    for nm, val, capped in crows:
+        if ry > bottom_y - 4:
+            break
+        vcol = (110, 180, 255) if capped else (215, 220, 230)
+        surface.blit(fnt_s.render(nm[:22], True, (215, 220, 230)), (rx + 8, ry))
+        vs = fnt_s.render(str(val), True, vcol)
+        surface.blit(vs, (rx + right_w - 8 - vs.get_width(), ry))
+        ry += 14
+
 def draw_synergy_window(surface):
     _syn_clear_rects()
-    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "synergy"):
+    if not (craftsyn_open and craftsyn_tab == "synergy"):
         return
+    _craftsyn_poll_skills()
     pad, title_h, tab_h = 8, 22, 18
     cols = 8
     col_w, col_gap = 50, 3
     gutter = 30                      # left label column (Nd/Cur/Fwl)
     grid_w = cols * col_w + (cols - 1) * col_gap
     w = gutter + grid_w + 2 * pad
+    right_w = 190
+    full_w = w + right_w
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
@@ -26492,11 +26481,13 @@ def draw_synergy_window(surface):
     body_h = (pad + hp_h + pad + grid_h + pad + status_h + pad
               + btn_rows * btn_h + (btn_rows - 1) * col_gap + pad)
     h = title_h + tab_h + body_h
-    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - w))
+    _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
+    h = max(h, title_h + 8 + 18 + max(_cs_n, 1) * 14 + pad)
+    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - full_w))
     y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
     craftsyn_pos[0], craftsyn_pos[1] = x, y
 
-    panel_r = pygame.Rect(x, y, w, h)
+    panel_r = pygame.Rect(x, y, full_w, h)
     _syn_rects["panel"] = panel_r
     pygame.draw.rect(surface, COL_PANEL,    panel_r, border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
@@ -26507,17 +26498,18 @@ def draw_synergy_window(surface):
 
     # title bar (drag handle) + close
     pygame.draw.rect(surface, COL_EV_HEADER,
-                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
-    ts = fnt_b.render("DEV \u00b7 Crafting / Synergy", True, COL_EV_TITLE)
+                     (x + 1, y + 1, full_w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Crafting / Synergy / Fishing", True, COL_EV_TITLE)
     surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
-    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    close_r = pygame.Rect(x + full_w - 18, y + 3, 15, 15)
     pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
     xs = fnt_b.render("x", True, (220, 180, 180))
     surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
                       close_r.y + (15 - xs.get_height()) // 2))
     _syn_rects["close"] = close_r
-    _syn_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+    _syn_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
     _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _syn_rects, fnt_b)
+    _draw_craftsyn_skills(surface, x + w, y + title_h, y + h - pad, right_w)
 
     cy = y + title_h + tab_h + pad
     _flash = (int(time.time() * 2) % 2 == 0)
@@ -26623,7 +26615,7 @@ def _synergy_handle_event(event):
     global craftsyn_open, craftsyn_tab, _syn_drag_off
     # toggle combo (Ctrl+Shift+Y), gated by the dev sentinel; works
     # whether the panel is open or closed.
-    if (_DEV_ENABLED and event.type == pygame.KEYDOWN
+    if (event.type == pygame.KEYDOWN
             and event.key == pygame.K_y):
         m = pygame.key.get_mods()
         if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
@@ -26632,7 +26624,7 @@ def _synergy_handle_event(event):
             else:
                 craftsyn_open = True; craftsyn_tab = "synergy"
             return True
-    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "synergy"):
+    if not (craftsyn_open and craftsyn_tab == "synergy"):
         return False
     r = _syn_rects
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -26640,7 +26632,7 @@ def _synergy_handle_event(event):
         if r.get("close") and r["close"].collidepoint(mx, my):
             craftsyn_open = False
             return True
-        for _tk in ("craft", "synergy"):
+        for _tk in ("craft", "synergy", "fisher"):
             _tr = r.get("tab:" + _tk)
             if _tr and _tr.collidepoint(mx, my):
                 craftsyn_tab = _tk
@@ -26769,6 +26761,45 @@ _skillup_drag = {"on": False, "dx": 0, "dy": 0}
 _SKILLUP_SKILLS = ["Healing", "Geomancy", "Enhancing", "Ninjutsu",
                    "Singing", "Blue", "Summoning"]
 
+# Live skill list for the panel's Combat / Magic tabs, from SKILLUP|skills|
+# (the 0x062 skill-levels packet); refreshed on every skillup. Each entry is
+# (name, value, capped).
+skillup_skills = []
+skillup_skills_tab = "combat"    # "combat" | "magic"
+skillup_skills_scroll = 0
+_skillup_last_poll = 0           # ms of last auto status poll (skill refresh)
+
+# Magic = anything ending in " Magic" plus the song / instrument / ninjutsu /
+# geomancy / handbell skills; everything else (weapons + defensive) is combat.
+_SKILLUP_MAGIC_NAMES = {
+    "ninjutsu", "singing", "stringed instrument", "wind instrument",
+    "geomancy", "handbell",
+}
+def _skillup_is_magic(name):
+    n = (name or "").lower()
+    if "automaton" in n:          # PUP automaton skills aren't in the menu
+        return False
+    return n.endswith(" magic") or n in _SKILLUP_MAGIC_NAMES
+
+# Combat = weapon + defensive skills. Used as an allow-list so crafting /
+# synthesis / fishing skills (also in the 0x062 packet) are excluded.
+_SKILLUP_COMBAT_NAMES = {
+    "hand-to-hand", "dagger", "sword", "great sword", "axe", "great axe",
+    "scythe", "polearm", "katana", "great katana", "club", "staff",
+    "archery", "marksmanship", "throwing", "guarding", "evasion", "shield",
+    "parrying",
+}
+def _skillup_is_combat(name):
+    return (name or "").lower() in _SKILLUP_COMBAT_NAMES
+
+# Crafting / gathering skills, for the Crafting / Synergy panel's skill column.
+_CRAFT_SKILL_NAMES = {
+    "woodworking", "smithing", "goldsmithing", "clothcraft", "leathercraft",
+    "bonecraft", "alchemy", "cooking", "synergy", "fishing",
+}
+def _skillup_is_craft(name):
+    return (name or "").lower() in _CRAFT_SKILL_NAMES
+
 def _skillup_clear_rects():
     _skillup_rects.clear()
 
@@ -26779,12 +26810,24 @@ def _skillup_send(sub):
         pass
 
 def draw_skillup_window(surface):
-    global skillup_panel_pos
+    global skillup_panel_pos, _skillup_last_poll
     _skillup_clear_rects()
-    if not (_DEV_ENABLED and skillup_panel_open):
+    if not skillup_panel_open:
         return
+    # Keep the skill list current without a manual button: it already updates
+    # live on every skillup (the 0x062 emit); this poll covers the idle case
+    # and initial population by re-requesting status every few seconds.
+    _now_ms = pygame.time.get_ticks()
+    if _now_ms - _skillup_last_poll > 3000:
+        _skillup_last_poll = _now_ms
+        try:
+            _skillup_send("status")
+        except Exception:
+            pass
     pad, title_h = 8, 22
-    w = 250
+    w = 376                 # left content width (kept for its own layout)
+    right_w = 256           # Combat / Magic skills column on the right
+    _sk_row_h = 14
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
@@ -26794,11 +26837,22 @@ def draw_skillup_window(surface):
          + btn_h + 8
          + row_h + btn_h + 6
          + row_h + btn_h + pad)
-    x = max(0, min(int(skillup_panel_pos[0]), surface.get_width() - w))
+    # Right column height: fit the taller of the two tabs so switching tabs
+    # never resizes the window; grow the panel if it needs more than the left.
+    _sk_combat = sum(1 for _n, _v, _c in skillup_skills
+                     if _skillup_is_combat(_n))
+    _sk_magic = sum(1 for _n, _v, _c in skillup_skills
+                    if _skillup_is_magic(_n))
+    _sk_max = max(_sk_combat, _sk_magic, 1)
+    _right_h = (title_h + pad + (btn_h + 4)
+                + _sk_max * _sk_row_h + pad)
+    h = max(h, _right_h)
+    full_w = w + right_w
+    x = max(0, min(int(skillup_panel_pos[0]), surface.get_width() - full_w))
     y = max(0, min(int(skillup_panel_pos[1]), surface.get_height() - h))
     skillup_panel_pos[0], skillup_panel_pos[1] = x, y
 
-    panel_r = pygame.Rect(x, y, w, h)
+    panel_r = pygame.Rect(x, y, full_w, h)
     _skillup_rects["panel"] = panel_r
     pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
@@ -26808,16 +26862,16 @@ def draw_skillup_window(surface):
         pass
 
     pygame.draw.rect(surface, COL_EV_HEADER,
-                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
-    ts = fnt_b.render("DEV \u00b7 SkillUp", True, COL_EV_TITLE)
+                     (x + 1, y + 1, full_w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("SkillUp", True, COL_EV_TITLE)
     surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
-    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    close_r = pygame.Rect(x + full_w - 18, y + 3, 15, 15)
     pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
     xs = fnt_b.render("x", True, (220, 180, 180))
     surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
                       close_r.y + (15 - xs.get_height()) // 2))
     _skillup_rects["close"] = close_r
-    _skillup_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+    _skillup_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
 
     def button(rect, label, on=False, on_bg=(45, 80, 60), on_bd=(70, 120, 90),
                on_tx=(200, 235, 210), off_bg=(44, 48, 58), off_bd=(72, 78, 92),
@@ -26883,8 +26937,38 @@ def draw_skillup_window(surface):
                on_bg=(45, 60, 85), on_bd=(90, 120, 170), on_tx=(200, 220, 245))
         _skillup_rects["after:" + cmd] = r
 
+    # ── right column: Combat / Magic skill tabs (value; blue = capped) ────
+    rx = x + w
+    pygame.draw.line(surface, COL_SLOT_BDR, (rx, y + title_h), (rx, y + h - 1))
+    ry = y + title_h + pad
+    tab_w = (right_w - 18) // 2
+    for i, (lab, tk) in enumerate((("Combat", "combat"), ("Magic", "magic"))):
+        tr = pygame.Rect(rx + 6 + i * (tab_w + 6), ry, tab_w, btn_h)
+        button(tr, lab, on=(skillup_skills_tab == tk),
+               on_bg=(50, 62, 82), on_bd=(95, 120, 165), on_tx=(205, 220, 245))
+        _skillup_rects["sktab:" + tk] = tr
+    ry += btn_h + 4
+    if skillup_skills_tab == "magic":
+        rows = [sk for sk in skillup_skills if _skillup_is_magic(sk[0])]
+    else:
+        rows = [sk for sk in skillup_skills if _skillup_is_combat(sk[0])]
+    rows = sorted(rows, key=lambda sk: sk[0].lower())
+    list_bottom = y + h - pad
+    if not rows:
+        surface.blit(fnt_s.render("(waiting for skill data\u2026)", True,
+                                  (150, 155, 170)), (rx + 8, ry))
+    for nm, val, capped in rows:
+        if ry > list_bottom:
+            break
+        # name always white; only the value goes blue when capped
+        vcol = (110, 180, 255) if capped else (215, 220, 230)
+        surface.blit(fnt_s.render(nm[:22], True, (215, 220, 230)), (rx + 8, ry))
+        vs = fnt_s.render(str(val), True, vcol)
+        surface.blit(vs, (rx + right_w - 8 - vs.get_width(), ry))
+        ry += _sk_row_h
+
 def _skillup_handle_event(event):
-    if not (_DEV_ENABLED and skillup_panel_open):
+    if not skillup_panel_open:
         return False
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
         mx, my = event.pos
@@ -26911,6 +26995,9 @@ def _skillup_handle_event(event):
                     return True
                 if key.startswith("after:"):
                     _skillup_send("after|" + key.split(":", 1)[1])
+                    return True
+                if key.startswith("sktab:"):
+                    globals()["skillup_skills_tab"] = key.split(":", 1)[1]
                     return True
         r = _skillup_rects.get("panel")
         if r and r.collidepoint(mx, my):
@@ -28832,7 +28919,7 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
     for slot in range(7):
         row = pygame.Rect(area.x, fy, area.width, 15)
         sl = by_slot.get(slot)
-        if sl and sl.get("status") and sl["status"] != "Empty":
+        if sl and sl.get("status") and sl["status"] not in ("Empty", "Sold"):
             stat = sl["status"]
             col = ((150, 210, 160) if stat == "Sold"
                    else (212, 158, 158) if stat == "Not Sold"
@@ -29176,12 +29263,16 @@ def _ah_handle_event(event):
 
 
 def draw_craft_window(surface):
-    global craft_scroll
+    global craft_scroll, _skillup_last_poll
     _craft_clear_rects()
-    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "craft"):
+    if not (craftsyn_open and craftsyn_tab == "craft"):
         return
+    _craftsyn_poll_skills()
     pad, title_h, tab_h = 8, 22, 18
     w = 360
+    right_w = 190
+    full_w = w + right_w
+    _cs_row_h = 14
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
@@ -29198,11 +29289,13 @@ def draw_craft_window(surface):
          + fld_h + 6                                            # jiggle
          + row_h + 4                                            # status line
          + 3 * row_h + pad)                                     # log
-    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - w))
+    _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
+    h = max(h, title_h + tab_h + pad + max(_cs_n, 1) * _cs_row_h + 18 + pad)
+    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - full_w))
     y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
     craftsyn_pos[0], craftsyn_pos[1] = x, y
 
-    panel_r = pygame.Rect(x, y, w, h)
+    panel_r = pygame.Rect(x, y, full_w, h)
     _craft_rects["panel"] = panel_r
     pygame.draw.rect(surface, COL_PANEL,    panel_r, border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
@@ -29212,16 +29305,16 @@ def draw_craft_window(surface):
         pass
 
     pygame.draw.rect(surface, COL_EV_HEADER,
-                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
-    ts = fnt_b.render("DEV \u00b7 Crafting / Synergy", True, COL_EV_TITLE)
+                     (x + 1, y + 1, full_w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Crafting / Synergy / Fishing", True, COL_EV_TITLE)
     surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
-    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    close_r = pygame.Rect(x + full_w - 18, y + 3, 15, 15)
     pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
     xs = fnt_b.render("x", True, (220, 180, 180))
     surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
                       close_r.y + (15 - xs.get_height()) // 2))
     _craft_rects["close"] = close_r
-    _craft_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+    _craft_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
     _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _craft_rects, fnt_b)
 
     def field(rect, text, focused, placeholder=""):
@@ -29394,6 +29487,8 @@ def draw_craft_window(surface):
         ml = fnt_s.render(line[:54], True, (150, 156, 168))
         surface.blit(ml, (x + pad, cy + i * row_h))
 
+    _draw_craftsyn_skills(surface, x + w, y + title_h, y + h - pad, right_w)
+
 def _craft_apply_count(default=1):
     try:
         n = int(craft_count)
@@ -29405,7 +29500,7 @@ def _craft_handle_event(event):
     global craftsyn_open, craftsyn_tab, _craft_drag_off, craft_query, craft_focus
     global craft_count, craft_sel, craft_scroll
     # toggle (Ctrl+Shift+R), dev-gated
-    if (_DEV_ENABLED and event.type == pygame.KEYDOWN
+    if (event.type == pygame.KEYDOWN
             and event.key == pygame.K_r):
         m = pygame.key.get_mods()
         if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
@@ -29414,7 +29509,7 @@ def _craft_handle_event(event):
             else:
                 craftsyn_open = True; craftsyn_tab = "craft"
             return True
-    if not (_DEV_ENABLED and craftsyn_open and craftsyn_tab == "craft"):
+    if not (craftsyn_open and craftsyn_tab == "craft"):
         return False
     r = _craft_rects
 
@@ -29465,7 +29560,7 @@ def _craft_handle_event(event):
         if r.get("close") and r["close"].collidepoint(mx, my):
             craftsyn_open = False
             return True
-        for _tk in ("craft", "synergy"):
+        for _tk in ("craft", "synergy", "fisher"):
             _tr = r.get("tab:" + _tk)
             if _tr and _tr.collidepoint(mx, my):
                 craftsyn_tab = _tk
@@ -29609,6 +29704,191 @@ _NYZUL_LEADERS = {
 _NYZUL_HNM_FLOORS = {20, 40, 60, 80, 100}
 _NYZUL_ZONE = 77        # Nyzul Isle Uncharted Area -- the floor zone (the
                         # zone id stays the same across every floor of a run)
+
+# ── Fisher: third tab of the Crafting / Synergy panel ─────────────────────
+# Full port of the old Fisher settings box into an in-overlay tab. Values are
+# the same `fisher_*` settings (all applies="lua"), so editing here drives the
+# Lua fisher engine through set_setting -> apply_setting_side_effects exactly
+# like the old box did.
+_fisher_rects = {}
+_fisher_drag_off = None
+fisher_focus = ""       # setting key of the field being edited, or ""
+fisher_buf = {}         # in-progress text buffers per field
+
+_FISHER_FIELDS = [
+    ("fisher_enabled",                "Fishing on",        "bool"),
+    ("fisher_bait",                   "Bait",              "text"),
+    ("fisher_catch",                  "Catch",             "text"),
+    ("fisher_catch_limit",            "Catch limit",       "int"),
+    ("fisher_opt_recast_delay",       "Recast delay (s)",  "int"),
+    ("fisher_opt_release_delay",      "Release delay (s)", "int"),
+    ("fisher_opt_catch_delay_min",    "Catch delay min",   "int"),
+    ("fisher_opt_catch_delay_tweak",  "Catch delay tweak", "int"),
+    ("fisher_opt_equip_delay",        "Equip delay (s)",   "int"),
+    ("fisher_opt_move_delay",         "Move delay (s)",    "int"),
+    ("fisher_opt_cast_attempt_delay", "Cast retry delay",  "int"),
+    ("fisher_opt_cast_attempt_max",   "Cast retry max",    "int"),
+    ("fisher_opt_no_hook_max",        "No-hook limit",     "int"),
+    ("fisher_debug",                  "Debug messages",    "bool"),
+]
+_FISHER_KIND = {k: kd for k, _l, kd in _FISHER_FIELDS}
+
+def _fisher_clear_rects():
+    _fisher_rects.clear()
+
+def _fisher_commit_focus():
+    """Write the focused field's buffer back through set_setting (pushes to
+    Lua). Called on Enter, on blur, and before any tab / close action."""
+    global fisher_focus
+    key = fisher_focus
+    if key and key in fisher_buf:
+        set_setting(key, fisher_buf.get(key, ""))
+    fisher_focus = ""
+
+def draw_fisher_window(surface):
+    global craftsyn_pos
+    _fisher_clear_rects()
+    if not (craftsyn_open and craftsyn_tab == "fisher"):
+        return
+    _craftsyn_poll_skills()
+    pad, title_h, tab_h = 8, 22, 18
+    w = 330
+    right_w = 190
+    full_w = w + right_w
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    fld_h = 20
+    n = len(_FISHER_FIELDS)
+    h = title_h + tab_h + pad + n * (fld_h + 4) + pad
+    _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
+    h = max(h, title_h + 8 + 18 + max(_cs_n, 1) * 14 + pad)
+    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - full_w))
+    y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
+    craftsyn_pos[0], craftsyn_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, full_w, h)
+    _fisher_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
+    except Exception:
+        pass
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, full_w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Crafting / Synergy / Fishing", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + full_w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _fisher_rects["close"] = close_r
+    _fisher_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
+    _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _fisher_rects, fnt_b)
+
+    def field(rect, text, focused):
+        pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=3)
+        pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
+                         rect, 1, border_radius=3)
+        t = fnt.render(text, True, (225, 225, 230))
+        surface.blit(t, (rect.x + 5, rect.centery - t.get_height() // 2))
+        if focused:
+            cx = rect.x + 5 + t.get_width()
+            pygame.draw.line(surface, (220, 220, 230),
+                             (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
+
+    cy = y + title_h + tab_h + pad
+    lbl_w = 150
+    for key, label, kind in _FISHER_FIELDS:
+        surface.blit(fnt.render(label, True, (200, 206, 216)), (x + pad, cy + 3))
+        rect = pygame.Rect(x + pad + lbl_w, cy, w - pad - lbl_w - pad, fld_h)
+        if kind == "bool":
+            on = bool(setting(key))
+            _craft_btn(surface, rect, "ON" if on else "OFF", fnt_s,
+                       (52, 80, 52) if on else (58, 44, 44),
+                       (200, 235, 200) if on else (222, 180, 180))
+            _fisher_rects["toggle:" + key] = rect
+        else:
+            if fisher_focus == key:
+                txt = fisher_buf.get(key, "")
+            else:
+                v = setting(key)
+                txt = "" if v is None else str(v)
+            field(rect, txt, fisher_focus == key)
+            _fisher_rects["edit:" + key] = rect
+        cy += fld_h + 4
+
+    _draw_craftsyn_skills(surface, x + w, y + title_h, y + h - pad, right_w)
+
+def _fisher_handle_event(event):
+    global craftsyn_open, craftsyn_tab, fisher_focus, _fisher_drag_off
+    if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
+        m = pygame.key.get_mods()
+        if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
+            if craftsyn_open and craftsyn_tab == "fisher":
+                craftsyn_open = False
+            else:
+                craftsyn_open = True; craftsyn_tab = "fisher"
+            return True
+    if not (craftsyn_open and craftsyn_tab == "fisher"):
+        return False
+    if event.type == pygame.KEYDOWN and fisher_focus:
+        if event.key == pygame.K_ESCAPE:
+            fisher_focus = ""
+            return True
+        if event.key == pygame.K_RETURN:
+            _fisher_commit_focus()
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            fisher_buf[fisher_focus] = fisher_buf.get(fisher_focus, "")[:-1]
+            return True
+        ch = event.unicode
+        if ch and ch.isprintable():
+            if _FISHER_KIND.get(fisher_focus) == "int" and not ch.isdigit():
+                return True
+            fisher_buf[fisher_focus] = fisher_buf.get(fisher_focus, "") + ch
+        return True
+    r = _fisher_rects
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            _fisher_commit_focus(); craftsyn_open = False
+            return True
+        for _tk in ("craft", "synergy", "fisher"):
+            _tr = r.get("tab:" + _tk)
+            if _tr and _tr.collidepoint(mx, my):
+                _fisher_commit_focus(); craftsyn_tab = _tk
+                return True
+        for key, _l, kind in _FISHER_FIELDS:
+            if kind == "bool":
+                rr = r.get("toggle:" + key)
+                if rr and rr.collidepoint(mx, my):
+                    _fisher_commit_focus()
+                    set_setting(key, not bool(setting(key)))
+                    return True
+            else:
+                rr = r.get("edit:" + key)
+                if rr and rr.collidepoint(mx, my):
+                    _fisher_commit_focus()
+                    fisher_focus = key
+                    v = setting(key)
+                    fisher_buf[key] = "" if v is None else str(v)
+                    return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            _fisher_drag_off = (mx - craftsyn_pos[0], my - craftsyn_pos[1])
+            return True
+        if r.get("panel") and r["panel"].collidepoint(mx, my):
+            _fisher_commit_focus()
+            return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        _fisher_drag_off = None
+    if event.type == pygame.MOUSEMOTION and _fisher_drag_off is not None:
+        craftsyn_pos[0] = event.pos[0] - _fisher_drag_off[0]
+        craftsyn_pos[1] = event.pos[1] - _fisher_drag_off[1]
+        return True
+    return False
 
 def _nyzul_objmode():
     """Classify the current Nyzul floor objective from its text: 'lamp'
@@ -30304,7 +30584,7 @@ def _toggle_craft_panel():
                         and scanzone_view in ("radar", "map"))
 
 def _toggle_skillup_panel():
-    """Settings -> Developer -> SkillUp [OPEN]. Toggles the panel; closes the
+    """Settings -> Statistics -> SkillUp [OPEN]. Toggles the panel; closes the
     settings dropdown when opening and asks the lua side for a fresh status."""
     global skillup_panel_open
     skillup_panel_open = not skillup_panel_open
@@ -30562,7 +30842,7 @@ def draw_scanzone_window(surface):
     global scanzone_scroll, scanzone_panel_w, scanzone_panel_h
     global scanzone_roster_scroll
     _scanzone_clear_rects()
-    if not (_DEV_ENABLED and scanzone_panel_open):
+    if not scanzone_panel_open:
         return
     pad, title_h, input_h, btn_h, grip = 8, 22, 22, 20, 14
     row_h = _sz_row_h
@@ -30601,7 +30881,7 @@ def draw_scanzone_window(surface):
     # title bar (drag handle) + close
     pygame.draw.rect(surface, COL_EV_HEADER,
                      (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
-    ts = fnt_b.render("DEV \u00b7 Scan Zone", True, COL_EV_TITLE)
+    ts = fnt_b.render("Tracker", True, COL_EV_TITLE)
     surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
     close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
     pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
@@ -31691,8 +31971,8 @@ def _scanzone_handle_event(event):
     global scanzone_dot_label, scanzone_alias_target
     global _sz_pan_off, _sz_area_last_click
     global _sz_listbar_drag, _sz_rosterbar_drag, scanzone_roster_scroll
-    # Toggle combo (works open or closed), gated by the dev sentinel.
-    if (_DEV_ENABLED and event.type == pygame.KEYDOWN
+    # Toggle combo (works open or closed): Ctrl+Shift+G.
+    if (event.type == pygame.KEYDOWN
             and event.key == pygame.K_g):
         m = pygame.key.get_mods()
         if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
@@ -31700,7 +31980,7 @@ def _scanzone_handle_event(event):
             _scanzone_set_radar(scanzone_panel_open
                                 and scanzone_view in ("radar", "map"))
             return True
-    if not (_DEV_ENABLED and scanzone_panel_open):
+    if not scanzone_panel_open:
         return False
 
     # right-click on a row / dot -> open context menu
@@ -34886,6 +35166,10 @@ def draw_inventory_dropdown(surface):
                     (tag_x,
                      cy + (row_h - tag_surf.get_height()) // 2))
 
+                if it.get("bazaar", 0):
+                    _bzb = label_font.render("B", True, (245, 205, 90))
+                    surface.blit(_bzb, (row_rect.x + 2, row_rect.y
+                                        + (row_rect.height - _bzb.get_height()) // 2))
                 inventory_dropdown_rects.append((row_rect, {
                     "kind": "open_item_url",
                     "url":  _bgwiki_item_url(nm),
@@ -34896,6 +35180,7 @@ def draw_inventory_dropdown(surface):
                     "item_name":  it.get("name", "") or nm,
                     "item_count": cnt,
                     "bag":        bag_key,
+                    "bazaar":     it.get("bazaar", 0),
                 }))
                 cy += row_h
 
@@ -35080,6 +35365,10 @@ def draw_inventory_dropdown(surface):
                 (panel_x + panel_w - cnt_surf.get_width() - pad,
                  cy + (row_h - cnt_surf.get_height()) // 2))
 
+        if it.get("bazaar", 0):
+            _bzb = label_font.render("B", True, (245, 205, 90))
+            surface.blit(_bzb, (row_rect.x + 2, row_rect.y
+                                + (row_rect.height - _bzb.get_height()) // 2))
         inventory_dropdown_rects.append((row_rect, {
             "kind": "open_item_url",
             "url":  _bgwiki_item_url(nm),
@@ -35088,6 +35377,7 @@ def draw_inventory_dropdown(surface):
             "item_name":  it.get("name", "") or nm,
             "item_count": cnt,
             "bag":        bag_key,
+            "bazaar":     it.get("bazaar", 0),
         }))
         cy += row_h
 
@@ -35280,6 +35570,7 @@ def dispatch_inventory_dropdown_right_click(mx, my):
                 "item_name":  action.get("item_name", "") or "?",
                 "item_count": action.get("item_count", 1),
                 "bag":        action.get("bag", ""),
+                "bazaar":     action.get("bazaar", 0),
             }
             return True
     return False
@@ -35361,6 +35652,97 @@ def draw_inventory_slip_nickname_editor(surface):
                           box.y + (box.height - i_surf.get_height()) // 2))
 
 
+def _inv_bazaar_confirm():
+    global inventory_bazaar_popup
+    p = inventory_bazaar_popup
+    if p and p.get("buf"):
+        try:
+            price = int(p["buf"])
+        except ValueError:
+            price = 0
+        if price > 0:
+            _inv_send_bazaar(p["item_id"], price)
+    inventory_bazaar_popup = None
+
+
+def _inventory_bazaar_popup_event(event):
+    """Capture input while the bazaar price popup is open."""
+    global inventory_bazaar_popup
+    p = inventory_bazaar_popup
+    if p is None:
+        return False
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_ESCAPE:
+            inventory_bazaar_popup = None
+            return True
+        if event.key == pygame.K_RETURN:
+            _inv_bazaar_confirm()
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            p["buf"] = p.get("buf", "")[:-1]
+            return True
+        ch = event.unicode
+        if ch and ch.isdigit() and len(p.get("buf", "")) < 9:
+            p["buf"] = p.get("buf", "") + ch
+        return True
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        for rect, act in inventory_bazaar_popup_rects:
+            if rect.collidepoint(mx, my):
+                if act == "ok":
+                    _inv_bazaar_confirm()
+                elif act == "cancel":
+                    inventory_bazaar_popup = None
+                return True   # "panel" swallows without closing
+        inventory_bazaar_popup = None     # click outside closes
+        return True
+    return False
+
+
+def draw_inventory_bazaar_popup(surface):
+    global inventory_bazaar_popup_rects
+    inventory_bazaar_popup_rects = []
+    p = inventory_bazaar_popup
+    if p is None:
+        return
+    tf = pygame.font.SysFont("Consolas", 12, bold=True)
+    f  = pygame.font.SysFont("Consolas", 12)
+    w, h = 250, 100
+    sw, shh = surface.get_size()
+    x = (sw - w) // 2
+    y = (shh - h) // 2
+    pygame.draw.rect(surface, (28, 28, 36), (x, y, w, h), border_radius=5)
+    pygame.draw.rect(surface, COL_BORDER, (x, y, w, h), 1, border_radius=5)
+    surface.blit(tf.render("Set bazaar price", True, (222, 205, 150)),
+                 (x + 10, y + 8))
+    nm = p.get("item_name") or "?"
+    if len(nm) > 30:
+        nm = nm[:29] + "\u2026"
+    surface.blit(f.render(nm, True, (200, 206, 218)), (x + 10, y + 30))
+    fld = pygame.Rect(x + 10, y + 52, w - 90, 22)
+    pygame.draw.rect(surface, (20, 22, 28), fld, border_radius=3)
+    pygame.draw.rect(surface, (195, 160, 80), fld, 1, border_radius=3)
+    buf = p.get("buf", "")
+    show = (buf + " gil") if buf else "price (gil)"
+    surface.blit(f.render(show, True,
+                          (225, 225, 230) if buf else (120, 128, 142)),
+                 (fld.x + 5, fld.centery - f.get_height() // 2))
+    ok = pygame.Rect(fld.right + 8, y + 52, 62, 22)
+    pygame.draw.rect(surface, (50, 80, 55), ok, border_radius=3)
+    pygame.draw.rect(surface, (90, 150, 100), ok, 1, border_radius=3)
+    _t = f.render("Set", True, (190, 235, 200))
+    surface.blit(_t, (ok.centerx - _t.get_width() // 2,
+                      ok.centery - _t.get_height() // 2))
+    cancel = pygame.Rect(x + 10, y + h - 26, 62, 20)
+    pygame.draw.rect(surface, (60, 44, 44), cancel, border_radius=3)
+    _c = f.render("Cancel", True, (222, 182, 182))
+    surface.blit(_c, (cancel.centerx - _c.get_width() // 2,
+                      cancel.centery - _c.get_height() // 2))
+    inventory_bazaar_popup_rects.append((ok, "ok"))
+    inventory_bazaar_popup_rects.append((cancel, "cancel"))
+    inventory_bazaar_popup_rects.append((pygame.Rect(x, y, w, h), "panel"))
+
+
 def draw_inventory_item_ctx_menu(surface):
     """Render the inventory item right-click menu when one is open.
 
@@ -35390,6 +35772,9 @@ def draw_inventory_item_ctx_menu(surface):
     if m.get("bag") == "inventory":
         actions.append(("drop", "Drop item", (235, 170, 170)))
     actions.append(("autodrop", "Auto-drop (Treasury)", (235, 205, 150)))
+    actions.append(("bazaar", "Bazaar\u2026", (170, 205, 235)))
+    if m.get("bazaar", 0):
+        actions.append(("unbazaar", "Remove from bazaar", (235, 205, 90)))
 
     # Header: item name (+ count when >1), truncated to keep it tidy.
     cnt = m.get("item_count", 1) or 1
@@ -38667,24 +39052,6 @@ _SUBDIALOG_CONFIGS = {
                 "Never halt on TP - keep shooting until you stop it.",
         },
     },
-    "allseeingeye": {
-        "title":    "AllSeeingEye",
-        "subtitle": "Reveal entities the server hides (rewrites 0x0E status).",
-        "rows": [
-            ("ase_enabled",   "AllSeeingEye on",          "bool"),
-            ("ase_dead",      "Reveal dead / corpse (2)", "bool"),
-            ("ase_appearing", "Reveal appearing (6)",     "bool"),
-            ("ase_fading",    "Reveal fading (7)",        "bool"),
-        ],
-        "helpers": {
-            "ase_dead":
-                "Show entities sitting in dead/corpse status.",
-            "ase_appearing":
-                "Show entities in the appearing (spawning-in) status.",
-            "ase_fading":
-                "Show entities in the fading (despawning) status.",
-        },
-    },
     "fisher": {
         "title":    "Fisher",
         "subtitle": "Embedded auto-fishing. Set bait + catch, then flip "
@@ -38892,18 +39259,6 @@ def _open_autora():
         except Exception:
             pass
     _open_subdialog("autora")
-
-
-def _open_allseeingeye():
-    """Open the AllSeeingEye box. Re-push the lua-applied reveal toggles
-    first so a relaunch (no bulk settings sync at boot) can't leave the box
-    and the lua handler disagreeing on which statuses are revealed."""
-    for _k in ("ase_dead", "ase_appearing", "ase_fading"):
-        try:
-            apply_setting_side_effects(_k, settings.get(_k))
-        except Exception:
-            pass
-    _open_subdialog("allseeingeye")
 
 
 def _open_fisher():
@@ -52101,6 +52456,20 @@ while running:
                         skillup_state["stoptype"] = sf[8] or "Stop"
                     except (ValueError, IndexError):
                         pass
+                elif sf and sf[0] == "skills":
+                    # SKILLUP|skills|name~val~capped;name~val~capped;...
+                    rows = []
+                    payload = sf[1] if len(sf) > 1 else ""
+                    for chunk in payload.split(";"):
+                        if not chunk:
+                            continue
+                        p3 = chunk.split("~")
+                        if len(p3) >= 3:
+                            try:
+                                rows.append((p3[0], int(p3[1]), p3[2] == "1"))
+                            except ValueError:
+                                pass
+                    skillup_skills[:] = rows
             if tag == "SET":
                 # Authoritative source: gearswap explicitly told us what
                 # set was equipped. Wins over STATE in the renderer.
@@ -52631,7 +53000,7 @@ while running:
                     for ent in body.split(";"):
                         if not ent:
                             continue
-                        fields = ent.split(",", 2)
+                        fields = ent.split(",", 3)
                         if len(fields) < 2:
                             continue
                         try:
@@ -52639,9 +53008,17 @@ while running:
                             cnt = int(fields[1])
                         except ValueError:
                             continue
-                        nm = fields[2] if len(fields) >= 3 else ""
+                        # New wire format: id,count,bazaar,name.
+                        # Old (pre-bazaar): id,count,name.
+                        if len(fields) >= 4 and fields[2].lstrip("-").isdigit():
+                            baz = int(fields[2])
+                            nm = fields[3]
+                        else:
+                            baz = 0
+                            nm = fields[2] if len(fields) >= 3 else ""
                         items_in_bag.append({
                             "id": iid, "count": cnt, "name": nm,
+                            "bazaar": baz,
                         })
                 _inv_buffer[bag_name] = items_in_bag
             elif raw.startswith("INV_SLIP|"):
@@ -55382,14 +55759,14 @@ while running:
     if not display_hidden:
         draw_loadouts_window(screen)
 
-    # ── DEV · Scan Zone (hidden; sentinel-gated) ───────────────────────
-    if _DEV_ENABLED and not display_hidden:
+    # ── Scan Zone (general feature; ungated for all users) ─────────────
+    if not display_hidden:
         draw_scanzone_window(screen)
     else:
         _scanzone_clear_rects()
 
-    # ── DEV · Synergy (hidden; sentinel-gated; draws above Scan Zone) ──
-    if _DEV_ENABLED and not display_hidden:
+    # ── Crafting / Synergy: synergy tab (general feature; ungated) ──
+    if not display_hidden:
         draw_synergy_window(screen)
     else:
         _syn_clear_rects()
@@ -55400,15 +55777,21 @@ while running:
     else:
         _ah_clear_rects()
     # ── DEV · SkillUp (hidden; sentinel-gated) ──
-    if _DEV_ENABLED and not display_hidden:
+    if not display_hidden:
         draw_skillup_window(screen)
     else:
         _skillup_clear_rects()
-    # ── DEV · Craft (hidden; sentinel-gated; draws above Synergy) ──
-    if _DEV_ENABLED and not display_hidden:
+    # ── Crafting / Synergy: craft tab (general feature; ungated) ──
+    if not display_hidden:
         draw_craft_window(screen)
     else:
         _craft_clear_rects()
+
+    # ── Crafting / Synergy: fisher tab (general feature; ungated) ──
+    if not display_hidden:
+        draw_fisher_window(screen)
+    else:
+        _fisher_clear_rects()
 
     # ── Settings dropdown (above everything when open) ──────────────────────
     draw_settings_menu(screen)
@@ -55419,6 +55802,7 @@ while running:
     draw_inventory_slip_nickname_editor(screen)
     # ── Item right-click menu (drop / auto-drop — on top of the dropdown) ───
     draw_inventory_item_ctx_menu(screen)
+    draw_inventory_bazaar_popup(screen)
 
     # ── Character-view dropdown (small; right of gear button) ───────────────
     draw_char_view_dropdown(screen)
@@ -55778,6 +56162,10 @@ while running:
             # Anchors handle repositioning automatically on the next frame.
             # No save needed — nothing on disk changes.
 
+        elif _inventory_bazaar_popup_event(event):
+            # Bazaar price popup is open and capturing input.
+            pass
+
         elif _subdialog_text_handle_event(event):
             # A focused text row in a Configure subdialog (e.g. the
             # Fisher bait/catch fields) is capturing keystrokes.
@@ -55806,6 +56194,12 @@ while running:
             # DEV · Synergy panel (sentinel-gated) consumed the event,
             # including its Ctrl+Shift+Y toggle combo. Checked before Scan
             # Zone because it draws above it.
+            pass
+
+        elif (not _dev_panel_input_blocked()
+                and _fisher_handle_event(event)):
+            # Fisher tab (third Crafting / Synergy tab) consumed the event,
+            # including its Ctrl+Shift+F toggle combo.
             pass
 
         elif (not _dev_panel_input_blocked()
@@ -56947,6 +57341,18 @@ while running:
                             elif _act == "autodrop":
                                 _inv_send_autodrop(
                                     inventory_item_ctx_menu["item_id"])
+                            elif _act == "bazaar":
+                                globals()["inventory_bazaar_popup"] = {
+                                    "item_id":
+                                        inventory_item_ctx_menu["item_id"],
+                                    "item_name":
+                                        inventory_item_ctx_menu.get(
+                                            "item_name", "?"),
+                                    "buf": "",
+                                }
+                            elif _act == "unbazaar":
+                                _inv_send_bazaar(
+                                    inventory_item_ctx_menu["item_id"], 0)
                             break
                     inventory_item_ctx_menu = None
                     continue

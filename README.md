@@ -93,11 +93,11 @@ OmniWatch settings live in two places, depending on what you want to change:
 Click the gear icon at the top of the overlay. The dropdown groups settings by panel. Most sections expose just a single **CONFIGURE** button (light blue) that opens a focused subdialog for that panel's options — this keeps the dropdown short and scannable.
 
 - **General** — Full screen, Always on top, **Display** [CONFIGURE] (window opacity, global UI scale 0.5×–3.0×, transparent background, toggle nub visibility), Setup mode
-- **Misc** — Checklist, Simulation mode
+- **Misc** — **Auction House** [OPEN], **Crafting / Synergy / Fishing** [OPEN], **Tracker** [OPEN], **AutoRA** [OPEN], Checklist, Simulation mode
 - **Header** — **Header** [CONFIGURE] (show time / weather / events / location, **Show OS clock**, **Show clock seconds**, **Clock time zone**, server choice, points tracker focus), **Currency cycler** [CONFIGURE] (per-currency toggles + cycle interval), **Inventory** [CONFIGURE] (inventory button + gearswap folder), Reset zone timer
 - **Party Panel** — **Party Panel** [CONFIGURE] (show alliance, show pets, show buffs, show debuffs, compact icon grid, edit buff/debuff blacklists, edit buff aliases)
 - **Equipment** — **Equipment** [CONFIGURE] (show panel, show tooltips, show ring cooldown, ring cycle interval 2–15s, per-ring inclusion toggles for Warp / Dem / Holla / Mea / Echad / Trizek / Reraise / Endorsement / Emporox)
-- **Statistics** — **Statistics** [CONFIGURE] (show panel, gear settings wizard, edit stats layout)
+- **Statistics** — **Statistics** [CONFIGURE] (show panel, gear settings wizard, edit stats layout), **SkillUp** [OPEN]
 - **Recast Timer** — **Recast Timer** [CONFIGURE] (show, auto-hide, edit blacklist)
 - **Buff Timer** — **Buff Timer** [CONFIGURE] (show, auto-hide, edit blacklist)
 - **Chat Panel** — **Chat Panel** [CONFIGURE] (show, font size, show input bar)
@@ -523,6 +523,8 @@ Items are grouped by bag and searchable by name. **GearSwap reference detection*
 **Right-click actions** (requires the [Treasury](https://github.com/from20020516/Treasury) addon for auto-drop): right-click any item row for a context menu —
 - **Drop item** — drops the item now (main Inventory bag only; storage/wardrobe items can't be dropped)
 - **Auto-drop (Treasury)** — runs `tr drop add <name>`: the item joins Treasury's auto-drop list, and with Treasury's AutoDrop on, the copy in your bag drops immediately and every future copy keeps dropping
+- **Bazaar…** — sets a sale price on the item (a small price box pops up) and lists it in your bazaar; works in any zone where you can bazaar. Items currently bazaared show a gold **B** at the left of their row
+- **Remove from bazaar** — shown only for bazaared items; unlists the item (sets its price to 0)
 
 Both actions are multibox-guarded: they're tagged with the displayed character and only that client acts, so you can't drop from the wrong box. Esc or clicking elsewhere closes the menu.
 
@@ -532,13 +534,47 @@ A Buy/Sell tool in one window. Drag the title bar to move it; drag the **bottom-
 
 **Buy tab** — type two or more characters to search. Stackable items are listed twice, once as the single and once as the stack (e.g. *Fire Crystal* and *Fire Crystal x 12*), mirroring the in-game AH; click either to queue that exact variant. Queued rows form a **bid queue** with per-item **Quantity / Start / Max / Increment** — the bidder walks each item's bids upward by the increment toward the max, repeating until the quantity is filled, paced by the **throttle** (seconds per transaction). **Clear** (beside Find / Sort) empties the search field and result list.
 
-**Sell tab** — hit **Refresh** at an Auction House to pull your sellable inventory, pick a single/stack + price, and **List** runs the real two-step AH list handshake. Your seven active listings show below with live status (On auction / Sold / Not Sold) and price.
+**Sell tab** — hit **Refresh** at an Auction House to pull your sellable inventory, pick a single/stack + price, and **List** runs the real two-step AH list handshake. Your active listings show below with live status (On auction / Not Sold) and price; a listing clears from the list the moment it sells.
 
 **Live prices — the `$` button.** Click the gold **`$`** on any item (a buy result or a sell row) to look it up live on your world's search server — the same source FFXIAH reads, but in-game and with no website. The Results pane shows a coloured item-name header with the **current listing counts** (singles / stacks for sale), then the **last ~10 sales** as *date · seller → buyer · price*, for the single or stack you clicked. **Clear** on the Results header wipes the log. Lookups run on a background thread, so the overlay never blocks.
 
 **One-time setup — do an in-game Search first.** Your world's search-server address is handed to the client at login and never travels in a packet OmniWatch can read, so OmniWatch picks it up from the game client's *own* connection to that server — which only exists once you've used the game's **Search** feature in the current session. If a `$` lookup reports **"search server not found,"** open Search once in-game (the in-app prompt calls this `/search` — use the Search menu to look up a player, party, or linkshell), then click `$` again. The detected address is cached to `%APPDATA%\OmniWatch\search_server_cache.txt` and reused on future launches, so this is normally a one-time step. To pin it manually, put `IP:port` (e.g. `124.150.154.63:54002`) in `%APPDATA%\OmniWatch\search_server.txt`.
 
 **Right-click** any item (search result, queued row, or sell-inventory item) to open its **FFXIAH** page in your browser; set your server once on ffxiah.com and every link lands on your world's prices.
+
+### Tracker
+
+A live widescan and radar for the current zone. Open it from **Settings → Misc → Tracker [OPEN]** or toggle it any time with **Ctrl+Shift+G**. Drag the title bar to move it and the bottom-right grip to resize; position and size persist.
+
+**Find by name.** Type part of a name to search the current zone's entity list and get every match with its **target index** (hex id). It's a client-side lookup — no targeting needed — so you can locate a specific NPC, mob, or NM before it's on screen.
+
+**Radar and map.** Switch between a player-centred **radar** (live widescan dots for mobs / NPCs / PCs around you, coloured by type) and a **map** view that plots entities on the zone grid. Hover a dot for its name, index, and distance; the map also reads out live **X / Y** under the cursor. Type coordinates into the box — either `X Y` world coords or a grid reference like `F-8` — and hit **Coordinates** to drop a pin.
+
+**Track spawns.** Click an entity to **track** it: OmniWatch follows its live position and shows **X / Y / Z**, distance, and **HP%** in its roster row. Each tracked entry carries a spawn state (it flashes when it pops), a **near** flag when it's within ~50 yalms, and a recorded **time of death** so you can watch a respawn window. Mark an entry **permanent** to keep it on the roster across deaths and re-detect its respawn by index. Filter the list by **All / Spawned / Unspawned**.
+
+**Right-click** a roster row or a radar/map dot for its context menu (per-entity actions such as tracking, aliasing, marking it permanent, or removing it).
+
+### Crafting / Synergy / Fishing
+
+A combined crafting toolbox in one draggable window with three tabs, opened from **Settings → Misc → Crafting / Synergy / Fishing [OPEN]**. Each tab also toggles on its own: **Ctrl+Shift+R** (Crafting), **Ctrl+Shift+Y** (Synergy), **Ctrl+Shift+F** (Fishing). A **Craft Skills** column on the right shows your crafting / gathering skills (Woodworking, Smithing, Goldsmithing, Clothcraft, Leathercraft, Bonecraft, Alchemy, Cooking, Synergy, Fishing) with the value in white and capped skills in blue; it stays visible on all three tabs.
+
+**Crafting.** Type two or more characters to search the recipe database (~4,200 recipes). Pick a recipe to see its crystal and ingredients, set a make count, and run the embedded auto-synth engine with HQ / support toggles, a synth delay and a jiggle. A status line and message log track progress.
+
+**Synergy.** Drives the furnace minigame: a live furnace-HP bar and an 8-element grid (Needed / Current / Fewell) with buttons for the synergy actions (thwack, pressure, safety lever, repair, recycle, smock) plus Re-fewell / Refresh / End. When you are not at an active furnace it shows the idle Re-fewell / Refresh controls.
+
+**Fishing.** The embedded auto-fisher. Set **Bait** and **Catch** (comma-separated names), a **Catch limit**, and tune the timing (recast / release / catch / equip / move / cast-retry delays, cast-retry max, no-hook limit), then flip **Fishing on**. It needs bait, at least one catch, and to be standing still. Click a field to edit it; Enter or click away to save.
+
+### AutoRA
+
+Auto-repeat ranged attacks. Open the settings box from **Settings → Misc → AutoRA [OPEN]**. Set the **Stop at TP** threshold (1000–3000), or turn on **Ignore TP** to keep firing, then flip **Auto ranged attack** on: while engaged it re-fires **/shoot** at your target, halting at the TP threshold unless ignored.
+
+### SkillUp
+
+Auto-skills your out-of-combat magic skills. Open it from **Settings → Statistics → SkillUp [OPEN]**. Click a skill-type button — **Healing / Geomancy / Enhancing / Ninjutsu / Singing / Blue / Summoning** — and it builds the loop itself from every self-target spell you already know for that skill (skipping Teleport / Warp / Tractor / Escape / Geo-* / avatars). It then cycles them, resting for MP, swapping wind / string instruments for BRD, popping Unbridled Learning for BLU, unpacking ninja tools, and running avatar Favor / Siphon / Release for SMN — tracking skillups/hr and total, and stopping when the skill caps. Options let it use Trust, Geo or Item, and choose what to do when finished (Stop / Shutdown / Logoff).
+
+A **Combat / Magic** skill display fills the right side: two tabs listing every weapon / defensive and magic skill, value in white and capped skills in blue. It refreshes on its own (every few seconds and live on each skillup) — no button needed.
+
+Note: SkillUp auto-casts unattended to raise skills, which carries more account risk on retail servers than the passive panels; use at your discretion.
 
 ### NPC dialog "continue" arrow
 

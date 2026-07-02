@@ -1,0 +1,1337 @@
+
+=== checkparam (0x029) trace started 2026-06-09 09:57:12 ===
+[09:57:12] [0x029] msg=4 target=17846452 p1=0 p2=0
+[09:57:22] [0x029] msg=6 target=17846452 p1=0 p2=0
+[09:58:06] [0x029] msg=4 target=17846453 p1=0 p2=0
+[09:58:14] [0x029] msg=6 target=17846453 p1=0 p2=0
+[09:58:14] [0x029] msg=234 target=17846450 p1=0 p2=0
+[09:58:16] [0x029] msg=6 target=17846450 p1=0 p2=0
+[10:01:09] [0x029] msg=5 target=17846452 p1=0 p2=0
+
+=== chat_packet trace started 2026-06-09 10:01:13 ===
+[10:01:13] [PKT] pkt_mode=27 data_len=60 sender=[Halima] msg=[off to work i go, have fun everyone]
+       hex: 17 1E 83 0A 1B 00 00 00 48 61 6C 69 6D 61 00 00 00 00 00 00 00 00 00 6F 66 66 20 74 6F 20 77 6F 72 6B 20 69 20 67 6F 2C 20 68 61 76 65 20 66 75 6E 20 65 76 65 72 79 6F 6E 65 00 00
+[10:01:18] [PKT] pkt_mode=27 data_len=32 sender=[Marquisxion] msg=[laters]
+       hex: 17 10 90 0A 1B 00 00 00 4D 61 72 71 75 69 73 78 69 6F 6E 00 00 00 00 6C 61 74 65 72 73 00 00 00
+[10:01:19] [0x029] msg=6 target=17846452 p1=0 p2=0
+[10:01:19] [0x029] msg=234 target=17846451 p1=0 p2=0
+[10:01:21] [0x029] msg=6 target=17846451 p1=0 p2=0
+[10:01:22] [PKT] pkt_mode=27 data_len=28 sender=[Venjamin] msg=[later]
+       hex: 17 0E 99 0A 1B 00 00 00 56 65 6E 6A 61 6D 69 6E 00 00 00 00 00 00 00 6C 61 74 65 72
+[10:01:58] [0x029] msg=6 target=17846453 p1=0 p2=0
+[10:02:28] [0x029] msg=6 target=17846450 p1=0 p2=0
+[10:05:04] [0x029] msg=5 target=17846451 p1=0 p2=0
+[10:05:08] [0x029] msg=5 target=17846451 p1=0 p2=0
+[10:05:14] [0x029] msg=6 target=17846451 p1=0 p2=0
+[10:05:14] [0x029] msg=234 target=17846452 p1=0 p2=0
+[10:05:22] [0x029] msg=6 target=17846452 p1=0 p2=0
+[10:05:34] [PKT] pkt_mode=27 data_len=88 sender=[Moid] msg=[full moon for like 2.5 more hours if ur trying to do Divine Might]
+       hex: 17 2C FC 0C 1B 00 00 00 4D 6F 69 64 00 00 00 00 00 00 00 00 00 00 00 66 75 6C 6C 20 6D 6F 6F 6E 20 66 6F 72 20 6C 69 6B 65 20 32 2E 35 20 6D 6F 72 65 20 68 6F 75 72 73 20 69 66 20 75 72 20 74
+[10:06:00] [0x029] msg=5 target=17846450 p1=0 p2=0
+[10:06:08] [0x029] msg=6 target=17846450 p1=0 p2=0
+[10:06:13] [0x029] msg=6 target=17846453 p1=0 p2=0
+[10:06:35] [0x029] msg=206 target=717844 p1=37 p2=0
+[10:09:18] [0x029] msg=206 target=717844 p1=116 p2=0
+[10:18:15] [PKT] pkt_mode=5 data_len=32 sender=[Zeptune] msg=[morning]
+       hex: 17 10 34 14 05 00 00 00 5A 65 70 74 75 6E 65 00 00 00 00 00 00 00 00 6D 6F 72 6E 69 6E 67 00 00
+[10:18:23] [PKT] pkt_mode=5 data_len=28 sender=[Yavaan] msg=[hihi]
+       hex: 17 0E 47 14 05 00 00 00 59 61 76 61 61 6E 00 00 00 00 00 00 00 00 00 68 69 68 69 00
+
+=== chat_packet trace started 2026-06-14 16:36:19 ===
+[16:36:19] [PKT] pkt_mode=27 data_len=48 sender=[Nerman] msg=[S2 wins the design race]
+       hex: 17 18 AA 23 1B 00 00 00 4E 65 72 6D 61 6E 00 00 00 00 00 00 00 00 00 53 32 20 77 69 6E 73 20 74 68 65 20 64 65 73 69 67 6E 20 72 61 63 65 00 00
+[16:36:33] [PKT] pkt_mode=27 data_len=52 sender=[Jirin] msg=[Fashion is the true endgame]
+       hex: 17 1A CB 23 1B 00 00 00 4A 69 72 69 6E 00 00 00 00 00 00 00 00 00 00 46 61 73 68 69 6F 6E 20 69 73 20 74 68 65 20 74 72 75 65 20 65 6E 64 67 61 6D 65 00 00
+[16:38:43] [PKT] pkt_mode=26 data_len=44 sender=[Isaacv] msg=[{Odyssey}C Seg {Looking for members.} @1]
+       hex: 17 16 08 25 1A 00 F7 00 49 73 61 61 63 76 00 00 00 00 00 00 00 00 00 FD 02 02 28 11 FD 43 20 53 65 67 20 FD 02 02 13 0E FD 20 40 31
+[16:39:54] [PKT] pkt_mode=27 data_len=60 sender=[Nerman] msg=[ill be back, making a quick store run]
+       hex: 17 1E B5 25 1B 00 00 00 4E 65 72 6D 61 6E 00 00 00 00 00 00 00 00 00 69 6C 6C 20 62 65 20 62 61 63 6B 2C 20 6D 61 6B 69 6E 67 20 61 20 71 75 69 63 6B 20 73 74 6F 72 65 20 72 75 6E
+[16:40:06] [PKT] pkt_mode=27 data_len=52 sender=[Nerman] msg=[dont do anything I wouldnt~]
+       hex: 17 1A D0 25 1B 00 00 00 4E 65 72 6D 61 6E 00 00 00 00 00 00 00 00 00 64 6F 6E 74 20 64 6F 20 61 6E 79 74 68 69 6E 67 20 49 20 77 6F 75 6C 64 6E 74 7E 00 00
+[16:40:22] [PKT] pkt_mode=27 data_len=68 sender=[Rosovyes] msg=[Anybody here know where I can find Grauberg?]
+       hex: 17 22 F7 25 1B 00 00 00 52 6F 73 6F 76 79 65 73 00 00 00 00 00 00 00 41 6E 79 62 6F 64 79 20 68 65 72 65 20 6B 6E 6F 77 20 77 68 65 72 65 20 49 20 63 61 6E 20 66 69 6E 64 20 47 72 61 75 62 65
+[16:40:29] [PKT] pkt_mode=27 data_len=56 sender=[Kaelerac] msg=[*sigh* fiiiiiiiiiiiiiiiine mooom]
+       hex: 17 1C 0A 26 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 2A 73 69 67 68 2A 20 66 69 69 69 69 69 69 69 69 69 69 69 69 69 69 69 69 6E 65 20 6D 6F 6F 6F 6D 00
+[16:40:43] [PKT] pkt_mode=27 data_len=56 sender=[Echovia] msg=[sw corner of {Pashhow Marshlands [S]} for {Grauberg [S]}]
+       hex: 17 1C 2C 26 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 73 77 20 63 6F 72 6E 65 72 20 6F 66 20 FD 02 02 27 25 FD 20 66 6F 72 20 FD 02 02 27 20 FD 00 00 00
+[16:40:57] [PKT] pkt_mode=27 data_len=44 sender=[Banador] msg=[its in the past kinda]
+       hex: 17 16 4E 26 1B 00 00 00 42 61 6E 61 64 6F 72 00 00 00 00 00 00 00 00 69 74 73 20 69 6E 20 74 68 65 20 70 61 73 74 20 6B 69 6E 64 61
+[16:41:08] [PKT] pkt_mode=27 data_len=68 sender=[Kaelerac] msg=[ north of gustaberg and 30 years thattaway]
+       hex: 17 22 68 26 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 20 6E 6F 72 74 68 20 6F 66 20 67 75 73 74 61 62 65 72 67 20 61 6E 64 20 33 30 20 79 65 61 72 73 20 74 68 61 74 74 61 77 61
+[16:41:26] [PKT] pkt_mode=27 data_len=56 sender=[Rosovyes] msg=[Thank you.  I'll find it somehow.]
+       hex: 17 1C 93 26 1B 00 00 00 52 6F 73 6F 76 79 65 73 00 00 00 00 00 00 00 54 68 61 6E 6B 20 79 6F 75 2E 20 20 49 27 6C 6C 20 66 69 6E 64 20 69 74 20 73 6F 6D 65 68 6F 77 2E
+[16:41:26] [PKT] pkt_mode=27 data_len=64 sender=[Subtlemistakes] msg=[nothing like going to the futures past]
+       hex: 17 20 93 26 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 6E 6F 74 68 69 6E 67 20 6C 69 6B 65 20 67 6F 69 6E 67 20 74 6F 20 74 68 65 20 66 75 74 75 72 65 73 20 70 61 73 74 00 00 00
+[16:41:38] [PKT] pkt_mode=27 data_len=108 sender=[Echovia] msg=[instead of going straight to the normal {Pashhow Marshlands} exit, there's a path around f-10/11]
+       hex: 17 36 B1 26 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 69 6E 73 74 65 61 64 20 6F 66 20 67 6F 69 6E 67 20 73 74 72 61 69 67 68 74 20 74 6F 20 74 68 65 20 6E 6F 72 6D 61 6C 20 FD
+[16:41:40] [PKT] pkt_mode=27 data_len=64 sender=[Jirin] msg=[Two days before the day after tomorrow]
+       hex: 17 20 B6 26 1B 00 00 00 4A 69 72 69 6E 00 00 00 00 00 00 00 00 00 00 54 77 6F 20 64 61 79 73 20 62 65 66 6F 72 65 20 74 68 65 20 64 61 79 20 61 66 74 65 72 20 74 6F 6D 6F 72 72 6F 77 00 00 00
+[16:41:44] [PKT] pkt_mode=27 data_len=32 sender=[Jirin] msg=[Dear god]
+       hex: 17 10 C0 26 1B 00 00 00 4A 69 72 69 6E 00 00 00 00 00 00 00 00 00 00 44 65 61 72 20 67 6F 64 00
+[16:41:45] [PKT] pkt_mode=27 data_len=80 sender=[Banador] msg=[working on the WotG storyline will be needed to access it]
+       hex: 17 28 C2 26 1B 00 00 00 42 61 6E 61 64 6F 72 00 00 00 00 00 00 00 00 77 6F 72 6B 69 6E 67 20 6F 6E 20 74 68 65 20 57 6F 74 47 20 73 74 6F 72 79 6C 69 6E 65 20 77 69 6C 6C 20 62 65 20 6E 65 65
+[16:41:46] [PKT] pkt_mode=27 data_len=36 sender=[Jirin] msg=[That's today]
+       hex: 17 12 C4 26 1B 00 00 00 4A 69 72 69 6E 00 00 00 00 00 00 00 00 00 00 54 68 61 74 27 73 20 74 6F 64 61 79 00
+[16:41:51] [PKT] pkt_mode=27 data_len=28 sender=[Townsen] msg=[rofl]
+       hex: 17 0E D1 26 1B 00 00 00 54 6F 77 6E 73 65 6E 00 00 00 00 00 00 00 00 72 6F 66 6C 00
+
+=== chat_packet trace started 2026-06-14 18:24:03 ===
+[18:24:03] [PKT] pkt_mode=33 data_len=32 sender=[Raika] msg=[{Hello!}]
+       hex: 17 10 BF 0F 21 00 00 00 52 61 69 6B 61 00 00 00 00 00 00 00 00 00 00 FD 02 01 01 0B FD 00 00 00
+[18:24:41] [PKT] pkt_mode=27 data_len=72 sender=[Ibanezra] msg=[;; only {Initiate} there too... next rank is {Apprentice}]
+       hex: 17 24 1A 10 1B 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 3B 3B 20 6F 6E 6C 79 20 FD 02 02 0C 1E FD 20 74 68 65 72 65 20 74 6F 6F 2E 2E 2E 20 6E 65 78 74 20 72 61 6E 6B 20 69 73 20
+[18:25:13] [PKT] pkt_mode=27 data_len=56 sender=[Gile] msg=[i can get just deep in {Caedarva Mire} atm]
+       hex: 17 1C 68 10 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 69 20 63 61 6E 20 67 65 74 20 6A 75 73 74 20 64 65 65 70 20 69 6E 20 FD 02 02 14 D0 FD 20 61 74 6D
+[18:25:28] [PKT] pkt_mode=33 data_len=24 sender=[Calientita] msg=[.]
+       hex: 17 0C 8E 10 21 00 00 00 43 61 6C 69 65 6E 74 69 74 61 00 00 00 00 00 2E
+[18:25:39] [PKT] pkt_mode=27 data_len=44 sender=[Kyraha] msg=[IT's fine I'll wait!]
+       hex: 17 16 A8 10 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 54 27 73 20 66 69 6E 65 20 49 27 6C 6C 20 77 61 69 74 21 00
+[18:25:53] [PKT] pkt_mode=27 data_len=44 sender=[Kyraha] msg=[Ty anyway Ibanezra]
+       hex: 17 16 CB 10 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 54 79 20 61 6E 79 77 61 79 20 49 62 61 6E 65 7A 72 61 00 00 00
+[18:26:02] [PKT] pkt_mode=27 data_len=28 sender=[Ibanezra] msg=[;;]
+       hex: 17 0E E0 10 1B 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 3B 3B 00 00 00
+[18:26:30] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01ef,0000000a,0000002d,00000120,00000000,00000000,]
+       hex: 17 26 26 11 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 65 66 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 64 2C 30 30 30 30 30 31 32 30 2C 30 30 30 30 30 30
+
+=== checkparam (0x029) trace started 2026-06-14 18:27:22 ===
+[18:27:22] [0x029] msg=206 target=717844 p1=40 p2=0
+[18:27:33] [0x029] msg=206 target=717844 p1=41 p2=0
+[18:28:00] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01f1,0000000a,0000002f,00000120,00000000,00000000,]
+       hex: 17 26 FF 11 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 66 31 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 66 2C 30 30 30 30 30 31 32 30 2C 30 30 30 30 30 30
+[18:29:59] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01e6,0000000a,00000024,00000087,00000087,00000087,]
+       hex: 17 26 22 13 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 65 36 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 34 2C 30 30 30 30 30 30 38 37 2C 30 30 30 30 30 30
+[18:30:09] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01f3,0000000a,00000031,00000120,00000000,00000000,]
+       hex: 17 26 3A 13 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 66 33 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 33 31 2C 30 30 30 30 30 31 32 30 2C 30 30 30 30 30 30
+[18:30:10] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01ee,0000000a,0000002c,00000120,00003785,0002db64,]
+       hex: 17 26 3B 13 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 65 65 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 63 2C 30 30 30 30 30 31 32 30 2C 30 30 30 30 33 37
+[18:30:25] [PKT] pkt_mode=33 data_len=28 sender=[Ginrou] msg=[...]
+       hex: 17 0E 60 13 21 00 00 00 47 69 6E 72 6F 75 00 00 00 00 00 00 00 00 00 2E 2E 2E 00 00
+[18:30:55] [PKT] pkt_mode=33 data_len=32 sender=[Deiru] msg=[{Hello!}]
+       hex: 17 10 AA 13 21 00 00 00 44 65 69 72 75 00 00 00 00 00 00 00 00 00 00 FD 02 01 01 0B FD 00 00 00
+[18:32:27] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01f0,0000000a,0000002e,00000121,00000001,0000000a,]
+       hex: 17 26 89 14 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 66 30 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 65 2C 30 30 30 30 30 31 32 31 2C 30 30 30 30 30 30
+[18:35:31] [PKT] pkt_mode=27 data_len=44 sender=[Kyraha] msg=[I'm a sheep it seems]
+       hex: 17 16 48 16 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 27 6D 20 61 20 73 68 65 65 70 20 69 74 20 73 65 65 6D 73 00
+[18:37:09] [PKT] pkt_mode=27 data_len=116 sender=[Kyraha] msg=[It wasn't anything sketchy after all, it's an item that transforms you (pungent powder II)]
+       hex: 17 3A 36 17 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 74 20 77 61 73 6E 27 74 20 61 6E 79 74 68 69 6E 67 20 73 6B 65 74 63 68 79 20 61 66 74 65 72 20 61 6C 6C 2C 20 69 74 27
+[18:41:20] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01ef,0000000a,0000002d,00000121,00000001,00000001,]
+       hex: 17 26 9A 19 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 65 66 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 64 2C 30 30 30 30 30 31 32 31 2C 30 30 30 30 30 30
+[18:42:00] [PKT] pkt_mode=27 data_len=48 sender=[Kyraha] msg=[How do I turn back lol]
+       hex: 17 18 FA 19 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 48 6F 77 20 64 6F 20 49 20 74 75 72 6E 20 62 61 63 6B 20 6C 6F 6C 00 00 00
+[18:42:34] [PKT] pkt_mode=33 data_len=32 sender=[Grapha] msg=[{Hello!}]
+       hex: 17 10 4D 1A 21 00 00 00 47 72 61 70 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[18:42:51] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01f1,0000000a,0000002f,00000121,00000001,00000001,]
+       hex: 17 26 76 1A 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 66 31 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 66 2C 30 30 30 30 30 31 32 31 2C 30 30 30 30 30 30
+[18:43:49] [PKT] pkt_mode=27 data_len=76 sender=[Echovia] msg=[cancel the costume buff like you would any other buff]
+       hex: 17 26 02 1B 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 63 61 6E 63 65 6C 20 74 68 65 20 63 6F 73 74 75 6D 65 20 62 75 66 66 20 6C 69 6B 65 20 79 6F 75 20 77 6F 75 6C 64 20 61 6E
+[18:43:58] [PKT] pkt_mode=27 data_len=40 sender=[Kyraha] msg=[Yes just saw it]
+       hex: 17 14 18 1B 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 59 65 73 20 6A 75 73 74 20 73 61 77 20 69 74 00 00
+[18:44:08] [PKT] pkt_mode=27 data_len=104 sender=[Echovia] msg=[press F twice to bring your cursor up to the status bar then hit enter to clear]
+       hex: 17 34 30 1B 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 70 72 65 73 73 20 46 20 74 77 69 63 65 20 74 6F 20 62 72 69 6E 67 20 79 6F 75 72 20 63 75 72 73 6F 72 20 75 70 20 74 6F 20
+[18:44:26] [PKT] pkt_mode=33 data_len=44 sender=[Quinnifer] msg=[show me your crits]
+       hex: 17 16 5D 1B 21 00 00 00 51 75 69 6E 6E 69 66 65 72 00 00 00 00 00 00 73 68 6F 77 20 6D 65 20 79 6F 75 72 20 63 72 69 74 73 00 00 00
+[18:44:52] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01f3,0000000a,00000031,00000121,00000001,00000001,]
+       hex: 17 26 9B 1B 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 66 33 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 33 31 2C 30 30 30 30 30 31 32 31 2C 30 30 30 30 30 30
+[18:44:52] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01ee,0000000a,0000002c,00000121,00003786,0002db65,]
+       hex: 17 26 9B 1B 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 65 65 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 63 2C 30 30 30 30 30 31 32 31 2C 30 30 30 30 33 37
+[18:48:27] [PKT] pkt_mode=33 data_len=76 sender=[] msg=[0a,01f0,0000000a,0000002e,00000123,00000002,0000000a,]
+       hex: 17 26 A7 1D 21 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 30 61 2C 30 31 66 30 2C 30 30 30 30 30 30 30 61 2C 30 30 30 30 30 30 32 65 2C 30 30 30 30 30 31 32 33 2C 30 30 30 30 30 30
+[18:49:38] [PKT] pkt_mode=33 data_len=24 sender=[Tetuco] msg=[/]
+       hex: 17 0C 52 1E 21 00 00 00 54 65 74 75 63 6F 00 00 00 00 00 00 00 00 00 2F
+
+=== chat_packet trace started 2026-06-16 11:45:40 ===
+[11:45:40] [PKT] pkt_mode=26 data_len=140 sender=[Histoy] msg=[REMAP weapon/OdysseyV0-V25/HTMB/Super RP/Ambuscade/Omen/Sortie/Dynamis wave3/Master Trials/buy?discord:alexkim8667]
+       hex: 17 46 42 23 1A 00 EC 00 48 69 73 74 6F 79 00 00 00 00 00 00 00 00 00 52 45 4D 41 50 20 77 65 61 70 6F 6E 2F 4F 64 79 73 73 65 79 56 30 2D 56 32 35 2F 48 54 4D 42 2F 53 75 70 65 72 20 52 50 2F
+
+=== chat_packet trace started 2026-06-16 11:50:03 ===
+[11:50:03] [PKT] pkt_mode=26 data_len=60 sender=[Tsukix] msg=[{Alzadaal Undersea Ruins}NW 左上 {box}ありますよ～～～]
+       hex: 17 1E B4 25 1A 00 F1 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 DD FD 4E 57 20 8D B6 8F E3 20 FD 02 01 1E 15 FD 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60 00
+[11:55:17] [PKT] pkt_mode=27 data_len=32 sender=[Kaelerac] msg=[morning!]
+       hex: 17 10 AD 28 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6D 6F 72 6E 69 6E 67 21 00
+[11:55:21] [PKT] pkt_mode=27 data_len=32 sender=[Marquisxion] msg=[hiya :)]
+       hex: 17 10 B8 28 1B 00 00 00 4D 61 72 71 75 69 73 78 69 6F 6E 00 00 00 00 68 69 79 61 20 3A 29 00 00
+[11:55:22] [PKT] pkt_mode=27 data_len=28 sender=[Susurro] msg=[hihi]
+       hex: 17 0E B9 28 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 68 69 68 69 00
+[11:55:29] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[hi]
+       hex: 17 0E CA 28 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[11:55:30] [PKT] pkt_mode=27 data_len=32 sender=[Gawdrik] msg=[{/wave}]
+       hex: 17 10 CE 28 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 FD 02 02 0D 27 FD 00 00 00
+[11:55:39] [PKT] pkt_mode=27 data_len=32 sender=[Marquisxion] msg=[hiya :)]
+       hex: 17 10 E3 28 1B 00 00 00 4D 61 72 71 75 69 73 78 69 6F 6E 00 00 00 00 68 69 79 61 20 3A 29 00 00
+[11:55:40] [PKT] pkt_mode=26 data_len=140 sender=[Histoy] msg=[REMAP weapon/OdysseyV0-V25/HTMB/Super RP/Ambuscade/Omen/Sortie/Dynamis wave3/Master Trials/buy?discord:alexkim8667]
+       hex: 17 46 E5 28 1A 00 EC 00 48 69 73 74 6F 79 00 00 00 00 00 00 00 00 00 52 45 4D 41 50 20 77 65 61 70 6F 6E 2F 4F 64 79 73 73 65 79 56 30 2D 56 32 35 2F 48 54 4D 42 2F 53 75 70 65 72 20 52 50 2F
+[11:55:52] [PKT] pkt_mode=27 data_len=28 sender=[Bids] msg=[hey]
+       hex: 17 0E 02 29 1B 00 00 00 42 69 64 73 00 00 00 00 00 00 00 00 00 00 00 68 65 79 00 00
+[11:59:25] [PKT] pkt_mode=26 data_len=84 sender=[Mrbiggz] msg=[how much would someone charge to take me through a V1 {please}]
+       hex: 17 2A 09 2B 1A 00 F9 00 4D 72 62 69 67 67 7A 00 00 00 00 00 00 00 00 68 6F 77 20 6D 75 63 68 20 77 6F 75 6C 64 20 73 6F 6D 65 6F 6E 65 20 63 68 61 72 67 65 20 74 6F 20 74 61 6B 65 20 6D 65 20
+[12:07:45] [PKT] pkt_mode=26 data_len=52 sender=[Tsukix] msg=[{The Boyahda Tree}{box} ありますよ～～]
+       hex: 17 1A C6 2F 1A 00 F1 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 44 FD FD 02 01 1E 15 FD 20 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 00 00
+[12:11:34] [PKT] pkt_mode=27 data_len=104 sender=[Kaelerac] msg=[learning BLU has taught me a valuable skill -- how to turn my back to the enemy]
+       hex: 17 34 F3 31 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6C 65 61 72 6E 69 6E 67 20 42 4C 55 20 68 61 73 20 74 61 75 67 68 74 20 6D 65 20 61 20 76 61 6C 75 61 62 6C 65 20 73 6B 69
+[12:11:41] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[lol]
+       hex: 17 0E 05 32 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 6C 6F 6C 00 00
+[12:11:57] [PKT] pkt_mode=27 data_len=64 sender=[Kaelerac] msg=[the secret, dear reader, is the letter H]
+       hex: 17 20 2A 32 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 74 68 65 20 73 65 63 72 65 74 2C 20 64 65 61 72 20 72 65 61 64 65 72 2C 20 69 73 20 74 68 65 20 6C 65 74 74 65 72 20 48 00
+[12:12:13] [PKT] pkt_mode=27 data_len=28 sender=[Azro] msg=[lol]
+       hex: 17 0E 51 32 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6C 6F 6C 00 00
+[12:12:55] [PKT] pkt_mode=27 data_len=108 sender=[Kaelerac] msg=[but even with this new secret technique, the dhalmels still refuse to heal themselves]
+       hex: 17 36 B7 32 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 62 75 74 20 65 76 65 6E 20 77 69 74 68 20 74 68 69 73 20 6E 65 77 20 73 65 63 72 65 74 20 74 65 63 68 6E 69 71 75 65 2C 20
+[12:13:10] [PKT] pkt_mode=27 data_len=60 sender=[Subtlemistakes] msg=[i had to pull like 2 or 3 at a time]
+       hex: 17 1E DB 32 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 69 20 68 61 64 20 74 6F 20 70 75 6C 6C 20 6C 69 6B 65 20 32 20 6F 72 20 33 20 61 74 20 61 20 74 69 6D 65 00 00
+[12:13:19] [PKT] pkt_mode=27 data_len=44 sender=[Subtlemistakes] msg=[and get them to <25%]
+       hex: 17 16 F1 32 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 61 6E 64 20 67 65 74 20 74 68 65 6D 20 74 6F 20 3C 32 35 25 00
+[12:13:39] [PKT] pkt_mode=27 data_len=88 sender=[Kaelerac] msg=[yep, that's my method atm. only have healing/passive trusts out]
+       hex: 17 2C 22 33 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 79 65 70 2C 20 74 68 61 74 27 73 20 6D 79 20 6D 65 74 68 6F 64 20 61 74 6D 2E 20 6F 6E 6C 79 20 68 61 76 65 20 68 65 61 6C
+[12:13:48] [PKT] pkt_mode=26 data_len=100 sender=[Linphosies] msg=[{Job Points} 500p/5m 2100p/20m {Master Level}5hr/5m ML0~30/30m ML0~50 {Buy?} {/tell} {Thank you.}]
+       hex: 17 32 37 33 1A 00 EB 00 4C 69 6E 70 68 6F 73 69 65 73 00 00 00 00 00 FD 02 02 28 1D FD 20 35 30 30 70 2F 35 6D 20 32 31 30 30 70 2F 32 30 6D 20 FD 02 02 28 19 FD 35 68 72 2F 35 6D 20 4D 4C 30
+[12:13:56] [PKT] pkt_mode=27 data_len=52 sender=[Subtlemistakes] msg=[yeah it was pretty rare doe]
+       hex: 17 1A 4C 33 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 79 65 61 68 20 69 74 20 77 61 73 20 70 72 65 74 74 79 20 72 61 72 65 20 64 6F 65 00 00
+[12:14:01] [PKT] pkt_mode=27 data_len=56 sender=[Kaelerac] msg=[one applies Dia to feed them TP]
+       hex: 17 1C 57 33 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6F 6E 65 20 61 70 70 6C 69 65 73 20 44 69 61 20 74 6F 20 66 65 65 64 20 74 68 65 6D 20 54 50 00 00
+[12:14:51] [PKT] pkt_mode=26 data_len=52 sender=[Tsukix] msg=[{Ru'Aun Gardens}{box} ありますよ～～～]
+       hex: 17 1A D1 33 1A 00 F0 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 6F FD FD 02 01 1E 15 FD 20 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60
+[12:15:52] [PKT] pkt_mode=27 data_len=124 sender=[Subtlemistakes] msg=[oh yeah i never use dia cause i was a dumdum, i just used like a low lvl club and beat them to death]
+       hex: 17 3E 66 34 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 6F 68 20 79 65 61 68 20 69 20 6E 65 76 65 72 20 75 73 65 20 64 69 61 20 63 61 75 73 65 20 69 20 77 61 73 20 61 20 64 75 6D
+[12:16:11] [PKT] pkt_mode=27 data_len=56 sender=[Kaelerac] msg=[no weapon here, just these hands]
+       hex: 17 1C 93 34 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6E 6F 20 77 65 61 70 6F 6E 20 68 65 72 65 2C 20 6A 75 73 74 20 74 68 65 73 65 20 68 61 6E 64 73 00
+[12:16:13] [PKT] pkt_mode=27 data_len=32 sender=[Melah] msg=[{Hand-to-Hand}]
+       hex: 17 10 99 34 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 18 03 FD 00 00 00
+[12:16:14] [PKT] pkt_mode=27 data_len=44 sender=[Subtlemistakes] msg=[albeit very slowly]
+       hex: 17 16 9C 34 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 61 6C 62 65 69 74 20 76 65 72 79 20 73 6C 6F 77 6C 79 00 00 00
+[12:18:34] [PKT] pkt_mode=27 data_len=76 sender=[Kaelerac] msg=[yusss, these long camels finally learned their place]
+       hex: 17 26 F0 35 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 79 75 73 73 73 2C 20 74 68 65 73 65 20 6C 6F 6E 67 20 63 61 6D 65 6C 73 20 66 69 6E 61 6C 6C 79 20 6C 65 61 72 6E 65 64 20
+[12:22:57] [PKT] pkt_mode=27 data_len=116 sender=[Gabimaru] msg=[wow two hours waiting for double ice weather to be gone so I can pass the frozen waterfall]
+       hex: 17 3A 6F 38 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 77 6F 77 20 74 77 6F 20 68 6F 75 72 73 20 77 61 69 74 69 6E 67 20 66 6F 72 20 64 6F 75 62 6C 65 20 69 63 65 20 77 65 61 74
+[12:23:09] [PKT] pkt_mode=27 data_len=56 sender=[Gabimaru] msg=[How long does the weather last?]
+       hex: 17 1C 8B 38 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 48 6F 77 20 6C 6F 6E 67 20 64 6F 65 73 20 74 68 65 20 77 65 61 74 68 65 72 20 6C 61 73 74 3F 00 00
+[12:23:10] [PKT] pkt_mode=27 data_len=32 sender=[Kaelerac] msg=[wtffff]
+       hex: 17 10 8D 38 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 77 74 66 66 66 66 00 00 00
+[12:23:38] [PKT] pkt_mode=27 data_len=40 sender=[Gabimaru] msg=[yea I know ; ;]
+       hex: 17 14 D1 38 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 79 65 61 20 49 20 6B 6E 6F 77 20 3B 20 3B 00 00 00
+[12:23:56] [PKT] pkt_mode=27 data_len=80 sender=[Gabimaru] msg=[anyone with {Uleguerand Range} {Home Point} #1 can help me with Nexum cape]
+       hex: 17 28 FD 38 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 61 6E 79 6F 6E 65 20 77 69 74 68 20 FD 02 02 14 8A FD 20 FD 02 02 08 29 FD 20 23 31 20 63 61 6E 20 68 65 6C 70 20 6D 65 20
+[12:24:12] [PKT] pkt_mode=27 data_len=48 sender=[Gabimaru] msg=[or I can just wait lol]
+       hex: 17 18 24 39 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 6F 72 20 49 20 63 61 6E 20 6A 75 73 74 20 77 61 69 74 20 6C 6F 6C 00 00 00
+[12:24:20] [PKT] pkt_mode=27 data_len=36 sender=[Melah] msg=[we can help u]
+       hex: 17 12 38 39 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 77 65 20 63 61 6E 20 68 65 6C 70 20 75
+[12:24:43] [PKT] pkt_mode=27 data_len=64 sender=[Gabimaru] msg=[ I would really really appricate it Melah]
+       hex: 17 20 6F 39 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 20 49 20 77 6F 75 6C 64 20 72 65 61 6C 6C 79 20 72 65 61 6C 6C 79 20 61 70 70 72 69 63 61 74 65 20 69 74 20 4D 65 6C 61 68
+[12:27:36] [PKT] pkt_mode=27 data_len=128 sender=[Kaelerac] msg=[so for the nexus cape, you just party up with the party leader at target location, equip and use cape?]
+       hex: 17 40 13 3B 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 73 6F 20 66 6F 72 20 74 68 65 20 6E 65 78 75 73 20 63 61 70 65 2C 20 79 6F 75 20 6A 75 73 74 20 70 61 72 74 79 20 75 70 20
+[12:27:43] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[yes]
+       hex: 17 0E 25 3B 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 79 65 73 00 00
+[12:27:52] [PKT] pkt_mode=27 data_len=48 sender=[Gabimaru] msg=[has to be an open area]
+       hex: 17 18 39 3B 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 68 61 73 20 74 6F 20 62 65 20 61 6E 20 6F 70 65 6E 20 61 72 65 61 00 00 00
+[12:28:50] [PKT] pkt_mode=27 data_len=112 sender=[Gabimaru] msg=[We can do the opposite now u wait for me i find an entrance then u can teleport to me lol]
+       hex: 17 38 C7 3B 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 57 65 20 63 61 6E 20 64 6F 20 74 68 65 20 6F 70 70 6F 73 69 74 65 20 6E 6F 77 20 75 20 77 61 69 74 20 66 6F 72 20 6D 65 20
+[12:28:53] [PKT] pkt_mode=27 data_len=28 sender=[Gabimaru] msg=[mt]
+       hex: 17 0E CD 3B 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 6D 74 00 00 00
+[12:33:08] [PKT] pkt_mode=27 data_len=88 sender=[Gabimaru] msg=[anyone need {Uleguerand Range} {Home Point} #1  waterfall gate opened finally lol]
+       hex: 17 2C 3A 3E 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 61 6E 79 6F 6E 65 20 6E 65 65 64 20 FD 02 02 14 8A FD 20 FD 02 02 08 29 FD 20 23 31 20 20 77 61 74 65 72 66 61 6C 6C 20 67
+[12:34:27] [PKT] pkt_mode=5 data_len=64 sender=[Tohken] msg=[man i cant do normal sahagins for shit. ]
+       hex: 17 20 D2 3E 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 6D 61 6E 20 69 20 63 61 6E 74 20 64 6F 20 6E 6F 72 6D 61 6C 20 73 61 68 61 67 69 6E 73 20 66 6F 72 20 73 68 69 74 2E 20 00
+[12:34:32] [PKT] pkt_mode=5 data_len=44 sender=[Tohken] msg=[getting frustrating.]
+       hex: 17 16 DF 3E 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 67 65 74 74 69 6E 67 20 66 72 75 73 74 72 61 74 69 6E 67 2E 00
+[12:35:38] [PKT] pkt_mode=5 data_len=124 sender=[Tohken] msg=[made a new whm so my main whm can use brd/marsyas and they are just not the same. i miss my old whm..]
+       hex: 17 3E 68 3F 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 6D 61 64 65 20 61 20 6E 65 77 20 77 68 6D 20 73 6F 20 6D 79 20 6D 61 69 6E 20 77 68 6D 20 63 61 6E 20 75 73 65 20 62 72 64
+[12:37:09] [PKT] pkt_mode=5 data_len=80 sender=[Yevn] msg=[is the server lag absolute assbutt right now or is it me?]
+       hex: 17 28 1F 40 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 69 73 20 74 68 65 20 73 65 72 76 65 72 20 6C 61 67 20 61 62 73 6F 6C 75 74 65 20 61 73 73 62 75 74 74 20 72 69 67 68 74 20
+[12:37:20] [PKT] pkt_mode=5 data_len=56 sender=[Sairie] msg=[iu thikn ur internets messin up]
+       hex: 17 1C 39 40 05 00 00 00 53 61 69 72 69 65 00 00 00 00 00 00 00 00 00 69 75 20 74 68 69 6B 6E 20 75 72 20 69 6E 74 65 72 6E 65 74 73 20 6D 65 73 73 69 6E 20 75 70 00 00
+[12:37:34] [PKT] pkt_mode=5 data_len=40 sender=[Yevn] msg=[hmm. ok thanks]
+       hex: 17 14 4F 40 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 68 6D 6D 2E 20 6F 6B 20 74 68 61 6E 6B 73 00 00 00
+[12:38:01] [PKT] pkt_mode=5 data_len=52 sender=[Yevn] msg=[in and out of r0 constantly]
+       hex: 17 1A 80 40 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 69 6E 20 61 6E 64 20 6F 75 74 20 6F 66 20 72 30 20 63 6F 6E 73 74 61 6E 74 6C 79 00 00
+[12:38:06] [PKT] pkt_mode=5 data_len=68 sender=[Dnb] msg=[my was doing that when my isp was doing maint]
+       hex: 17 22 8D 40 05 00 00 00 44 6E 62 00 00 00 00 00 00 00 00 00 00 00 00 6D 79 20 77 61 73 20 64 6F 69 6E 67 20 74 68 61 74 20 77 68 65 6E 20 6D 79 20 69 73 70 20 77 61 73 20 64 6F 69 6E 67 20 6D
+[12:38:39] [PKT] pkt_mode=5 data_len=68 sender=[Yevn] msg=[I'll reset my modem and stuff then I rekon]
+       hex: 17 22 BD 40 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 49 27 6C 6C 20 72 65 73 65 74 20 6D 79 20 6D 6F 64 65 6D 20 61 6E 64 20 73 74 75 66 66 20 74 68 65 6E 20 49 20 72 65 6B 6F
+[12:39:06] [PKT] pkt_mode=5 data_len=132 sender=[Tohken] msg=[im not experiencing that on any of the 6. i seen ur message form last night., prlly best bet to reset rouuter]
+       hex: 17 42 EC 40 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 69 6D 20 6E 6F 74 20 65 78 70 65 72 69 65 6E 63 69 6E 67 20 74 68 61 74 20 6F 6E 20 61 6E 79 20 6F 66 20 74 68 65 20 36 2E
+[12:39:37] [PKT] pkt_mode=5 data_len=80 sender=[Yevn] msg=[ok cool. I should be able to do something about it then ]
+       hex: 17 28 27 41 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 6F 6B 20 63 6F 6F 6C 2E 20 49 20 73 68 6F 75 6C 64 20 62 65 20 61 62 6C 65 20 74 6F 20 64 6F 20 73 6F 6D 65 74 68 69 6E 67
+[12:40:27] [PKT] pkt_mode=27 data_len=80 sender=[Kaelerac] msg=[neat! I haven't used my prime sub in ages, so have at it]
+       hex: 17 28 8D 41 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6E 65 61 74 21 20 49 20 68 61 76 65 6E 27 74 20 75 73 65 64 20 6D 79 20 70 72 69 6D 65 20 73 75 62 20 69 6E 20 61 67 65 73
+[12:40:29] [PKT] pkt_mode=27 data_len=28 sender=[Kaelerac] msg=[mt]
+       hex: 17 0E 91 41 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6D 74 00 00 00
+[12:44:02] [PKT] pkt_mode=5 data_len=52 sender=[Yevn] msg=[oh I think windows 11 updated]
+       hex: 17 1A 98 43 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 6F 68 20 49 20 74 68 69 6E 6B 20 77 69 6E 64 6F 77 73 20 31 31 20 75 70 64 61 74 65 64
+[12:44:02] [PKT] pkt_mode=5 data_len=36 sender=[Yevn] msg=[that'll do it]
+       hex: 17 12 98 43 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 74 68 61 74 27 6C 6C 20 64 6F 20 69 74
+[12:46:44] [PKT] pkt_mode=5 data_len=28 sender=[Tohken] msg=[yay]
+       hex: 17 0E FE 44 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 79 61 79 00 00
+[12:47:09] [PKT] pkt_mode=5 data_len=116 sender=[Tohken] msg=[easy was easier to manage but man. if only sleeping both sides was more consistent with 6 ]
+       hex: 17 3A 3A 45 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 65 61 73 79 20 77 61 73 20 65 61 73 69 65 72 20 74 6F 20 6D 61 6E 61 67 65 20 62 75 74 20 6D 61 6E 2E 20 69 66 20 6F 6E 6C
+[12:48:17] [PKT] pkt_mode=5 data_len=76 sender=[Tohken] msg=[dnb needs sortie access stat for that goodgood ebers.]
+       hex: 17 26 E0 45 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 64 6E 62 20 6E 65 65 64 73 20 73 6F 72 74 69 65 20 61 63 63 65 73 73 20 73 74 61 74 20 66 6F 72 20 74 68 61 74 20 67 6F 6F
+[12:57:16] [PKT] pkt_mode=26 data_len=44 sender=[Amelloides] msg=[{Undead Swarm} preparing 227]
+       hex: 17 16 D6 4A 1A 00 00 01 41 6D 65 6C 6C 6F 69 64 65 73 00 00 00 00 00 FD 02 01 08 80 FD 20 70 72 65 70 61 72 69 6E 67 20 32 32 37 00
+[12:57:33] [PKT] pkt_mode=26 data_len=48 sender=[Smokesdank] msg=[LF pulse cell Ay 3 mil]
+       hex: 17 18 01 4B 1A 00 EB 00 53 6D 6F 6B 65 73 64 61 6E 6B 00 00 00 00 00 4C 46 20 70 75 6C 73 65 20 63 65 6C 6C 20 41 79 20 33 20 6D 69 6C 00 00 00
+
+=== chat_packet trace started 2026-06-16 13:04:13 ===
+[13:04:13] [PKT] pkt_mode=5 data_len=40 sender=[Hellsrayne] msg=[whats up guys ]
+       hex: 17 14 B8 4E 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 77 68 61 74 73 20 75 70 20 67 75 79 73 20 00 00 00
+[13:04:31] [PKT] pkt_mode=5 data_len=28 sender=[Susurro] msg=[heyo]
+       hex: 17 0E E4 4E 05 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 68 65 79 6F 00
+[13:04:46] [PKT] pkt_mode=5 data_len=28 sender=[Cornpop] msg=[ello]
+       hex: 17 0E 07 4F 05 00 00 00 43 6F 72 6E 70 6F 70 00 00 00 00 00 00 00 00 65 6C 6C 6F 00
+[13:04:59] [PKT] pkt_mode=26 data_len=44 sender=[Amelloides] msg=[{Undead Swarm} preparing 236]
+       hex: 17 16 26 4F 1A 00 00 01 41 6D 65 6C 6C 6F 69 64 65 73 00 00 00 00 00 FD 02 01 08 80 FD 20 70 72 65 70 61 72 69 6E 67 20 32 33 36 00
+[13:05:27] [PKT] pkt_mode=26 data_len=64 sender=[Tsukix] msg=[{Alzadaal Undersea Ruins}SE 右下 {box}ありますよ～～～～]
+       hex: 17 20 6B 4F 1A 00 F1 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 DD FD 53 45 20 89 45 89 BA 20 FD 02 01 1E 15 FD 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60 81 60 00 00 00
+[13:06:07] [PKT] pkt_mode=26 data_len=68 sender=[Emmycakes] msg=[{Skia Shin.} {Do you need it?} -- {money} {Can I have it?} {price} {/tell}]
+       hex: 17 22 CD 4F 1A 00 01 01 45 6D 6D 79 63 61 6B 65 73 00 00 00 00 00 00 FD 07 02 55 B1 FD 20 FD 02 02 12 06 FD 20 2D 2D 20 FD 02 02 1E 6D FD 20 FD 02 02 12 01 FD 20 FD 02 02 1E 13 FD 20 FD 02 02
+[13:06:26] [PKT] pkt_mode=5 data_len=48 sender=[Tohken] msg=[ambuscade / lua editing]
+       hex: 17 18 FB 4F 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 61 6D 62 75 73 63 61 64 65 20 2F 20 6C 75 61 20 65 64 69 74 69 6E 67 00 00
+[13:07:22] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 81 50 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:09:01] [PKT] pkt_mode=5 data_len=80 sender=[Hellsrayne] msg=[im going to run {Dynamis - Windurst} if anyone wants to tag along :)]
+       hex: 17 28 72 51 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 69 6D 20 67 6F 69 6E 67 20 74 6F 20 72 75 6E 20 FD 02 02 14 80 FD 20 69 66 20 61 6E 79 6F 6E 65 20 77 61 6E 74 73 20 74 6F
+[13:09:16] [PKT] pkt_mode=27 data_len=56 sender=[Wowbagger] msg=[The Undead Swarm is on the move!]
+       hex: 17 1C 96 51 1B 00 00 00 57 6F 77 62 61 67 67 65 72 00 00 00 00 00 00 54 68 65 20 55 6E 64 65 61 64 20 53 77 61 72 6D 20 69 73 20 6F 6E 20 74 68 65 20 6D 6F 76 65 21 00
+[13:09:19] [PKT] pkt_mode=5 data_len=28 sender=[Tohken] msg=[div?]
+       hex: 17 0E 9F 51 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 64 69 76 3F 00
+[13:09:41] [PKT] pkt_mode=5 data_len=44 sender=[Hellsrayne] msg=[just the regular one]
+       hex: 17 16 D3 51 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 6A 75 73 74 20 74 68 65 20 72 65 67 75 6C 61 72 20 6F 6E 65 00
+[13:09:53] [PKT] pkt_mode=5 data_len=56 sender=[Hellsrayne] msg=[gotta clear all this old content ]
+       hex: 17 1C F1 51 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 67 6F 74 74 61 20 63 6C 65 61 72 20 61 6C 6C 20 74 68 69 73 20 6F 6C 64 20 63 6F 6E 74 65 6E 74 20
+[13:10:24] [PKT] pkt_mode=26 data_len=80 sender=[Fendy] msg=[ {Besieged}  {Undead Swarm}  Lv13  advancing  行軍中  {Al Zahbi}  {Gather together.}]
+       hex: 17 28 3C 52 1A 00 32 00 46 65 6E 64 79 00 00 00 00 00 00 00 00 00 00 20 FD 02 01 08 74 FD 20 20 FD 02 01 08 80 FD 20 20 4C 76 31 33 20 20 61 64 76 61 6E 63 69 6E 67 20 20 8D 73 8C 52 92 86 20
+[13:10:41] [PKT] pkt_mode=27 data_len=64 sender=[Azro] msg=[lb3 is makign me want to uninstall lol ]
+       hex: 17 20 67 52 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6C 62 33 20 69 73 20 6D 61 6B 69 67 6E 20 6D 65 20 77 61 6E 74 20 74 6F 20 75 6E 69 6E 73 74 61 6C 6C 20 6C 6F 6C 20 00 00
+[13:10:57] [PKT] pkt_mode=5 data_len=132 sender=[Tohken] msg=[i gotta do it but havent gotten my 2 new guys access yet. got almost 2 weeks of pto coming up on the 25th ]
+       hex: 17 42 8C 52 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 69 20 67 6F 74 74 61 20 64 6F 20 69 74 20 62 75 74 20 68 61 76 65 6E 74 20 67 6F 74 74 65 6E 20 6D 79 20 32 20 6E 65 77 20
+[13:11:07] [PKT] pkt_mode=5 data_len=64 sender=[Tohken] msg=[i plan to bang out the story shit then.]
+       hex: 17 20 A6 52 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 69 20 70 6C 61 6E 20 74 6F 20 62 61 6E 67 20 6F 75 74 20 74 68 65 20 73 74 6F 72 79 20 73 68 69 74 20 74 68 65 6E 2E 00 00
+[13:11:11] [PKT] pkt_mode=5 data_len=28 sender=[Hellsrayne] msg=[nice]
+       hex: 17 0E B0 52 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 6E 69 63 65 00
+[13:11:19] [PKT] pkt_mode=27 data_len=140 sender=[Kaelerac] msg=[yeahhhhh. i did that one alongside Magicite (since they go to the same areas), and if I had to do that w/out wiki....]
+       hex: 17 46 C2 52 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 79 65 61 68 68 68 68 68 2E 20 69 20 64 69 64 20 74 68 61 74 20 6F 6E 65 20 61 6C 6F 6E 67 73 69 64 65 20 4D 61 67 69 63 69
+[13:11:26] [PKT] pkt_mode=27 data_len=60 sender=[Kaelerac] msg=[I'd say something that'd break TOS]
+       hex: 17 1E D3 52 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 49 27 64 20 73 61 79 20 73 6F 6D 65 74 68 69 6E 67 20 74 68 61 74 27 64 20 62 72 65 61 6B 20 54 4F 53 00 00 00
+[13:11:28] [PKT] pkt_mode=5 data_len=88 sender=[Hellsrayne] msg=[i think im on summer break from college starting this weekend ]
+       hex: 17 2C D9 52 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 69 20 74 68 69 6E 6B 20 69 6D 20 6F 6E 20 73 75 6D 6D 65 72 20 62 72 65 61 6B 20 66 72 6F 6D 20 63 6F 6C 6C 65 67 65 20 73
+[13:11:33] [PKT] pkt_mode=5 data_len=48 sender=[Hellsrayne] msg=[still gotta work tho :( ]
+       hex: 17 18 E5 52 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 73 74 69 6C 6C 20 67 6F 74 74 61 20 77 6F 72 6B 20 74 68 6F 20 3A 28 20 00
+[13:11:40] [PKT] pkt_mode=5 data_len=28 sender=[Tohken] msg=[:(]
+       hex: 17 0E F6 52 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 3A 28 00 00 00
+[13:12:01] [PKT] pkt_mode=27 data_len=72 sender=[Eskaton] msg=[Eekamemnar and I did it *mostly* without the wiki]
+       hex: 17 24 28 53 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 45 65 6B 61 6D 65 6D 6E 61 72 20 61 6E 64 20 49 20 64 69 64 20 69 74 20 2A 6D 6F 73 74 6C 79 2A 20 77 69 74 68 6F 75 74 20
+[13:12:06] [PKT] pkt_mode=5 data_len=132 sender=[Tohken] msg=[my damn demonic factory is gonna fall apart without me holding it together on 3rd. everyones mad at me rn ]
+       hex: 17 42 34 53 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 6D 79 20 64 61 6D 6E 20 64 65 6D 6F 6E 69 63 20 66 61 63 74 6F 72 79 20 69 73 20 67 6F 6E 6E 61 20 66 61 6C 6C 20 61 70 61
+[13:12:07] [PKT] pkt_mode=27 data_len=40 sender=[Eskaton] msg=[It was *rough*]
+       hex: 17 14 37 53 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 49 74 20 77 61 73 20 2A 72 6F 75 67 68 2A 00 00 00
+[13:12:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 5A 53 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:12:23] [PKT] pkt_mode=27 data_len=64 sender=[Kaelerac] msg=[that is equal parts laudable and insane]
+       hex: 17 20 5D 53 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 74 68 61 74 20 69 73 20 65 71 75 61 6C 20 70 61 72 74 73 20 6C 61 75 64 61 62 6C 65 20 61 6E 64 20 69 6E 73 61 6E 65 00 00
+[13:12:26] [PKT] pkt_mode=27 data_len=40 sender=[Azro] msg=[I cant imagine]
+       hex: 17 14 64 53 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 49 20 63 61 6E 74 20 69 6D 61 67 69 6E 65 00 00 00
+[13:12:36] [PKT] pkt_mode=27 data_len=60 sender=[Azro] msg=[you are a sage of somekind im sure]
+       hex: 17 1E 7E 53 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 79 6F 75 20 61 72 65 20 61 20 73 61 67 65 20 6F 66 20 73 6F 6D 65 6B 69 6E 64 20 69 6D 20 73 75 72 65 00 00 00
+[13:12:40] [PKT] pkt_mode=27 data_len=68 sender=[Eskaton] msg=[The door puzzle in the yagudo one broke us]
+       hex: 17 22 87 53 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 54 68 65 20 64 6F 6F 72 20 70 75 7A 7A 6C 65 20 69 6E 20 74 68 65 20 79 61 67 75 64 6F 20 6F 6E 65 20 62 72 6F 6B 65 20 75
+[13:12:52] [PKT] pkt_mode=27 data_len=36 sender=[Bids] msg=[{Besieged} soon]
+       hex: 17 12 A5 53 1B 00 00 00 42 69 64 73 00 00 00 00 00 00 00 00 00 00 00 FD 02 02 08 74 FD 20 73 6F 6F 6E 00 00
+[13:12:59] [PKT] pkt_mode=27 data_len=64 sender=[Azro] msg=[ive been running around davoi for 2 hrs]
+       hex: 17 20 B5 53 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 69 76 65 20 62 65 65 6E 20 72 75 6E 6E 69 6E 67 20 61 72 6F 75 6E 64 20 64 61 76 6F 69 20 66 6F 72 20 32 20 68 72 73 00 00
+[13:13:20] [PKT] pkt_mode=5 data_len=100 sender=[Tohken] msg=[they got me training 3 dudes to do what i do for those weeks. its bs kinda xd]
+       hex: 17 32 E8 53 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 74 68 65 79 20 67 6F 74 20 6D 65 20 74 72 61 69 6E 69 6E 67 20 33 20 64 75 64 65 73 20 74 6F 20 64 6F 20 77 68 61 74 20 69
+[13:13:28] [PKT] pkt_mode=27 data_len=116 sender=[Eskaton] msg=[If you're trying to do it without the wiki, I'd be more than happy to give gentle hints : )]
+       hex: 17 3A FD 53 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 49 66 20 79 6F 75 27 72 65 20 74 72 79 69 6E 67 20 74 6F 20 64 6F 20 69 74 20 77 69 74 68 6F 75 74 20 74 68 65 20 77 69 6B
+[13:13:48] [PKT] pkt_mode=27 data_len=64 sender=[Kaelerac] msg=[is that the 3 or 4 levers by the door?]
+       hex: 17 20 2D 54 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 73 20 74 68 61 74 20 74 68 65 20 33 20 6F 72 20 34 20 6C 65 76 65 72 73 20 62 79 20 74 68 65 20 64 6F 6F 72 3F 00 00 00
+[13:13:50] [PKT] pkt_mode=27 data_len=52 sender=[Azro] msg=[oh, im using the wiki hahaha]
+       hex: 17 1A 31 54 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6F 68 2C 20 69 6D 20 75 73 69 6E 67 20 74 68 65 20 77 69 6B 69 20 68 61 68 61 68 61 00
+[13:13:51] [PKT] pkt_mode=26 data_len=48 sender=[Smokesdank] msg=[LF pulse cell Ay 3 mil]
+       hex: 17 18 34 54 1A 00 F9 00 53 6D 6F 6B 65 73 64 61 6E 6B 00 00 00 00 00 4C 46 20 70 75 6C 73 65 20 63 65 6C 6C 20 41 79 20 33 20 6D 69 6C 00 00 00
+[13:14:00] [PKT] pkt_mode=27 data_len=52 sender=[Eskaton] msg=[Probably the right choice lol]
+       hex: 17 1A 4A 54 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 50 72 6F 62 61 62 6C 79 20 74 68 65 20 72 69 67 68 74 20 63 68 6F 69 63 65 20 6C 6F 6C
+[13:14:01] [PKT] pkt_mode=27 data_len=36 sender=[Azro] msg=[no shame here]
+       hex: 17 12 4C 54 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6E 6F 20 73 68 61 6D 65 20 68 65 72 65
+[13:14:10] [PKT] pkt_mode=27 data_len=84 sender=[Eskaton] msg=[It was a crazy adventure doing it blind, but it took *days*]
+       hex: 17 2A 63 54 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 49 74 20 77 61 73 20 61 20 63 72 61 7A 79 20 61 64 76 65 6E 74 75 72 65 20 64 6F 69 6E 67 20 69 74 20 62 6C 69 6E 64 2C 20
+[13:14:16] [PKT] pkt_mode=27 data_len=128 sender=[Kaelerac] msg=[i haaaaaaaated davoi. Got into like a 20 minute fight with what felt like every orc in a 6 mile radius]
+       hex: 17 40 71 54 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 20 68 61 61 61 61 61 61 61 61 74 65 64 20 64 61 76 6F 69 2E 20 47 6F 74 20 69 6E 74 6F 20 6C 69 6B 65 20 61 20 32 30 20
+[13:14:28] [PKT] pkt_mode=27 data_len=56 sender=[Azro] msg=[that was me about 10 minutes ago]
+       hex: 17 1C 8D 54 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 74 68 61 74 20 77 61 73 20 6D 65 20 61 62 6F 75 74 20 31 30 20 6D 69 6E 75 74 65 73 20 61 67 6F 00
+[13:14:33] [PKT] pkt_mode=5 data_len=92 sender=[Hellsrayne] msg=[i bought merc kris yesterday and omg this thing is worth every penny ]
+       hex: 17 2E 9A 54 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 69 20 62 6F 75 67 68 74 20 6D 65 72 63 20 6B 72 69 73 20 79 65 73 74 65 72 64 61 79 20 61 6E 64 20 6F 6D 67 20 74 68 69 73
+[13:14:39] [PKT] pkt_mode=27 data_len=56 sender=[Azro] msg=[link after link after link hahaha]
+       hex: 17 1C A7 54 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6C 69 6E 6B 20 61 66 74 65 72 20 6C 69 6E 6B 20 61 66 74 65 72 20 6C 69 6E 6B 20 68 61 68 61 68 61
+[13:14:48] [PKT] pkt_mode=27 data_len=80 sender=[Kaelerac] msg=[that orb was the closest i came to allllmost uninstalling]
+       hex: 17 28 BE 54 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 74 68 61 74 20 6F 72 62 20 77 61 73 20 74 68 65 20 63 6C 6F 73 65 73 74 20 69 20 63 61 6D 65 20 74 6F 20 61 6C 6C 6C 6C 6D
+[13:15:04] [PKT] pkt_mode=27 data_len=112 sender=[Eskaton] msg=[We got lucky and had already stumbled into the hidden pool for the orb before getting it]
+       hex: 17 38 E4 54 1B 00 00 00 45 73 6B 61 74 6F 6E 00 00 00 00 00 00 00 00 57 65 20 67 6F 74 20 6C 75 63 6B 79 20 61 6E 64 20 68 61 64 20 61 6C 72 65 61 64 79 20 73 74 75 6D 62 6C 65 64 20 69 6E 74
+[13:15:19] [PKT] pkt_mode=27 data_len=100 sender=[Kaelerac] msg=[it was when i learned that the earring of raising could not be recharged T_T]
+       hex: 17 32 08 55 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 74 20 77 61 73 20 77 68 65 6E 20 69 20 6C 65 61 72 6E 65 64 20 74 68 61 74 20 74 68 65 20 65 61 72 72 69 6E 67 20 6F 66
+[13:15:30] [PKT] pkt_mode=27 data_len=36 sender=[Azro] msg=[nooooooooo]
+       hex: 17 12 23 55 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6E 6F 6F 6F 6F 6F 6F 6F 6F 6F 00 00 00
+[13:15:46] [PKT] pkt_mode=26 data_len=80 sender=[Fendy] msg=[ {Besieged}  {Undead Swarm}  Lv13  advancing  行軍中  {Al Zahbi}  {Gather together.}]
+       hex: 17 28 4B 55 1A 00 32 00 46 65 6E 64 79 00 00 00 00 00 00 00 00 00 00 20 FD 02 01 08 74 FD 20 20 FD 02 01 08 80 FD 20 20 4C 76 31 33 20 20 61 64 76 61 6E 63 69 6E 67 20 20 8D 73 8C 52 92 86 20
+[13:15:55] [PKT] pkt_mode=27 data_len=132 sender=[Kaelerac] msg=[i wasted like 75% of the charges 'cause i thought it was just a buff I was expected to have up at all times.]
+       hex: 17 42 61 55 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 20 77 61 73 74 65 64 20 6C 69 6B 65 20 37 35 25 20 6F 66 20 74 68 65 20 63 68 61 72 67 65 73 20 27 63 61 75 73 65 20 69
+[13:16:03] [PKT] pkt_mode=27 data_len=64 sender=[Kaelerac] msg=[I was wearing the chocobo shirt too T_T]
+       hex: 17 20 74 55 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 49 20 77 61 73 20 77 65 61 72 69 6E 67 20 74 68 65 20 63 68 6F 63 6F 62 6F 20 73 68 69 72 74 20 74 6F 6F 20 54 5F 54 00 00
+[13:16:19] [PKT] pkt_mode=27 data_len=60 sender=[Kaelerac] msg=[ah not the shirt, the destrier beret]
+       hex: 17 1E 9B 55 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 61 68 20 6E 6F 74 20 74 68 65 20 73 68 69 72 74 2C 20 74 68 65 20 64 65 73 74 72 69 65 72 20 62 65 72 65 74 00
+[13:16:57] [PKT] pkt_mode=27 data_len=64 sender=[Azro] msg=[I never would have found this hidden pond]
+       hex: 17 20 F8 55 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 49 20 6E 65 76 65 72 20 77 6F 75 6C 64 20 68 61 76 65 20 66 6F 75 6E 64 20 74 68 69 73 20 68 69 64 64 65 6E 20 70 6F 6E 64
+[13:17:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 32 56 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:19:19] [PKT] pkt_mode=26 data_len=80 sender=[Fendy] msg=[ {Besieged}  {Undead Swarm}  Lv13  advancing  行軍中  {Al Zahbi}  {Gather together.}]
+       hex: 17 28 31 57 1A 00 32 00 46 65 6E 64 79 00 00 00 00 00 00 00 00 00 00 20 FD 02 01 08 74 FD 20 20 FD 02 01 08 80 FD 20 20 4C 76 31 33 20 20 61 64 76 61 6E 63 69 6E 67 20 20 8D 73 8C 52 92 86 20
+[13:21:26] [PKT] pkt_mode=26 data_len=92 sender=[Fendy] msg=[ {Besieged}  {Undead Swarm}  Lv13  arrival  到着  {Al Zahbi}  {Gather together.} きたじょ～～～～]
+       hex: 17 2E 66 58 1A 00 32 00 46 65 6E 64 79 00 00 00 00 00 00 00 00 00 00 20 FD 02 01 08 74 FD 20 20 FD 02 01 08 80 FD 20 20 4C 76 31 33 20 20 61 72 72 69 76 61 6C 20 20 93 9E 92 85 20 20 FD 02 01
+[13:22:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 EB 58 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:26:48] [PKT] pkt_mode=26 data_len=100 sender=[Linphosies] msg=[{Job Points} 500p/5m 2100p/20m {Master Level}5hr/5m ML0~30/30m ML0~50 {Buy?} {/tell} {Thank you.}]
+       hex: 17 32 73 5B 1A 00 EB 00 4C 69 6E 70 68 6F 73 69 65 73 00 00 00 00 00 FD 02 02 28 1D FD 20 35 30 30 70 2F 35 6D 20 32 31 30 30 70 2F 32 30 6D 20 FD 02 02 28 19 FD 35 68 72 2F 35 6D 20 4D 4C 30
+[13:27:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 C3 5B 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:31:17] [PKT] pkt_mode=27 data_len=68 sender=[Azro] msg=[please tell me the rest of LB's are easier]
+       hex: 17 22 00 5E 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 70 6C 65 61 73 65 20 74 65 6C 6C 20 6D 65 20 74 68 65 20 72 65 73 74 20 6F 66 20 4C 42 27 73 20 61 72 65 20 65 61 73 69 65
+[13:31:29] [PKT] pkt_mode=27 data_len=28 sender=[Azro] msg=[haha]
+       hex: 17 0E 1F 5E 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 68 61 68 61 00
+[13:31:41] [PKT] pkt_mode=27 data_len=48 sender=[Kaelerac] msg=[it's definitely the worst]
+       hex: 17 18 3B 5E 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 74 27 73 20 64 65 66 69 6E 69 74 65 6C 79 20 74 68 65 20 77 6F 72 73 74
+[13:31:45] [PKT] pkt_mode=27 data_len=64 sender=[Subtlemistakes] msg=[the one you are imo, was the longest one]
+       hex: 17 20 45 5E 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 74 68 65 20 6F 6E 65 20 79 6F 75 20 61 72 65 20 69 6D 6F 2C 20 77 61 73 20 74 68 65 20 6C 6F 6E 67 65 73 74 20 6F 6E 65 00
+[13:32:05] [PKT] pkt_mode=27 data_len=72 sender=[Subtlemistakes] msg=[and i was doing the nation quest at the same time]
+       hex: 17 24 75 5E 1B 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 61 6E 64 20 69 20 77 61 73 20 64 6F 69 6E 67 20 74 68 65 20 6E 61 74 69 6F 6E 20 71 75 65 73 74 20 61 74 20 74 68 65 20 73
+[13:32:22] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 9E 5E 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:36:18] [PKT] pkt_mode=26 data_len=60 sender=[Zeptune] msg=[anyone know location of limbus ???]
+       hex: 17 1E DB 60 1A 00 F5 00 5A 65 70 74 75 6E 65 00 00 00 00 00 00 00 00 61 6E 79 6F 6E 65 20 6B 6E 6F 77 20 6C 6F 63 61 74 69 6F 6E 20 6F 66 20 6C 69 6D 62 75 73 20 3F 3F 3F 00 00 00
+[13:36:24] [PKT] pkt_mode=26 data_len=36 sender=[Zadimortis] msg=[whereisdi.com]
+       hex: 17 12 EB 60 1A 00 01 01 5A 61 64 69 6D 6F 72 74 69 73 00 00 00 00 00 77 68 65 72 65 69 73 64 69 2E 63 6F 6D
+[13:36:41] [PKT] pkt_mode=26 data_len=48 sender=[Armond] msg=[whereisnm.com but yes :)]
+       hex: 17 18 13 61 1A 00 F7 00 41 72 6D 6F 6E 64 00 00 00 00 00 00 00 00 00 77 68 65 72 65 69 73 6E 6D 2E 63 6F 6D 20 62 75 74 20 79 65 73 20 3A 29 00
+[13:36:56] [PKT] pkt_mode=26 data_len=44 sender=[Zadimortis] msg=[sorry yeah that one]
+       hex: 17 16 37 61 1A 00 01 01 5A 61 64 69 6D 6F 72 74 69 73 00 00 00 00 00 73 6F 72 72 79 20 79 65 61 68 20 74 68 61 74 20 6F 6E 65 00 00
+[13:37:05] [PKT] pkt_mode=26 data_len=72 sender=[Shiraj] msg=[i hear Central 3 - Temenos and SE 2 for Apollyon]
+       hex: 17 24 4D 61 1A 00 F9 00 53 68 69 72 61 6A 00 00 00 00 00 00 00 00 00 69 20 68 65 61 72 20 43 65 6E 74 72 61 6C 20 33 20 2D 20 54 65 6D 65 6E 6F 73 20 61 6E 64 20 53 45 20 32 20 66 6F 72 20 41
+[13:37:06] [PKT] pkt_mode=26 data_len=32 sender=[Zeptune] msg=[oh dang]
+       hex: 17 10 51 61 1A 00 F5 00 5A 65 70 74 75 6E 65 00 00 00 00 00 00 00 00 6F 68 20 64 61 6E 67 00 00
+[13:37:14] [PKT] pkt_mode=26 data_len=48 sender=[Kashayokai] msg=[{Over there} {That way} {sea} ???]
+       hex: 17 18 63 61 1A 00 F9 00 4B 61 73 68 61 79 6F 6B 61 69 00 00 00 00 00 FD 02 02 0E 07 FD 20 FD 02 02 0E 02 FD 20 FD 02 02 1E 75 FD 20 3F 3F 3F 00
+[13:37:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 75 61 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:37:54] [PKT] pkt_mode=26 data_len=100 sender=[Linphosies] msg=[{Job Points} 500p/5m 2100p/20m {Master Level}5hr/5m ML0~30/30m ML0~50 {Buy?} {/tell} {Thank you.}]
+       hex: 17 32 C5 61 1A 00 EB 00 4C 69 6E 70 68 6F 73 69 65 73 00 00 00 00 00 FD 02 02 28 1D FD 20 35 30 30 70 2F 35 6D 20 32 31 30 30 70 2F 32 30 6D 20 FD 02 02 28 19 FD 35 68 72 2F 35 6D 20 4D 4C 30
+[13:42:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 4F 64 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:44:14] [PKT] pkt_mode=27 data_len=100 sender=[Azro] msg=[okay Davoi is done. Can I hire a squad of BLM's to meteor that place to ash?]
+       hex: 17 32 61 65 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 6F 6B 61 79 20 44 61 76 6F 69 20 69 73 20 64 6F 6E 65 2E 20 43 61 6E 20 49 20 68 69 72 65 20 61 20 73 71 75 61 64 20 6F 66
+[13:44:58] [PKT] pkt_mode=27 data_len=124 sender=[Shortking] msg=[i was doing davoi for the rdm weapon until i read your comment and went pack to pick the other quests]
+       hex: 17 3E CB 65 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 69 20 77 61 73 20 64 6F 69 6E 67 20 64 61 76 6F 69 20 66 6F 72 20 74 68 65 20 72 64 6D 20 77 65 61 70 6F 6E 20 75 6E 74 69
+[13:45:07] [PKT] pkt_mode=27 data_len=28 sender=[Azro] msg=[haha]
+       hex: 17 0E E1 65 1B 00 00 00 41 7A 72 6F 00 00 00 00 00 00 00 00 00 00 00 68 61 68 61 00
+[13:45:16] [PKT] pkt_mode=27 data_len=72 sender=[Shortking] msg=[your suffering has not been in vain, my friend]
+       hex: 17 24 F7 65 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 79 6F 75 72 20 73 75 66 66 65 72 69 6E 67 20 68 61 73 20 6E 6F 74 20 62 65 65 6E 20 69 6E 20 76 61 69 6E 2C 20 6D 79 20 66
+[13:45:43] [PKT] pkt_mode=26 data_len=52 sender=[Stellantis] msg=[{Reisenjima} HELMS {Do you need it?} /tell\]
+       hex: 17 1A 37 66 1A 00 EB 00 53 74 65 6C 6C 61 6E 74 69 73 00 00 00 00 00 FD 02 02 27 1D FD 20 48 45 4C 4D 53 20 FD 02 02 12 06 FD 20 2F 74 65 6C 6C 5C 00 00 00
+[13:47:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 27 67 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:52:08] [PKT] pkt_mode=27 data_len=72 sender=[Kaelerac] msg=[.....huh. all my macros appear to have been wiped]
+       hex: 17 24 E1 69 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 2E 2E 2E 2E 2E 68 75 68 2E 20 61 6C 6C 20 6D 79 20 6D 61 63 72 6F 73 20 61 70 70 65 61 72 20 74 6F 20 68 61 76 65 20 62 65
+[13:52:22] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 01 6A 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:52:22] [PKT] pkt_mode=27 data_len=52 sender=[Kaelerac] msg=[i'm 100% on the right book]
+       hex: 17 1A 02 6A 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 27 6D 20 31 30 30 25 20 6F 6E 20 74 68 65 20 72 69 67 68 74 20 62 6F 6F 6B 00 00 00
+[13:52:23] [PKT] pkt_mode=27 data_len=44 sender=[Melah] msg=[did u change pages?]
+       hex: 17 16 04 6A 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 64 69 64 20 75 20 63 68 61 6E 67 65 20 70 61 67 65 73 3F 00 00
+[13:52:41] [PKT] pkt_mode=27 data_len=48 sender=[Kaelerac] msg=[nope, i just checked that]
+       hex: 17 18 31 6A 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6E 6F 70 65 2C 20 69 20 6A 75 73 74 20 63 68 65 63 6B 65 64 20 74 68 61 74
+[13:53:01] [PKT] pkt_mode=27 data_len=56 sender=[Kaelerac] msg=[gonna relog and see if weirdness]
+       hex: 17 1C 61 6A 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 67 6F 6E 6E 61 20 72 65 6C 6F 67 20 61 6E 64 20 73 65 65 20 69 66 20 77 65 69 72 64 6E 65 73 73 00
+[13:53:04] [PKT] pkt_mode=27 data_len=44 sender=[Melah] msg=[did u change pages?]
+       hex: 17 16 69 6A 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 64 69 64 20 75 20 63 68 61 6E 67 65 20 70 61 67 65 73 3F 00 00
+[13:53:08] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[oops]
+       hex: 17 0E 71 6A 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 6F 6F 70 73 00
+[13:53:41] [PKT] pkt_mode=27 data_len=88 sender=[Kaelerac] msg=[okay, after zoning they're back lol. no clue what happened there]
+       hex: 17 2C BA 6A 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6F 6B 61 79 2C 20 61 66 74 65 72 20 7A 6F 6E 69 6E 67 20 74 68 65 79 27 72 65 20 62 61 63 6B 20 6C 6F 6C 2E 20 6E 6F 20 63
+[13:53:58] [PKT] pkt_mode=27 data_len=28 sender=[Susurro] msg=[weird]
+       hex: 17 0E D1 6A 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 77 65 69 72 64
+[13:54:19] [PKT] pkt_mode=27 data_len=52 sender=[Kaelerac] msg=[going to assume visual bug ]
+       hex: 17 1A 01 6B 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 67 6F 69 6E 67 20 74 6F 20 61 73 73 75 6D 65 20 76 69 73 75 61 6C 20 62 75 67 20 00 00
+[13:57:22] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 BE 6C 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[13:59:28] [PKT] pkt_mode=26 data_len=100 sender=[Linphosies] msg=[{Job Points} 500p/5m 2100p/20m {Master Level}5hr/5m ML0~30/30m ML0~50 {Buy?} {/tell} {Thank you.}]
+       hex: 17 32 F2 6D 1A 00 EB 00 4C 69 6E 70 68 6F 73 69 65 73 00 00 00 00 00 FD 02 02 28 1D FD 20 35 30 30 70 2F 35 6D 20 32 31 30 30 70 2F 32 30 6D 20 FD 02 02 28 19 FD 35 68 72 2F 35 6D 20 4D 4C 30
+[14:02:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 96 6F 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:02:56] [PKT] pkt_mode=26 data_len=68 sender=[Vayaa] msg=[Orthrus's Claw or Orthrus KI {Sell?} {Reward:} $$]
+       hex: 17 22 EA 6F 1A 00 F3 00 56 61 79 61 61 00 00 00 00 00 00 00 00 00 00 4F 72 74 68 72 75 73 27 73 20 43 6C 61 77 20 6F 72 20 4F 72 74 68 72 75 73 20 4B 49 20 FD 02 02 12 04 FD 20 FD 02 02 12 0B
+[14:04:24] [PKT] pkt_mode=26 data_len=68 sender=[Vayaa] msg=[Orthrus's Claw or Orthrus KI {Sell?} {Reward:} $$]
+       hex: 17 22 C0 70 1A 00 F3 00 56 61 79 61 61 00 00 00 00 00 00 00 00 00 00 4F 72 74 68 72 75 73 27 73 20 43 6C 61 77 20 6F 72 20 4F 72 74 68 72 75 73 20 4B 49 20 FD 02 02 12 04 FD 20 FD 02 02 12 0B
+[14:07:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 6E 72 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:12:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 24 75 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:13:06] [PKT] pkt_mode=5 data_len=44 sender=[Hellsrayne] msg=[ /pcmd add Saborwulf]
+       hex: 17 16 90 75 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 20 2F 70 63 6D 64 20 61 64 64 20 53 61 62 6F 72 77 75 6C 66 00
+[14:13:15] [PKT] pkt_mode=5 data_len=32 sender=[Hellsrayne] msg=[oops lol ]
+       hex: 17 10 A7 75 05 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 6F 6F 70 73 20 6C 6F 6C 20
+[14:17:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 FD 77 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:21:52] [PKT] pkt_mode=5 data_len=76 sender=[Yevn] msg=[can anyone in town shout that Fafnir is up for me?]
+       hex: 17 26 8D 7A 05 00 00 00 59 65 76 6E 00 00 00 00 00 00 00 00 00 00 00 63 61 6E 20 61 6E 79 6F 6E 65 20 69 6E 20 74 6F 77 6E 20 73 68 6F 75 74 20 74 68 61 74 20 46 61 66 6E 69 72 20 69 73 20 75
+[14:22:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 D5 7A 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:24:27] [PKT] pkt_mode=26 data_len=60 sender=[Tsukix] msg=[{Alzadaal Undersea Ruins}SW 左下 {box}ありますよ～～～]
+       hex: 17 1E 06 7C 1A 00 F1 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 DD FD 53 57 20 8D B6 89 BA 20 FD 02 01 1E 15 FD 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60 00
+[14:27:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 AE 7D 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:32:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 87 80 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:37:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 5F 83 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:39:29] [PKT] pkt_mode=26 data_len=104 sender=[Paimeii] msg=[Endgame Linkshell EU timezone recruiting! Limbus, Sortie, Odyssey {Team up?} {/tell}]
+       hex: 17 34 95 84 1A 00 01 01 50 61 69 6D 65 69 69 00 00 00 00 00 00 00 00 45 6E 64 67 61 6D 65 20 4C 69 6E 6B 73 68 65 6C 6C 20 45 55 20 74 69 6D 65 7A 6F 6E 65 20 72 65 63 72 75 69 74 69 6E 67 21
+[14:40:02] [PKT] pkt_mode=26 data_len=56 sender=[Tsukix] msg=[{The Boyahda Tree}{box} ありますよ～～～～]
+       hex: 17 1C DB 84 1A 00 F1 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 44 FD FD 02 01 1E 15 FD 20 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60 81 60 00 00
+[14:42:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 25 86 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:47:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 FE 88 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:47:49] [PKT] pkt_mode=26 data_len=52 sender=[Tsukix] msg=[{Ru'Aun Gardens}{box}ありますよ～～～]
+       hex: 17 1A 40 89 1A 00 EF 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 6F FD FD 02 01 1E 15 FD 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60 00
+[14:52:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 D6 8B 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:52:53] [PKT] pkt_mode=27 data_len=44 sender=[Melah] msg=[sorry i was {Away} ]
+       hex: 17 16 23 8C 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 73 6F 72 72 79 20 69 20 77 61 73 20 FD 02 02 17 02 FD 20 00 00
+[14:53:02] [PKT] pkt_mode=27 data_len=48 sender=[Gawdrik] msg=[didnt even see my {/wave}]
+       hex: 17 18 3A 8C 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 64 69 64 6E 74 20 65 76 65 6E 20 73 65 65 20 6D 79 20 FD 02 02 0D 27 FD 00
+[14:57:22] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 AF 8E 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+
+=== checkparam (0x029) trace started 2026-06-16 15:00:00 ===
+[15:00:00] [0x029] msg=705 target=717844 p1=4014 p2=0
+[15:00:58] [PKT] pkt_mode=26 data_len=48 sender=[Isaacv] msg=[casual endgame LS {Do you need it?}]
+       hex: 17 18 BD 90 1A 00 EB 00 49 73 61 61 63 76 00 00 00 00 00 00 00 00 00 63 61 73 75 61 6C 20 65 6E 64 67 61 6D 65 20 4C 53 20 FD 02 02 12 06 FD 00
+[15:02:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 87 91 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:07:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 5E 94 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:08:26] [PKT] pkt_mode=26 data_len=52 sender=[Isaacv] msg=[casual endgame {Linkshell} {Do you need it?}]
+       hex: 17 1A FD 94 1A 00 EB 00 49 73 61 61 63 76 00 00 00 00 00 00 00 00 00 63 61 73 75 61 6C 20 65 6E 64 67 61 6D 65 20 FD 02 02 0F 01 FD 20 FD 02 02 12 06 FD 00
+[15:11:59] [PKT] pkt_mode=26 data_len=52 sender=[Isaacv] msg=[casual endgame {Linkshell} {Do you need it?}]
+       hex: 17 1A 01 97 1A 00 EB 00 49 73 61 61 63 76 00 00 00 00 00 00 00 00 00 63 61 73 75 61 6C 20 65 6E 64 67 61 6D 65 20 FD 02 02 0F 01 FD 20 FD 02 02 12 06 FD 00
+[15:12:22] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 38 97 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:15:07] [PKT] pkt_mode=26 data_len=52 sender=[Isaacv] msg=[casual endgame {Linkshell} {Do you need it?}]
+       hex: 17 1A C9 98 1A 00 EB 00 49 73 61 61 63 76 00 00 00 00 00 00 00 00 00 63 61 73 75 61 6C 20 65 6E 64 67 61 6D 65 20 FD 02 02 0F 01 FD 20 FD 02 02 12 06 FD 00
+[15:16:02] [PKT] pkt_mode=27 data_len=84 sender=[Gabimaru] msg=[Mind if I give my best friend a pearl so he can join us here]
+       hex: 17 2A 4F 99 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 4D 69 6E 64 20 69 66 20 49 20 67 69 76 65 20 6D 79 20 62 65 73 74 20 66 72 69 65 6E 64 20 61 20 70 65 61 72 6C 20 73 6F 20
+[15:17:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 10 9A 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:18:06] [PKT] pkt_mode=27 data_len=68 sender=[Bids] msg=[if you can make pearls you can give them out]
+       hex: 17 22 7C 9A 1B 00 00 00 42 69 64 73 00 00 00 00 00 00 00 00 00 00 00 69 66 20 79 6F 75 20 63 61 6E 20 6D 61 6B 65 20 70 65 61 72 6C 73 20 79 6F 75 20 63 61 6E 20 67 69 76 65 20 74 68 65 6D 20
+[15:22:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 E9 9C 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:27:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 C1 9F 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:29:53] [PKT] pkt_mode=27 data_len=32 sender=[Kyraha] msg=[{Hello!}]
+       hex: 17 10 33 A1 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[15:30:18] [PKT] pkt_mode=27 data_len=32 sender=[Melah] msg=[{Hello!}]
+       hex: 17 10 6E A1 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[15:30:21] [PKT] pkt_mode=27 data_len=28 sender=[Susurro] msg=[hihi]
+       hex: 17 0E 77 A1 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 68 69 68 69 00
+[15:30:30] [PKT] pkt_mode=27 data_len=68 sender=[Kyraha] msg=[This mountain climb must be a fan favorite]
+       hex: 17 22 8C A1 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 54 68 69 73 20 6D 6F 75 6E 74 61 69 6E 20 63 6C 69 6D 62 20 6D 75 73 74 20 62 65 20 61 20 66 61 6E 20 66 61 76 6F 72 69 74
+[15:30:40] [PKT] pkt_mode=27 data_len=28 sender=[Susurro] msg=[>.>]
+       hex: 17 0E A4 A1 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 3E 2E 3E 00 00
+[15:30:58] [PKT] pkt_mode=27 data_len=32 sender=[Varuapeiru] msg=[hello o/]
+       hex: 17 10 D0 A1 1B 00 00 00 56 61 72 75 61 70 65 69 72 75 00 00 00 00 00 68 65 6C 6C 6F 20 6F 2F 00
+[15:31:05] [PKT] pkt_mode=27 data_len=64 sender=[Gabimaru] msg=[Everyone... Varuapeiru is my best friend]
+       hex: 17 20 E2 A1 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 45 76 65 72 79 6F 6E 65 2E 2E 2E 20 56 61 72 75 61 70 65 69 72 75 20 69 73 20 6D 79 20 62 65 73 74 20 66 72 69 65 6E 64 00
+[15:31:15] [PKT] pkt_mode=27 data_len=24 sender=[Susurro] msg=[!]
+       hex: 17 0C FA A1 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 21
+[15:31:21] [PKT] pkt_mode=27 data_len=32 sender=[Melah] msg=[Welcome]
+       hex: 17 10 08 A2 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 57 65 6C 63 6F 6D 65 00 00
+[15:31:25] [PKT] pkt_mode=27 data_len=32 sender=[Varuapeiru] msg=[ty ty!]
+       hex: 17 10 12 A2 1B 00 00 00 56 61 72 75 61 70 65 69 72 75 00 00 00 00 00 74 79 20 74 79 21 00 00 00
+[15:31:27] [PKT] pkt_mode=27 data_len=44 sender=[Gawdrik] msg=[challenge accepted]
+       hex: 17 16 17 A2 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 63 68 61 6C 6C 65 6E 67 65 20 61 63 63 65 70 74 65 64 00 00 00
+[15:31:30] [PKT] pkt_mode=27 data_len=32 sender=[Susurro] msg=[{Helldive}]
+       hex: 17 10 1E A2 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 FD 02 02 26 2D FD 00 00 00
+[15:31:33] [PKT] pkt_mode=27 data_len=36 sender=[Susurro] msg=[err, {Hello!}]
+       hex: 17 12 26 A2 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 65 72 72 2C 20 FD 02 02 01 0B FD 00 00
+[15:31:35] [PKT] pkt_mode=27 data_len=32 sender=[Nerman] msg=[hello`]
+       hex: 17 10 2B A2 1B 00 00 00 4E 65 72 6D 61 6E 00 00 00 00 00 00 00 00 00 68 65 6C 6C 6F 60 00 00 00
+[15:31:35] [PKT] pkt_mode=27 data_len=32 sender=[Gawdrik] msg=[{/welcome}]
+       hex: 17 10 2B A2 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 FD 02 02 0D 1E FD 00 00 00
+[15:31:47] [PKT] pkt_mode=27 data_len=52 sender=[Kyraha] msg=[{Hello!} Varuapeiru and {/welcome}!]
+       hex: 17 1A 46 A2 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 20 56 61 72 75 61 70 65 69 72 75 20 61 6E 64 20 FD 02 02 0D 1E FD 21
+[15:31:47] [PKT] pkt_mode=27 data_len=40 sender=[Gabimaru] msg=[Welcome Varu ^^]
+       hex: 17 14 48 A2 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 57 65 6C 63 6F 6D 65 20 56 61 72 75 20 5E 5E 00 00
+[15:31:54] [PKT] pkt_mode=27 data_len=28 sender=[Nouvelle] msg=[o/]
+       hex: 17 0E 58 A2 1B 00 00 00 4E 6F 75 76 65 6C 6C 65 00 00 00 00 00 00 00 6F 2F 00 00 00
+[15:32:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 9B A2 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:32:32] [PKT] pkt_mode=27 data_len=48 sender=[Varuapeiru] msg=[Thank you thank you~ haha]
+       hex: 17 18 B4 A2 1B 00 00 00 56 61 72 75 61 70 65 69 72 75 00 00 00 00 00 54 68 61 6E 6B 20 79 6F 75 20 74 68 61 6E 6B 20 79 6F 75 7E 20 68 61 68 61
+[15:32:36] [PKT] pkt_mode=27 data_len=52 sender=[Varuapeiru] msg=[Back to work meetings I go]
+       hex: 17 1A BE A2 1B 00 00 00 56 61 72 75 61 70 65 69 72 75 00 00 00 00 00 42 61 63 6B 20 74 6F 20 77 6F 72 6B 20 6D 65 65 74 69 6E 67 73 20 49 20 67 6F 00 00 00
+[15:32:43] [PKT] pkt_mode=27 data_len=32 sender=[Susurro] msg=[enjoy!]
+       hex: 17 10 CF A2 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 65 6E 6A 6F 79 21 00 00 00
+[15:33:10] [PKT] pkt_mode=5 data_len=48 sender=[Tohken] msg=[anyone need hyglia clogs?]
+       hex: 17 18 11 A3 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 61 6E 79 6F 6E 65 20 6E 65 65 64 20 68 79 67 6C 69 61 20 63 6C 6F 67 73 3F
+[15:33:50] [PKT] pkt_mode=5 data_len=40 sender=[Tohken] msg=[it is whm gear.]
+       hex: 17 14 72 A3 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 69 74 20 69 73 20 77 68 6D 20 67 65 61 72 2E 00 00
+[15:34:01] [PKT] pkt_mode=5 data_len=40 sender=[Tohken] msg=[it is whm gear.]
+       hex: 17 14 8D A3 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 69 74 20 69 73 20 77 68 6D 20 67 65 61 72 2E 00 00
+[15:34:04] [PKT] pkt_mode=5 data_len=28 sender=[Tohken] msg=[mt]
+       hex: 17 0E 95 A3 05 00 00 00 54 6F 68 6B 65 6E 00 00 00 00 00 00 00 00 00 6D 74 00 00 00
+[15:37:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 74 A5 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:39:49] [PKT] pkt_mode=27 data_len=100 sender=[Gabimaru] msg=[I thought that was a roadrunner turns out to be a cactus running around lol]
+       hex: 17 32 DB A6 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 49 20 74 68 6F 75 67 68 74 20 74 68 61 74 20 77 61 73 20 61 20 72 6F 61 64 72 75 6E 6E 65 72 20 74 75 72 6E 73 20 6F 75 74
+[15:39:58] [PKT] pkt_mode=27 data_len=36 sender=[Melah] msg=[Fafnir is up]
+       hex: 17 12 F0 A6 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 46 61 66 6E 69 72 20 69 73 20 75 70 00
+[15:40:49] [PKT] pkt_mode=27 data_len=64 sender=[Shortking] msg=[i could use them if you dont need them]
+       hex: 17 20 6D A7 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 69 20 63 6F 75 6C 64 20 75 73 65 20 74 68 65 6D 20 69 66 20 79 6F 75 20 64 6F 6E 74 20 6E 65 65 64 20 74 68 65 6D 00 00 00
+[15:41:14] [PKT] pkt_mode=27 data_len=60 sender=[Melah] msg=[i race changed now i need them lol]
+       hex: 17 1E A9 A7 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 69 20 72 61 63 65 20 63 68 61 6E 67 65 64 20 6E 6F 77 20 69 20 6E 65 65 64 20 74 68 65 6D 20 6C 6F 6C 00 00 00
+[15:41:24] [PKT] pkt_mode=27 data_len=28 sender=[Shortking] msg=[oof]
+       hex: 17 0E C2 A7 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 6F 6F 66 00 00
+[15:41:41] [PKT] pkt_mode=27 data_len=60 sender=[Gabimaru] msg=[how much does it cost to change race?]
+       hex: 17 1E EB A7 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 68 6F 77 20 6D 75 63 68 20 64 6F 65 73 20 69 74 20 63 6F 73 74 20 74 6F 20 63 68 61 6E 67 65 20 72 61 63 65 3F
+[15:41:55] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[11]
+       hex: 17 0E 0C A8 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 31 31 00 00 00
+[15:42:18] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[usd ]
+       hex: 17 0E 44 A8 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 75 73 64 20 00
+[15:42:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 4C A8 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:42:30] [PKT] pkt_mode=27 data_len=40 sender=[Gabimaru] msg=[of course haha]
+       hex: 17 14 61 A8 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 6F 66 20 63 6F 75 72 73 65 20 68 61 68 61 00 00 00
+[15:42:57] [PKT] pkt_mode=27 data_len=76 sender=[Gabimaru] msg=[I am still collecting waypoints Melah, u need any :D]
+       hex: 17 26 A2 A8 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 49 20 61 6D 20 73 74 69 6C 6C 20 63 6F 6C 6C 65 63 74 69 6E 67 20 77 61 79 70 6F 69 6E 74 73 20 4D 65 6C 61 68 2C 20 75 20
+[15:43:14] [PKT] pkt_mode=27 data_len=48 sender=[Melah] msg=[im good thank you though ]
+       hex: 17 18 CD A8 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 69 6D 20 67 6F 6F 64 20 74 68 61 6E 6B 20 79 6F 75 20 74 68 6F 75 67 68 20
+[15:43:28] [PKT] pkt_mode=27 data_len=32 sender=[Gile] msg=[{Hello!}]
+       hex: 17 10 EF A8 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[15:43:37] [PKT] pkt_mode=27 data_len=32 sender=[Gabimaru] msg=[Gile! hi]
+       hex: 17 10 04 A9 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 47 69 6C 65 21 20 68 69 00
+[15:43:51] [PKT] pkt_mode=27 data_len=32 sender=[Jinxly] msg=[laliho]
+       hex: 17 10 26 A9 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 6C 61 6C 69 68 6F 00 00 00
+[15:43:57] [PKT] pkt_mode=27 data_len=32 sender=[Kyraha] msg=[{Hello!} o/]
+       hex: 17 10 35 A9 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 20 6F 2F
+[15:44:24] [PKT] pkt_mode=27 data_len=68 sender=[Melah] msg=[im so sad no one is coming to fight him lol]
+       hex: 17 22 77 A9 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 69 6D 20 73 6F 20 73 61 64 20 6E 6F 20 6F 6E 65 20 69 73 20 63 6F 6D 69 6E 67 20 74 6F 20 66 69 67 68 74 20 68 69 6D 20 6C
+[15:44:25] [PKT] pkt_mode=27 data_len=28 sender=[Susurro] msg=[hihi]
+       hex: 17 0E 79 A9 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 68 69 68 69 00
+[15:44:44] [PKT] pkt_mode=27 data_len=36 sender=[Gile] msg=[to fight who?]
+       hex: 17 12 A8 A9 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 74 6F 20 66 69 67 68 74 20 77 68 6F 3F
+[15:44:52] [PKT] pkt_mode=27 data_len=64 sender=[Kyraha] msg=[What's the deal with Fafnir, I don't know]
+       hex: 17 20 BA A9 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 57 68 61 74 27 73 20 74 68 65 20 64 65 61 6C 20 77 69 74 68 20 46 61 66 6E 69 72 2C 20 49 20 64 6F 6E 27 74 20 6B 6E 6F 77
+[15:44:53] [PKT] pkt_mode=27 data_len=56 sender=[Susurro] msg=[all I would do is die sorry ><]
+       hex: 17 1C BD A9 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 61 6C 6C 20 49 20 77 6F 75 6C 64 20 64 6F 20 69 73 20 64 69 65 20 73 6F 72 72 79 20 3E 3C 00 00 00
+[15:44:58] [PKT] pkt_mode=27 data_len=32 sender=[Melah] msg=[Fafnir]
+       hex: 17 10 C9 A9 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 46 61 66 6E 69 72 00 00 00
+[15:45:13] [PKT] pkt_mode=27 data_len=48 sender=[Gile] msg=[brt after i change jobs]
+       hex: 17 18 ED A9 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 62 72 74 20 61 66 74 65 72 20 69 20 63 68 61 6E 67 65 20 6A 6F 62 73 00 00
+[15:45:23] [PKT] pkt_mode=27 data_len=44 sender=[Gile] msg=[bout to zone alot ]
+       hex: 17 16 06 AA 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 62 6F 75 74 20 74 6F 20 7A 6F 6E 65 20 61 6C 6F 74 20 00 00 00
+[15:46:05] [PKT] pkt_mode=27 data_len=48 sender=[Kyraha] msg=[Why do you farm it etc]
+       hex: 17 18 6B AA 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 57 68 79 20 64 6F 20 79 6F 75 20 66 61 72 6D 20 69 74 20 65 74 63 00 00 00
+[15:46:22] [PKT] pkt_mode=27 data_len=60 sender=[Nerman] msg=[items to upograde race armor to +1]
+       hex: 17 1E 96 AA 1B 00 00 00 4E 65 72 6D 61 6E 00 00 00 00 00 00 00 00 00 69 74 65 6D 73 20 74 6F 20 75 70 6F 67 72 61 64 65 20 72 61 63 65 20 61 72 6D 6F 72 20 74 6F 20 2B 31 00 00 00
+[15:46:48] [PKT] pkt_mode=27 data_len=56 sender=[Kyraha] msg=[Race armor? The starting armor?]
+       hex: 17 1C D5 AA 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 52 61 63 65 20 61 72 6D 6F 72 3F 20 54 68 65 20 73 74 61 72 74 69 6E 67 20 61 72 6D 6F 72 3F 00 00
+[15:47:17] [PKT] pkt_mode=27 data_len=88 sender=[Nerman] msg=[the 30's armor you get from coffer, from the jeuno goblin quest]
+       hex: 17 2C 1A AB 1B 00 00 00 4E 65 72 6D 61 6E 00 00 00 00 00 00 00 00 00 74 68 65 20 33 30 27 73 20 61 72 6D 6F 72 20 79 6F 75 20 67 65 74 20 66 72 6F 6D 20 63 6F 66 66 65 72 2C 20 66 72 6F 6D 20
+[15:47:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 25 AB 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:47:24] [PKT] pkt_mode=27 data_len=88 sender=[Nouvelle] msg=[Anyone high levels that can 1 shot Siren for me for rov quest?]
+       hex: 17 2C 2D AB 1B 00 00 00 4E 6F 75 76 65 6C 6C 65 00 00 00 00 00 00 00 41 6E 79 6F 6E 65 20 68 69 67 68 20 6C 65 76 65 6C 73 20 74 68 61 74 20 63 61 6E 20 31 20 73 68 6F 74 20 53 69 72 65 6E 20
+[15:47:34] [PKT] pkt_mode=27 data_len=28 sender=[Nouvelle] msg=[Any*]
+       hex: 17 0E 45 AB 1B 00 00 00 4E 6F 75 76 65 6C 6C 65 00 00 00 00 00 00 00 41 6E 79 2A 00
+[15:47:36] [PKT] pkt_mode=27 data_len=52 sender=[Kyraha] msg=[Oh ok I don't know about it]
+       hex: 17 1A 48 AB 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 4F 68 20 6F 6B 20 49 20 64 6F 6E 27 74 20 6B 6E 6F 77 20 61 62 6F 75 74 20 69 74 00 00
+[15:47:55] [PKT] pkt_mode=27 data_len=120 sender=[Susurro] msg=[can't one shot Siren but I can definitely kill her if ya need lol, just won't be as fancy as a 99]
+       hex: 17 3C 76 AB 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 63 61 6E 27 74 20 6F 6E 65 20 73 68 6F 74 20 53 69 72 65 6E 20 62 75 74 20 49 20 63 61 6E 20 64 65 66 69 6E 69 74 65 6C 79
+[15:48:10] [PKT] pkt_mode=27 data_len=52 sender=[Nouvelle] msg=[Yeah I just need her killed]
+       hex: 17 1A 9C AB 1B 00 00 00 4E 6F 75 76 65 6C 6C 65 00 00 00 00 00 00 00 59 65 61 68 20 49 20 6A 75 73 74 20 6E 65 65 64 20 68 65 72 20 6B 69 6C 6C 65 64 00 00
+[15:48:22] [PKT] pkt_mode=27 data_len=60 sender=[Susurro] msg=[gimme just a moment and I'll be there]
+       hex: 17 1E B8 AB 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 67 69 6D 6D 65 20 6A 75 73 74 20 61 20 6D 6F 6D 65 6E 74 20 61 6E 64 20 49 27 6C 6C 20 62 65 20 74 68 65 72 65
+[15:48:27] [PKT] pkt_mode=27 data_len=28 sender=[Nouvelle] msg=[ok]
+       hex: 17 0E C5 AB 1B 00 00 00 4E 6F 75 76 65 6C 6C 65 00 00 00 00 00 00 00 6F 6B 00 00 00
+[15:52:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 FE AD 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:52:54] [PKT] pkt_mode=27 data_len=68 sender=[Gabimaru] msg=[is it worth it to do {Expeditionary Force} for our nation?]
+       hex: 17 22 4D AE 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 69 73 20 69 74 20 77 6F 72 74 68 20 69 74 20 74 6F 20 64 6F 20 FD 02 02 08 71 FD 20 66 6F 72 20 6F 75 72 20 6E 61 74 69 6F
+[15:53:15] [PKT] pkt_mode=27 data_len=64 sender=[Gile] msg=[if you want a zone under windy control]
+       hex: 17 20 82 AE 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 69 66 20 79 6F 75 20 77 61 6E 74 20 61 20 7A 6F 6E 65 20 75 6E 64 65 72 20 77 69 6E 64 79 20 63 6F 6E 74 72 6F 6C 00 00 00
+[15:53:26] [PKT] pkt_mode=27 data_len=52 sender=[Gile] msg=[or w/e nation your from lol]
+       hex: 17 1A 9C AE 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 6F 72 20 77 2F 65 20 6E 61 74 69 6F 6E 20 79 6F 75 72 20 66 72 6F 6D 20 6C 6F 6C 00 00
+[15:53:33] [PKT] pkt_mode=27 data_len=44 sender=[Gabimaru] msg=[more crystals Gile :D]
+       hex: 17 16 AC AE 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 6D 6F 72 65 20 63 72 79 73 74 61 6C 73 20 47 69 6C 65 20 3A 44
+[15:54:39] [PKT] pkt_mode=27 data_len=76 sender=[Gabimaru] msg=[it required full party members of rank 3 and above]
+       hex: 17 26 4C AF 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 69 74 20 72 65 71 75 69 72 65 64 20 66 75 6C 6C 20 70 61 72 74 79 20 6D 65 6D 62 65 72 73 20 6F 66 20 72 61 6E 6B 20 33 20
+[15:54:44] [PKT] pkt_mode=27 data_len=44 sender=[Gabimaru] msg=[I would do it for fun]
+       hex: 17 16 5A AF 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 49 20 77 6F 75 6C 64 20 64 6F 20 69 74 20 66 6F 72 20 66 75 6E
+[15:54:54] [PKT] pkt_mode=27 data_len=92 sender=[Kyraha] msg=[What path should I choose when speaking to Faursel to get to {Aht Urhgan}?]
+       hex: 17 2E 71 AF 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 57 68 61 74 20 70 61 74 68 20 73 68 6F 75 6C 64 20 49 20 63 68 6F 6F 73 65 20 77 68 65 6E 20 73 70 65 61 6B 69 6E 67 20 74
+[15:57:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 D6 B0 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[15:58:04] [PKT] pkt_mode=27 data_len=28 sender=[Melah] msg=[oh no]
+       hex: 17 0E 3E B1 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 6F 68 20 6E 6F
+[15:58:47] [PKT] pkt_mode=27 data_len=100 sender=[Jinxly] msg=[hey with blu i just learned {Cocoon} but its not in my spell book or anything?]
+       hex: 17 32 A7 B1 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 68 65 79 20 77 69 74 68 20 62 6C 75 20 69 20 6A 75 73 74 20 6C 65 61 72 6E 65 64 20 FD 02 02 26 1E FD 20 62 75 74 20 69 74
+[15:59:03] [PKT] pkt_mode=27 data_len=44 sender=[Tocororo] msg=[Got to set the spell]
+       hex: 17 16 CE B1 1B 00 00 00 54 6F 63 6F 72 6F 72 6F 00 00 00 00 00 00 00 47 6F 74 20 74 6F 20 73 65 74 20 74 68 65 20 73 70 65 6C 6C 00
+[15:59:20] [PKT] pkt_mode=27 data_len=64 sender=[Zuru] msg=[Yea go to magic > blue magic > set spells]
+       hex: 17 20 F9 B1 1B 00 00 00 5A 75 72 75 00 00 00 00 00 00 00 00 00 00 00 59 65 61 20 67 6F 20 74 6F 20 6D 61 67 69 63 20 3E 20 62 6C 75 65 20 6D 61 67 69 63 20 3E 20 73 65 74 20 73 70 65 6C 6C 73
+[15:59:27] [PKT] pkt_mode=27 data_len=72 sender=[Zuru] msg=[then it takes like a min before you can use it]
+       hex: 17 24 09 B2 1B 00 00 00 5A 75 72 75 00 00 00 00 00 00 00 00 00 00 00 74 68 65 6E 20 69 74 20 74 61 6B 65 73 20 6C 69 6B 65 20 61 20 6D 69 6E 20 62 65 66 6F 72 65 20 79 6F 75 20 63 61 6E 20 75
+[15:59:38] [PKT] pkt_mode=27 data_len=28 sender=[Jinxly] msg=[ty :)]
+       hex: 17 0E 25 B2 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 74 79 20 3A 29
+[15:59:59] [PKT] pkt_mode=27 data_len=64 sender=[Tocororo] msg=[Took me awhile to figure out as well lmao]
+       hex: 17 20 57 B2 1B 00 00 00 54 6F 63 6F 72 6F 72 6F 00 00 00 00 00 00 00 54 6F 6F 6B 20 6D 65 20 61 77 68 69 6C 65 20 74 6F 20 66 69 67 75 72 65 20 6F 75 74 20 61 73 20 77 65 6C 6C 20 6C 6D 61 6F
+[16:02:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 B2 B3 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:03:20] [PKT] pkt_mode=26 data_len=92 sender=[Emmycakes] msg=[{Skia Shin.} {Apollyon} {Katana} {Do you need it?} -- {money} {Can I have it?} {price} ??? {/tell} {Thank you.}]
+       hex: 17 2E 41 B4 1A 00 01 01 45 6D 6D 79 63 61 6B 65 73 00 00 00 00 00 00 FD 07 02 55 B1 FD 20 FD 02 02 14 B2 FD 20 FD 02 02 18 05 FD 20 FD 02 02 12 06 FD 20 2D 2D 20 FD 02 02 1E 6D FD 20 FD 02 02
+[16:07:02] [PKT] pkt_mode=27 data_len=44 sender=[Melah] msg=[Kirins chest is up]
+       hex: 17 16 5F B6 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 4B 69 72 69 6E 73 20 63 68 65 73 74 20 69 73 20 75 70 00 00 00
+[16:07:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 8C B6 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:12:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 66 B9 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:15:23] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E 22 BB 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[16:16:36] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E D3 BB 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[16:17:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 42 BC 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:18:02] [PKT] pkt_mode=27 data_len=72 sender=[Shortking] msg=[could anyone give me a hand with miser murphy?]
+       hex: 17 24 A5 BC 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 63 6F 75 6C 64 20 61 6E 79 6F 6E 65 20 67 69 76 65 20 6D 65 20 61 20 68 61 6E 64 20 77 69 74 68 20 6D 69 73 65 72 20 6D 75
+[16:18:30] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E EC BC 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[16:18:33] [PKT] pkt_mode=27 data_len=48 sender=[Gile] msg=[after this synth i can]
+       hex: 17 18 F2 BC 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 61 66 74 65 72 20 74 68 69 73 20 73 79 6E 74 68 20 69 20 63 61 6E 00 00 00
+[16:18:34] [PKT] pkt_mode=27 data_len=28 sender=[Shizurushu] msg=[yes]
+       hex: 17 0E F5 BC 1B 00 00 00 53 68 69 7A 75 72 75 73 68 75 00 00 00 00 00 79 65 73 00 00
+[16:18:48] [PKT] pkt_mode=27 data_len=56 sender=[Gile] msg=[unless someone can help sooner]
+       hex: 17 1C 16 BD 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 75 6E 6C 65 73 73 20 73 6F 6D 65 6F 6E 65 20 63 61 6E 20 68 65 6C 70 20 73 6F 6F 6E 65 72 00 00 00
+[16:19:15] [PKT] pkt_mode=27 data_len=80 sender=[Jinxly] msg=[someoen pl this stupid blu and get me some spells >< lmao]
+       hex: 17 28 58 BD 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 73 6F 6D 65 6F 65 6E 20 70 6C 20 74 68 69 73 20 73 74 75 70 69 64 20 62 6C 75 20 61 6E 64 20 67 65 74 20 6D 65 20 73 6F 6D
+[16:19:22] [PKT] pkt_mode=27 data_len=40 sender=[Jinxly] msg=[shizuariinnnnooo]
+       hex: 17 14 69 BD 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 73 68 69 7A 75 61 72 69 69 6E 6E 6E 6E 6F 6F 6F 00
+[16:19:25] [PKT] pkt_mode=27 data_len=60 sender=[Gabimaru] msg=[sure I can, but what do I need to do]
+       hex: 17 1E 71 BD 1B 00 00 00 47 61 62 69 6D 61 72 75 00 00 00 00 00 00 00 73 75 72 65 20 49 20 63 61 6E 2C 20 62 75 74 20 77 68 61 74 20 64 6F 20 49 20 6E 65 65 64 20 74 6F 20 64 6F 00
+[16:19:27] [PKT] pkt_mode=27 data_len=32 sender=[Jinxly] msg=[fun name]
+       hex: 17 10 75 BD 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 66 75 6E 20 6E 61 6D 65 00
+[16:19:35] [PKT] pkt_mode=27 data_len=32 sender=[Shizurushu] msg=[Hi Jinxly]
+       hex: 17 10 88 BD 1B 00 00 00 53 68 69 7A 75 72 75 73 68 75 00 00 00 00 00 48 69 20 4A 69 6E 78 6C 79
+[16:19:46] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E A3 BD 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[16:19:52] [PKT] pkt_mode=27 data_len=116 sender=[Kaelerac] msg=[maybe a dumb question -- on default controller keybinds, how do you target party with spells?]
+       hex: 17 3A B1 BD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6D 61 79 62 65 20 61 20 64 75 6D 62 20 71 75 65 73 74 69 6F 6E 20 2D 2D 20 6F 6E 20 64 65 66 61 75 6C 74 20 63 6F 6E 74 72
+[16:20:00] [PKT] pkt_mode=27 data_len=76 sender=[Kaelerac] msg=[up/down on D-pad after selecting spell not working]
+       hex: 17 26 C6 BD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 75 70 2F 64 6F 77 6E 20 6F 6E 20 44 2D 70 61 64 20 61 66 74 65 72 20 73 65 6C 65 63 74 69 6E 67 20 73 70 65 6C 6C 20 6E 6F
+[16:20:03] [PKT] pkt_mode=27 data_len=44 sender=[Jinxly] msg=[should just be dpad]
+       hex: 17 16 CC BD 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 73 68 6F 75 6C 64 20 6A 75 73 74 20 62 65 20 64 70 61 64 00 00
+[16:20:19] [PKT] pkt_mode=27 data_len=44 sender=[Kaelerac] msg=[yeah, super SHOULD be]
+       hex: 17 16 F4 BD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 79 65 61 68 2C 20 73 75 70 65 72 20 53 48 4F 55 4C 44 20 62 65
+[16:20:19] [PKT] pkt_mode=27 data_len=64 sender=[Jinxly] msg=[are you using a macro set with <sctp ?]
+       hex: 17 20 F4 BD 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 61 72 65 20 79 6F 75 20 75 73 69 6E 67 20 61 20 6D 61 63 72 6F 20 73 65 74 20 77 69 74 68 20 3C 73 63 74 70 20 3F 00 00 00
+[16:20:31] [PKT] pkt_mode=27 data_len=52 sender=[Kaelerac] msg=[nope, magic menu in-combat]
+       hex: 17 1A 11 BE 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6E 6F 70 65 2C 20 6D 61 67 69 63 20 6D 65 6E 75 20 69 6E 2D 63 6F 6D 62 61 74 00 00 00
+[16:21:00] [PKT] pkt_mode=27 data_len=64 sender=[Kyraha] msg=[Try using up-down instead of left-right]
+       hex: 17 20 57 BE 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 54 72 79 20 75 73 69 6E 67 20 75 70 2D 64 6F 77 6E 20 69 6E 73 74 65 61 64 20 6F 66 20 6C 65 66 74 2D 72 69 67 68 74 00 00
+[16:21:13] [PKT] pkt_mode=27 data_len=44 sender=[Kaelerac] msg=[done every direction]
+       hex: 17 16 76 BE 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 64 6F 6E 65 20 65 76 65 72 79 20 64 69 72 65 63 74 69 6F 6E 00
+[16:21:28] [PKT] pkt_mode=27 data_len=76 sender=[Kaelerac] msg=[ah, let me check one thing if i'm being super dumb]
+       hex: 17 26 9B BE 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 61 68 2C 20 6C 65 74 20 6D 65 20 63 68 65 63 6B 20 6F 6E 65 20 74 68 69 6E 67 20 69 66 20 69 27 6D 20 62 65 69 6E 67 20 73
+[16:22:00] [PKT] pkt_mode=27 data_len=112 sender=[Kaelerac] msg=[lol, worked it out. {Pollen} only targets self. you are now free to move about the world]
+       hex: 17 38 EA BE 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6C 6F 6C 2C 20 77 6F 72 6B 65 64 20 69 74 20 6F 75 74 2E 20 FD 02 02 26 21 FD 20 6F 6E 6C 79 20 74 61 72 67 65 74 73 20 73
+[16:22:11] [PKT] pkt_mode=27 data_len=36 sender=[Jinxly] msg=[tsktsk lol]
+       hex: 17 12 05 BF 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 74 73 6B 74 73 6B 20 6C 6F 6C 00 00 00
+[16:22:17] [PKT] pkt_mode=27 data_len=56 sender=[Susurro] msg=[that was gonna be my question lol]
+       hex: 17 1C 13 BF 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 74 68 61 74 20 77 61 73 20 67 6F 6E 6E 61 20 62 65 20 6D 79 20 71 75 65 73 74 69 6F 6E 20 6C 6F 6C
+[16:22:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 1E BF 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:22:23] [PKT] pkt_mode=27 data_len=96 sender=[Kaelerac] msg=[tbf, the description is just "Restores HP" -- not "Restores OWN HP" lol]
+       hex: 17 30 22 BF 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 74 62 66 2C 20 74 68 65 20 64 65 73 63 72 69 70 74 69 6F 6E 20 69 73 20 6A 75 73 74 20 22 52 65 73 74 6F 72 65 73 20 48 50
+[16:22:43] [PKT] pkt_mode=27 data_len=64 sender=[Shortking] msg=[i need to kill 2 nm for the rdm artifact]
+       hex: 17 20 52 BF 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 69 20 6E 65 65 64 20 74 6F 20 6B 69 6C 6C 20 32 20 6E 6D 20 66 6F 72 20 74 68 65 20 72 64 6D 20 61 72 74 69 66 61 63 74 00
+[16:23:56] [PKT] pkt_mode=27 data_len=72 sender=[Jinxly] msg=[nothin like whackin monkies with a level 1 sword]
+       hex: 17 24 06 C0 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 6E 6F 74 68 69 6E 20 6C 69 6B 65 20 77 68 61 63 6B 69 6E 20 6D 6F 6E 6B 69 65 73 20 77 69 74 68 20 61 20 6C 65 76 65 6C 20
+[16:24:34] [PKT] pkt_mode=27 data_len=84 sender=[Kyraha] msg=[Does the boat to {Aht Urhgan} in {Mhaura} arrive to the same dock?]
+       hex: 17 2A 61 C0 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 44 6F 65 73 20 74 68 65 20 62 6F 61 74 20 74 6F 20 FD 02 02 14 DB FD 20 69 6E 20 FD 02 02 14 1E FD 20 61 72 72 69 76 65 20
+[16:24:44] [PKT] pkt_mode=27 data_len=52 sender=[Kaelerac] msg=[That sounds euphamistic AF]
+       hex: 17 1A 7A C0 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 54 68 61 74 20 73 6F 75 6E 64 73 20 65 75 70 68 61 6D 69 73 74 69 63 20 41 46 00 00 00
+[16:24:45] [PKT] pkt_mode=27 data_len=28 sender=[Susurro] msg=[yeah]
+       hex: 17 0E 7C C0 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 79 65 61 68 00
+[16:25:15] [PKT] pkt_mode=27 data_len=96 sender=[Kyraha] msg=[Ty I asked a guy dressed up as a chocobo here but they're not responding]
+       hex: 17 30 C6 C0 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 54 79 20 49 20 61 73 6B 65 64 20 61 20 67 75 79 20 64 72 65 73 73 65 64 20 75 70 20 61 73 20 61 20 63 68 6F 63 6F 62 6F 20
+[16:27:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 FB C1 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:32:17] [PKT] pkt_mode=26 data_len=92 sender=[Emmycakes] msg=[{Skia Shin.} {Apollyon} {Katana} {Do you need it?} -- {money} {Can I have it?} {price} ??? {/tell} {Thank you.}]
+       hex: 17 2E CF C4 1A 00 00 01 45 6D 6D 79 63 61 6B 65 73 00 00 00 00 00 00 FD 07 02 55 B1 FD 20 FD 02 02 14 B2 FD 20 FD 02 02 18 05 FD 20 FD 02 02 12 06 FD 20 2D 2D 20 FD 02 02 1E 6D FD 20 FD 02 02
+[16:32:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 D9 C4 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:33:34] [PKT] pkt_mode=26 data_len=100 sender=[Linphosies] msg=[{Job Points} 500p/5m 2100p/20m {Master Level}5hr/5m ML0~30/30m ML0~50 {Buy?} {/tell} {Thank you.}]
+       hex: 17 32 8C C5 1A 00 EB 00 4C 69 6E 70 68 6F 73 69 65 73 00 00 00 00 00 FD 02 02 28 1D FD 20 35 30 30 70 2F 35 6D 20 32 31 30 30 70 2F 32 30 6D 20 FD 02 02 28 19 FD 35 68 72 2F 35 6D 20 4D 4C 30
+[16:34:48] [PKT] pkt_mode=26 data_len=120 sender=[Kagachi] msg=[オデシB行きませんか？ job不問  装備も不問 只今赤1 テノヒラノ魔法 これは 少年と お母さんの お話]
+       hex: 17 3C 3E C6 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 8D 73 82 AB 82 DC 82 B9 82 F1 82 A9 81 48 20 6A 6F 62 95 73 96 E2 20 20 91 95 94 F5 82 E0 95 73 96 E2
+[16:36:11] [PKT] pkt_mode=26 data_len=136 sender=[Kagachi] msg=[オデシB  job不問 装備も不問 縛りなし 術式の開示 只今赤1 トアル世界の トアル町 トアル国に 少年が 住んでいました]
+       hex: 17 44 09 C7 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 20 6A 6F 62 95 73 96 E2 20 91 95 94 F5 82 E0 95 73 96 E2 20 94 9B 82 E8 82 C8 82 B5 20 8F 70 8E AE
+[16:37:15] [PKT] pkt_mode=26 data_len=116 sender=[Kagachi] msg=[オデシB job不問 せぐぽ行きませんか？ 只今赤1 少年は 幼いですが トアル学園に 通っていました]
+       hex: 17 3A A3 C7 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 82 B9 82 AE 82 DB 8D 73 82 AB 82 DC 82 B9 82 F1 82 A9 81 48 20 91 FC 8D A1
+[16:37:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 B3 C7 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:38:48] [PKT] pkt_mode=26 data_len=128 sender=[Kagachi] msg=[オデシB job不問 セグポキャンプ 行きませんか？ 只今赤1 或る日 学園の先生が  生徒へ 素敵な提案を 申し出ます]
+       hex: 17 40 86 C8 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 83 5A 83 4F 83 7C 83 4C 83 83 83 93 83 76 20 8D 73 82 AB 82 DC 82 B9 82 F1
+[16:41:30] [PKT] pkt_mode=26 data_len=136 sender=[Kagachi] msg=[オデシB job不問 どんなjobでも  無問題 気軽にご参加を ただいま おかえり 赤1 皆の ご父兄さんを 学園に招待しないか？]
+       hex: 17 44 11 CA 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 82 C7 82 F1 82 C8 6A 6F 62 82 C5 82 E0 20 20 96 B3 96 E2 91 E8 20 8B 43 8C
+[16:42:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 8E CA 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:43:46] [PKT] pkt_mode=27 data_len=80 sender=[Jinxly] msg=[i'm giving up oin blu. i'm just gunna go pld/war for now]
+       hex: 17 28 5C CB 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 69 27 6D 20 67 69 76 69 6E 67 20 75 70 20 6F 69 6E 20 62 6C 75 2E 20 69 27 6D 20 6A 75 73 74 20 67 75 6E 6E 61 20 67 6F 20
+[16:43:55] [PKT] pkt_mode=27 data_len=52 sender=[Jinxly] msg=[dont have the patience lol]
+       hex: 17 1A 72 CB 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 64 6F 6E 74 20 68 61 76 65 20 74 68 65 20 70 61 74 69 65 6E 63 65 20 6C 6F 6C 00 00 00
+[16:44:00] [PKT] pkt_mode=27 data_len=48 sender=[Kaelerac] msg=[what called it for you?]
+       hex: 17 18 7D CB 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 77 68 61 74 20 63 61 6C 6C 65 64 20 69 74 20 66 6F 72 20 79 6F 75 3F 00 00
+[16:44:10] [PKT] pkt_mode=26 data_len=132 sender=[Kagachi] msg=[オデシB job不問 装備も不問 気軽に 手軽に セグポキャンプ 只今赤1 なんだか たのしそう でも ちょっと  党しそう]
+       hex: 17 42 97 CB 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 91 95 94 F5 82 E0 95 73 96 E2 20 8B 43 8C 79 82 C9 20 8E E8 8C 79 82 C9 20
+[16:44:12] [PKT] pkt_mode=27 data_len=104 sender=[Zuru] msg=[Just gotta have something on in the background while youre trying to learn spells]
+       hex: 17 34 9B CB 1B 00 00 00 5A 75 72 75 00 00 00 00 00 00 00 00 00 00 00 4A 75 73 74 20 67 6F 74 74 61 20 68 61 76 65 20 73 6F 6D 65 74 68 69 6E 67 20 6F 6E 20 69 6E 20 74 68 65 20 62 61 63 6B 67
+[16:44:14] [PKT] pkt_mode=27 data_len=100 sender=[Kaelerac] msg=[i'm actively working on BLU for PLD sub, so it's super relevant for me lol]
+       hex: 17 32 A1 CB 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 27 6D 20 61 63 74 69 76 65 6C 79 20 77 6F 72 6B 69 6E 67 20 6F 6E 20 42 4C 55 20 66 6F 72 20 50 4C 44 20 73 75 62 2C 20
+[16:44:37] [PKT] pkt_mode=27 data_len=92 sender=[Jinxly] msg=[well me too, but ive spent like 4 hours total and learned 0 spells]
+       hex: 17 2E D7 CB 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 77 65 6C 6C 20 6D 65 20 74 6F 6F 2C 20 62 75 74 20 69 76 65 20 73 70 65 6E 74 20 6C 69 6B 65 20 34 20 68 6F 75 72 73 20 74
+[16:44:41] [PKT] pkt_mode=26 data_len=100 sender=[Linphosies] msg=[{Job Points} 500p/5m 2100p/20m {Master Level}5hr/5m ML0~30/30m ML0~50 {Buy?} {/tell} {Thank you.}]
+       hex: 17 32 E0 CB 1A 00 EB 00 4C 69 6E 70 68 6F 73 69 65 73 00 00 00 00 00 FD 02 02 28 1D FD 20 35 30 30 70 2F 35 6D 20 32 31 30 30 70 2F 32 30 6D 20 FD 02 02 28 19 FD 35 68 72 2F 35 6D 20 4D 4C 30
+[16:44:51] [PKT] pkt_mode=27 data_len=84 sender=[Kaelerac] msg=[are you targeting spells that are near your BLU magic level?]
+       hex: 17 2A FA CB 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 61 72 65 20 79 6F 75 20 74 61 72 67 65 74 69 6E 67 20 73 70 65 6C 6C 73 20 74 68 61 74 20 61 72 65 20 6E 65 61 72 20 79 6F
+[16:44:54] [PKT] pkt_mode=27 data_len=56 sender=[Zuru] msg=[have you leveled your blue magic ]
+       hex: 17 1C 00 CC 1B 00 00 00 5A 75 72 75 00 00 00 00 00 00 00 00 00 00 00 68 61 76 65 20 79 6F 75 20 6C 65 76 65 6C 65 64 20 79 6F 75 72 20 62 6C 75 65 20 6D 61 67 69 63 20
+[16:45:16] [PKT] pkt_mode=27 data_len=68 sender=[Jinxly] msg=[cant really when i have no blu magic to acast]
+       hex: 17 22 36 CC 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 63 61 6E 74 20 72 65 61 6C 6C 79 20 77 68 65 6E 20 69 20 68 61 76 65 20 6E 6F 20 62 6C 75 20 6D 61 67 69 63 20 74 6F 20 61
+[16:45:20] [PKT] pkt_mode=27 data_len=48 sender=[Jinxly] msg=[ive used some books tho]
+       hex: 17 18 41 CC 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 69 76 65 20 75 73 65 64 20 73 6F 6D 65 20 62 6F 6F 6B 73 20 74 68 6F 00 00
+[16:45:27] [PKT] pkt_mode=27 data_len=60 sender=[Melah] msg=[its easier once u get your af gloves ]
+       hex: 17 1E 51 CC 1B 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 69 74 73 20 65 61 73 69 65 72 20 6F 6E 63 65 20 75 20 67 65 74 20 79 6F 75 72 20 61 66 20 67 6C 6F 76 65 73 20
+[16:45:34] [PKT] pkt_mode=27 data_len=72 sender=[Kaelerac] msg=[punch some rabbits to get the spammable DD move]
+       hex: 17 24 64 CC 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 70 75 6E 63 68 20 73 6F 6D 65 20 72 61 62 62 69 74 73 20 74 6F 20 67 65 74 20 74 68 65 20 73 70 61 6D 6D 61 62 6C 65 20 44
+[16:45:37] [PKT] pkt_mode=27 data_len=24 sender=[Susurro] msg=[^]
+       hex: 17 0C 6A CC 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 5E
+[16:45:42] [PKT] pkt_mode=27 data_len=44 sender=[Kaelerac] msg=[only requires level 1]
+       hex: 17 16 75 CC 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6F 6E 6C 79 20 72 65 71 75 69 72 65 73 20 6C 65 76 65 6C 20 31
+[16:45:55] [PKT] pkt_mode=27 data_len=112 sender=[Gawdrik] msg=[i didnt even try to learn blu spell til i was 99. but that was during xp event that ended]
+       hex: 17 38 96 CC 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 69 20 64 69 64 6E 74 20 65 76 65 6E 20 74 72 79 20 74 6F 20 6C 65 61 72 6E 20 62 6C 75 20 73 70 65 6C 6C 20 74 69 6C 20 69
+[16:46:06] [PKT] pkt_mode=27 data_len=44 sender=[Tekichi] msg=[or mandys for pollen]
+       hex: 17 16 B1 CC 1B 00 00 00 54 65 6B 69 63 68 69 00 00 00 00 00 00 00 00 6F 72 20 6D 61 6E 64 79 73 20 66 6F 72 20 70 6F 6C 6C 65 6E 00
+[16:46:13] [PKT] pkt_mode=27 data_len=108 sender=[Kaelerac] msg=[crawlers for cocoon was also good, since you get the skill up casting it on yourself]
+       hex: 17 36 C1 CC 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 63 72 61 77 6C 65 72 73 20 66 6F 72 20 63 6F 63 6F 6F 6E 20 77 61 73 20 61 6C 73 6F 20 67 6F 6F 64 2C 20 73 69 6E 63 65 20
+[16:46:22] [PKT] pkt_mode=26 data_len=136 sender=[Kagachi] msg=[オデシBjob不問 装備も不問 セグメントキャンプ 只今赤1 やっても良いけど 僕らは何をするの？ 出来る事は 少ない 不安]
+       hex: 17 44 D8 CC 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 6A 6F 62 95 73 96 E2 20 91 95 94 F5 82 E0 95 73 96 E2 20 83 5A 83 4F 83 81 83 93 83 67 83 4C 83 83 83
+[16:46:29] [PKT] pkt_mode=27 data_len=36 sender=[Gile] msg=[{Pollen} also]
+       hex: 17 12 E9 CC 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 FD 02 02 26 21 FD 20 61 6C 73 6F 00 00
+[16:46:37] [PKT] pkt_mode=27 data_len=64 sender=[Jinxly] msg=[doesn't cocoon have like a 1min CD lol]
+       hex: 17 20 FB CC 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 64 6F 65 73 6E 27 74 20 63 6F 63 6F 6F 6E 20 68 61 76 65 20 6C 69 6B 65 20 61 20 31 6D 69 6E 20 43 44 20 6C 6F 6C 00 00 00
+[16:46:47] [PKT] pkt_mode=27 data_len=72 sender=[Kaelerac] msg=[well yeah, i'm saying in ADDITION to the others]
+       hex: 17 24 14 CD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 77 65 6C 6C 20 79 65 61 68 2C 20 69 27 6D 20 73 61 79 69 6E 67 20 69 6E 20 41 44 44 49 54 49 4F 4E 20 74 6F 20 74 68 65 20
+[16:46:54] [PKT] pkt_mode=27 data_len=80 sender=[Kaelerac] msg=[everything helps. i started BLU yesterday and now have]
+       hex: 17 28 26 CD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 65 76 65 72 79 74 68 69 6E 67 20 68 65 6C 70 73 2E 20 69 20 73 74 61 72 74 65 64 20 42 4C 55 20 79 65 73 74 65 72 64 61 79
+[16:47:07] [PKT] pkt_mode=27 data_len=52 sender=[Kaelerac] msg=[around 120 skill, i think?]
+       hex: 17 1A 45 CD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 61 72 6F 75 6E 64 20 31 32 30 20 73 6B 69 6C 6C 2C 20 69 20 74 68 69 6E 6B 3F 00 00 00
+[16:47:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 67 CD 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:48:19] [PKT] pkt_mode=27 data_len=64 sender=[Kaelerac] msg=[i'd check but i'm on wrong class now lol]
+       hex: 17 20 F4 CD 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 69 27 64 20 63 68 65 63 6B 20 62 75 74 20 69 27 6D 20 6F 6E 20 77 72 6F 6E 67 20 63 6C 61 73 73 20 6E 6F 77 20 6C 6F 6C 00
+[16:48:37] [PKT] pkt_mode=26 data_len=136 sender=[Kagachi] msg=[オデシB job不問 装備も不問  やる気だって！！無問題！！只今２名 君達が出来る事で 君達にやってもらう事も 計画はある]
+       hex: 17 44 1F CE 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 91 95 94 F5 82 E0 95 73 96 E2 20 20 82 E2 82 E9 8B 43 82 BE 82 C1 82 C4 81
+[16:49:20] [PKT] pkt_mode=27 data_len=104 sender=[Kaelerac] msg=[either way, WAR is great for PLD I think, so do that if that works better for you]
+       hex: 17 34 88 CE 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 65 69 74 68 65 72 20 77 61 79 2C 20 57 41 52 20 69 73 20 67 72 65 61 74 20 66 6F 72 20 50 4C 44 20 49 20 74 68 69 6E 6B 2C
+[16:49:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A E6 CE 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[16:51:51] [PKT] pkt_mode=27 data_len=40 sender=[Tonichoppa] msg=[cute crown jinxly]
+       hex: 17 14 F8 CF 1B 00 00 00 54 6F 6E 69 63 68 6F 70 70 61 00 00 00 00 00 63 75 74 65 20 63 72 6F 77 6E 20 6A 69 6E 78 6C 79
+[16:51:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 0A D0 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[16:52:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 41 D0 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:52:27] [PKT] pkt_mode=26 data_len=132 sender=[Kagachi] msg=[オデシB セグメントの旅  只今３名  先生の計画は 喫茶店を開いて おもてなしをするというもの 教室は手作りの飾り]
+       hex: 17 42 4F D0 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 83 5A 83 4F 83 81 83 93 83 67 82 CC 97 B7 20 20 91 FC 8D A1 82 52 96 BC 20 20 90 E6 90 B6 82 CC 8C
+[16:53:00] [PKT] pkt_mode=27 data_len=48 sender=[Gawdrik] msg=[got my rhapsody of mauve]
+       hex: 17 18 9E D0 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 67 6F 74 20 6D 79 20 72 68 61 70 73 6F 64 79 20 6F 66 20 6D 61 75 76 65 00
+[16:53:56] [PKT] pkt_mode=26 data_len=120 sender=[Kagachi] msg=[オデシB job不問 カガチに不満 {Yawn} 只今３名 軽食は 先生手作りの クッキー 飲物は コンビニで 購入]
+       hex: 17 3C 27 D1 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 83 4A 83 4B 83 60 82 C9 95 73 96 9E 20 FD 02 01 26 34 FD 20 91 FC 8D A1 82
+[16:53:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 2D D1 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[16:54:35] [PKT] pkt_mode=27 data_len=60 sender=[Jinxly] msg=[your hello didn't go in ls there echo]
+       hex: 17 1E 86 D1 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 79 6F 75 72 20 68 65 6C 6C 6F 20 64 69 64 6E 27 74 20 67 6F 20 69 6E 20 6C 73 20 74 68 65 72 65 20 65 63 68 6F
+[16:54:43] [PKT] pkt_mode=27 data_len=40 sender=[Jinxly] msg=[it was a /s lol]
+       hex: 17 14 98 D1 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 69 74 20 77 61 73 20 61 20 2F 73 20 6C 6F 6C 00 00
+[16:55:17] [PKT] pkt_mode=27 data_len=124 sender=[Echovia] msg=[i just thought that was lag cause sometimes it shows as say when i zone and use ls chat too quickly]
+       hex: 17 3E EC D1 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 69 20 6A 75 73 74 20 74 68 6F 75 67 68 74 20 74 68 61 74 20 77 61 73 20 6C 61 67 20 63 61 75 73 65 20 73 6F 6D 65 74 69 6D
+[16:55:22] [PKT] pkt_mode=27 data_len=44 sender=[Echovia] msg=[{Hello!} {Helldive} {Club}]
+       hex: 17 16 F7 D1 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 20 FD 02 02 26 2D FD 20 FD 02 02 18 27 FD 00
+[16:55:30] [PKT] pkt_mode=27 data_len=32 sender=[Gawdrik] msg=[hey echo!]
+       hex: 17 10 0B D2 1B 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 68 65 79 20 65 63 68 6F 21
+[16:55:37] [PKT] pkt_mode=27 data_len=36 sender=[Tonichoppa] msg=[hi Echo ^^]
+       hex: 17 12 1C D2 1B 00 00 00 54 6F 6E 69 63 68 6F 70 70 61 00 00 00 00 00 68 69 20 45 63 68 6F 20 5E 5E 00 00 00
+[16:55:48] [PKT] pkt_mode=27 data_len=32 sender=[Kyraha] msg=[{Hello!}]
+       hex: 17 10 36 D2 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[16:55:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 50 D2 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[16:56:30] [PKT] pkt_mode=26 data_len=132 sender=[Kagachi] msg=[オデシB job不問 装備は無問題 困党が絆と勇気を 育てます 只今３名 少年達が 得意な 折り紙で 教室をデコレーション]
+       hex: 17 42 9C D2 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 6A 6F 62 95 73 96 E2 20 91 95 94 F5 82 CD 96 B3 96 E2 91 E8 20 8D A2 93 EF 82 AA E3 4A 82 C6 97 45
+[16:56:49] [PKT] pkt_mode=27 data_len=28 sender=[Gile] msg=[hi]
+       hex: 17 0E CB D2 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[16:57:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 19 D3 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[16:57:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 73 D3 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[16:58:39] [PKT] pkt_mode=26 data_len=68 sender=[Ymu] msg=[Skia Shin. Katana Su4 Do you need it? Buy?]
+       hex: 17 22 D6 D3 1A 00 F6 00 59 6D 75 00 00 00 00 00 00 00 00 00 00 00 00 53 6B 69 61 20 53 68 69 6E 2E 20 4B 61 74 61 6E 61 20 53 75 34 20 44 6F 20 79 6F 75 20 6E 65 65 64 20 69 74 3F 20 42 75 79
+[16:59:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 97 D4 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:00:06] [PKT] pkt_mode=26 data_len=136 sender=[Kagachi] msg=[オデシB ６時になったら 出発しようかなーって  思っております ラストシャウト お話の 続きは 夢の中で。。。気になるぅ]
+       hex: 17 44 AA D4 1A 00 EC 00 4B 61 67 61 63 68 69 00 00 00 00 00 00 00 00 83 49 83 66 83 56 42 20 82 55 8E 9E 82 C9 82 C8 82 C1 82 BD 82 E7 20 8F 6F 94 AD 82 B5 82 E6 82 A4 82 A9 82 C8 81 5B 82 C1
+[17:01:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A BC D5 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:02:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 F3 D5 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:03:35] [PKT] pkt_mode=27 data_len=60 sender=[Kaelerac] msg=[actually, i'll meet you there now o7]
+       hex: 17 1E A6 D6 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 61 63 74 75 61 6C 6C 79 2C 20 69 27 6C 6C 20 6D 65 65 74 20 79 6F 75 20 74 68 65 72 65 20 6E 6F 77 20 6F 37 00
+[17:03:38] [PKT] pkt_mode=27 data_len=28 sender=[Kaelerac] msg=[mt]
+       hex: 17 0E AF D6 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6D 74 00 00 00
+[17:03:50] [PKT] pkt_mode=27 data_len=40 sender=[Jinxly] msg=[bring crackers]
+       hex: 17 14 CB D6 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 62 72 69 6E 67 20 63 72 61 63 6B 65 72 73 00 00 00
+[17:03:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A E0 D6 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:04:19] [PKT] pkt_mode=27 data_len=48 sender=[Echovia] msg=[don't forget the {Cursed Soup}]
+       hex: 17 18 12 D7 1B 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 64 6F 6E 27 74 20 66 6F 72 67 65 74 20 74 68 65 20 FD 07 02 10 8B FD 00 00
+[17:04:29] [PKT] pkt_mode=27 data_len=32 sender=[Nyameru] msg=[hey guy]
+       hex: 17 10 2A D7 1B 00 00 00 4E 79 61 6D 65 72 75 00 00 00 00 00 00 00 00 68 65 79 20 67 75 79 00 00
+[17:04:45] [PKT] pkt_mode=27 data_len=28 sender=[Gile] msg=[hi]
+       hex: 17 0E 52 D7 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[17:05:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 04 D8 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:06:09] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 1C D8 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:06:10] [PKT] pkt_mode=26 data_len=52 sender=[Onlyfangs] msg=[{Gold Chain} {Sell?} {/tell} {Thank you.}]
+       hex: 17 1A 20 D8 1A 00 F9 00 4F 6E 6C 79 66 61 6E 67 73 00 00 00 00 00 00 FD 07 02 02 F9 FD 20 FD 02 02 12 04 FD 20 FD 02 02 0D 14 FD 20 FD 02 02 01 0C FD 00 00
+[17:06:48] [PKT] pkt_mode=26 data_len=68 sender=[Donaldee] msg=[Forgotten thought {Do you have it?} {/tell} {Reward} {You can have this.}]
+       hex: 17 22 7C D8 1A 00 F6 00 44 6F 6E 61 6C 64 65 65 00 00 00 00 00 00 00 46 6F 72 67 6F 74 74 65 6E 20 74 68 6F 75 67 68 74 20 FD 02 02 02 05 FD 20 FD 02 02 0D 14 FD 20 FD 02 02 1F 31 FD 20 FD 02
+[17:06:55] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 8D D8 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:07:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 CC D8 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:07:54] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 1B D9 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:07:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 27 D9 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:08:53] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C AB D9 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:09:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 4B DA 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:10:00] [PKT] pkt_mode=27 data_len=44 sender=[Tonichoppa] msg=[Jukeboxctrl {Found it!} ^^]
+       hex: 17 16 4E DA 1B 00 00 00 54 6F 6E 69 63 68 6F 70 70 61 00 00 00 00 00 4A 75 6B 65 62 6F 78 63 74 72 6C 20 FD 02 02 05 0A FD 20 5E 5E
+[17:10:05] [PKT] pkt_mode=27 data_len=40 sender=[Tonichoppa] msg=[u have a twin?]
+       hex: 17 14 5B DA 1B 00 00 00 54 6F 6E 69 63 68 6F 70 70 61 00 00 00 00 00 75 20 68 61 76 65 20 61 20 74 77 69 6E 3F 00 00 00
+[17:10:15] [PKT] pkt_mode=27 data_len=36 sender=[Jukeboxctrl] msg=[ruh roh raggu]
+       hex: 17 12 72 DA 1B 00 00 00 4A 75 6B 65 62 6F 78 63 74 72 6C 00 00 00 00 72 75 68 20 72 6F 68 20 72 61 67 67 75
+[17:10:20] [PKT] pkt_mode=27 data_len=28 sender=[Tonichoppa] msg=[hahah]
+       hex: 17 0E 80 DA 1B 00 00 00 54 6F 6E 69 63 68 6F 70 70 61 00 00 00 00 00 68 61 68 61 68
+[17:11:19] [PKT] pkt_mode=27 data_len=76 sender=[Jukeboxctrl] msg=[looks like i can slaughter all the T1 escha fates now]
+       hex: 17 26 0E DB 1B 00 00 00 4A 75 6B 65 62 6F 78 63 74 72 6C 00 00 00 00 6C 6F 6F 6B 73 20 6C 69 6B 65 20 69 20 63 61 6E 20 73 6C 61 75 67 68 74 65 72 20 61 6C 6C 20 74 68 65 20 54 31 20 65 73 63
+[17:11:30] [PKT] pkt_mode=27 data_len=44 sender=[Jukeboxctrl] msg=[need some vanya stuff]
+       hex: 17 16 28 DB 1B 00 00 00 4A 75 6B 65 62 6F 78 63 74 72 6C 00 00 00 00 6E 65 65 64 20 73 6F 6D 65 20 76 61 6E 79 61 20 73 74 75 66 66
+[17:11:34] [PKT] pkt_mode=27 data_len=28 sender=[Jukeboxctrl] msg=[vanya]
+       hex: 17 0E 32 DB 1B 00 00 00 4A 75 6B 65 62 6F 78 63 74 72 6C 00 00 00 00 76 61 6E 79 61
+[17:11:41] [PKT] pkt_mode=27 data_len=36 sender=[Jukeboxctrl] msg=[uncle vanya]
+       hex: 17 12 44 DB 1B 00 00 00 4A 75 6B 65 62 6F 78 63 74 72 6C 00 00 00 00 75 6E 63 6C 65 20 76 61 6E 79 61 00 00
+[17:11:49] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 57 DB 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:11:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 6E DB 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:12:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 A5 DB 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:13:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 91 DC 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:14:05] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C A1 DC 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:15:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A B5 DD 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:17:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 7E DE 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:17:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A D9 DE 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:17:59] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C DB DE 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:18:23] [PKT] pkt_mode=27 data_len=88 sender=[Shortking] msg=[Could anyone give me a hand with a nm inside Garlaigne Citadel?]
+       hex: 17 2C 15 DF 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 43 6F 75 6C 64 20 61 6E 79 6F 6E 65 20 67 69 76 65 20 6D 65 20 61 20 68 61 6E 64 20 77 69 74 68 20 61 20 6E 6D 20 69 6E 73
+[17:18:38] [PKT] pkt_mode=27 data_len=32 sender=[Jinxly] msg=[the bomb?]
+       hex: 17 10 3A DF 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 74 68 65 20 62 6F 6D 62 3F
+[17:19:01] [PKT] pkt_mode=26 data_len=112 sender=[Milto] msg=[旧貨幣のルンゴ・モニヨンを各３０万Ｇで売ってくれませんか？ Buy Lungo/Montiont @300k /tell]
+       hex: 17 38 71 DF 1A 00 01 01 4D 69 6C 74 6F 00 00 00 00 00 00 00 00 00 00 8B 8C 89 DD 95 BC 82 CC 83 8B 83 93 83 53 81 45 83 82 83 6A 83 88 83 93 82 F0 8A 65 82 52 82 4F 96 9C 82 66 82 C5 94 84 82
+[17:19:01] [PKT] pkt_mode=27 data_len=56 sender=[Shortking] msg=[guardian statue for the rdm quest]
+       hex: 17 1C 72 DF 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 67 75 61 72 64 69 61 6E 20 73 74 61 74 75 65 20 66 6F 72 20 74 68 65 20 72 64 6D 20 71 75 65 73 74
+[17:19:11] [PKT] pkt_mode=27 data_len=52 sender=[Gile] msg=[i can after i am done here]
+       hex: 17 1A 89 DF 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 69 20 63 61 6E 20 61 66 74 65 72 20 69 20 61 6D 20 64 6F 6E 65 20 68 65 72 65 00 00 00
+[17:19:13] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 8D DF 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:19:50] [PKT] pkt_mode=27 data_len=80 sender=[Shortking] msg=[k thanks, the previous one 2 shotted me so i rather ask]
+       hex: 17 28 E7 DF 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 6B 20 74 68 61 6E 6B 73 2C 20 74 68 65 20 70 72 65 76 69 6F 75 73 20 6F 6E 65 20 32 20 73 68 6F 74 74 65 64 20 6D 65 20 73
+[17:19:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A FD DF 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:19:59] [PKT] pkt_mode=1 data_len=88 sender=[Dran] msg=[is there anyone able to make me a single quake grenade please?]
+       hex: 17 2C FE DF 01 00 00 00 44 72 61 6E 00 00 00 00 00 00 00 00 00 00 00 69 73 20 74 68 65 72 65 20 61 6E 79 6F 6E 65 20 61 62 6C 65 20 74 6F 20 6D 61 6B 65 20 6D 65 20 61 20 73 69 6E 67 6C 65 20
+[17:21:15] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C B7 E0 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:21:28] [PKT] pkt_mode=1 data_len=60 sender=[Dran] msg=[{Hello!} {Can I have it?} {Quake}grenade {please}?]
+       hex: 17 1E D7 E0 01 00 00 00 44 72 61 6E 00 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 20 FD 02 02 12 01 FD 20 FD 02 02 1B 1D FD 67 72 65 6E 61 64 65 20 FD 02 02 12 0A FD 3F 00 00
+[17:21:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 20 E1 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:22:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 57 E1 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:23:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 44 E2 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:24:15] [PKT] pkt_mode=27 data_len=40 sender=[Shortking] msg=[i am at the book]
+       hex: 17 14 6B E2 1B 00 00 00 53 68 6F 72 74 6B 69 6E 67 00 00 00 00 00 00 69 20 61 6D 20 61 74 20 74 68 65 20 62 6F 6F 6B 00
+[17:25:01] [PKT] pkt_mode=26 data_len=56 sender=[Erifaria] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C DC E2 1A 00 F3 00 45 72 69 66 61 72 69 61 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:25:52] [PKT] pkt_mode=27 data_len=60 sender=[Nyameru] msg=[anyone happen to be a leathercrafter?]
+       hex: 17 1E 58 E3 1B 00 00 00 4E 79 61 6D 65 72 75 00 00 00 00 00 00 00 00 61 6E 79 6F 6E 65 20 68 61 70 70 65 6E 20 74 6F 20 62 65 20 61 20 6C 65 61 74 68 65 72 63 72 61 66 74 65 72 3F
+[17:25:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 68 E3 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:26:09] [PKT] pkt_mode=27 data_len=32 sender=[Gile] msg=[what lvl?]
+       hex: 17 10 81 E3 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 77 68 61 74 20 6C 76 6C 3F
+[17:26:50] [PKT] pkt_mode=27 data_len=92 sender=[Nyameru] msg=[65 and 43 alchemy. need a piece for af+1 and there are none on AH :(]
+       hex: 17 2E E4 E3 1B 00 00 00 4E 79 61 6D 65 72 75 00 00 00 00 00 00 00 00 36 35 20 61 6E 64 20 34 33 20 61 6C 63 68 65 6D 79 2E 20 6E 65 65 64 20 61 20 70 69 65 63 65 20 66 6F 72 20 61 66 2B 31 20
+[17:27:04] [PKT] pkt_mode=27 data_len=28 sender=[Gile] msg=[i do]
+       hex: 17 0E 06 E4 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 69 20 64 6F 00
+[17:27:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 30 E4 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:27:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 8C E4 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:28:05] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E 9B E4 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[17:29:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A AF E5 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:30:05] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E BE E5 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[17:31:01] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E 47 E6 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[17:31:33] [PKT] pkt_mode=27 data_len=116 sender=[Nyameru] msg=[are you able to make sheep chammy? i can buy mats and pay you whatever youd like. i need 2]
+       hex: 17 3A 94 E6 1B 00 00 00 4E 79 61 6D 65 72 75 00 00 00 00 00 00 00 00 61 72 65 20 79 6F 75 20 61 62 6C 65 20 74 6F 20 6D 61 6B 65 20 73 68 65 65 70 20 63 68 61 6D 6D 79 3F 20 69 20 63 61 6E 20
+[17:31:40] [PKT] pkt_mode=27 data_len=72 sender=[Kyraha] msg=[I got on top of Parradamo Tor but at what price]
+       hex: 17 24 A5 E6 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 20 67 6F 74 20 6F 6E 20 74 6F 70 20 6F 66 20 50 61 72 72 61 64 61 6D 6F 20 54 6F 72 20 62 75 74 20 61 74 20 77 68 61 74
+[17:31:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A D2 E6 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:32:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 0A E7 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:32:29] [PKT] pkt_mode=26 data_len=60 sender=[Tarutarupower] msg=[PL {Escha - Zi'Tah} {Do you need it?} Tell 5M Exp/Merits]
+       hex: 17 1E 1E E7 1A 00 F6 00 54 61 72 75 74 61 72 75 70 6F 77 65 72 00 00 50 4C 20 FD 02 02 27 18 FD 20 FD 02 02 12 06 FD 20 54 65 6C 6C 20 35 4D 20 45 78 70 2F 4D 65 72 69 74 73 00 00
+[17:33:32] [PKT] pkt_mode=27 data_len=32 sender=[Silvercut] msg=[lali-ho!]
+       hex: 17 10 B7 E7 1B 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 6C 61 6C 69 2D 68 6F 21 00
+[17:33:36] [PKT] pkt_mode=27 data_len=28 sender=[Gile] msg=[hi]
+       hex: 17 0E C1 E7 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[17:33:39] [PKT] pkt_mode=27 data_len=24 sender=[Susurro] msg=[!]
+       hex: 17 0C C9 E7 1B 00 00 00 53 75 73 75 72 72 6F 00 00 00 00 00 00 00 00 21
+[17:33:50] [PKT] pkt_mode=27 data_len=32 sender=[Jinxly] msg=[hi silver]
+       hex: 17 10 E2 E7 1B 00 00 00 4A 69 6E 78 6C 79 00 00 00 00 00 00 00 00 00 68 69 20 73 69 6C 76 65 72
+[17:33:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A F8 E7 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:34:22] [PKT] pkt_mode=27 data_len=28 sender=[Silvercut] msg=[^^]
+       hex: 17 0E 31 E8 1B 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 5E 5E 00 00 00
+[17:34:26] [PKT] pkt_mode=27 data_len=28 sender=[Ikekee] msg=[o/]
+       hex: 17 0E 3B E8 1B 00 00 00 49 6B 65 6B 65 65 00 00 00 00 00 00 00 00 00 6F 2F 00 00 00
+[17:34:27] [PKT] pkt_mode=27 data_len=32 sender=[Kyraha] msg=[{Hello!} o/]
+       hex: 17 10 3C E8 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 20 6F 2F
+[17:34:40] [PKT] pkt_mode=26 data_len=56 sender=[Teato] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 5C E8 1A 00 F5 00 54 65 61 74 6F 00 00 00 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:35:09] [PKT] pkt_mode=27 data_len=84 sender=[Kyraha] msg=[If I'd fall one more time from that I'd be uninstalling rn]
+       hex: 17 2A A3 E8 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 66 20 49 27 64 20 66 61 6C 6C 20 6F 6E 65 20 6D 6F 72 65 20 74 69 6D 65 20 66 72 6F 6D 20 74 68 61 74 20 49 27 64 20 62
+[17:35:35] [PKT] pkt_mode=27 data_len=100 sender=[Kaelerac] msg=[oh yeah lol, that was ROUGH. did you get the geomagnetic fount at the top?]
+       hex: 17 32 E2 E8 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6F 68 20 79 65 61 68 20 6C 6F 6C 2C 20 74 68 61 74 20 77 61 73 20 52 4F 55 47 48 2E 20 64 69 64 20 79 6F 75 20 67 65 74 20
+[17:35:44] [PKT] pkt_mode=27 data_len=28 sender=[Kyraha] msg=[Yep]
+       hex: 17 0E F7 E8 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 59 65 70 00 00
+[17:35:51] [PKT] pkt_mode=27 data_len=40 sender=[Kaelerac] msg=[ phew thank god]
+       hex: 17 14 09 E9 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 20 70 68 65 77 20 74 68 61 6E 6B 20 67 6F 64 00 00
+[17:35:52] [PKT] pkt_mode=26 data_len=56 sender=[Teato] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 0B E9 1A 00 F5 00 54 65 61 74 6F 00 00 00 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:35:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 1B E9 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:36:01] [PKT] pkt_mode=27 data_len=64 sender=[Kyraha] msg=[I don't ever wanna climb that again lol]
+       hex: 17 20 22 E9 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 20 64 6F 6E 27 74 20 65 76 65 72 20 77 61 6E 6E 61 20 63 6C 69 6D 62 20 74 68 61 74 20 61 67 61 69 6E 20 6C 6F 6C 00 00
+[17:36:14] [PKT] pkt_mode=27 data_len=48 sender=[Silvercut] msg=[<_< whos gunna telll them]
+       hex: 17 18 41 E9 1B 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 3C 5F 3C 20 77 68 6F 73 20 67 75 6E 6E 61 20 74 65 6C 6C 6C 20 74 68 65 6D
+[17:36:58] [PKT] pkt_mode=27 data_len=64 sender=[Hikatteiru] msg=[ah dang, I used that for someoen else lol]
+       hex: 17 20 AC E9 1B 00 00 00 48 69 6B 61 74 74 65 69 72 75 00 00 00 00 00 61 68 20 64 61 6E 67 2C 20 49 20 75 73 65 64 20 74 68 61 74 20 66 6F 72 20 73 6F 6D 65 6F 65 6E 20 65 6C 73 65 20 6C 6F 6C
+[17:37:02] [PKT] pkt_mode=27 data_len=48 sender=[Kyraha] msg=[I did that for CoP MSQ]
+       hex: 17 18 B6 E9 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 49 20 64 69 64 20 74 68 61 74 20 66 6F 72 20 43 6F 50 20 4D 53 51 00 00 00
+[17:37:04] [PKT] pkt_mode=27 data_len=96 sender=[Kaelerac] msg=[oh god, don't tell me you have to climb it again outside of the CoP quest]
+       hex: 17 30 BB E9 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6F 68 20 67 6F 64 2C 20 64 6F 6E 27 74 20 74 65 6C 6C 20 6D 65 20 79 6F 75 20 68 61 76 65 20 74 6F 20 63 6C 69 6D 62 20 69
+[17:37:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 E4 E9 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:37:31] [PKT] pkt_mode=27 data_len=40 sender=[Silvercut] msg=[na just messin]
+       hex: 17 14 FB E9 1B 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 6E 61 20 6A 75 73 74 20 6D 65 73 73 69 6E 00 00 00
+[17:37:37] [PKT] pkt_mode=27 data_len=28 sender=[Kyraha] msg=[Lol]
+       hex: 17 0E 0A EA 1B 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 4C 6F 6C 00 00
+[17:37:39] [PKT] pkt_mode=27 data_len=32 sender=[Kaelerac] msg=[my heart]
+       hex: 17 10 0E EA 1B 00 00 00 4B 61 65 6C 65 72 61 63 00 00 00 00 00 00 00 6D 79 20 68 65 61 72 74 00
+[17:37:50] [PKT] pkt_mode=27 data_len=76 sender=[Silvercut] msg=[oh i know the feeling, thats why i enjoy despair XD]
+       hex: 17 26 2B EA 1B 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 6F 68 20 69 20 6B 6E 6F 77 20 74 68 65 20 66 65 65 6C 69 6E 67 2C 20 74 68 61 74 73 20 77 68 79 20 69 20 65 6E 6A 6F 79 20
+[17:37:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 3F EA 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:39:28] [PKT] pkt_mode=26 data_len=56 sender=[Teato] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 17 EB 1A 00 F6 00 54 65 61 74 6F 00 00 00 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:39:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 62 EB 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:40:02] [PKT] pkt_mode=27 data_len=36 sender=[Hikatteiru] msg=[nopekeyboard]
+       hex: 17 12 6B EB 1B 00 00 00 48 69 6B 61 74 74 65 69 72 75 00 00 00 00 00 6E 6F 70 65 6B 65 79 62 6F 61 72 64 00
+[17:40:06] [PKT] pkt_mode=27 data_len=28 sender=[Hikatteiru] msg=[omg]
+       hex: 17 0E 73 EB 1B 00 00 00 48 69 6B 61 74 74 65 69 72 75 00 00 00 00 00 6F 6D 67 00 00
+[17:40:18] [PKT] pkt_mode=27 data_len=24 sender=[Gile] msg=[?]
+       hex: 17 0C 92 EB 1B 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 3F
+[17:40:26] [PKT] pkt_mode=27 data_len=32 sender=[Hikatteiru] msg=[ignore]
+       hex: 17 10 A3 EB 1B 00 00 00 48 69 6B 61 74 74 65 69 72 75 00 00 00 00 00 69 67 6E 6F 72 65 00 00 00
+[17:41:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 86 EC 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:42:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 BC EC 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:43:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A A9 ED 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:44:29] [PKT] pkt_mode=26 data_len=56 sender=[Teato] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C F2 ED 1A 00 F6 00 54 65 61 74 6F 00 00 00 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:45:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A CC EE 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:47:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 95 EF 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:47:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A EF EF 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:49:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 14 F1 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:51:47] [PKT] pkt_mode=26 data_len=68 sender=[Donaldee] msg=[Forgotten thought {Do you have it?} {/tell} {Reward} {You can have this.}]
+       hex: 17 22 1B F2 1A 00 F6 00 44 6F 6E 61 6C 64 65 65 00 00 00 00 00 00 00 46 6F 72 67 6F 74 74 65 6E 20 74 68 6F 75 67 68 74 20 FD 02 02 02 05 FD 20 FD 02 02 0D 14 FD 20 FD 02 02 1F 31 FD 20 FD 02
+[17:51:58] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 36 F2 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+[17:52:05] [PKT] pkt_mode=26 data_len=56 sender=[Teato] msg=[{Odyssey} C Seg {Looking for members.} DD COR BRD]
+       hex: 17 1C 47 F2 1A 00 F6 00 54 65 61 74 6F 00 00 00 00 00 00 00 00 00 00 FD 02 02 28 11 FD 20 43 20 53 65 67 20 FD 02 02 13 0E FD 20 44 44 20 43 4F 52 20 42 52 44 00 00 00
+[17:52:21] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 6C F2 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[17:53:59] [PKT] pkt_mode=26 data_len=84 sender=[Lioky] msg=[Aeonic weapon. all 3 zones {Clear Mind}{Do you need it?}{Buy?} {event}@7PM EST]
+       hex: 17 2A 59 F3 1A 00 EB 00 4C 69 6F 6B 79 00 00 00 00 00 00 00 00 00 00 41 65 6F 6E 69 63 20 77 65 61 70 6F 6E 2E 20 61 6C 6C 20 33 20 7A 6F 6E 65 73 20 FD 02 02 20 2C FD FD 02 02 12 06 FD FD 02
+
+=== checkparam (0x029) trace started 2026-06-17 14:43:15 ===
+[14:43:15] [0x029] msg=16 target=375822 p1=0 p2=0
+
+=== chat_packet trace started 2026-06-17 14:43:53 ===
+[14:43:53] [PKT] pkt_mode=26 data_len=104 sender=[Onlyfayo] msg=[{Bibiki Bay} 500jp/5m. 2100JP/20M. 24H/22M . ML0-20/10M 20-30/20M 0-30/30M buy? /tell]
+       hex: 17 34 12 02 1A 00 EB 00 4F 6E 6C 79 66 61 79 6F 00 00 00 00 00 00 00 FD 02 02 14 85 FD 20 35 30 30 6A 70 2F 35 6D 2E 20 32 31 30 30 4A 50 2F 32 30 4D 2E 20 32 34 48 2F 32 32 4D 20 2E 20 4D 4C
+[14:46:33] [PKT] pkt_mode=26 data_len=140 sender=[Histoy] msg=[REMAP weapon/OdysseyV0-V25/HTMB/Super RP/Ambuscade/Omen/Sortie/Dynamis wave3/Master Trials/buy?discord:alexkim8667]
+       hex: 17 46 9A 03 1A 00 EC 00 48 69 73 74 6F 79 00 00 00 00 00 00 00 00 00 52 45 4D 41 50 20 77 65 61 70 6F 6E 2F 4F 64 79 73 73 65 79 56 30 2D 56 32 35 2F 48 54 4D 42 2F 53 75 70 65 72 20 52 50 2F
+[14:46:53] [PKT] pkt_mode=5 data_len=32 sender=[Kyraha] msg=[{Hello!} o/]
+       hex: 17 10 CB 03 05 00 00 00 4B 79 72 61 68 61 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 20 6F 2F
+[14:48:02] [PKT] pkt_mode=26 data_len=48 sender=[Smokesdank] msg=[LF pulse cell Ay 4x 3mil]
+       hex: 17 18 76 04 1A 00 EB 00 53 6D 6F 6B 65 73 64 61 6E 6B 00 00 00 00 00 4C 46 20 70 75 6C 73 65 20 63 65 6C 6C 20 41 79 20 34 78 20 33 6D 69 6C 00
+[14:48:16] [PKT] pkt_mode=5 data_len=32 sender=[Melah] msg=[{Hello!}]
+       hex: 17 10 97 04 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[14:51:12] [PKT] pkt_mode=26 data_len=92 sender=[Enym] msg=[{Looking for members.} aeonic {Clear Mind} only {Reisenjima} 7 HELMs {Buy?} {Do you need it?} 3 spots left]
+       hex: 17 2E 48 06 1A 00 FC 00 45 6E 79 6D 00 00 00 00 00 00 00 00 00 00 00 FD 02 02 13 0E FD 20 61 65 6F 6E 69 63 20 FD 02 02 20 2C FD 20 6F 6E 6C 79 20 FD 02 02 27 1D FD 20 37 20 48 45 4C 4D 73 20
+[14:51:33] [PKT] pkt_mode=26 data_len=140 sender=[Histoy] msg=[REMAP weapon/OdysseyV0-V25/HTMB/Super RP/Ambuscade/Omen/Sortie/Dynamis wave3/Master Trials/buy?discord:alexkim8667]
+       hex: 17 46 7B 06 1A 00 EC 00 48 69 73 74 6F 79 00 00 00 00 00 00 00 00 00 52 45 4D 41 50 20 77 65 61 70 6F 6E 2F 4F 64 79 73 73 65 79 56 30 2D 56 32 35 2F 48 54 4D 42 2F 53 75 70 65 72 20 52 50 2F
+[14:52:03] [PKT] pkt_mode=26 data_len=52 sender=[Tsukix] msg=[{The Boyahda Tree}{box}ありますよ～～～]
+       hex: 17 1A C7 06 1A 00 F1 00 54 73 75 6B 69 78 00 00 00 00 00 00 00 00 00 FD 02 01 14 44 FD FD 02 01 1E 15 FD 82 A0 82 E8 82 DC 82 B7 82 E6 81 60 81 60 81 60 00
+[14:54:44] [PKT] pkt_mode=26 data_len=92 sender=[Enym] msg=[{Looking for members.} aeonic {Clear Mind} only {Reisenjima} 7 HELMs {Buy?} {Do you need it?} 3 spots left]
+       hex: 17 2E 52 08 1A 00 FC 00 45 6E 79 6D 00 00 00 00 00 00 00 00 00 00 00 FD 02 02 13 0E FD 20 61 65 6F 6E 69 63 20 FD 02 02 20 2C FD 20 6F 6E 6C 79 20 FD 02 02 27 1D FD 20 37 20 48 45 4C 4D 73 20
+[14:56:32] [PKT] pkt_mode=26 data_len=140 sender=[Histoy] msg=[REMAP weapon/OdysseyV0-V25/HTMB/Super RP/Ambuscade/Omen/Sortie/Dynamis wave3/Master Trials/buy?discord:alexkim8667]
+       hex: 17 46 5D 09 1A 00 EC 00 48 69 73 74 6F 79 00 00 00 00 00 00 00 00 00 52 45 4D 41 50 20 77 65 61 70 6F 6E 2F 4F 64 79 73 73 65 79 56 30 2D 56 32 35 2F 48 54 4D 42 2F 53 75 70 65 72 20 52 50 2F
+
+=== chat_packet trace started 2026-06-17 18:49:59 ===
+[18:49:59] [PKT] pkt_mode=5 data_len=40 sender=[Bananapudding] msg=[how is every one]
+       hex: 17 14 78 34 05 00 00 00 42 61 6E 61 6E 61 70 75 64 64 69 6E 67 00 00 68 6F 77 20 69 73 20 65 76 65 72 79 20 6F 6E 65 00
+[18:51:11] [PKT] pkt_mode=5 data_len=28 sender=[Gile] msg=[hi]
+       hex: 17 0E 27 35 05 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[18:51:45] [PKT] pkt_mode=5 data_len=56 sender=[Gile] msg=[i am doing god, how about you?]
+       hex: 17 1C 7A 35 05 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 69 20 61 6D 20 64 6F 69 6E 67 20 67 6F 64 2C 20 68 6F 77 20 61 62 6F 75 74 20 79 6F 75 3F 00 00 00
+[18:51:55] [PKT] pkt_mode=5 data_len=36 sender=[Silvercut] msg=[<_< fudo god]
+       hex: 17 12 91 35 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 3C 5F 3C 20 66 75 64 6F 20 67 6F 64 00
+[18:52:23] [PKT] pkt_mode=5 data_len=84 sender=[Rosovyes] msg=[My Warrior's at Lv.75.  Now I can acquire Merit Points. :D]
+       hex: 17 2A D4 35 05 00 00 00 52 6F 73 6F 76 79 65 73 00 00 00 00 00 00 00 4D 79 20 57 61 72 72 69 6F 72 27 73 20 61 74 20 4C 76 2E 37 35 2E 20 20 4E 6F 77 20 49 20 63 61 6E 20 61 63 71 75 69 72 65
+[18:53:02] [PKT] pkt_mode=5 data_len=32 sender=[Melah] msg=[{Congratulations!}]
+       hex: 17 10 34 36 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0F FD 00 00 00
+[18:53:33] [PKT] pkt_mode=5 data_len=28 sender=[Bananapudding] msg=[nice]
+       hex: 17 0E 80 36 05 00 00 00 42 61 6E 61 6E 61 70 75 64 64 69 6E 67 00 00 6E 69 63 65 00
+[18:53:47] [PKT] pkt_mode=5 data_len=76 sender=[Silvercut] msg=[i exchanged tweakers and hurricanes for tornados...]
+       hex: 17 26 A1 36 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 69 20 65 78 63 68 61 6E 67 65 64 20 74 77 65 61 6B 65 72 73 20 61 6E 64 20 68 75 72 72 69 63 61 6E 65 73 20 66 6F 72 20 74
+[18:54:01] [PKT] pkt_mode=5 data_len=32 sender=[Rosovyes] msg=[Oh, geez.]
+       hex: 17 10 C4 36 05 00 00 00 52 6F 73 6F 76 79 65 73 00 00 00 00 00 00 00 4F 68 2C 20 67 65 65 7A 2E
+[18:54:03] [PKT] pkt_mode=5 data_len=64 sender=[Silvercut] msg=[had to go to basement already today XD]
+       hex: 17 20 C7 36 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 68 61 64 20 74 6F 20 67 6F 20 74 6F 20 62 61 73 65 6D 65 6E 74 20 61 6C 72 65 61 64 79 20 74 6F 64 61 79 20 58 44 00 00 00
+[18:54:21] [PKT] pkt_mode=5 data_len=44 sender=[Silvercut] msg=[not a metaphore XD]
+       hex: 17 16 F3 36 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 6E 6F 74 20 61 20 6D 65 74 61 70 68 6F 72 65 20 58 44 00 00 00
+[18:55:08] [PKT] pkt_mode=5 data_len=84 sender=[Rosovyes] msg=[I hate it when there's always a catch to things in life. -.-;]
+       hex: 17 2A 65 37 05 00 00 00 52 6F 73 6F 76 79 65 73 00 00 00 00 00 00 00 49 20 68 61 74 65 20 69 74 20 77 68 65 6E 20 74 68 65 72 65 27 73 20 61 6C 77 61 79 73 20 61 20 63 61 74 63 68 20 74 6F 20
+
+=== checkparam (0x029) trace started 2026-06-17 18:59:59 ===
+[18:59:59] [0x029] msg=705 target=717844 p1=4020 p2=0
+[19:00:25] [PKT] pkt_mode=5 data_len=44 sender=[Ibanezra] msg=[huray {Scholar} unlocked]
+       hex: 17 16 69 3A 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 68 75 72 61 79 20 FD 02 02 10 14 FD 20 75 6E 6C 6F 63 6B 65 64
+
+=== chat_packet trace started 2026-06-17 19:14:42 ===
+[19:14:42] [PKT] pkt_mode=5 data_len=48 sender=[Raveskully] msg=[hey  remote  u  around]
+       hex: 17 18 7C 42 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 68 65 79 20 20 72 65 6D 6F 74 65 20 20 75 20 20 61 72 6F 75 6E 64 00 00 00
+[19:15:08] [PKT] pkt_mode=5 data_len=28 sender=[Remotecontrol] msg=[sup]
+       hex: 17 0E BB 42 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 73 75 70 00 00
+[19:15:26] [PKT] pkt_mode=5 data_len=28 sender=[Ibanezra] msg=[yo]
+       hex: 17 0E E7 42 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 79 6F 00 00 00
+[19:15:41] [PKT] pkt_mode=5 data_len=32 sender=[Remotecontrol] msg=[sup rave]
+       hex: 17 10 0B 43 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 73 75 70 20 72 61 76 65 00
+[19:15:45] [PKT] pkt_mode=5 data_len=52 sender=[Raveskully] msg=[nm  i  can  now lvl  to  85 ]
+       hex: 17 1A 15 43 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 6E 6D 20 20 69 20 20 63 61 6E 20 20 6E 6F 77 20 6C 76 6C 20 20 74 6F 20 20 38 35 20 00
+[19:15:58] [PKT] pkt_mode=5 data_len=36 sender=[Remotecontrol] msg=[sweet grats]
+       hex: 17 12 35 43 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 73 77 65 65 74 20 67 72 61 74 73 00 00
+
+=== chat_packet trace started 2026-06-17 19:16:22 ===
+[19:16:22] [PKT] pkt_mode=5 data_len=72 sender=[Raveskully] msg=[just  tryna  think  of  what  to  offcially sub]
+       hex: 17 24 60 43 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 6A 75 73 74 20 20 74 72 79 6E 61 20 20 74 68 69 6E 6B 20 20 6F 66 20 20 77 68 61 74 20 20 74 6F 20 20 6F 66 66 63 69 61 6C
+[19:16:30] [PKT] pkt_mode=5 data_len=32 sender=[Remotecontrol] msg=[what job]
+       hex: 17 10 75 43 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 77 68 61 74 20 6A 6F 62 00
+[19:16:55] [PKT] pkt_mode=5 data_len=56 sender=[Subtlemistakes] msg=[Doms by daylight subs by night]
+       hex: 17 1C B0 43 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 44 6F 6D 73 20 62 79 20 64 61 79 6C 69 67 68 74 20 73 75 62 73 20 62 79 20 6E 69 67 68 74 00 00 00
+[19:17:06] [PKT] pkt_mode=5 data_len=32 sender=[Remotecontrol] msg=[sup sub]
+       hex: 17 10 CB 43 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 73 75 70 20 73 75 62 00 00
+[19:17:07] [PKT] pkt_mode=5 data_len=32 sender=[Raveskully] msg=[shhhh  ]
+       hex: 17 10 CE 43 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 73 68 68 68 68 20 20 00 00
+[19:17:11] [PKT] pkt_mode=5 data_len=36 sender=[Silvercut] msg=[... gigitty?]
+       hex: 17 12 D7 43 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 2E 2E 2E 20 67 69 67 69 74 74 79 3F 00
+[19:17:14] [PKT] pkt_mode=5 data_len=32 sender=[Subtlemistakes] msg=[{Hello!}]
+       hex: 17 10 DE 43 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 FD 02 02 01 0B FD 00 00 00
+[19:17:23] [PKT] pkt_mode=5 data_len=56 sender=[Raveskully] msg=[cant  out  our secrets like that ]
+       hex: 17 1C F4 43 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 63 61 6E 74 20 20 6F 75 74 20 20 6F 75 72 20 73 65 63 72 65 74 73 20 6C 69 6B 65 20 74 68 61 74 20
+[19:17:26] [PKT] pkt_mode=5 data_len=28 sender=[Gile] msg=[hi]
+       hex: 17 0E FD 43 05 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[19:17:29] [PKT] pkt_mode=5 data_len=32 sender=[Subtlemistakes] msg=[it's okay]
+       hex: 17 10 03 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 69 74 27 73 20 6F 6B 61 79
+[19:17:33] [PKT] pkt_mode=5 data_len=48 sender=[Silvercut] msg=[...there a password? <_<]
+       hex: 17 18 0E 44 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 2E 2E 2E 74 68 65 72 65 20 61 20 70 61 73 73 77 6F 72 64 3F 20 3C 5F 3C 00
+[19:17:38] [PKT] pkt_mode=5 data_len=48 sender=[Subtlemistakes] msg=[we dont kinkshame here]
+       hex: 17 18 1A 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 77 65 20 64 6F 6E 74 20 6B 69 6E 6B 73 68 61 6D 65 20 68 65 72 65 00 00 00
+[19:17:47] [PKT] pkt_mode=5 data_len=36 sender=[Subtlemistakes] msg=[we just judge]
+       hex: 17 12 30 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 77 65 20 6A 75 73 74 20 6A 75 64 67 65
+[19:17:49] [PKT] pkt_mode=5 data_len=48 sender=[Silvercut] msg=[kink shaming is my kink]
+       hex: 17 18 33 44 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 6B 69 6E 6B 20 73 68 61 6D 69 6E 67 20 69 73 20 6D 79 20 6B 69 6E 6B 00 00
+[19:17:51] [PKT] pkt_mode=5 data_len=28 sender=[Subtlemistakes] msg=[:3]
+       hex: 17 0E 39 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 3A 33 00 00 00
+[19:17:59] [PKT] pkt_mode=5 data_len=28 sender=[Subtlemistakes] msg=[lmao]
+       hex: 17 0E 4B 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 6C 6D 61 6F 00
+[19:18:37] [PKT] pkt_mode=5 data_len=52 sender=[Subtlemistakes] msg=[but yeaj what main job lol]
+       hex: 17 1A A8 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 62 75 74 20 79 65 61 6A 20 77 68 61 74 20 6D 61 69 6E 20 6A 6F 62 20 6C 6F 6C 00 00 00
+[19:18:56] [PKT] pkt_mode=5 data_len=40 sender=[Silvercut] msg=[almost 30 nin <_<]
+       hex: 17 14 D7 44 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 61 6C 6D 6F 73 74 20 33 30 20 6E 69 6E 20 3C 5F 3C
+[19:19:02] [PKT] pkt_mode=5 data_len=32 sender=[Subtlemistakes] msg=[niiiice]
+       hex: 17 10 E5 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 6E 69 69 69 69 63 65 00 00
+[19:19:10] [PKT] pkt_mode=5 data_len=52 sender=[Silvercut] msg=[o shit i need to lvl {Ninjutsu}]
+       hex: 17 1A F9 44 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 6F 20 73 68 69 74 20 69 20 6E 65 65 64 20 74 6F 20 6C 76 6C 20 FD 02 02 18 07 FD 00 00
+[19:19:12] [PKT] pkt_mode=5 data_len=36 sender=[Subtlemistakes] msg=[believe it]
+       hex: 17 12 FE 44 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 62 65 6C 69 65 76 65 20 69 74 00 00 00
+[19:19:20] [PKT] pkt_mode=5 data_len=44 sender=[Subtlemistakes] msg=[do you really thouhg?]
+       hex: 17 16 11 45 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 64 6F 20 79 6F 75 20 72 65 61 6C 6C 79 20 74 68 6F 75 68 67 3F
+[19:19:28] [PKT] pkt_mode=5 data_len=44 sender=[Silvercut] msg=[fudging judging <_<]
+       hex: 17 16 25 45 05 00 00 00 53 69 6C 76 65 72 63 75 74 00 00 00 00 00 00 66 75 64 67 69 6E 67 20 6A 75 64 67 69 6E 67 20 3C 5F 3C 00 00
+[19:19:58] [PKT] pkt_mode=5 data_len=108 sender=[Rosovyes] msg=[I thought ExP could convert to Limit Points.  I guess I had to adjust it myself. ^^;]
+       hex: 17 36 6D 45 05 00 00 00 52 6F 73 6F 76 79 65 73 00 00 00 00 00 00 00 49 20 74 68 6F 75 67 68 74 20 45 78 50 20 63 6F 75 6C 64 20 63 6F 6E 76 65 72 74 20 74 6F 20 4C 69 6D 69 74 20 50 6F 69 6E
+[19:20:14] [PKT] pkt_mode=5 data_len=28 sender=[Subtlemistakes] msg=[wdym?]
+       hex: 17 0E 94 45 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 77 64 79 6D 3F
+[19:23:03] [PKT] pkt_mode=5 data_len=88 sender=[Echovia] msg=[when you cap your exp, it turns into limit points automatically]
+       hex: 17 2C 30 47 05 00 00 00 45 63 68 6F 76 69 61 00 00 00 00 00 00 00 00 77 68 65 6E 20 79 6F 75 20 63 61 70 20 79 6F 75 72 20 65 78 70 2C 20 69 74 20 74 75 72 6E 73 20 69 6E 74 6F 20 6C 69 6D 69
+[19:24:09] [PKT] pkt_mode=5 data_len=112 sender=[Subtlemistakes] msg=[yeah thats what i did, or did they mean they toggled it earlier than max exp. I guess?]
+       hex: 17 38 D0 47 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 79 65 61 68 20 74 68 61 74 73 20 77 68 61 74 20 69 20 64 69 64 2C 20 6F 72 20 64 69 64 20 74 68 65 79 20 6D 65 61 6E 20 74
+[19:24:50] [PKT] pkt_mode=5 data_len=140 sender=[Subtlemistakes] msg=[wouldnt it be better to just leave it on auto so that you dont forget and potentially delvl in a far far away future]
+       hex: 17 46 32 48 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 77 6F 75 6C 64 6E 74 20 69 74 20 62 65 20 62 65 74 74 65 72 20 74 6F 20 6A 75 73 74 20 6C 65 61 76 65 20 69 74 20 6F 6E 20
+[19:26:02] [PKT] pkt_mode=5 data_len=72 sender=[Subtlemistakes] msg=[also I hope everyone is having a great afternoon!]
+       hex: 17 24 E2 48 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 61 6C 73 6F 20 49 20 68 6F 70 65 20 65 76 65 72 79 6F 6E 65 20 69 73 20 68 61 76 69 6E 67 20 61 20 67 72 65 61 74 20 61 66
+[19:30:57] [PKT] pkt_mode=5 data_len=56 sender=[Raveskully] msg=[back  sorry  customer  showed  up]
+       hex: 17 1C AE 4B 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 62 61 63 6B 20 20 73 6F 72 72 79 20 20 63 75 73 74 6F 6D 65 72 20 20 73 68 6F 77 65 64 20 20 75 70
+[19:31:11] [PKT] pkt_mode=5 data_len=28 sender=[Subtlemistakes] msg=[wb!]
+       hex: 17 0E D1 4B 05 00 00 00 53 75 62 74 6C 65 6D 69 73 74 61 6B 65 73 00 77 62 21 00 00
+[19:51:23] [PKT] pkt_mode=27 data_len=92 sender=[Hellsrayne] msg=[there are so many people in dynamis jeunoe right now that i am sad ]
+       hex: 17 2E 53 57 1B 00 00 00 48 65 6C 6C 73 72 61 79 6E 65 00 00 00 00 00 74 68 65 72 65 20 61 72 65 20 73 6F 20 6D 61 6E 79 20 70 65 6F 70 6C 65 20 69 6E 20 64 79 6E 61 6D 69 73 20 6A 65 75 6E 6F
+[19:59:47] [PKT] pkt_mode=5 data_len=60 sender=[Raveskully] msg=[remote i  need to  lvl  faster  lol]
+       hex: 17 1E 1C 5C 05 00 00 00 52 61 76 65 73 6B 75 6C 6C 79 00 00 00 00 00 72 65 6D 6F 74 65 20 69 20 20 6E 65 65 64 20 74 6F 20 20 6C 76 6C 20 20 66 61 73 74 65 72 20 20 6C 6F 6C 00 00
+[20:09:52] [PKT] pkt_mode=5 data_len=40 sender=[Altivelis] msg=[Hello everyone!]
+       hex: 17 14 DC 61 05 00 00 00 41 6C 74 69 76 65 6C 69 73 00 00 00 00 00 00 48 65 6C 6C 6F 20 65 76 65 72 79 6F 6E 65 21 00 00
+[20:10:01] [PKT] pkt_mode=5 data_len=28 sender=[Bakubon] msg=[o/]
+       hex: 17 0E F1 61 05 00 00 00 42 61 6B 75 62 6F 6E 00 00 00 00 00 00 00 00 6F 2F 00 00 00
+[20:10:05] [PKT] pkt_mode=5 data_len=32 sender=[Melah] msg=[{Hello!}]
+       hex: 17 10 FA 61 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0B FD 00 00 00
+[20:10:12] [PKT] pkt_mode=5 data_len=28 sender=[Ibanezra] msg=[hiya]
+       hex: 17 0E 0C 62 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 68 69 79 61 00
+[20:10:13] [PKT] pkt_mode=5 data_len=28 sender=[Gile] msg=[hi]
+       hex: 17 0E 0E 62 05 00 00 00 47 69 6C 65 00 00 00 00 00 00 00 00 00 00 00 68 69 00 00 00
+[20:11:57] [PKT] pkt_mode=5 data_len=36 sender=[Ibanezra] msg=[hurray... @95]
+       hex: 17 12 0C 63 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 68 75 72 72 61 79 2E 2E 2E 20 40 39 35
+[20:12:15] [PKT] pkt_mode=5 data_len=32 sender=[Laelikaru] msg=[grats!]
+       hex: 17 10 36 63 05 00 00 00 4C 61 65 6C 69 6B 61 72 75 00 00 00 00 00 00 67 72 61 74 73 21 00 00 00
+[20:12:26] [PKT] pkt_mode=5 data_len=60 sender=[Ibanezra] msg=[how many merits do i need this tiime?]
+       hex: 17 1E 51 63 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 68 6F 77 20 6D 61 6E 79 20 6D 65 72 69 74 73 20 64 6F 20 69 20 6E 65 65 64 20 74 68 69 73 20 74 69 69 6D 65 3F
+[20:12:29] [PKT] pkt_mode=5 data_len=32 sender=[Melah] msg=[{Congratulations!}]
+       hex: 17 10 59 63 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 01 0F FD 00 00 00
+[20:12:48] [PKT] pkt_mode=5 data_len=60 sender=[Remotecontrol] msg=[i think 1 and key item to figh taru]
+       hex: 17 1E 88 63 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 69 20 74 68 69 6E 6B 20 31 20 61 6E 64 20 6B 65 79 20 69 74 65 6D 20 74 6F 20 66 69 67 68 20 74 61 72 75 00 00
+[20:12:58] [PKT] pkt_mode=5 data_len=44 sender=[Bids] msg=[oh.. aint no merits]
+       hex: 17 16 A0 63 05 00 00 00 42 69 64 73 00 00 00 00 00 00 00 00 00 00 00 6F 68 2E 2E 20 61 69 6E 74 20 6E 6F 20 6D 65 72 69 74 73 00 00
+[20:13:05] [PKT] pkt_mode=5 data_len=32 sender=[Melah] msg=[{fun} ]
+       hex: 17 10 AF 63 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 FD 02 02 1E 93 FD 20 00 00
+[20:13:12] [PKT] pkt_mode=5 data_len=76 sender=[Ibanezra] msg=[o.O... there is a battle? i better study up.... easy?]
+       hex: 17 26 C2 63 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 6F 2E 4F 2E 2E 2E 20 74 68 65 72 65 20 69 73 20 61 20 62 61 74 74 6C 65 3F 20 69 20 62 65 74 74 65 72 20 73 74 75 64 79 20
+[20:13:25] [PKT] pkt_mode=5 data_len=56 sender=[Melah] msg=[if you get the right stuff it is]
+       hex: 17 1C E1 63 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 69 66 20 79 6F 75 20 67 65 74 20 74 68 65 20 72 69 67 68 74 20 73 74 75 66 66 20 69 74 20 69 73 00
+[20:13:57] [PKT] pkt_mode=5 data_len=44 sender=[Ibanezra] msg=[another Trust battle?]
+       hex: 17 16 2E 64 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 61 6E 6F 74 68 65 72 20 54 72 75 73 74 20 62 61 74 74 6C 65 3F
+[20:14:25] [PKT] pkt_mode=5 data_len=84 sender=[Remotecontrol] msg=[get that key item that freezes the taru the  some thing tail]
+       hex: 17 2A 73 64 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 67 65 74 20 74 68 61 74 20 6B 65 79 20 69 74 65 6D 20 74 68 61 74 20 66 72 65 65 7A 65 73 20 74 68 65 20 74 61 72 75 20 74
+[20:14:27] [PKT] pkt_mode=5 data_len=96 sender=[Melah] msg=[well yea but if you dont get your rarab tails he can be rather diffucult]
+       hex: 17 30 77 64 05 00 00 00 4D 65 6C 61 68 00 00 00 00 00 00 00 00 00 00 77 65 6C 6C 20 79 65 61 20 62 75 74 20 69 66 20 79 6F 75 20 64 6F 6E 74 20 67 65 74 20 79 6F 75 72 20 72 61 72 61 62 20 74
+[20:14:39] [PKT] pkt_mode=5 data_len=48 sender=[Remotecontrol] msg=[for gopt what it called]
+       hex: 17 18 94 64 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 66 6F 72 20 67 6F 70 74 20 77 68 61 74 20 69 74 20 63 61 6C 6C 65 64 00 00
+[20:14:46] [PKT] pkt_mode=5 data_len=32 sender=[Remotecontrol] msg=[for got]
+       hex: 17 10 A6 64 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 66 6F 72 20 67 6F 74 00 00
+[20:15:03] [PKT] pkt_mode=5 data_len=32 sender=[Remotecontrol] msg=[ther u go]
+       hex: 17 10 CE 64 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 74 68 65 72 20 75 20 67 6F
+[20:15:19] [PKT] pkt_mode=5 data_len=80 sender=[Ibanezra] msg=[well damn.... imma need that stuff in about 15 minutes /]
+       hex: 17 28 F6 64 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 77 65 6C 6C 20 64 61 6D 6E 2E 2E 2E 2E 20 69 6D 6D 61 20 6E 65 65 64 20 74 68 61 74 20 73 74 75 66 66 20 69 6E 20 61 62 6F
+[20:22:50] [PKT] pkt_mode=5 data_len=48 sender=[Ibanezra] msg=[well damn capped already]
+       hex: 17 18 3F 69 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 77 65 6C 6C 20 64 61 6D 6E 20 63 61 70 70 65 64 20 61 6C 72 65 61 64 79 00
+[20:33:34] [PKT] pkt_mode=5 data_len=44 sender=[Ibanezra] msg=[a "rarab tail" huh]
+       hex: 17 16 5C 6F 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 61 20 22 72 61 72 61 62 20 74 61 69 6C 22 20 68 75 68 00 00 00
+[20:34:18] [PKT] pkt_mode=5 data_len=88 sender=[Remotecontrol] msg=[u get the rabit tail by getting 3 item all with the log in point]
+       hex: 17 2C C6 6F 05 00 00 00 52 65 6D 6F 74 65 63 6F 6E 74 72 6F 6C 00 00 75 20 67 65 74 20 74 68 65 20 72 61 62 69 74 20 74 61 69 6C 20 62 79 20 67 65 74 74 69 6E 67 20 33 20 69 74 65 6D 20 61 6C
+[20:34:39] [PKT] pkt_mode=5 data_len=60 sender=[Ibanezra] msg=[gotta talk to him first to flag quest]
+       hex: 17 1E F8 6F 05 00 00 00 49 62 61 6E 65 7A 72 61 00 00 00 00 00 00 00 67 6F 74 74 61 20 74 61 6C 6B 20 74 6F 20 68 69 6D 20 66 69 72 73 74 20 74 6F 20 66 6C 61 67 20 71 75 65 73 74
+
+=== checkparam (0x029) trace started 2026-06-18 10:06:40 ===
+[10:06:40] [0x029] msg=6 target=17215533 p1=0 p2=0
+[10:15:27] [0x029] msg=6 target=17215532 p1=0 p2=0
+[10:21:27] [0x029] msg=6 target=17215524 p1=0 p2=0
+[10:21:40] [0x029] msg=6 target=17215530 p1=0 p2=0
+[10:25:10] [0x029] msg=6 target=17215531 p1=0 p2=0
+[10:30:48] [0x029] msg=6 target=17215531 p1=0 p2=0
+[10:34:11] [0x029] msg=6 target=17215530 p1=0 p2=0
+[10:49:23] [0x029] msg=6 target=17215529 p1=0 p2=0
+[10:49:36] [0x029] msg=6 target=17215532 p1=0 p2=0
+[10:52:24] [0x029] msg=6 target=17215526 p1=0 p2=0
+[10:52:38] [0x029] msg=6 target=17215530 p1=0 p2=0
+[10:54:53] [PKT] pkt_mode=5 data_len=48 sender=[Gawdrik] msg=[Rank 10 {San d'Oria} woot woot]
+       hex: 17 18 0C 5A 05 00 00 00 47 61 77 64 72 69 6B 00 00 00 00 00 00 00 00 52 61 6E 6B 20 31 30 20 FD 02 02 14 12 FD 20 77 6F 6F 74 20 77 6F 6F 74 00
+[10:55:02] [PKT] pkt_mode=5 data_len=32 sender=[Halima] msg=[congrats]
+       hex: 17 10 21 5A 05 00 00 00 48 61 6C 69 6D 61 00 00 00 00 00 00 00 00 00 63 6F 6E 67 72 61 74 73 00
+[10:55:08] [PKT] pkt_mode=5 data_len=28 sender=[Wowbagger] msg=[gratz]
+       hex: 17 0E 30 5A 05 00 00 00 57 6F 77 62 61 67 67 65 72 00 00 00 00 00 00 67 72 61 74 7A
+[10:55:24] [0x029] msg=6 target=17215525 p1=0 p2=0
+[10:56:11] [PKT] pkt_mode=5 data_len=32 sender=[Clownhost] msg=[{Congratulations!}]
+       hex: 17 10 C8 5A 05 00 00 00 43 6C 6F 77 6E 68 6F 73 74 00 00 00 00 00 00 FD 02 02 01 0F FD 00 00 00
+[10:58:15] [PKT] pkt_mode=27 data_len=52 sender=[Foxagon] msg=[ughhh. this ambuscade queue]
+       hex: 17 1A F4 5B 1B 00 00 00 46 6F 78 61 67 6F 6E 00 00 00 00 00 00 00 00 75 67 68 68 68 2E 20 74 68 69 73 20 61 6D 62 75 73 63 61 64 65 20 71 75 65 75 65 00 00
+[10:59:58] [0x029] msg=705 target=717844 p1=4019 p2=0
+[11:14:48] [0x029] msg=6 target=17215531 p1=0 p2=0

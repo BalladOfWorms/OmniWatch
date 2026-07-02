@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.9.0] — 2026-07-01
+
+This release graduates the remaining developer-only panels into general
+features and retires the hidden Developer section entirely.
+
+### Added
+
+- **Tracker** is available to everyone — a live widescan / radar for the current zone. Open it from **Settings → Misc → Tracker** or with **Ctrl+Shift+G**. Search entities by name (with target index), see a player-centred radar and a zone map, track spawns with live X/Y/Z, HP%, a "near" flag and time-of-death, drop coordinate pins from typed `X Y` or grid references, and keep permanent roster entries.
+- **SkillUp** is available to everyone, from **Settings → Statistics → SkillUp**. Pick a skill type and it auto-loops your known self-target spells for it (MP rest, instrument swaps, Unbridled Learning, ninja-tool unpack, avatar Favor/Siphon/Release), tracking skillups/hr and stopping on cap. A new **Combat / Magic** skill display on the right lists every weapon/defensive and magic skill, value in white and capped skills in blue, refreshing automatically and live on each skillup.
+- **Crafting / Synergy / Fishing** is available to everyone, from **Settings → Misc**. The old Crafting / Synergy panel gained a third **Fishing** tab (a full port of the auto-fisher: bait, catch, catch limit and all timing knobs), and a shared **Craft Skills** column on the right shows your crafting / gathering skills (value white, capped blue) on all three tabs. Tabs toggle with Ctrl+Shift+R (Crafting) / Ctrl+Shift+Y (Synergy) / Ctrl+Shift+F (Fishing).
+- **AutoRA** is available to everyone, from **Settings → Misc → AutoRA** — auto-repeat ranged attacks (/shoot) while engaged, with a configurable TP halt or an ignore-TP option.
+- **Bazaar from the inventory dropdown** — right-click any main-inventory item and pick **Bazaar…** to set a sale price (a small price popup) and list it in your bazaar; **Remove from bazaar** unlists it. Bazaared items are flagged with a gold **B** in the dropdown. Works in any zone where bazaars are allowed.
+
+### Changed
+
+- Panels renamed for clarity: **Scan Zone → Tracker** and **Crafting / Synergy → Crafting / Synergy / Fishing**. The "DEV ·" prefix was dropped from every panel title now that they're public.
+- Graduated panels moved into normal settings sections: **Misc** now holds Auction House, Crafting / Synergy / Fishing, Tracker and AutoRA (in that order); **SkillUp** sits under **Statistics**.
+- Skill displays show the skill name in white and colour only the value blue when that skill is capped. PUP automaton skills (not shown in the game menu) are excluded from the Magic tab.
+- **Auction House:** a Sell listing now clears from your listings the moment it sells, instead of lingering as a green "Sold" row.
+
+### Removed
+
+- The hidden **Developer** settings section is gone; with every panel graduated there is nothing left to gate.
+
 ## [1.8.3] — 2026-07-01
 
 ### Added
