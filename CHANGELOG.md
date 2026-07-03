@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.9.1] — 2026-07-02
+
+### Added
+
+- **Bazaar price hint** — the **Bazaar…** popup now shows the recent market range (`market: LO – HI g`) for the item, pulled live from your world's search server, so you can price without guessing. The Auction House **`$`** lookup also gains a `range (last N)` line summarising the high/low of the most recent sales.
+- **Recipe levels on the Craft tab** — each recipe now shows the crafting skill level(s) it requires: the gating level right-aligned in the results list, and the full breakdown (e.g. *Goldsmithing 59, Alchemy 12*) on its own line under the selected recipe. Built from LandSandBoat's synthesis data and merged into `recipes.json` (~3,800 recipes covered); recipes without data simply show no level.
+- **"Can I make this?" ingredient coloring** — selecting a recipe now colours each ingredient **green if you hold it in any bag**, **red if you don't**. The crystal is treated as an ingredient and coloured the same way, so a glance tells you whether you can make it and what you're missing.
+- **Search by ingredient** — a **Recipe / Ingr.** toggle next to the Craft search box. In ingredient mode, typing a material (the crystal counts too) lists every recipe that uses it.
+- **Tracker audio alert** — right-click a tracked mob and toggle **Alert (A)** to get a two-tone beep the moment it spawns (the roster row shows a cyan **A**, and the track is kept permanent so it survives death → respawn). Handy for camping without watching the screen.
+- **Tracker re-scan rate control** — a **Poll** button opens an editor to set how often **Active** (spawned) and **Inactive** (despawned) tracks are re-scanned, so you can trade detection speed for less packet traffic on large rosters.
+
+### Changed
+
+- **Crafting / Synergy / Fishing** no longer resizes the window when you switch tabs — all three tabs share a fixed width with the **Craft Skills** column locked in one place.
+- **Craft recipe details** — ingredients now wrap onto a second line instead of being truncated with "…", so recipes with many materials show everything. The required level sits on its own line and is now **yellow**, to stand apart from the green/red ingredient colouring.
+- **Tracker button row** — removed the **Wide** button and shifted the List / Spawn / Type filters left; the new **Poll** button takes the freed spot.
+
+### Fixed
+
+- **Tracker active-track no longer sticks on "(paused)"** — the live widescan follow (which the game disables while you're engaged) now re-issues itself and resumes on its own after combat, instead of staying frozen until you re-track the mob.
+
 ## [1.9.0] — 2026-07-01
 
 This release graduates the remaining developer-only panels into general

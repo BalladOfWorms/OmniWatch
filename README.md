@@ -523,7 +523,7 @@ Items are grouped by bag and searchable by name. **GearSwap reference detection*
 **Right-click actions** (requires the [Treasury](https://github.com/from20020516/Treasury) addon for auto-drop): right-click any item row for a context menu —
 - **Drop item** — drops the item now (main Inventory bag only; storage/wardrobe items can't be dropped)
 - **Auto-drop (Treasury)** — runs `tr drop add <name>`: the item joins Treasury's auto-drop list, and with Treasury's AutoDrop on, the copy in your bag drops immediately and every future copy keeps dropping
-- **Bazaar…** — sets a sale price on the item (a small price box pops up) and lists it in your bazaar; works in any zone where you can bazaar. Items currently bazaared show a gold **B** at the left of their row
+- **Bazaar…** — sets a sale price on the item (a small price box pops up, with a **`market: LO – HI g`** hint showing the item's recent sale range from your world's search server) and lists it in your bazaar; works in any zone where you can bazaar. Items currently bazaared show a gold **B** at the left of their row
 - **Remove from bazaar** — shown only for bazaared items; unlists the item (sets its price to 0)
 
 Both actions are multibox-guarded: they're tagged with the displayed character and only that client acts, so you can't drop from the wrong box. Esc or clicking elsewhere closes the menu.
@@ -536,7 +536,7 @@ A Buy/Sell tool in one window. Drag the title bar to move it; drag the **bottom-
 
 **Sell tab** — hit **Refresh** at an Auction House to pull your sellable inventory, pick a single/stack + price, and **List** runs the real two-step AH list handshake. Your active listings show below with live status (On auction / Not Sold) and price; a listing clears from the list the moment it sells.
 
-**Live prices — the `$` button.** Click the gold **`$`** on any item (a buy result or a sell row) to look it up live on your world's search server — the same source FFXIAH reads, but in-game and with no website. The Results pane shows a coloured item-name header with the **current listing counts** (singles / stacks for sale), then the **last ~10 sales** as *date · seller → buyer · price*, for the single or stack you clicked. **Clear** on the Results header wipes the log. Lookups run on a background thread, so the overlay never blocks.
+**Live prices — the `$` button.** Click the gold **`$`** on any item (a buy result or a sell row) to look it up live on your world's search server — the same source FFXIAH reads, but in-game and with no website. The Results pane shows a coloured item-name header with the **current listing counts** (singles / stacks for sale), then the **last ~10 sales** as *date · seller → buyer · price*, for the single or stack you clicked, plus a **`range (last N)`** line giving the high/low of those sales. **Clear** on the Results header wipes the log. Lookups run on a background thread, so the overlay never blocks.
 
 **One-time setup — do an in-game Search first.** Your world's search-server address is handed to the client at login and never travels in a packet OmniWatch can read, so OmniWatch picks it up from the game client's *own* connection to that server — which only exists once you've used the game's **Search** feature in the current session. If a `$` lookup reports **"search server not found,"** open Search once in-game (the in-app prompt calls this `/search` — use the Search menu to look up a player, party, or linkshell), then click `$` again. The detected address is cached to `%APPDATA%\OmniWatch\search_server_cache.txt` and reused on future launches, so this is normally a one-time step. To pin it manually, put `IP:port` (e.g. `124.150.154.63:54002`) in `%APPDATA%\OmniWatch\search_server.txt`.
 
@@ -552,13 +552,15 @@ A live widescan and radar for the current zone. Open it from **Settings → Misc
 
 **Track spawns.** Click an entity to **track** it: OmniWatch follows its live position and shows **X / Y / Z**, distance, and **HP%** in its roster row. Each tracked entry carries a spawn state (it flashes when it pops), a **near** flag when it's within ~50 yalms, and a recorded **time of death** so you can watch a respawn window. Mark an entry **permanent** to keep it on the roster across deaths and re-detect its respawn by index. Filter the list by **All / Spawned / Unspawned**.
 
-**Right-click** a roster row or a radar/map dot for its context menu (per-entity actions such as tracking, aliasing, marking it permanent, or removing it).
+**Right-click** a roster row or a radar/map dot for its context menu (per-entity actions such as tracking, aliasing, marking it permanent, toggling an **audio alert**, or removing it). With **Alert (A)** on, a tracked mob plays a two-tone beep the moment it spawns (its row shows a cyan **A**), so you can camp a pop without watching the screen.
+
+**Poll rate.** The **Poll** button opens a small editor to set how often spawned (**Active**) and despawned (**Inactive**) tracks are re-scanned — dial the inactive rate up to cut packet traffic when watching a large roster, or keep it low (≈1s) for the fastest respawn detection.
 
 ### Crafting / Synergy / Fishing
 
 A combined crafting toolbox in one draggable window with three tabs, opened from **Settings → Misc → Crafting / Synergy / Fishing [OPEN]**. Each tab also toggles on its own: **Ctrl+Shift+R** (Crafting), **Ctrl+Shift+Y** (Synergy), **Ctrl+Shift+F** (Fishing). A **Craft Skills** column on the right shows your crafting / gathering skills (Woodworking, Smithing, Goldsmithing, Clothcraft, Leathercraft, Bonecraft, Alchemy, Cooking, Synergy, Fishing) with the value in white and capped skills in blue; it stays visible on all three tabs.
 
-**Crafting.** Type two or more characters to search the recipe database (~4,200 recipes). Pick a recipe to see its crystal and ingredients, set a make count, and run the embedded auto-synth engine with HQ / support toggles, a synth delay and a jiggle. A status line and message log track progress.
+**Crafting.** Type two or more characters to search the recipe database (~4,200 recipes). Each result shows the recipe's **gating craft level** on the right, and picking a recipe shows its crystal, ingredients, and the full skill-level breakdown (e.g. *Bonecraft 26, Leathercraft 7*) on its own line. Set a make count and run the embedded auto-synth engine with HQ / support toggles, a synth delay and a jiggle. A status line and message log track progress.
 
 **Synergy.** Drives the furnace minigame: a live furnace-HP bar and an 8-element grid (Needed / Current / Fewell) with buttons for the synergy actions (thwack, pressure, safety lever, repair, recycle, smock) plus Re-fewell / Refresh / End. When you are not at an active furnace it shows the idle Re-fewell / Refresh controls.
 

@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.9.0 (2026-07-01)"
+OMNIWATCH_BUILD_STAMP = "v1.9.1 (2026-07-02)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.9.0"
+OMNIWATCH_VERSION = "1.9.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -26509,7 +26509,7 @@ def draw_synergy_window(surface):
     _syn_rects["close"] = close_r
     _syn_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
     _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _syn_rects, fnt_b)
-    _draw_craftsyn_skills(surface, x + w, y + title_h, y + h - pad, right_w)
+    _draw_craftsyn_skills(surface, x + 467, y + title_h, y + h - pad, right_w)
 
     cy = y + title_h + tab_h + pad
     _flash = (int(time.time() * 2) % 2 == 0)
@@ -26703,6 +26703,26 @@ def _craft_load_recipes():
     return {}
 
 craft_recipes = _craft_load_recipes()
+
+
+def _craft_level_of(name):
+    rc = craft_recipes.get(name)
+    return rc.get("levels") if isinstance(rc, dict) else None
+
+
+def _craft_level_max(name):
+    lv = _craft_level_of(name)
+    return max(lv.values()) if lv else None
+
+
+def _craft_level_str(name):
+    lv = _craft_level_of(name)
+    if not lv:
+        return ""
+    return ", ".join("%s %d" % (c, l)
+                     for c, l in sorted(lv.items(), key=lambda kv: -kv[1]))
+
+
 craft_state = {
     "delay": 24, "paused": False, "display": False, "food": "",
     "support": False, "jiggle": "", "qlen": 0, "hq": False, "busy": False,
@@ -26713,6 +26733,7 @@ craft_panel_pos = globals().get("craft_panel_pos") or [260, 200]
 _craft_drag_off = None
 _craft_rects = {}
 craft_query = ""
+craft_search_mode = "recipe"        # recipe | ingredient
 craft_results = []                  # filtered recipe names (sorted)
 craft_sel = None                    # selected recipe name
 craft_count = "1"
@@ -26740,6 +26761,12 @@ def _craft_filter():
     q = craft_query.strip().lower()
     if not q:
         craft_results = []
+    elif craft_search_mode == "ingredient":
+        out = [n for n, rc in craft_recipes.items()
+               if q in rc.get("crystal", "").lower()
+               or any(q in ig.lower() for ig in rc.get("ingredients", []))]
+        out.sort()
+        craft_results = out[:300]
     else:
         out = [n for n in craft_recipes if q in n.lower()]
         out.sort()
@@ -27723,6 +27750,11 @@ def _ah_fetch_history(item_id, stack):
                 _ah_hist_emit("  %s g   %s   %s \u2192 %s" % (
                     "{:,}".format(sale["price"]), _ahsrch_fmtdate(sale["date"]),
                     sale["seller"] or "?", sale["buyer"] or "?"))
+            _prices = [s["price"] for s in res["sales"] if s.get("price")]
+            if _prices:
+                _ah_hist_emit("  range (last %d): %s \u2013 %s g" % (
+                    len(_prices), "{:,}".format(min(_prices)),
+                    "{:,}".format(max(_prices))))
         except OSError as e:
             _ah_hist_emit("History error: %s" % e)
             _ah_search_ip = None
@@ -29020,6 +29052,7 @@ def _ah_commit_edit():
     ah_state["edit"] = None
     ah_state["edit_buf"] = ""
 
+
 def _ah_handle_event(event):
     if not ah_panel_open:
         return False
@@ -29271,7 +29304,7 @@ def draw_craft_window(surface):
     pad, title_h, tab_h = 8, 22, 18
     w = 360
     right_w = 190
-    full_w = w + right_w
+    full_w = 467 + right_w
     _cs_row_h = 14
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
@@ -29281,7 +29314,7 @@ def draw_craft_window(surface):
     fld_h = 20
     btn_h = 20
     h = (title_h + tab_h + pad + fld_h + 4 + res_rows * row_h + 6  # search + results
-         + 34                                                   # selected info (2 lines)
+         + 34 + 2 * row_h                                      # selected info (4 lines)
          + fld_h + 6                                            # count/make/repeat
          + btn_h + 6                                            # pause/clear/status
          + btn_h + 6                                            # hq/support/display
@@ -29332,10 +29365,18 @@ def draw_craft_window(surface):
                              (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
 
     cy = y + title_h + tab_h + pad
-    # search field
-    sr = pygame.Rect(x + pad, cy, w - 2 * pad, fld_h)
-    field(sr, craft_query, craft_focus == "search", "search recipes\u2026")
+    # search field + Recipe/Ingredient mode toggle
+    _tgl_w = 68
+    sr = pygame.Rect(x + pad, cy, w - 2 * pad - _tgl_w - 4, fld_h)
+    _ing = craft_search_mode == "ingredient"
+    field(sr, craft_query, craft_focus == "search",
+          "search ingredients\u2026" if _ing else "search recipes\u2026")
     _craft_rects["search"] = sr
+    tgl_r = pygame.Rect(sr.right + 4, cy, _tgl_w, fld_h)
+    _craft_btn(surface, tgl_r, "Ingr." if _ing else "Recipe", fnt_s,
+               (52, 60, 44) if _ing else (44, 48, 58),
+               (224, 224, 180) if _ing else (196, 202, 214))
+    _craft_rects["searchmode"] = tgl_r
     cy += fld_h + 4
 
     # results list
@@ -29355,9 +29396,13 @@ def draw_craft_window(surface):
         rr = pygame.Rect(list_r.x, ry, list_r.width, row_h)
         if nm == craft_sel:
             pygame.draw.rect(surface, (40, 56, 44), rr)
-        t = fnt_s.render(nm[:46], True,
+        t = fnt_s.render(nm[:42], True,
                          (210, 230, 210) if nm == craft_sel else (198, 204, 214))
         surface.blit(t, (rr.x + 4, rr.y + 1))
+        _lvm = _craft_level_max(nm)
+        if _lvm is not None:
+            _lvt = fnt_s.render(str(_lvm), True, (150, 178, 205))
+            surface.blit(_lvt, (rr.right - _lvt.get_width() - 4, rr.y + 1))
         hits.append((rr, nm))
     _craft_rects["hits"] = hits
     if total > res_rows:
@@ -29368,26 +29413,65 @@ def draw_craft_window(surface):
     # selected recipe info (crystal + ingredients, 2 lines)
     if craft_sel and craft_sel in craft_recipes:
         rc = craft_recipes[craft_sel]
-        cl = fnt_s.render("Crystal: %s" % rc.get("crystal", "?"),
-                          True, (170, 200, 230))
-        surface.blit(cl, (x + pad, cy))
+        # inventory names across all bags, for the green/red have-check
+        _inv_names = set()
+        for _items in inventory_state.values():
+            if isinstance(_items, list):
+                for _it in _items:
+                    _n = _it.get("name")
+                    if _n:
+                        _inv_names.add(_n.strip().lower())
+
+        def _have_col(nm):
+            if not _inv_names:
+                return (180, 186, 198)
+            return ((140, 205, 140) if nm.strip().lower() in _inv_names
+                    else (214, 130, 130))
+
+        # crystal, treated as an ingredient (coloured by whether we hold it)
+        crystal = rc.get("crystal", "?")
+        surface.blit(fnt_s.render("Crystal: ", True, (170, 200, 230)),
+                     (x + pad, cy))
+        _cw = fnt_s.size("Crystal: ")[0]
+        surface.blit(fnt_s.render(crystal, True, _have_col(crystal)),
+                     (x + pad + _cw, cy))
+
+        # ingredients, wrapping onto a 2nd line if they don't fit
         ings = rc.get("ingredients", [])
-        # group duplicates: "A x2, B, C"
         seen, order = {}, []
         for ig in ings:
             if ig not in seen:
                 seen[ig] = 0; order.append(ig)
             seen[ig] += 1
-        parts = [("%s x%d" % (g, seen[g]) if seen[g] > 1 else g) for g in order]
-        il = ", ".join(parts)
-        if len(il) > 52:
-            il = il[:51] + "\u2026"
-        it = fnt_s.render(il, True, (180, 186, 198))
-        surface.blit(it, (x + pad, cy + row_h))
+        gx = x + pad
+        gy = cy + row_h
+        limit = x + w - pad
+        maxy = cy + 2 * row_h           # up to 2 ingredient lines
+        for _gi, g in enumerate(order):
+            label = ("%s x%d" % (g, seen[g])) if seen[g] > 1 else g
+            if _gi < len(order) - 1:
+                label += ", "
+            seg = fnt_s.render(label, True, _have_col(g))
+            if gx + seg.get_width() > limit:
+                if gy < maxy:
+                    gy += row_h
+                    gx = x + pad
+                else:
+                    surface.blit(fnt_s.render("\u2026", True,
+                                              (180, 186, 198)), (gx, gy))
+                    break
+            surface.blit(seg, (gx, gy))
+            gx += seg.get_width()
+
+        # recipe level on its own line below the ingredients
+        _lvs = _craft_level_str(craft_sel)
+        if _lvs:
+            surface.blit(fnt_s.render("Level: %s" % _lvs, True, (224, 202, 120)),
+                         (x + pad, cy + 3 * row_h))
     else:
         ph = fnt_s.render("(pick a recipe above)", True, (120, 128, 142))
         surface.blit(ph, (x + pad, cy))
-    cy += 34
+    cy += 34 + 2 * row_h
 
     # count + Make + Repeat
     cnt_r = pygame.Rect(x + pad, cy, 44, fld_h)
@@ -29487,7 +29571,7 @@ def draw_craft_window(surface):
         ml = fnt_s.render(line[:54], True, (150, 156, 168))
         surface.blit(ml, (x + pad, cy + i * row_h))
 
-    _draw_craftsyn_skills(surface, x + w, y + title_h, y + h - pad, right_w)
+    _draw_craftsyn_skills(surface, x + 467, y + title_h, y + h - pad, right_w)
 
 def _craft_apply_count(default=1):
     try:
@@ -29498,7 +29582,7 @@ def _craft_apply_count(default=1):
 
 def _craft_handle_event(event):
     global craftsyn_open, craftsyn_tab, _craft_drag_off, craft_query, craft_focus
-    global craft_count, craft_sel, craft_scroll
+    global craft_count, craft_sel, craft_scroll, craft_search_mode
     # toggle (Ctrl+Shift+R), dev-gated
     if (event.type == pygame.KEYDOWN
             and event.key == pygame.K_r):
@@ -29565,6 +29649,12 @@ def _craft_handle_event(event):
             if _tr and _tr.collidepoint(mx, my):
                 craftsyn_tab = _tk
                 return True
+        # search mode toggle (recipe <-> ingredient)
+        if r.get("searchmode") and r["searchmode"].collidepoint(mx, my):
+            craft_search_mode = ("recipe" if craft_search_mode == "ingredient"
+                                 else "ingredient")
+            _craft_filter()
+            return True
         # focus fields
         for key in ("search", "count", "food", "jiggle"):
             rr = r.get(key)
@@ -29650,7 +29740,11 @@ scanzone_track_info  = ""           # live tracked-entity readout
 scanzone_track_pos   = None         # (wx,wy) of tracked entity, for map
 scanzone_pin         = None         # coord-search pin ("world"/"grid",..)
 scanzone_tracks      = {}           # idx -> roster entry (multi-track)
-_sz_poll_last        = 0            # ticks of last spawn-status poll
+_sz_poll_last          = 0          # last re-scan of SPAWNED tracks
+_sz_poll_last_inactive = 0          # last re-scan of DESPAWNED tracks
+scanzone_poll_active   = 1000       # ms between re-scans of spawned tracks
+scanzone_poll_inactive = 1000       # ms between re-scans of despawned tracks
+scanzone_poll_popup    = False      # poll-rate editor open?
 scanzone_dot_label   = "none"       # dot labels on radar/map: none/name/id
 scanzone_aliases     = {}           # idx -> custom alias (overrides name)
 scanzone_alias_target = None        # idx being aliased (box in alias mode)
@@ -29754,7 +29848,7 @@ def draw_fisher_window(surface):
     pad, title_h, tab_h = 8, 22, 18
     w = 330
     right_w = 190
-    full_w = w + right_w
+    full_w = 467 + right_w
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
@@ -29820,7 +29914,7 @@ def draw_fisher_window(surface):
             _fisher_rects["edit:" + key] = rect
         cy += fld_h + 4
 
-    _draw_craftsyn_skills(surface, x + w, y + title_h, y + h - pad, right_w)
+    _draw_craftsyn_skills(surface, x + 467, y + title_h, y + h - pad, right_w)
 
 def _fisher_handle_event(event):
     global craftsyn_open, craftsyn_tab, fisher_focus, _fisher_drag_off
@@ -30315,6 +30409,20 @@ def _scanzone_set_pin(text):
         scanzone_view = "map"
         _scanzone_set_radar(True)
 
+def _sz_alert_beep():
+    """Short audio cue when an alert-flagged tracked mob spawns."""
+    try:
+        if sys.platform.startswith("win"):
+            import winsound
+            winsound.Beep(1040, 160)
+            winsound.Beep(1320, 200)
+        else:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def _scanzone_add_track(idx):
     """Add (or refresh) a roster entry for `idx`."""
     ent = scanzone_tracks.get(idx)
@@ -30347,7 +30455,7 @@ def _scanzone_hover_scan(idx, now):
 
 def _scanzone_update_tracks(now):
     """Poll spawn status, flag spawn transitions, and proximity (50y)."""
-    global _sz_poll_last, _lamp_reconcile_at
+    global _sz_poll_last, _sz_poll_last_inactive, _lamp_reconcile_at
     if _lamp_reconcile_at and now >= _lamp_reconcile_at:
         _lamp_reconcile_at = 0
         if scanzone_lamp_mode:
@@ -30358,8 +30466,13 @@ def _scanzone_update_tracks(now):
                 pass
     if not scanzone_tracks:
         return
-    if now - _sz_poll_last > 2500:
+    _do_a = now - _sz_poll_last > scanzone_poll_active
+    _do_i = now - _sz_poll_last_inactive > scanzone_poll_inactive
+    if _do_a:
         _sz_poll_last = now
+    if _do_i:
+        _sz_poll_last_inactive = now
+    if (_do_a or _do_i):
         # In Nyzul the roster is radar-driven and must never inject -- the 0x16
         # poll is what was making in-game mobs disappear. Only the standalone
         # Find feature (non-Nyzul) re-polls its tracks to follow them at range.
@@ -30367,6 +30480,11 @@ def _scanzone_update_tracks(now):
                 and zone_info.get("zone_id") == _NYZUL_ZONE):
             for idx, _pent in list(scanzone_tracks.items()):
                 if _pent.get("tag"):
+                    continue
+                # spawned tracks poll on the active rate, despawned on the
+                # (usually slower) inactive rate
+                _sp = _pent.get("spawned")
+                if not ((_sp and _do_a) or ((not _sp) and _do_i)):
                     continue
                 try:
                     sock_cmd_out.sendto(("SCANZONE|scan|%d" % idx).encode(
@@ -30433,6 +30551,8 @@ def _scanzone_update_tracks(now):
             if ent.get("tod"):                 # had a death -> this is a respawn
                 ent["respawned"] = True
             ent["tod"] = None                  # clear the old death time
+            if ent.get("alert"):               # 'A' flag -> audio alert
+                _sz_alert_beep()
         elif _was and not sp and not _nyz:
             # Spawned -> not spawned is a death/despawn. Fire on the
             # transition itself, not only on a fresh HP<=0 scan: when a mob
@@ -30981,15 +31101,15 @@ def draw_scanzone_window(surface):
     _sz_rects["clear"] = clear_r
     _sz_rects.pop("scan", None)
 
-    # row B: Wide | view | Spawn | Type
+    # row B: view | Spawn | Type | Poll  (Wide removed; filters shifted left,
+    # Poll opens the re-scan-rate editor and sits under Clear)
     cy += btn_h + gap
     b4 = (bw - 2 * pad - 3 * gap) // 4
-    wide_r = pygame.Rect(x + pad, cy, b4, btn_h)
-    view_r = pygame.Rect(wide_r.right + gap, cy, b4, btn_h)
+    view_r = pygame.Rect(x + pad, cy, b4, btn_h)
     spwn_r = pygame.Rect(view_r.right + gap, cy, b4, btn_h)
-    type_r = pygame.Rect(spwn_r.right + gap, cy,
-                         (x + bw - pad) - (spwn_r.right + gap), btn_h)
-    _sz_btn(surface, wide_r, "Wide", (40, 70, 95), (210, 225, 240), fnt_b)
+    type_r = pygame.Rect(spwn_r.right + gap, cy, b4, btn_h)
+    poll_r = pygame.Rect(type_r.right + gap, cy,
+                         (x + bw - pad) - (type_r.right + gap), btn_h)
     _sz_btn(surface, view_r,
             {"list": "List", "radar": "Radar", "map": "Map"}.get(
                 scanzone_view, "List"),
@@ -31006,10 +31126,14 @@ def draw_scanzone_window(surface):
     _sz_btn(surface, type_r, _tf_lbl.get(scanzone_type_filter, "Any"),
             (80, 55, 80) if _tf_on else (50, 55, 65),
             (235, 210, 235) if _tf_on else (190, 190, 200), fnt_b)
-    _sz_rects["wide"]    = wide_r
+    _sz_btn(surface, poll_r, "Poll",
+            (75, 60, 45) if scanzone_poll_popup else (55, 55, 65),
+            (235, 220, 195) if scanzone_poll_popup else (205, 205, 215), fnt_b)
+    _sz_rects.pop("wide", None)
     _sz_rects["view"]    = view_r
     _sz_rects["spawned"] = spwn_r
     _sz_rects["typef"]   = type_r
+    _sz_rects["poll"]    = poll_r
 
     # main area (list/radar/map) on the left, tracked roster on the right
     cy += btn_h + pad
@@ -31557,6 +31681,10 @@ def draw_scanzone_window(surface):
             _pb = fnt_s.render("P", True, (240, 215, 120))
             _rx -= _pb.get_width() + 6
             surface.blit(_pb, (_rx, er.y + 1))
+        if _ent.get("alert"):
+            _ab = fnt_s.render("A", True, (120, 210, 240))
+            _rx -= _ab.get_width() + 4
+            surface.blit(_ab, (_rx, er.y + 1))
         _rmw = max(8, (_rx - 6) - _x1)
         _rn = _scanzone_real_name(_tidx)
         while _rn and fnt_s.size(_rn)[0] > _rmw:
@@ -31962,6 +32090,41 @@ def draw_scanzone_window(surface):
             iy += 18
         _sz_rects["ctx"] = crects
 
+    # ── Poll-rate editor popup (opened by the Poll button) ─────────────────
+    if scanzone_poll_popup and _sz_rects.get("poll"):
+        pr = _sz_rects["poll"]
+        pw, ph = 212, 96
+        px = max(x + pad, min(pr.x, x + bw - pw - pad))
+        py = pr.bottom + 4
+        panel = pygame.Rect(px, py, pw, ph)
+        pygame.draw.rect(surface, (26, 28, 36), panel, border_radius=5)
+        pygame.draw.rect(surface, (95, 105, 125), panel, 1, border_radius=5)
+        _sz_rects["poll_panel"] = panel
+        surface.blit(fnt_b.render("Re-scan rate (ms)", True, (216, 210, 195)),
+                     (px + 8, py + 6))
+        for _ri, (_lbl, _val, _mk, _pk) in enumerate((
+                ("Active", scanzone_poll_active, "poll_minus_a", "poll_plus_a"),
+                ("Inactive", scanzone_poll_inactive,
+                 "poll_minus_i", "poll_plus_i"))):
+            ry = py + 26 + _ri * 22
+            surface.blit(fnt_s.render(_lbl, True, (200, 206, 218)),
+                         (px + 8, ry + 2))
+            mr = pygame.Rect(px + 72, ry, 20, 18)
+            vr = pygame.Rect(mr.right + 2, ry, 56, 18)
+            plr = pygame.Rect(vr.right + 2, ry, 20, 18)
+            _sz_btn(surface, mr, "-", (62, 52, 52), (230, 210, 210), fnt_b)
+            pygame.draw.rect(surface, (18, 20, 26), vr, border_radius=3)
+            _vt = fnt_s.render(str(_val), True, (226, 229, 236))
+            surface.blit(_vt, (vr.centerx - _vt.get_width() // 2, vr.centery - 7))
+            _sz_btn(surface, plr, "+", (52, 62, 52), (210, 230, 210), fnt_b)
+            _sz_rects[_mk] = mr
+            _sz_rects[_pk] = plr
+        surface.blit(fnt_s.render("spawned / despawned tracks", True,
+                                  (140, 148, 162)), (px + 8, py + ph - 30))
+        cl = pygame.Rect(px + pw - 52, py + ph - 22, 46, 18)
+        _sz_btn(surface, cl, "Close", (50, 55, 65), (212, 212, 218), fnt_b)
+        _sz_rects["poll_close"] = cl
+
 def _scanzone_handle_event(event):
     global scanzone_panel_open, _sz_drag_off, _sz_resize_off, scanzone_input
     global scanzone_scroll, scanzone_status, scanzone_results
@@ -32002,9 +32165,12 @@ def _scanzone_handle_event(event):
                     return True
                 _pe = scanzone_tracks.get(hidx)
                 _pl = "Perm \u2713" if (_pe and _pe.get("perm")) else "Perm"
+                _al = ("Alert (A) \u2713" if (_pe and _pe.get("alert"))
+                       else "Alert (A)")
                 _sz_ctx = {"x": mx, "y": my, "idx": hidx,
                            "items": [("Make active", "track"),
                                      (_pl, "perm"),
+                                     (_al, "alertoggle"),
                                      ("Alias\u2026", "alias"),
                                      ("Untrack", "untrack")]}
                 return True
@@ -32036,6 +32202,12 @@ def _scanzone_handle_event(event):
                         _pe = scanzone_tracks.get(idx)
                         if _pe is not None:
                             _pe["perm"] = not _pe.get("perm")
+                    elif act == "alertoggle":
+                        _pe = scanzone_tracks.get(idx)
+                        if _pe is not None:
+                            _pe["alert"] = not _pe.get("alert")
+                            if _pe["alert"]:
+                                _pe["perm"] = True   # keep it so respawns fire
                     elif act == "untrack":
                         _scanzone_untrack(idx)
                     elif act == "lampclr1":
@@ -32110,6 +32282,31 @@ def _scanzone_handle_event(event):
         if r.get("coord") and r["coord"].collidepoint(mx, my):
             _scanzone_set_pin(scanzone_input)
             return True
+        if scanzone_poll_popup:
+            _step = 250
+            for _pk, _fn in (
+                ("poll_minus_a", lambda: max(250, scanzone_poll_active - _step)),
+                ("poll_plus_a",  lambda: min(10000, scanzone_poll_active + _step)),
+            ):
+                _pr = r.get(_pk)
+                if _pr and _pr.collidepoint(mx, my):
+                    globals()["scanzone_poll_active"] = _fn()
+                    return True
+            for _pk, _fn in (
+                ("poll_minus_i", lambda: max(250, scanzone_poll_inactive - _step)),
+                ("poll_plus_i",  lambda: min(10000, scanzone_poll_inactive + _step)),
+            ):
+                _pr = r.get(_pk)
+                if _pr and _pr.collidepoint(mx, my):
+                    globals()["scanzone_poll_inactive"] = _fn()
+                    return True
+            if r.get("poll_close") and r["poll_close"].collidepoint(mx, my):
+                globals()["scanzone_poll_popup"] = False
+                return True
+            if r.get("poll_panel") and r["poll_panel"].collidepoint(mx, my):
+                return True                      # swallow clicks inside the box
+            globals()["scanzone_poll_popup"] = False   # click-away closes
+            return True
         if r.get("clear") and r["clear"].collidepoint(mx, my):
             scanzone_input = ""
             scanzone_results = []
@@ -32118,8 +32315,8 @@ def _scanzone_handle_event(event):
             scanzone_scroll = 0
             scanzone_pin = None
             return True
-        if r.get("wide") and r["wide"].collidepoint(mx, my):
-            _scanzone_request_wide()
+        if r.get("poll") and r["poll"].collidepoint(mx, my):
+            globals()["scanzone_poll_popup"] = not scanzone_poll_popup
             return True
         if r.get("view") and r["view"].collidepoint(mx, my):
             _vorder = ["list", "radar", "map"]
@@ -35699,6 +35896,37 @@ def _inventory_bazaar_popup_event(event):
     return False
 
 
+def _bazaar_price_range(item_id):
+    """Query the world's search server for an item's recent AH sales and
+    return (low, high) of the last few, or a status string."""
+    try:
+        ip, port = _ah_resolve_server()
+        if not ip:
+            return "noserver"
+        res = _ahsrch_parse_history(
+            _ahsrch_query_history(ip, port, int(item_id), 0, timeout=8.0))
+        if not res.get("ok"):
+            return None
+        prices = [sv["price"] for sv in res.get("sales", []) if sv.get("price")]
+        if not prices:
+            return "nosales"
+        return (min(prices), max(prices))
+    except Exception:
+        return None
+
+
+def _bazaar_start_range_lookup(popup):
+    """Kick off a background AH price-range lookup for the popup's item."""
+    popup["range"] = "loading"
+
+    def _worker(pop=popup):
+        r = _bazaar_price_range(pop.get("item_id"))
+        if inventory_bazaar_popup is pop:
+            pop["range"] = r
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def draw_inventory_bazaar_popup(surface):
     global inventory_bazaar_popup_rects
     inventory_bazaar_popup_rects = []
@@ -35707,7 +35935,7 @@ def draw_inventory_bazaar_popup(surface):
         return
     tf = pygame.font.SysFont("Consolas", 12, bold=True)
     f  = pygame.font.SysFont("Consolas", 12)
-    w, h = 250, 100
+    w, h = 250, 118
     sw, shh = surface.get_size()
     x = (sw - w) // 2
     y = (shh - h) // 2
@@ -35733,6 +35961,20 @@ def draw_inventory_bazaar_popup(surface):
     _t = f.render("Set", True, (190, 235, 200))
     surface.blit(_t, (ok.centerx - _t.get_width() // 2,
                       ok.centery - _t.get_height() // 2))
+    rng = p.get("range")
+    if rng == "loading":
+        _rt, _rc = "market: looking up\u2026", (150, 160, 175)
+    elif rng == "noserver":
+        _rt, _rc = "market: search server not found", (185, 150, 150)
+    elif rng == "nosales":
+        _rt, _rc = "market: no recent sales", (150, 160, 175)
+    elif isinstance(rng, tuple):
+        _rt = "market: {:,} \u2013 {:,} g".format(rng[0], rng[1])
+        _rc = (170, 205, 150)
+    else:
+        _rt, _rc = "", None
+    if _rt:
+        surface.blit(f.render(_rt, True, _rc), (x + 10, y + 80))
     cancel = pygame.Rect(x + 10, y + h - 26, 62, 20)
     pygame.draw.rect(surface, (60, 44, 44), cancel, border_radius=3)
     _c = f.render("Cancel", True, (222, 182, 182))
@@ -57350,6 +57592,8 @@ while running:
                                             "item_name", "?"),
                                     "buf": "",
                                 }
+                                _bazaar_start_range_lookup(
+                                    inventory_bazaar_popup)
                             elif _act == "unbazaar":
                                 _inv_send_bazaar(
                                     inventory_item_ctx_menu["item_id"], 0)

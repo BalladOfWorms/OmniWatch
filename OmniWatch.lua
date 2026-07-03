@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.9.0'
+_addon.version  = '1.9.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -5538,6 +5538,8 @@ end)
 -- (SZTRACK| on the gs channel) so the panel can show a live position +
 -- distance. Driven by SCANZONE|track|<index> (0 = stop).
 _ow_sz_track_index = 0
+_ow_sz_track_last  = 0     -- os.clock() of the last live 0x0F5 update
+_ow_sz_track_retry = 0     -- last keepalive re-issue
 
 function _ow_scanzone_track(index)
     index = tonumber(index) or 0
@@ -5556,6 +5558,7 @@ ow_safe_register('incoming chunk', function(id, data)
     local level  = data:byte(0x10 + 1) or 0
     local tindex = (data:byte(0x12 + 1) or 0) + (data:byte(0x13 + 1) or 0) * 256
     local status = _ow_sz_u32(data, 0x14 + 1)   -- 1 Update / 2,3 Reset
+    if status == 1 then _ow_sz_track_last = os.clock() end
     if udp_gs then
         udp_gs:send(string.format('SZTRACK|%d|%.1f|%.1f|%.1f|%d|%d',
             tindex, x, y, z, status, level))
@@ -5585,9 +5588,23 @@ function _ow_scanzone_radar_set(on)
 end
 
 function _ow_scanzone_radar_tick(now)
+    now = now or os.clock()
+    -- Widescan-track keepalive: the 0x0F5 stream stops when interrupted
+    -- (engaging in combat disables widescan, the mob dies, you zone) and
+    -- does NOT resume on its own -- that is the "(paused)" you see after a
+    -- couple of kills. If an active track has gone quiet, re-issue the
+    -- track request so it picks back up the moment widescan is usable again.
+    if _ow_sz_track_index ~= 0
+            and (now - (_ow_sz_track_last or 0)) > 3.0
+            and (now - (_ow_sz_track_retry or 0)) > 3.0 then
+        _ow_sz_track_retry = now
+        pcall(function()
+            packets.inject(packets.new('outgoing', 0x0F5,
+                {['Index'] = _ow_sz_track_index}))
+        end)
+    end
     if not _ow_sz_radar_on then return end
     if not udp_gs then return end
-    now = now or os.clock()
     if (now - _ow_sz_radar_last) < (1.0 / _OW_SZ_RADAR_HZ) then return end
     _ow_sz_radar_last = now
     if not (windower.ffxi and windower.ffxi.get_mob_array) then return end
