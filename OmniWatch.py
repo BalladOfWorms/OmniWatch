@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.9.1 (2026-07-02)"
+OMNIWATCH_BUILD_STAMP = "v1.9.2 (2026-07-09)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.9.1"
+OMNIWATCH_VERSION = "1.9.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -5124,6 +5124,15 @@ inventory_dropdown_open  = False
 # UI scroll state per bag, and which bag is currently expanded.
 inventory_active_bag     = None       # None = bag-list view; str = bag-detail view
 inventory_bag_scroll     = {}         # bag_name -> int (item-row offset)
+inventory_bag_sort_field = "name"     # single-bag sort: "name" | "category"
+inventory_bag_sort_rev   = False      # reverse (descending) sort
+# Rough in-game category ordering for the "Category" sort; unknown
+# categories fall to the end (rank 50) and then sort by name.
+_INV_CAT_ORDER = {
+    "Weapon": 0, "Armor": 1, "Usable": 2, "UsableItem": 2, "Crystal": 3,
+    "General": 4, "Furnishing": 5, "Linkshell": 6, "Puppet": 7,
+    "Automaton": 7, "Currency": 8, "Slip": 9, "Mannequin": 10,
+}
 inventory_dropdown_rects = []         # click-target list for the dropdown
 # Toggle button rect in the header (set in draw_header, read by click handler).
 inventory_button_rect    = None
@@ -5533,6 +5542,20 @@ inventory_item_ctx_rects = []      # [(pygame.Rect, action_str)] per frame
 # Shape: {"item_id": int, "item_name": str, "buf": str} or None.
 inventory_bazaar_popup = None
 inventory_bazaar_popup_rects = []  # [(pygame.Rect, action)] per frame
+
+# Move-to-bag popup (right-click -> Move to...). Shape:
+# {"item_id": int, "item_name": str, "from_bag": str} or None.
+inventory_move_popup = None
+inventory_move_popup_rects = []
+# (bag key as sent to lua, short label)
+_INV_MOVE_BAGS = [
+    ("inventory", "Inventory"), ("satchel", "Satchel"), ("sack", "Sack"),
+    ("case", "Case"), ("wardrobe", "WD 1"), ("wardrobe2", "WD 2"),
+    ("wardrobe3", "WD 3"), ("wardrobe4", "WD 4"), ("wardrobe5", "WD 5"),
+    ("wardrobe6", "WD 6"), ("wardrobe7", "WD 7"), ("wardrobe8", "WD 8"),
+    ("safe", "Safe"), ("safe2", "Safe 2"), ("storage", "Storage"),
+    ("locker", "Locker"),
+]
 
 # dps_state: per-source bucket dicts, keyed by src tag ('me', 'pet',
 # '<party_member>'). Replaced wholesale on each batch.
@@ -35482,8 +35505,14 @@ def draw_inventory_dropdown(surface):
     bag_label = next((lbl for k, lbl in INVENTORY_BAG_ORDER if k == bag_key),
                      bag_key)
     items     = list(inventory_state.get(bag_key, []))
-    # Sort alphabetically by name for predictable scanning.
-    items.sort(key=lambda it: (it.get("name") or "").lower())
+
+    def _sortkey(it):
+        _nm = (it.get("name") or "").lower()
+        if inventory_bag_sort_field == "category":
+            c = it.get("category") or ""
+            return (_INV_CAT_ORDER.get(c, 50), c, _nm)
+        return (_nm,)
+    items.sort(key=_sortkey, reverse=inventory_bag_sort_rev)
 
     # Header: back button + bag name + count.
     back_w = 28
@@ -35498,8 +35527,10 @@ def draw_inventory_dropdown(surface):
          back_rect.y + (row_h - back_surf.get_height()) // 2))
     inventory_dropdown_rects.append((back_rect, {"kind": "back"}))
 
+    _sf = "Cat" if inventory_bag_sort_field == "category" else "Name"
+    _sd = "\u2193" if inventory_bag_sort_rev else "\u2191"
     title_surf = title_font.render(
-        f"{bag_label}  ({len(items)} items)",
+        f"{bag_label}  ({len(items)})  \u00b7  {_sf} {_sd}",
         True, (220, 200, 150))
     surface.blit(title_surf,
         (panel_x + back_w + 6, cy + (row_h - title_surf.get_height()) // 2))
@@ -35578,27 +35609,21 @@ def draw_inventory_dropdown(surface):
         }))
         cy += row_h
 
-    # Scroll buttons (top-right of panel) when we have overflow.
-    if max_scroll > 0:
-        up_rect = pygame.Rect(panel_x + panel_w - 44,
-                              panel_y + 4, 18, 18)
-        dn_rect = pygame.Rect(panel_x + panel_w - 22,
-                              panel_y + 4, 18, 18)
-        for r, label in ((up_rect, "▲"), (dn_rect, "▼")):
-            pygame.draw.rect(surface, (60, 60, 75), r, border_radius=2)
-            ts = label_font.render(label, True, (220, 220, 230))
-            if ts.get_width() < 4:
-                ts = label_font.render(
-                    "^" if label == "▲" else "v", True, (220, 220, 230))
-            surface.blit(ts,
-                (r.x + (r.w - ts.get_width()) // 2,
-                 r.y + (r.h - ts.get_height()) // 2))
-        inventory_dropdown_rects.append((up_rect, {
-            "kind": "scroll", "bag": bag_key, "delta": -1,
-        }))
-        inventory_dropdown_rects.append((dn_rect, {
-            "kind": "scroll", "bag": bag_key, "delta": 1,
-        }))
+    # Sort controls (top-right): field toggle (Name/Category) + direction.
+    fld_rect = pygame.Rect(panel_x + panel_w - 44, panel_y + 4, 18, 18)
+    dir_rect = pygame.Rect(panel_x + panel_w - 22, panel_y + 4, 18, 18)
+    _fl = "C" if inventory_bag_sort_field == "category" else "N"
+    _dl = "\u2193" if inventory_bag_sort_rev else "\u2191"
+    for r, label in ((fld_rect, _fl), (dir_rect, _dl)):
+        pygame.draw.rect(surface, (60, 60, 75), r, border_radius=2)
+        ts = label_font.render(label, True, (220, 220, 230))
+        if ts.get_width() < 4:
+            ts = label_font.render(
+                "v" if label == "\u2193" else "^", True, (220, 220, 230))
+        surface.blit(ts, (r.x + (r.w - ts.get_width()) // 2,
+                          r.y + (r.h - ts.get_height()) // 2))
+    inventory_dropdown_rects.append((fld_rect, {"kind": "sortfield"}))
+    inventory_dropdown_rects.append((dir_rect, {"kind": "sortrev"}))
 
 
 def dispatch_inventory_dropdown_click(mx, my):
@@ -35680,6 +35705,13 @@ def dispatch_inventory_dropdown_click(mx, my):
                 bag = action["bag"]
                 cur = inventory_bag_scroll.get(bag, 0)
                 inventory_bag_scroll[bag] = max(0, cur + action["delta"])
+            elif kind == "sortfield":
+                globals()["inventory_bag_sort_field"] = (
+                    "category" if inventory_bag_sort_field == "name"
+                    else "name")
+            elif kind == "sortrev":
+                globals()["inventory_bag_sort_rev"] = (
+                    not inventory_bag_sort_rev)
             elif kind == "open_item_url":
                 url = action.get("url", "")
                 if url:
@@ -35927,6 +35959,92 @@ def _bazaar_start_range_lookup(popup):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+def _inv_send_move(item_id, from_bag, to_bag):
+    """Ask Lua to move <item_id> from <from_bag> to <to_bag> for the locked
+    character (INVACT|move), via Windower's native move_item."""
+    try:
+        target = _mb_lock_target() or ""
+        payload = "INVACT|move|%s|%d|%s|%s" % (target, int(item_id),
+                                               from_bag, to_bag)
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] inv move send failed: {e!r}")
+
+
+def _inventory_move_popup_event(event):
+    """Capture input while the move-to-bag popup is open."""
+    global inventory_move_popup
+    p = inventory_move_popup
+    if p is None:
+        return False
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_ESCAPE:
+            inventory_move_popup = None
+        return True
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        for rect, act in inventory_move_popup_rects:
+            if rect.collidepoint(mx, my):
+                if act == "cancel":
+                    inventory_move_popup = None
+                elif act == "panel":
+                    pass                    # swallow, keep open
+                else:
+                    _inv_send_move(p["item_id"],
+                                   p.get("from_bag", "inventory"), act)
+                    inventory_move_popup = None
+                return True
+        inventory_move_popup = None         # click outside closes
+        return True
+    return False
+
+
+def draw_inventory_move_popup(surface):
+    global inventory_move_popup_rects
+    inventory_move_popup_rects = []
+    p = inventory_move_popup
+    if p is None:
+        return
+    tf = pygame.font.SysFont("Consolas", 12, bold=True)
+    f = pygame.font.SysFont("Consolas", 11)
+    from_bag = p.get("from_bag", "")
+    bags = [(k, lbl) for (k, lbl) in _INV_MOVE_BAGS if k != from_bag]
+    cols, bw_, bh_, gap = 3, 78, 20, 6
+    rows = (len(bags) + cols - 1) // cols
+    w = 24 + cols * bw_ + (cols - 1) * gap
+    h = 44 + rows * (bh_ + gap) + 8 + 22
+    sw, shh = surface.get_size()
+    x = (sw - w) // 2
+    y = (shh - h) // 2
+    pygame.draw.rect(surface, (28, 28, 36), (x, y, w, h), border_radius=5)
+    pygame.draw.rect(surface, COL_BORDER, (x, y, w, h), 1, border_radius=5)
+    surface.blit(tf.render("Move to bag", True, (170, 205, 235)),
+                 (x + 12, y + 8))
+    nm = p.get("item_name") or "?"
+    if len(nm) > 34:
+        nm = nm[:33] + "\u2026"
+    surface.blit(f.render(nm, True, (200, 206, 218)), (x + 12, y + 26))
+    by = y + 44
+    for i, (k, lbl) in enumerate(bags):
+        cx = x + 12 + (i % cols) * (bw_ + gap)
+        cy = by + (i // cols) * (bh_ + gap)
+        br = pygame.Rect(cx, cy, bw_, bh_)
+        pygame.draw.rect(surface, (48, 54, 68), br, border_radius=3)
+        pygame.draw.rect(surface, (80, 90, 110), br, 1, border_radius=3)
+        _t = f.render(lbl, True, (210, 216, 228))
+        surface.blit(_t, (br.centerx - _t.get_width() // 2,
+                          br.centery - _t.get_height() // 2))
+        inventory_move_popup_rects.append((br, k))
+    cancel = pygame.Rect(x + w - 62, y + h - 24, 52, 18)
+    pygame.draw.rect(surface, (60, 44, 44), cancel, border_radius=3)
+    _c = f.render("Cancel", True, (222, 182, 182))
+    surface.blit(_c, (cancel.centerx - _c.get_width() // 2,
+                      cancel.centery - _c.get_height() // 2))
+    inventory_move_popup_rects.append((cancel, "cancel"))
+    # panel LAST so bag/cancel rects are tested first
+    inventory_move_popup_rects.append((pygame.Rect(x, y, w, h), "panel"))
+
+
 def draw_inventory_bazaar_popup(surface):
     global inventory_bazaar_popup_rects
     inventory_bazaar_popup_rects = []
@@ -36015,6 +36133,7 @@ def draw_inventory_item_ctx_menu(surface):
         actions.append(("drop", "Drop item", (235, 170, 170)))
     actions.append(("autodrop", "Auto-drop (Treasury)", (235, 205, 150)))
     actions.append(("bazaar", "Bazaar\u2026", (170, 205, 235)))
+    actions.append(("moveto", "Move to\u2026", (170, 235, 205)))
     if m.get("bazaar", 0):
         actions.append(("unbazaar", "Remove from bazaar", (235, 205, 90)))
 
@@ -53242,7 +53361,7 @@ while running:
                     for ent in body.split(";"):
                         if not ent:
                             continue
-                        fields = ent.split(",", 3)
+                        fields = ent.split(",", 4)
                         if len(fields) < 2:
                             continue
                         try:
@@ -53250,17 +53369,21 @@ while running:
                             cnt = int(fields[1])
                         except ValueError:
                             continue
-                        # New wire format: id,count,bazaar,name.
-                        # Old (pre-bazaar): id,count,name.
-                        if len(fields) >= 4 and fields[2].lstrip("-").isdigit():
-                            baz = int(fields[2])
-                            nm = fields[3]
+                        # Wire formats (newest first):
+                        #   id,count,bazaar,category,name
+                        #   id,count,bazaar,name           (no category)
+                        #   id,count,name                  (pre-bazaar)
+                        cat = ""
+                        if len(fields) >= 5 and fields[2].lstrip("-").isdigit():
+                            baz = int(fields[2]); cat = fields[3]; nm = fields[4]
+                        elif len(fields) >= 4 and fields[2].lstrip("-").isdigit():
+                            baz = int(fields[2]); nm = fields[3]
                         else:
                             baz = 0
                             nm = fields[2] if len(fields) >= 3 else ""
                         items_in_bag.append({
                             "id": iid, "count": cnt, "name": nm,
-                            "bazaar": baz,
+                            "bazaar": baz, "category": cat,
                         })
                 _inv_buffer[bag_name] = items_in_bag
             elif raw.startswith("INV_SLIP|"):
@@ -56045,6 +56168,7 @@ while running:
     # ── Item right-click menu (drop / auto-drop — on top of the dropdown) ───
     draw_inventory_item_ctx_menu(screen)
     draw_inventory_bazaar_popup(screen)
+    draw_inventory_move_popup(screen)
 
     # ── Character-view dropdown (small; right of gear button) ───────────────
     draw_char_view_dropdown(screen)
@@ -56403,6 +56527,9 @@ while running:
             screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
             # Anchors handle repositioning automatically on the next frame.
             # No save needed — nothing on disk changes.
+
+        elif _inventory_move_popup_event(event):
+            pass
 
         elif _inventory_bazaar_popup_event(event):
             # Bazaar price popup is open and capturing input.
@@ -57597,6 +57724,17 @@ while running:
                             elif _act == "unbazaar":
                                 _inv_send_bazaar(
                                     inventory_item_ctx_menu["item_id"], 0)
+                            elif _act == "moveto":
+                                globals()["inventory_move_popup"] = {
+                                    "item_id":
+                                        inventory_item_ctx_menu["item_id"],
+                                    "item_name":
+                                        inventory_item_ctx_menu.get(
+                                            "item_name", "?"),
+                                    "from_bag":
+                                        inventory_item_ctx_menu.get(
+                                            "bag", "inventory"),
+                                }
                             break
                     inventory_item_ctx_menu = None
                     continue

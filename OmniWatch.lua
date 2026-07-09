@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.9.1'
+_addon.version  = '1.9.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -14564,7 +14564,7 @@ local function handle_incoming_action(act)
                     end
                 end
             end
-            -- Haste spell: cat 4, spell id 57 (Haste) or 511 (Haste II).
+            -- Haste-family spell: cat 4, e.g. Haste, Haste II, Erratic Flutter.
             -- Each replaces the existing magic-haste entry (only one
             -- haste spell can be active on the same target).
             if cat == 4 and PW_HASTE_SPELL_POTENCY[act.param] then
@@ -18198,6 +18198,7 @@ local PW_BOLTERS_DEFAULT_FRACTION = 0.3
 PW_HASTE_SPELL_POTENCY = {
     [57]  = 14.65,   -- Haste
     [511] = 30.0,    -- Haste II
+    [710] = 30.0,    -- Erratic Flutter
 }
 
 -- Movement speed cap: hard limit is +60% over base (160% total).

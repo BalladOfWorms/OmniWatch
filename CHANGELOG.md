@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.2] — 2026-07-09
+
+### Fixed
+
+- **Erratic Flutter now counts as a Haste source** — the BLU spell applies buff 33 (Haste) at Haste II strength, but spell ID 710 was missing from the haste spell potency table (`PW_HASTE_SPELL_POTENCY`), so source-based handling (`dumpsources`, `dwtest`, `hasteinfo`) could miss BLU self-haste entirely. It's now registered at 30.0% magic haste, and the cat-4 handler comment was updated to describe Haste-family spells. *(Thanks again Gorschu!)*
+
 ## [1.9.1] — 2026-07-02
 
 ### Added
