@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.3] — 2026-07-10
+
+### Added
+
+- **Server population in the Chat header** — a green “Server current pop - N” readout now sits centered in the Chat panel’s header, in the gap between **Clear All** and the right-side buttons (**Show all tabs** / **Filters**), showing how many players are online on your world. It refreshes every 60 seconds using the same search-server engine as the Auction House features: one broad /search-style query whose reply carries the true total-found count — the live server population. It only polls while the Chat panel is visible, appears once the first reading lands, and quietly steps aside when the panel is too narrow for it to fit.
+
+### Fixed
+
+- **Auction House no longer “forgets” its search server** — the AH and population features would sometimes stop working until you opened the in-game Search menu again, even though your world's search-server address had never changed. A single slow or timed-out reply was enough to trigger it: every network error path treated the failure as “this address is wrong” and wiped the cached server, so the next lookup had nothing to fall back on. Now a timeout is treated as a timeout, not a bad address — the cached server survives transient hiccups, and auto-detection only re-runs on a slow timer or when you genuinely change worlds.
+- **Fresh reload no longer drops the first second of data** — after reloading the game and the overlay together, the Chat population could fail to appear, a hotbar macro might not fire, and the Auction House panel could flash a connection error before recovering. All three were the same startup race: the overlay now assigns its internal ports fresh each launch, and the addon was briefly reading the *previous* run's ports out of a leftover file. The overlay now clears that file before it starts, and the addon checks for the new ports several times a second right after loading, so everything connects almost immediately instead of after a beat.
+- **Inventory “Move to…” now works** — right-clicking an item and choosing another bag silently did nothing; the command reached the addon but had no handler, so it was quietly dropped. Moving items between inventory and any bag (satchel, sack, case, wardrobes) works now, including bag-to-bag moves, with the usual checks for Mog House access and free space.
+
 ## [1.9.2] — 2026-07-09
 
 ### Fixed

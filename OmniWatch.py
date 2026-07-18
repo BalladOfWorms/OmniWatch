@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.9.2 (2026-07-09)"
+OMNIWATCH_BUILD_STAMP = "v1.9.3 (2026-07-10)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.9.2"
+OMNIWATCH_VERSION = "1.9.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -821,6 +821,19 @@ def _ports_dir():
 
 _PORTS_PY_FILE  = os.path.join(_ports_dir(), "ow_ports_py.txt")
 _PORTS_LUA_FILE = os.path.join(_ports_dir(), "ow_ports_lua.txt")
+
+# Delete any ports file left over from a previous run, FIRST THING, before
+# we bind anything. Otherwise the lua addon (which reloads with the game)
+# reads last run's ports out of the stale file and sends every channel to a
+# dead socket until its ~1 Hz discovery poll notices the file changed. That
+# one-second gap is exactly the "population didn't show / macro didn't fire
+# / AH panel refused" window on a fresh reload. With the file gone, the lua
+# has nothing to read until we publish the real ports below, so it waits or
+# uses legacy defaults instead of trusting wrong numbers.
+try:
+    os.remove(_PORTS_PY_FILE)
+except OSError:
+    pass                  # not there = already clean, which is the goal
 
 _assigned_ports = {}      # channel -> actual bound port (filled as we bind)
 
@@ -27475,6 +27488,9 @@ def _ahsrch_save_cached(ip):
 
 
 def _ahsrch_clear_cached():
+    # Manual reset only. NOTHING in the normal error path calls this any
+    # more: a failed query is a strike (_ah_note_search_error), never a
+    # reason to forget an address that has not changed.
     try:
         os.remove(_ahsrch_cache_path())
     except Exception:
@@ -27640,8 +27656,40 @@ def _ahsrch_query_category(host, port, cat, timeout=8.0):
 
 # --- panel glue: session-cached IP, threaded fetch, main-thread drain ---
 _ah_search_ip = None
+_ah_search_fails = 0            # consecutive transport failures on that IP
+_ah_search_detect_next = 0.0    # time.time() gate for the next auto-detect
+_AH_SEARCH_FAIL_LIMIT = 3       # strikes before we re-detect the server
+_AH_SEARCH_DETECT_EVERY = 120.0 # seconds between background re-detects
 _ah_hist_inbox = _collections.deque()
 _ah_hist_busy = False
+
+
+def _ah_note_search_ok():
+    """A query against the current search server came back — clear strikes."""
+    global _ah_search_fails
+    _ah_search_fails = 0
+
+
+def _ah_note_search_error(exc=None):
+    """A query failed at the transport level.
+
+    Deliberately does NOT throw the remembered server away on the first
+    failure. socket.timeout IS an OSError, so a single slow reply (or a
+    moment offline) used to wipe both the in-memory IP and the on-disk
+    cache — and auto-detect can only find the server while the FFXI client
+    has a live/recent connection on the search port, so after that the
+    panel stayed dead until the user did an in-game /search, even though
+    the address never changed. Instead: count strikes, and only after
+    several in a row let the next resolve re-detect. The disk cache is
+    never deleted here; it stays as the fallback for when auto-detect
+    comes up empty.
+    """
+    global _ah_search_fails, _ah_search_ip, _ah_search_detect_next
+    _ah_search_fails += 1
+    if _ah_search_fails >= _AH_SEARCH_FAIL_LIMIT:
+        _ah_search_fails = 0
+        _ah_search_ip = None          # in-memory only — disk keeps the value
+        _ah_search_detect_next = 0.0  # let the next resolve re-detect at once
 
 
 def _ah_hist_emit(line):
@@ -27749,7 +27797,7 @@ def _ah_fetch_history(item_id, stack):
     tag = "stack" if stack else "single"
 
     def _worker():
-        global _ah_hist_busy, _ah_search_ip
+        global _ah_hist_busy
         try:
             ip, port = _ah_resolve_server()
             if not ip:
@@ -27757,6 +27805,7 @@ def _ah_fetch_history(item_id, stack):
                 return
             _ah_hist_emit("History: %s (%s)\u2026" % (name, tag))
             res = _ahsrch_parse_history(_ahsrch_query_history(ip, port, item_id, stack, timeout=8.0))
+            _ah_note_search_ok()
             if not res.get("ok"):
                 _ah_hist_emit("  no valid reply (%d bytes%s)" % (
                     len(res.get("raw", b"")),
@@ -27780,8 +27829,7 @@ def _ah_fetch_history(item_id, stack):
                     "{:,}".format(max(_prices))))
         except OSError as e:
             _ah_hist_emit("History error: %s" % e)
-            _ah_search_ip = None
-            _ahsrch_clear_cached()
+            _ah_note_search_error(e)
         except Exception as e:
             _ah_hist_emit("History error: %s" % e)
         finally:
@@ -27808,7 +27856,7 @@ def _ah_fetch_combined(item_id, stack):
     _ah_hist_busy = True
 
     def _worker():
-        global _ah_hist_busy, _ah_search_ip
+        global _ah_hist_busy
         try:
             ip, port = _ah_resolve_server()
             if not ip:
@@ -27818,6 +27866,7 @@ def _ah_fetch_combined(item_id, stack):
             if items is None:
                 _ah_hist_emit("Checking %s\u2026" % catname)
                 items = _ahsrch_query_category(ip, port, cat, timeout=8.0)["items"]
+                _ah_note_search_ok()
                 _ah_cat_cache[cat] = items
             sa, st = items.get(item_id, (0xFFFFFFFF, 0xFFFFFFFF))
             sd = "0" if sa == 0xFFFFFFFF else str(sa)
@@ -27827,6 +27876,7 @@ def _ah_fetch_combined(item_id, stack):
                 ("(%d) \u2014 %s Singles, %s Stacks For Sale" % (item_id, sd, kd),
                  (190, 198, 212))])
             res = _ahsrch_parse_history(_ahsrch_query_history(ip, port, item_id, stack))
+            _ah_note_search_ok()
             if not res.get("ok") or not res["sales"]:
                 _ah_hist_emit([("    no recent sales found", (150, 156, 168))])
             else:
@@ -27839,8 +27889,7 @@ def _ah_fetch_combined(item_id, stack):
                         ("{:,} g".format(sale["price"]), (235, 205, 120))])
         except OSError as e:
             _ah_hist_emit("AH error: %s" % e)
-            _ah_search_ip = None
-            _ahsrch_clear_cached()
+            _ah_note_search_error(e)
         except Exception as e:
             _ah_hist_emit("AH error: %s" % e)
         finally:
@@ -28346,7 +28395,7 @@ def _ah_probe_history(item_id, stack):
     name = _ah_item_name(item_id)
 
     def _worker():
-        global _ah_hist_busy, _ah_search_ip
+        global _ah_hist_busy
         try:
             ip, port = _ah_resolve_server()
             if not ip:
@@ -28383,8 +28432,7 @@ def _ah_probe_history(item_id, stack):
             _ah_hist_emit("History probe done. (A 'HISTORY!' line = the winning format.)")
         except OSError as e:
             _ah_hist_emit("AH error: %s" % e)
-            _ah_search_ip = None
-            _ahsrch_clear_cached()
+            _ah_note_search_error(e)
         except Exception as e:
             _ah_hist_emit("AH error: %s" % e)
         finally:
@@ -28392,32 +28440,253 @@ def _ah_probe_history(item_id, stack):
 
     threading.Thread(target=_worker, daemon=True).start()
 
+# ─────────────── player search / server population ───────────────
+# Ported from AuctionWatch. Besides the AH, the search server answers a
+# player-search family (retail /search). For a population readout we don't
+# need the (truncated) record list: every reply carries the TRUE match count
+# as a u16 at 0x0E ("total found, may differ from the amount sent"), and the
+# query behind it has no LIMIT — so one broad search returns the live server
+# population.
+#
+# The request framing is identical to the AH requests above; the only deltas
+# are the type byte (0x03 search / 0x00 search-all) and a bit-packed filter
+# payload: a byte count at 0x10, then entries from 0x11. Each entry is a
+# 5-bit tag, then (for most tags) a 1-bit sort flag + 1-bit "present" flag,
+# then the value bits. Verified by round-tripping a built request back
+# through the server's own decrypt + hash-check + bit-unpack logic.
+_AHSRCH_MASK64 = 0xFFFFFFFFFFFFFFFF
+
+_AHSRCH_TCP_SEARCH_ALL = 0x00
+_AHSRCH_TCP_SEARCH     = 0x03
+
+# 5-bit entry tags (search filter types)
+_AHSRCH_SE_NAME   = 0x00
+_AHSRCH_SE_AREA   = 0x01
+_AHSRCH_SE_NATION = 0x02
+_AHSRCH_SE_JOB    = 0x03
+_AHSRCH_SE_LEVEL  = 0x04
+
+
+def _ahsrch_packbits_be(target, value, byte_off, bit_off, nbits):
+    byte_off += bit_off >> 3
+    bit_off %= 8
+    bitmask = (_AHSRCH_MASK64 >> (64 - nbits)) << bit_off
+    value = ((value << bit_off) & _AHSRCH_MASK64) & bitmask
+    bitmask ^= _AHSRCH_MASK64
+    ab = (bit_off + nbits + 7) // 8
+    data = int.from_bytes(bytes(target[byte_off:byte_off + ab]), "little")
+    data = ((data & bitmask) | value) & ((1 << (ab * 8)) - 1)
+    target[byte_off:byte_off + ab] = data.to_bytes(ab, "little")
+
+
+def _ahsrch_packbits_le(target, value, bit_off, nbits):
+    # Port of the search protocol's little-endian bit-packer. `bit_off` is an
+    # absolute bit offset into target; returns the new absolute bit offset.
+    byte_off = bit_off >> 3
+    bit_off %= 8
+    t = bit_off + nbits
+    need = 1 if t <= 8 else 2 if t <= 16 else 4 if t <= 32 else 8
+    ab = (bit_off + nbits + 7) // 8
+    m = bytearray(need)
+    for c in range(ab):
+        m[need - 1 - c] = target[byte_off + c]
+    _ahsrch_packbits_be(m, value, 0, (need << 3) - (bit_off + nbits), nbits)
+    for c in range(ab):
+        target[byte_off + c] = m[need - 1 - c]
+    return (byte_off << 3) + bit_off + nbits
+
+
+def _ahsrch_build_search_request(job=None, min_lvl=None, max_lvl=None,
+                                 areas=None, nation=None, search_all=True,
+                                 key2=b"\x00\x00\x00\x00", key_tail=None):
+    # Build a player-search request. With no filters the reply's Total is the
+    # whole-server online population; pass job=<id> for a per-job count, etc.
+    if key_tail is None:
+        key_tail = os.urandom(4)
+    pl = bytearray(48)
+    off = 0
+
+    def _entry(tag, present, descending=0):
+        nonlocal off
+        off = _ahsrch_packbits_le(pl, tag, off, 5)
+        off = _ahsrch_packbits_le(pl, descending, off, 1)
+        off = _ahsrch_packbits_le(pl, present, off, 1)
+
+    if job is not None:
+        _entry(_AHSRCH_SE_JOB, 1)
+        off = _ahsrch_packbits_le(pl, job & 0x1F, off, 5)
+    if min_lvl is not None or max_lvl is not None:
+        _entry(_AHSRCH_SE_LEVEL, 1)
+        off = _ahsrch_packbits_le(pl, (min_lvl or 0) & 0xFF, off, 8)
+        off = _ahsrch_packbits_le(pl, (max_lvl or 0) & 0xFF, off, 8)
+    if nation is not None:
+        _entry(_AHSRCH_SE_NATION, 1)
+        off = _ahsrch_packbits_le(pl, nation & 0x3, off, 2)
+    if areas:
+        for a in areas:
+            _entry(_AHSRCH_SE_AREA, 1)
+            off = _ahsrch_packbits_le(pl, a & 0x3FF, off, 10)
+        _entry(_AHSRCH_SE_AREA, 0)  # area-list terminator
+
+    nbytes = (off + 7) // 8
+    length = 76
+    if 0x11 + nbytes > length - 0x18:
+        raise ValueError("search filter payload too large (%d bytes)" % nbytes)
+    buf = bytearray(length)
+    _ahsrch_struct.pack_into("<H", buf, 0x00, length)
+    _ahsrch_struct.pack_into("<I", buf, 0x04, _AHSRCH_IXFF)
+    _ahsrch_struct.pack_into("<H", buf, 0x08, 16)
+    buf[0x0A] = 0x80
+    buf[0x0B] = _AHSRCH_TCP_SEARCH_ALL if search_all else _AHSRCH_TCP_SEARCH
+    buf[0x10] = nbytes
+    buf[0x11:0x11 + nbytes] = pl[:nbytes]
+    buf[length - 0x18:length - 0x14] = key2
+    buf[length - 0x14:length - 0x04] = _ahsrch_md5(bytes(buf[0x08:length - 0x14]))
+    buf[length - 0x04:length] = key_tail
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(_AHSRCH_KEY_SEED + key_tail))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=False)
+    return bytes(buf)
+
+
+def _ahsrch_parse_search_count(data, key2=b"\x00\x00\x00\x00"):
+    # Decrypt one player-search reply and return the u16 "total found" at 0x0E
+    # (the reply's type byte at 0x0B is 0x80). None on failure.
+    if len(data) < 28:
+        return None
+    buf = bytearray(data)
+    length = _ahsrch_struct.unpack_from("<H", buf, 0)[0]
+    if length < 28 or length > len(buf):
+        return None
+    P, S = _ahsrch_blowfish_init(_ahsrch_md5(
+        _AHSRCH_KEY_SEED + bytes(buf[length - 4:length]) + key2))
+    _ahsrch_cipher_blocks(buf, length, P, S, decrypt=True)
+    if buf[0x0B] != 0x80:
+        return None
+    return _ahsrch_struct.unpack_from("<H", buf, 0x0E)[0]
+
+
+def _ahsrch_query_population(host, port=_AHSRCH_PORT, timeout=8.0, **filters):
+    # Fire one broad player search and read Total from the first reply packet
+    # (every packet carries it; no need to page the record list). No filters =
+    # whole-server online population.
+    req = _ahsrch_build_search_request(**filters)
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall(req)
+        data = _ahsrch_recv_packet(s, timeout)
+    return _ahsrch_parse_search_count(data)
+
+
+# All 16 live worlds' search servers occupy 124.150.154.61-.76 (confirmed in
+# AuctionWatch). Used to label the population readout with the world name the
+# resolved search-server address belongs to; unknown addresses fall back to a
+# plain "Server" label.
+_AHSRCH_WORLD_BY_IP = {
+    "124.150.154.61": "Bahamut",
+    "124.150.154.62": "Shiva",
+    "124.150.154.63": "Phoenix",
+    "124.150.154.64": "Carbuncle",
+    "124.150.154.65": "Fenrir",
+    "124.150.154.66": "Sylph",
+    "124.150.154.67": "Valefor",
+    "124.150.154.68": "Leviathan",
+    "124.150.154.69": "Odin",
+    "124.150.154.70": "Quetzalcoatl",
+    "124.150.154.71": "Siren",
+    "124.150.154.72": "Ragnarok",
+    "124.150.154.73": "Cerberus",
+    "124.150.154.74": "Bismarck",
+    "124.150.154.75": "Lakshmi",
+    "124.150.154.76": "Asura",
+}
+
+
+# ── chat-header population poller ─────────────────────────────────
+_chat_pop_count = None    # last successful population reading, or None
+_chat_pop_world = "Server"  # world name of the server the reading came from
+_chat_pop_busy  = False   # a fetch thread is in flight
+_chat_pop_next  = 0.0     # time.time() gate for the next fetch
+
+
+def _chat_pop_tick():
+    # Draw-driven 60 s poller behind the chat header's population readout.
+    # Cheap no-op most frames; when the gate expires it fires one broad
+    # player-search on a daemon thread (same server + engine as the AH
+    # features) and stores the reply's total-found count. Failures keep the
+    # last good number and simply retry on the next cycle.
+    global _chat_pop_busy, _chat_pop_next
+    now = time.time()
+    if _chat_pop_busy or now < _chat_pop_next:
+        return
+    _chat_pop_busy = True
+    _chat_pop_next = now + 60.0
+
+    def _worker():
+        global _chat_pop_count, _chat_pop_world, _chat_pop_busy
+        try:
+            ip, port = _ah_resolve_server()
+            if ip:
+                total = _ahsrch_query_population(ip, port, timeout=6.0)
+                if total is not None:
+                    _ah_note_search_ok()
+                    _chat_pop_count = total
+                    _chat_pop_world = _AHSRCH_WORLD_BY_IP.get(ip, "Server")
+        except OSError as e:
+            # Same recovery path as the AH workers: a strike, not a wipe.
+            # This poller fires every 60 s with a 6 s timeout, so it was by
+            # far the likeliest thing to throw the remembered IP away.
+            _ah_note_search_error(e)
+        except Exception:
+            pass
+        finally:
+            _chat_pop_busy = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def _ah_resolve_server():
-    # Resolve the search-server IP: in-memory cache -> manual override ->
-    # remembered (disk) -> auto-detect (and remember). Returns (ip, port).
-    global _ah_search_ip
+    # Resolve the search-server IP: manual override -> auto-detect (on a
+    # slow timer; the only source that can notice a world change) ->
+    # in-memory -> remembered (disk). Returns (ip, port).
+    #
+    # Order matters. Auto-detect reads this PC's TCP table and only sees
+    # the search server while the client has a live/recent connection to
+    # it — i.e. right after an in-game /search or AH browse — so it is
+    # authoritative when it answers and useless when it doesn't. The disk
+    # cache is the opposite: always available, possibly stale. So we let
+    # detect *upgrade* what we hold and never let it (or a failed query)
+    # erase it.
+    global _ah_search_ip, _ah_search_detect_next
     port = _AHSRCH_PORT
-    ip = _ah_search_ip
-    if not ip:
-        manual = _ahsrch_manual_server()
-        if manual:
-            ip, port = manual
+
+    manual = _ahsrch_manual_server()
+    if manual:
+        ip, port = manual
+        if ip != _ah_search_ip:
             _ah_search_ip = ip
             _ah_hist_emit("AH: using search server %s:%d (manual)" % (ip, port))
-            return ip, port
+        return ip, port
+
+    ip = _ah_search_ip
+    now = time.time()
+    if (not ip) or now >= _ah_search_detect_next:
+        _ah_search_detect_next = now + _AH_SEARCH_DETECT_EVERY
+        try:
+            found = _ahsrch_find_server()
+        except Exception:
+            found = None
+        if found and found != ip:
+            _ah_search_ip = ip = found
+            _ahsrch_save_cached(found)
+            _ah_hist_emit(
+                "AH: found search server %s (remembered for next time)" % found)
+
     if not ip:
         cached = _ahsrch_load_cached()
         if cached:
-            ip = cached
-            _ah_search_ip = ip
-            _ah_hist_emit("AH: using remembered search server %s" % ip)
-            return ip, port
-    if not ip:
-        ip = _ahsrch_find_server()
-        if ip:
-            _ah_search_ip = ip
-            _ahsrch_save_cached(ip)
-            _ah_hist_emit("AH: found search server %s (remembered for next time)" % ip)
+            _ah_search_ip = ip = cached
+            _ah_hist_emit("AH: using remembered search server %s" % cached)
+
     return ip, port
 
 
@@ -28440,7 +28709,7 @@ def _ah_fetch_avail(item_id, stack):
     _ah_hist_busy = True
 
     def _worker():
-        global _ah_hist_busy, _ah_search_ip
+        global _ah_hist_busy
         try:
             ip, port = _ah_resolve_server()
             if not ip:
@@ -28450,6 +28719,7 @@ def _ah_fetch_avail(item_id, stack):
             if items is None:
                 _ah_hist_emit("AH: checking %s listings\u2026" % catname)
                 items = _ahsrch_query_category(ip, port, cat, timeout=8.0)["items"]
+                _ah_note_search_ok()
                 _ah_cat_cache[cat] = items
             sa, st = items.get(item_id, (0, 0xFFFFFFFF))
             sd = "n/a" if sa == 0xFFFFFFFF else str(sa)
@@ -28457,8 +28727,7 @@ def _ah_fetch_avail(item_id, stack):
             _ah_hist_emit("%s [%s] \u2014 on AH now: %s single / %s stack" % (name, catname, sd, kd))
         except OSError as e:
             _ah_hist_emit("AH error: %s" % e)
-            _ah_search_ip = None
-            _ahsrch_clear_cached()
+            _ah_note_search_error(e)
         except Exception as e:
             _ah_hist_emit("AH error: %s" % e)
         finally:
@@ -45002,6 +45271,35 @@ def draw_chat_panel(surface, x, y, locked=False):
             (_sa_r.x + (_sa_r.width  - _sa_t.get_width())  // 2,
              _sa_r.y + (_sa_r.height - _sa_t.get_height()) // 2))
         _chat_show_all_button_rect = _sa_r
+
+    # ── Server population readout ───────────────────────────────
+    # Passive green "<World> current population - N" line centered in the
+    # header gap between the Clear All button (left cluster) and
+    # the right-side buttons (Show all tabs when present, else the
+    # Filters gear). N is the live online-player count from the
+    # world's search server, refreshed every 60 s by
+    # _chat_pop_tick() (draw-driven: it only polls while the chat
+    # panel is actually being rendered). Hidden until the first
+    # reading lands, and skipped when the panel is too narrow for
+    # the text to fit the gap.
+    _chat_pop_tick()
+    if _chat_pop_count is not None:
+        _pop_left  = _chat_clear_all_button_rect.right
+        _pop_right = (_chat_show_all_button_rect.x
+                      if _chat_show_all_button_rect else gear_rect.x)
+        _pop_t = title_font.render(
+            "%s current population - %d" % (_chat_pop_world,
+                                            _chat_pop_count),
+            True, (120, 220, 120))
+        if _pop_t.get_width() > (_pop_right - _pop_left) - 8:
+            # Narrow panel: fall back to a short label before giving up.
+            _pop_t = title_font.render("pop - %d" % _chat_pop_count,
+                                       True, (120, 220, 120))
+        if _pop_t.get_width() <= (_pop_right - _pop_left) - 8:
+            surface.blit(_pop_t,
+                (_pop_left + ((_pop_right - _pop_left)
+                              - _pop_t.get_width()) // 2,
+                 y + 1 + (gear_h - _pop_t.get_height()) // 2))
 
     # Read font sizes once per draw based on chat_font_size setting.
     # Tab strip height scales with tab font so the strip doesn't look

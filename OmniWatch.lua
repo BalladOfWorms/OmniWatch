@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.9.2'
+_addon.version  = '1.9.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2284,6 +2284,8 @@ OW_LEGACY_PORTS = {
 OW_LEGACY_CMD_PORT = 5011
 OW_PORTS_PY_RAW = nil      -- last-read ow_ports_py.txt content (change detect)
 OW_NEXT_PORT_POLL = 0      -- throttle for the prerender re-resolve poll
+OW_PORTS_RESOLVED = false  -- have we ever read a real ports file this run?
+OW_LOAD_CLOCK = nil        -- os.clock at load, for the fast initial ramp
 
 function ow_ports_py_path()  return ow_user_config_dir() .. '/ow_ports_py.txt' end
 function ow_ports_lua_path() return ow_user_config_dir() .. '/ow_ports_lua.txt' end
@@ -2334,13 +2336,29 @@ function ow_write_lua_cmd_port(port)
 end
 
 function ow_poll_port_discovery(now)
-    -- Re-resolve channel peers when ow_ports_py.txt changes (overlay started
-    -- after us, or restarted with new ports). Throttled to ~1 Hz.
+    -- Re-resolve channel peers when ow_ports_py.txt changes: the overlay
+    -- started after us, or restarted with new ephemeral ports.
+    --
+    -- The cadence is the whole point. On a fresh game reload the overlay
+    -- is often still starting, so for the first ~10 s we poll ~10 Hz to
+    -- catch its ports THE MOMENT it publishes them -- that is the second
+    -- of dead population / dropped macros / AH refusal we are closing.
+    -- Once we have read a real file we drop to 1 Hz, which is plenty for
+    -- catching a later overlay restart.
     now = now or os.clock()
+    OW_LOAD_CLOCK = OW_LOAD_CLOCK or now
     if now < OW_NEXT_PORT_POLL then return end
-    OW_NEXT_PORT_POLL = now + 1.0
+    -- Ramp is purely time-based: 10 Hz for the first 10 s after load, then
+    -- 1 Hz. A stale file that gets read at t=0 must NOT end the ramp early
+    -- (that was the bug -- it latched "resolved" before the real ports
+    -- arrived and went quiet). By the time the window closes, Python has
+    -- long since deleted the stale file and published the real one.
+    local ramping = (now - OW_LOAD_CLOCK) < 10
+    OW_NEXT_PORT_POLL = now + (ramping and 0.1 or 1.0)
+
     local prev = OW_PORTS_PY_RAW
     local ports = ow_read_py_ports()
+    if ports then OW_PORTS_RESOLVED = true end   -- diagnostics only
     if OW_PORTS_PY_RAW ~= prev then
         ow_resolve_peers(ports)
     end
@@ -5301,6 +5319,175 @@ local function _ow_inv_bazaar_by_id(item_id, price)
     else
         ow_chat(123, '[OmniWatch] Bazaar: packet inject failed')
     end
+end
+
+-- Move <item_id> from one bag to another for the "Move to..." action on
+-- the overlay's item right-click menu. Bag names arrive on the wire as
+-- res.bags command strings ('inventory', 'wardrobe3', 'safe2', ...).
+--
+-- The game only ever moves items BETWEEN INVENTORY AND A BAG, which is
+-- exactly the shape of Windower's two calls: put_item(bag, i, n) pushes
+-- inventory -> bag, get_item(bag, i, n) pulls bag -> inventory. A
+-- bag-to-bag request is therefore run as two hops through inventory,
+-- with the second hop scheduled once the item has landed. Globals, not
+-- locals: the 200-local cap at this scope.
+_ow_inv_bagids = nil
+
+function _ow_inv_bag_ids()
+    if _ow_inv_bagids then return _ow_inv_bagids end
+    local b = {}
+    if res and res.bags then
+        for _, v in pairs(res.bags) do
+            if type(v) == 'table' and v.id ~= nil then
+                if v.command and v.command ~= '' then
+                    b[v.command:lower()] = v.id
+                end
+                local en = v.en or v.name
+                if en and en ~= '' then
+                    b[en:lower():gsub('%s+', '')] = v.id
+                end
+            end
+        end
+    end
+    -- Retail bag ids, so a resources build without .command can't quietly
+    -- break a move. Only fills gaps -- res.bags wins where it answered.
+    local fixed = {
+        inventory = 0, safe = 1, storage = 2, temporary = 3, locker = 4,
+        satchel = 5, sack = 6, case = 7, wardrobe = 8, safe2 = 9,
+        wardrobe2 = 10, wardrobe3 = 11, wardrobe4 = 12, wardrobe5 = 13,
+        wardrobe6 = 14, wardrobe7 = 15, wardrobe8 = 16,
+    }
+    for k, v in pairs(fixed) do
+        if b[k] == nil then b[k] = v end
+    end
+    _ow_inv_bagids = b
+    return b
+end
+
+-- First slot in <bag> holding <item_id> that is free to move (status 0 =
+-- not equipped / not bazaared / not linked). Returns index, count.
+function _ow_inv_find_slot(items, bag, item_id)
+    local contents = items[bag]
+    if type(contents) ~= 'table' then return nil end
+    local maxb = tonumber(items['max_' .. bag]) or 80
+    local eq
+    for i = 1, maxb do
+        local it = contents[i]
+        if type(it) == 'table' and it.id == item_id
+                and (tonumber(it.count) or 0) > 0 then
+            if it.status == 0 or it.status == nil then
+                return (it.slot or i), (tonumber(it.count) or 1)
+            end
+            eq = true
+        end
+    end
+    return nil, nil, eq
+end
+
+-- Free slots in <bag>. Windower reports every slot of an enabled bag,
+-- with count 0 for the empty ones.
+function _ow_inv_bag_space(items, bag)
+    local contents = items[bag]
+    if type(contents) ~= 'table' then return 0 end
+    local maxb = tonumber(items['max_' .. bag]) or 0
+    local free = 0
+    for i = 1, maxb do
+        local it = contents[i]
+        if type(it) ~= 'table' or (tonumber(it.count) or 0) == 0 then
+            free = free + 1
+        end
+    end
+    return free
+end
+
+function _ow_inv_bag_ok(items, bag)
+    -- enabled_<bag> is false for a bag you can't reach from here (the
+    -- wardrobes and safe/storage/locker need Mog House access).
+    if items['enabled_' .. bag] == false then
+        ow_chat(123, '[OmniWatch] Move: ' .. bag
+            .. ' is not available here (Mog House access?).')
+        return false
+    end
+    return true
+end
+
+function _ow_inv_move_by_id(item_id, from_bag, to_bag)
+    if not (windower.ffxi and windower.ffxi.get_items
+            and windower.ffxi.put_item and windower.ffxi.get_item) then
+        ow_chat(123, '[OmniWatch] Move: this Windower build has no '
+            .. 'get_item/put_item.')
+        return
+    end
+    local ids = _ow_inv_bag_ids()
+    from_bag = tostring(from_bag or 'inventory'):lower()
+    to_bag   = tostring(to_bag or 'inventory'):lower()
+    local fid, tid = ids[from_bag], ids[to_bag]
+    if not fid then
+        ow_chat(123, '[OmniWatch] Move: unknown bag ' .. from_bag); return
+    end
+    if not tid then
+        ow_chat(123, '[OmniWatch] Move: unknown bag ' .. to_bag); return
+    end
+    if fid == tid then
+        ow_chat(207, '[OmniWatch] Move: already in ' .. to_bag); return
+    end
+    local nm = (res and res.items and res.items[item_id]
+                and (res.items[item_id].en or res.items[item_id].name))
+               or ('#' .. tostring(item_id))
+    local items = windower.ffxi.get_items()
+    if type(items) ~= 'table' then
+        ow_chat(123, '[OmniWatch] Move: no item data'); return
+    end
+    if not (_ow_inv_bag_ok(items, from_bag)
+            and _ow_inv_bag_ok(items, to_bag)) then return end
+    local slot, count, equipped = _ow_inv_find_slot(items, from_bag, item_id)
+    if not slot then
+        if equipped then
+            ow_chat(123, '[OmniWatch] Move: ' .. nm
+                .. ' is equipped or bazaared -- can\'t move it.')
+        else
+            ow_chat(123, '[OmniWatch] Move: ' .. nm
+                .. ' is not in ' .. from_bag .. ' any more.')
+        end
+        return
+    end
+    if _ow_inv_bag_space(items, to_bag) < 1 then
+        ow_chat(123, '[OmniWatch] Move: ' .. to_bag .. ' is full.'); return
+    end
+    if fid == 0 then
+        windower.ffxi.put_item(tid, slot, count)
+    elseif tid == 0 then
+        windower.ffxi.get_item(fid, slot, count)
+    else
+        -- Bag to bag: hop through inventory. The item has no slot in
+        -- inventory until the server answers, so re-find it there before
+        -- the second hop instead of guessing an index.
+        if _ow_inv_bag_space(items, 'inventory') < 1 then
+            ow_chat(123, '[OmniWatch] Move: inventory is full -- '
+                .. from_bag .. ' to ' .. to_bag .. ' has to pass '
+                .. 'through it.')
+            return
+        end
+        windower.ffxi.get_item(fid, slot, count)
+        coroutine.schedule(function()
+            local ok = pcall(function()
+                local now = windower.ffxi.get_items()
+                local s2, c2 = _ow_inv_find_slot(now, 'inventory', item_id)
+                if s2 then
+                    windower.ffxi.put_item(tid, s2, c2)
+                else
+                    ow_chat(123, '[OmniWatch] Move: ' .. nm
+                        .. ' did not reach inventory -- left in '
+                        .. from_bag .. '.')
+                end
+            end)
+            if not ok then
+                ow_chat(123, '[OmniWatch] Move: second hop failed.')
+            end
+        end, 1.0)
+    end
+    ow_chat(207, string.format('[OmniWatch] Move: %s%s  %s -> %s',
+        nm, (count > 1 and (' x' .. count) or ''), from_bag, to_bag))
 end
 
 -- Drain helper: pulls all queued packets off udp_cmd_in and routes each
@@ -9359,6 +9546,8 @@ local function _ow_drain_inbound()
             -- Wire forms:
             --   INVACT|drop|<char>|<item_id>      → one-shot drop now
             --   INVACT|autodrop|<char>|<item_id>  → add to Treasury list
+            --   INVACT|bazaar|<char>|<item_id>|<price>
+            --   INVACT|move|<char>|<item_id>|<from bag>|<to bag>
             -- <char> is the character whose inventory the overlay was
             -- showing (its multibox lock target). Because only one game
             -- client owns this socket, we act ONLY if THIS client is
@@ -9371,12 +9560,19 @@ local function _ow_drain_inbound()
                 local a2     = tail:find('|', 1, true)
                 local who    = a2 and tail:sub(1, a2 - 1) or ''
                 local id_str = a2 and tail:sub(a2 + 1) or ''
-                -- bazaar carries an extra |<price> field after the item id
-                local bz_price
+                -- bazaar carries an extra |<price> field after the item
+                -- id; move carries |<from bag>|<to bag>
+                local bz_price, mv_from, mv_to
                 local a3 = id_str:find('|', 1, true)
                 if a3 then
-                    bz_price = tonumber(id_str:sub(a3 + 1))
-                    id_str   = id_str:sub(1, a3 - 1)
+                    local extra = id_str:sub(a3 + 1)
+                    id_str      = id_str:sub(1, a3 - 1)
+                    bz_price    = tonumber(extra)
+                    local a4    = extra:find('|', 1, true)
+                    if a4 then
+                        mv_from = extra:sub(1, a4 - 1)
+                        mv_to   = extra:sub(a4 + 1)
+                    end
                 end
                 local item_id = tonumber(id_str)
                 local me      = windower.ffxi.get_player
@@ -9409,6 +9605,13 @@ local function _ow_drain_inbound()
                         if not ok then
                             ow_chat(123,
                                 '[OmniWatch] bazaar error: ' .. tostring(err))
+                        end
+                    elseif action == 'move' then
+                        local ok, err = pcall(_ow_inv_move_by_id,
+                                              item_id, mv_from, mv_to)
+                        if not ok then
+                            ow_chat(123,
+                                '[OmniWatch] move error: ' .. tostring(err))
                         end
                     end
                 end
