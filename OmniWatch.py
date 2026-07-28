@@ -30050,8 +30050,6 @@ scanzone_spawn_filter = "all"       # list filter: all | spawned | unspawned
 scanzone_type_filter = "any"        # any | mob | pc | npc
 scanzone_wide       = {}            # index -> {type, level, name, x, y} (spawned)
 _scanzone_wide_tmp  = {}            # accumulates during a SZWIDE start..end burst
-_sz_wide_auto       = False         # last widescan was auto-fired (Nyzul track)
-                                    # -> don't yank the view to radar on it
 _sz_nyzul_wide_last = 0             # throttle (ms) for the Nyzul auto widescan
 scanzone_radar      = []            # [(idx,type,dx,dy,hpp,name)] live mob array
 scanzone_radar_heading = 0.0        # player heading (radians, world space)
@@ -30592,8 +30590,7 @@ def _scanzone_scan_from_input():
 
 def _scanzone_request_wide():
     """Ask the lua side to run a widescan (radar source)."""
-    global scanzone_status, _sz_wide_auto
-    _sz_wide_auto = False
+    global scanzone_status
     try:
         sock_cmd_out.sendto(b"SCANZONE|wide", _cmd_addr())
         scanzone_status = "widescan requested\u2026"
@@ -30604,12 +30601,10 @@ def _scanzone_request_wide():
 def _scanzone_request_wide_auto():
     """Fire a widescan for the Nyzul auto-tracker -- no view change, no status
     spam. Populates the roster zone-wide (vs the radar's near-me range)."""
-    global _sz_wide_auto
-    _sz_wide_auto = True
     try:
         sock_cmd_out.sendto(b"SCANZONE|wide", _cmd_addr())
     except Exception:
-        _sz_wide_auto = False
+        pass
 
 def _scanzone_set_radar(on):
     """Tell the lua side to start/stop streaming the live mob-array radar."""
@@ -52849,10 +52844,8 @@ while running:
                     scanzone_wide.clear()
                     scanzone_wide.update(_scanzone_wide_tmp)
                     _scanzone_wide_tmp.clear()
-                    # Auto-fired sweeps (Nyzul tracker) must not yank the view.
-                    if not _sz_wide_auto:
-                        globals()["scanzone_view"] = "radar"
-                    globals()["_sz_wide_auto"] = False
+                    # Widescan refreshes data only; view changes are explicit
+                    # user actions.
                 elif value[:2] == "m|":
                     mf = value.split("|")
                     if len(mf) >= 6:
