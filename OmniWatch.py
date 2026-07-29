@@ -27079,6 +27079,169 @@ def _skillup_handle_event(event):
 
 
 
+# ── Reusable single-line text field ─────────────────────────────────────
+class _TextField:
+    """Small pygame text editor: cursor, selection, filtering and drawing."""
+
+    def __init__(self, max_length=120, allowed=None):
+        self.max_length = max_length
+        self.allowed = allowed
+        self.focused = False
+        self.cursor = 0
+        self.anchor = None
+        self.scroll_x = 0
+        self.blink_at = 0.0
+        self._rect = None
+        self._font = None
+        self._pad = 4
+
+    def _selection(self):
+        if self.anchor is None or self.anchor == self.cursor:
+            return self.cursor, self.cursor
+        return min(self.anchor, self.cursor), max(self.anchor, self.cursor)
+
+    def _reset_blink(self):
+        self.blink_at = time.time()
+
+    def focus(self, text, mouse_x=None, rect=None):
+        self.focused = True
+        self.anchor = None
+        self.cursor = len(text)
+        target_rect = rect or self._rect
+        if mouse_x is not None and target_rect is not None and self._font:
+            px = max(0, mouse_x - target_rect.x - self._pad + self.scroll_x)
+            self.cursor = len(text)
+            for i in range(len(text)):
+                left = self._font.size(text[:i])[0]
+                right = self._font.size(text[:i + 1])[0]
+                if px < (left + right) / 2:
+                    self.cursor = i
+                    break
+        self._reset_blink()
+
+    def blur(self):
+        self.focused = False
+        self.anchor = None
+
+    def _move(self, text, position, shift):
+        if shift:
+            if self.anchor is None:
+                self.anchor = self.cursor
+        else:
+            self.anchor = None
+        self.cursor = max(0, min(len(text), position))
+        self._reset_blink()
+
+    def _replace_selection(self, text, replacement):
+        lo, hi = self._selection()
+        room = max(0, self.max_length - (len(text) - (hi - lo)))
+        replacement = replacement[:room]
+        text = text[:lo] + replacement + text[hi:]
+        self.cursor = lo + len(replacement)
+        self.anchor = None
+        self._reset_blink()
+        return text
+
+    def handle_event(self, event, text):
+        """Return (new_text, action), where action is handled/changed/submit/cancel."""
+        if not self.focused:
+            return text, None
+        if event.type == pygame.TEXTINPUT:
+            incoming = "".join(
+                ch for ch in (event.text or "")
+                if ch.isprintable()
+                and (self.allowed is None or ch in self.allowed))
+            if incoming:
+                return self._replace_selection(text, incoming), "changed"
+            return text, "handled"
+        if event.type != pygame.KEYDOWN:
+            return text, None
+
+        ctrl = bool(event.mod & pygame.KMOD_CTRL)
+        shift = bool(event.mod & pygame.KMOD_SHIFT)
+        if ctrl and event.key == pygame.K_a:
+            self.anchor = 0
+            self.cursor = len(text)
+            self._reset_blink()
+            return text, "handled"
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            return text, "submit"
+        if event.key == pygame.K_ESCAPE:
+            return text, "cancel"
+
+        lo, hi = self._selection()
+        if event.key == pygame.K_BACKSPACE:
+            if lo != hi:
+                return self._replace_selection(text, ""), "changed"
+            if self.cursor:
+                self.anchor = self.cursor - 1
+                return self._replace_selection(text, ""), "changed"
+            return text, "handled"
+        if event.key == pygame.K_DELETE:
+            if lo != hi:
+                return self._replace_selection(text, ""), "changed"
+            if self.cursor < len(text):
+                self.anchor = self.cursor + 1
+                return self._replace_selection(text, ""), "changed"
+            return text, "handled"
+        if event.key == pygame.K_LEFT:
+            pos = lo if lo != hi and not shift else self.cursor - 1
+            self._move(text, pos, shift)
+            return text, "handled"
+        if event.key == pygame.K_RIGHT:
+            pos = hi if lo != hi and not shift else self.cursor + 1
+            self._move(text, pos, shift)
+            return text, "handled"
+        if event.key == pygame.K_HOME:
+            self._move(text, 0, shift)
+            return text, "handled"
+        if event.key == pygame.K_END:
+            self._move(text, len(text), shift)
+            return text, "handled"
+        return text, "handled"
+
+    def draw(self, surface, rect, text, font, placeholder="",
+             bg=(16, 18, 22), border=(90, 100, 120),
+             focus_border=(195, 160, 80), text_color=(228, 228, 233),
+             placeholder_color=(118, 126, 140)):
+        self._rect, self._font = rect.copy(), font
+        self.cursor = max(0, min(len(text), self.cursor))
+        inner = pygame.Rect(rect.x + self._pad, rect.y + 2,
+                            max(1, rect.width - self._pad * 2),
+                            max(1, rect.height - 4))
+        cursor_px = font.size(text[:self.cursor])[0]
+        if cursor_px - self.scroll_x > inner.width - 1:
+            self.scroll_x = cursor_px - inner.width + 1
+        elif cursor_px < self.scroll_x:
+            self.scroll_x = cursor_px
+        total_px = font.size(text)[0]
+        self.scroll_x = max(0, min(self.scroll_x,
+                                   max(0, total_px - inner.width + 1)))
+
+        pygame.draw.rect(surface, bg, rect, border_radius=3)
+        pygame.draw.rect(surface, focus_border if self.focused else border,
+                         rect, 1, border_radius=3)
+        old_clip = surface.get_clip()
+        surface.set_clip(inner)
+        text_y = rect.centery - font.get_height() // 2
+        text_x = inner.x - self.scroll_x
+        lo, hi = self._selection()
+        if self.focused and lo != hi:
+            sx = text_x + font.size(text[:lo])[0]
+            ex = text_x + font.size(text[:hi])[0]
+            pygame.draw.rect(surface, (64, 96, 150),
+                             (sx, text_y, max(1, ex - sx), font.get_height()))
+        shown = text if text else placeholder
+        color = text_color if text else placeholder_color
+        surface.blit(font.render(shown, True, color), (text_x, text_y))
+        if (self.focused
+                and (time.time() - self.blink_at) % 1.0 < 0.55):
+            cx = text_x + cursor_px
+            pygame.draw.line(surface, (220, 220, 230),
+                             (cx, rect.y + 3), (cx, rect.bottom - 3), 1)
+        surface.set_clip(old_clip)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  DEV · Auction House panel
 #  Framework: Buy / Sell / List tabs, a working section (left) + a purchase-
@@ -27091,7 +27254,6 @@ def _skillup_handle_event(event):
 # ══════════════════════════════════════════════════════════════════════════
 ah_state = {
     "search": "",
-    "search_focus": False,
     "tab": "buy",            # buy | sell
     "items": [],             # [{"id": int, "name": str}] from AH|items
     "browse": False,         # category-browse mode in the Buy tab
@@ -27129,6 +27291,8 @@ _ah_rects = {}
 _ah_item_tip_rects = []   # [(rect, item_id)] for hover tooltips
 _ah_drag = {"on": False, "dx": 0, "dy": 0}
 _ah_resize = {"on": False, "x0": 0, "y0": 0, "w0": 0, "h0": 0}
+_ah_search_field = _TextField(max_length=40)
+_ah_edit_field = _TextField(max_length=20, allowed="0123456789.")
 
 
 def _ah_save_geometry():
@@ -28866,10 +29030,12 @@ def draw_ah_window(surface):
         surface.blit(t, (rect.centerx - t.get_width() // 2,
                          rect.centery - t.get_height() // 2))
 
-    def field(rect, text, focused, placeholder=""):
+    def field(rect, text, editor=None, placeholder=""):
+        if editor is not None:
+            editor.draw(surface, rect, text, fnt_s, placeholder)
+            return
         pygame.draw.rect(surface, (16, 18, 22), rect, border_radius=3)
-        pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
-                         rect, 1, border_radius=3)
+        pygame.draw.rect(surface, (90, 100, 120), rect, 1, border_radius=3)
         disp = text
         while disp and fnt_s.size(disp)[0] > rect.width - 8:
             disp = disp[1:]
@@ -28877,10 +29043,6 @@ def draw_ah_window(surface):
         col = (228, 228, 233) if text else (118, 126, 140)
         surface.blit(fnt_s.render(shown, True, col),
                      (rect.x + 4, rect.centery - fnt_s.get_height() // 2))
-        if focused:
-            cx = rect.x + 4 + (fnt_s.size(disp)[0] if disp else 0)
-            pygame.draw.line(surface, (220, 220, 230),
-                             (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
 
     # body: working pane | right results log  (buy-only; no tabs)
     ty = y + title_h
@@ -29012,7 +29174,7 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
     pad = 6
     # search row: field + Find + sort toggle
     sr = pygame.Rect(area.x, area.y, area.width - 222, 22)
-    field(sr, ah_state["search"], ah_state["search_focus"], "search items\u2026")
+    field(sr, ah_state["search"], _ah_search_field, "search items\u2026")
     _ah_rects["search"] = sr
     go_r = pygame.Rect(sr.right + 5, area.y, 48, 22)
     btn(go_r, "Find")
@@ -29117,7 +29279,7 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
             fr = pygame.Rect(cx, qy, cw - 4, qh - 3)
             editing = ah_state["edit"] == ("q", qi, key)
             val = ah_state["edit_buf"] if editing else str(q[key])
-            field(fr, val, editing, "")
+            field(fr, val, _ah_edit_field if editing else None, "")
             _ah_rects["qf:%d:%s" % (qi, key)] = fr
         # remove
         rm = pygame.Rect(q_r.x + 366, qy, 16, qh - 3)
@@ -29136,7 +29298,7 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
     th_r = pygame.Rect(area.x + 56, by, 44, 20)
     th_edit = ah_state["edit"] == ("throttle",)
     field(th_r, (ah_state["edit_buf"] if th_edit else str(ah_state["throttle"])),
-          th_edit, "")
+          _ah_edit_field if th_edit else None, "")
     _ah_rects["throttle"] = th_r
     surface.blit(fnt_s.render("s/txn", True, (120, 128, 142)), (th_r.right + 4, by + 4))
 
@@ -29223,7 +29385,7 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
         pval = (ah_state["edit_buf"] if editing
                 else (str(ah_state.get("sell_price", 0))
                       if ah_state.get("sell_price") else ""))
-        field(pr, pval, editing, "price (gil)")
+        field(pr, pval, _ah_edit_field if editing else None, "price (gil)")
         _ah_rects["sellprice"] = pr
         lb = pygame.Rect(area.right - 52, fy, 50, 18)
         btn(lb, "List", on=True, on_bg=(50, 80, 55), on_bd=(90, 150, 100),
@@ -29343,6 +29505,7 @@ def _ah_commit_edit():
         pass
     ah_state["edit"] = None
     ah_state["edit_buf"] = ""
+    _ah_edit_field.blur()
 
 
 def _claim_overlay_text_focus():
@@ -29384,10 +29547,10 @@ def _ah_handle_event(event):
         if r.get("search") and r["search"].collidepoint(mx, my):
             _ah_commit_edit()
             _claim_overlay_text_focus()
-            ah_state["search_focus"] = True
+            _ah_search_field.focus(ah_state["search"], mx, r["search"])
             return True
         else:
-            ah_state["search_focus"] = False
+            _ah_search_field.blur()
         if r.get("search_go") and r["search_go"].collidepoint(mx, my):
             _ah_commit_edit(); _ah_run_search(); return True
         if r.get("ah_clear") and r["ah_clear"].collidepoint(mx, my):
@@ -29396,7 +29559,7 @@ def _ah_handle_event(event):
             ah_state["items"] = []
             ah_state["items_scroll"] = 0
             _claim_overlay_text_focus()
-            ah_state["search_focus"] = True
+            _ah_search_field.focus(ah_state["search"])
             return True
         if r.get("ah_cats") and r["ah_cats"].collidepoint(mx, my):
             _ah_commit_edit()
@@ -29468,6 +29631,8 @@ def _ah_handle_event(event):
                 ah_state["edit"] = ("sellprice",)
                 ah_state["edit_buf"] = (str(ah_state.get("sell_price", 0))
                                         if ah_state.get("sell_price") else "")
+                _ah_edit_field.allowed = "0123456789"
+                _ah_edit_field.focus(ah_state["edit_buf"], mx, rr)
                 return True
             if key == "selllist":
                 _ah_commit_edit()
@@ -29489,12 +29654,16 @@ def _ah_handle_event(event):
                 _claim_overlay_text_focus()
                 ah_state["edit"] = ("q", int(qi), fld)
                 ah_state["edit_buf"] = str(ah_state["queue"][int(qi)][fld])
+                _ah_edit_field.allowed = "0123456789"
+                _ah_edit_field.focus(ah_state["edit_buf"], mx, rr)
                 return True
             if key == "throttle":
                 _ah_commit_edit()
                 _claim_overlay_text_focus()
                 ah_state["edit"] = ("throttle",)
                 ah_state["edit_buf"] = str(ah_state["throttle"])
+                _ah_edit_field.allowed = "0123456789."
+                _ah_edit_field.focus(ah_state["edit_buf"], mx, rr)
                 return True
             if key == "ah_sort":
                 _order = ["name", "level_asc", "level_desc"]
@@ -29569,34 +29738,27 @@ def _ah_handle_event(event):
             return True
         ah_state["items_scroll"] = max(0, ah_state["items_scroll"] + d)
         return True
-    elif event.type == pygame.KEYDOWN:
+    elif event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
         if ah_state["edit"] is not None:
-            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                _ah_commit_edit(); return True
-            if event.key == pygame.K_ESCAPE:
-                ah_state["edit"] = None; ah_state["edit_buf"] = ""; return True
-            if event.key == pygame.K_BACKSPACE:
-                ah_state["edit_buf"] = ah_state["edit_buf"][:-1]; return True
-            ch = getattr(event, "unicode", "")
-            if ch and (ch.isdigit() or ch == "."):
-                ah_state["edit_buf"] += ch
+            ah_state["edit_buf"], action = _ah_edit_field.handle_event(
+                event, ah_state["edit_buf"])
+            if action == "submit":
+                _ah_commit_edit()
+            elif action == "cancel":
+                ah_state["edit"] = None
+                ah_state["edit_buf"] = ""
+                _ah_edit_field.blur()
             return True
-        if ah_state["search_focus"]:
-            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                _ah_run_search(); return True
-            if event.key == pygame.K_ESCAPE:
-                ah_state["search_focus"] = False; return True
-            if event.key == pygame.K_BACKSPACE:
-                ah_state["search"] = ah_state["search"][:-1]
+        if _ah_search_field.focused:
+            ah_state["search"], action = _ah_search_field.handle_event(
+                event, ah_state["search"])
+            if action == "submit":
+                _ah_run_search()
+            elif action == "cancel":
+                _ah_search_field.blur()
+            elif action == "changed":
                 if len(ah_state["search"]) >= 2:
                     _ah_run_search()
-                return True
-            ch = getattr(event, "unicode", "")
-            if ch and ch.isprintable() and ch not in ("\r", "\n", "\t"):
-                if len(ah_state["search"]) < 40:
-                    ah_state["search"] += ch
-                    if len(ah_state["search"]) >= 2:
-                        _ah_run_search()
             return True
     return False
 
@@ -30036,7 +30198,7 @@ _sz_area_last_click = 0             # ticks of last view click (dbl=recenter)
 scanzone_map_pan    = [0.0, 0.0]    # map pan offset (screen px)
 scanzone_radar_pan  = [0.0, 0.0]    # radar pan offset (screen px)
 scanzone_input      = ""
-scanzone_input_focus = False
+_scanzone_field     = _TextField(max_length=40)
 scanzone_results    = []            # [(name, id, index)]  from DAT find
 scanzone_status     = ""
 scanzone_scroll     = 0             # first visible result row
@@ -30950,6 +31112,8 @@ def _toggle_scanzone_panel():
             globals()["settings_menu_open"] = False
         except Exception:
             pass
+    else:
+        _scanzone_field.blur()
 
 
 def _toggle_synergy_panel():
@@ -30975,6 +31139,9 @@ def _toggle_ah_panel():
             globals()["settings_menu_open"] = False
         except Exception:
             pass
+    else:
+        _ah_search_field.blur()
+        _ah_edit_field.blur()
 
 
 def _toggle_craftsyn_panel():
@@ -31356,34 +31523,16 @@ def draw_scanzone_window(surface):
     cy = y + title_h + pad
     in_r = pygame.Rect(x + pad, cy, bw - 2 * pad, input_h)
     _alias_mode = scanzone_alias_target is not None
-    pygame.draw.rect(surface, (30, 25, 16) if _alias_mode else (20, 22, 28),
-                     in_r, border_radius=3)
-    _input_focused = scanzone_input_focus or _alias_mode
-    pygame.draw.rect(
-        surface,
-        (195, 160, 80) if _input_focused else (90, 100, 120),
-        in_r, 1, border_radius=3)
-    if _alias_mode:
-        if scanzone_input:
-            isurf = fnt.render(scanzone_input, True, (240, 225, 165))
-        else:
-            isurf = fnt.render(
-                "type an alias\u2026  Enter saves  \u00b7  Esc cancels",
-                True, (175, 150, 110))
-    elif scanzone_input:
-        isurf = fnt.render(scanzone_input, True, (230, 230, 235))
-    else:
-        isurf = fnt.render(
-            "Name  /  Hex ID 0x1A2  /  Coordinates  X Y Z  /  grid F-8",
-            True, (110, 110, 120))
-    surface.blit(isurf, (in_r.x + 6,
-                         in_r.y + (input_h - isurf.get_height()) // 2))
-    caret_x = in_r.x + 6 + fnt.size(scanzone_input)[0] + 1
-    if _input_focused:
-        pygame.draw.line(
-            surface,
-            (235, 210, 140) if _alias_mode else (200, 210, 220),
-            (caret_x, in_r.y + 4), (caret_x, in_r.y + input_h - 4))
+    _placeholder = (
+        "type an alias\u2026  Enter saves  \u00b7  Esc cancels"
+        if _alias_mode else
+        "Name  /  Hex ID 0x1A2  /  Coordinates  X Y Z  /  grid F-8")
+    _scanzone_field.draw(
+        surface, in_r, scanzone_input, fnt, _placeholder,
+        bg=(30, 25, 16) if _alias_mode else (20, 22, 28),
+        text_color=(240, 225, 165) if _alias_mode else (230, 230, 235),
+        placeholder_color=(175, 150, 110) if _alias_mode
+        else (110, 110, 120))
     _sz_rects["input"] = in_r
 
     # row A: Find | Scan Zone | Coordinates | Clear  (Scan Zone lists every
@@ -32433,7 +32582,6 @@ def draw_scanzone_window(surface):
 
 def _scanzone_handle_event(event):
     global scanzone_panel_open, _sz_drag_off, _sz_resize_off, scanzone_input
-    global scanzone_input_focus
     global scanzone_scroll, scanzone_status, scanzone_results
     global scanzone_panel_w, scanzone_panel_h, scanzone_scan_info
     global scanzone_view, scanzone_spawn_filter, _sz_ctx, scanzone_radar_zoom
@@ -32448,7 +32596,7 @@ def _scanzone_handle_event(event):
         if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
             scanzone_panel_open = not scanzone_panel_open
             if not scanzone_panel_open:
-                scanzone_input_focus = False
+                _scanzone_field.blur()
             _scanzone_set_radar(scanzone_panel_open
                                 and scanzone_view in ("radar", "map"))
             return True
@@ -32504,7 +32652,8 @@ def _scanzone_handle_event(event):
                     elif act == "alias":
                         scanzone_alias_target = idx
                         scanzone_input = scanzone_aliases.get(idx, "")
-                        scanzone_input_focus = True
+                        _scanzone_field.max_length = 32
+                        _scanzone_field.focus(scanzone_input)
                         _claim_overlay_text_focus()
                         scanzone_status = (
                             "alias for %s \u2014 type, Enter saves"
@@ -32531,9 +32680,11 @@ def _scanzone_handle_event(event):
             return True
         if r.get("input") and r["input"].collidepoint(mx, my):
             _claim_overlay_text_focus()
-            scanzone_input_focus = True
+            _scanzone_field.max_length = (
+                32 if scanzone_alias_target is not None else 40)
+            _scanzone_field.focus(scanzone_input, mx, r["input"])
             return True
-        scanzone_input_focus = False
+        _scanzone_field.blur()
         if scanzone_alias_target is not None:
             scanzone_alias_target = None
             scanzone_input = ""
@@ -32545,7 +32696,7 @@ def _scanzone_handle_event(event):
             return True
         if r.get("close") and r["close"].collidepoint(mx, my):
             scanzone_panel_open = False
-            scanzone_input_focus = False
+            _scanzone_field.blur()
             _scanzone_set_radar(False)
             return True
         for _bk, _dragvar in (("listbar", "_sz_listbar_drag"),
@@ -32772,56 +32923,42 @@ def _scanzone_handle_event(event):
             scanzone_roster_scroll = max(0, scanzone_roster_scroll - event.y)
             return True
 
-    if event.type == pygame.KEYDOWN and scanzone_alias_target is not None:
-        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            _al = scanzone_input.strip()
-            if _al:
-                scanzone_aliases[scanzone_alias_target] = _al
-                scanzone_status = "alias set: " + _al
-            else:
-                scanzone_aliases.pop(scanzone_alias_target, None)
-                scanzone_status = "alias cleared"
-            scanzone_alias_target = None
-            scanzone_input = ""
-            scanzone_input_focus = False
+    if event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+        if scanzone_alias_target is not None:
+            scanzone_input, action = _scanzone_field.handle_event(
+                event, scanzone_input)
+            if action == "submit":
+                _al = scanzone_input.strip()
+                if _al:
+                    scanzone_aliases[scanzone_alias_target] = _al
+                    scanzone_status = "alias set: " + _al
+                else:
+                    scanzone_aliases.pop(scanzone_alias_target, None)
+                    scanzone_status = "alias cleared"
+                scanzone_alias_target = None
+                scanzone_input = ""
+                _scanzone_field.blur()
+            elif action == "cancel":
+                scanzone_alias_target = None
+                scanzone_input = ""
+                _scanzone_field.blur()
+                scanzone_status = "alias cancelled"
             return True
-        if event.key == pygame.K_ESCAPE:
-            scanzone_alias_target = None
-            scanzone_input = ""
-            scanzone_input_focus = False
-            scanzone_status = "alias cancelled"
-            return True
-        if event.key == pygame.K_BACKSPACE:
-            scanzone_input = scanzone_input[:-1]
-            return True
-        ch = getattr(event, "unicode", "")
-        if ch and ch.isprintable() and ch not in ("\r", "\n", "\t"):
-            if len(scanzone_input) < 32:
-                scanzone_input += ch
-            return True
-        return True
-    if event.type == pygame.KEYDOWN:
-        if event.key == pygame.K_ESCAPE:
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             if _sz_ctx:
                 _sz_ctx = None
                 return True
             scanzone_panel_open = False
-            scanzone_input_focus = False
+            _scanzone_field.blur()
             _scanzone_set_radar(False)
             return True
-        if not scanzone_input_focus:
+        if not _scanzone_field.focused:
             return False
-        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        scanzone_input, action = _scanzone_field.handle_event(
+            event, scanzone_input)
+        if action == "submit":
             _scanzone_run_find()
-            return True
-        if event.key == pygame.K_BACKSPACE:
-            scanzone_input = scanzone_input[:-1]
-            return True
-        ch = getattr(event, "unicode", "")
-        if ch and ch.isprintable() and ch not in ("\r", "\n", "\t"):
-            if len(scanzone_input) < 40:
-                scanzone_input += ch
-            return True
+        return True
     return False
 
 
@@ -56830,11 +56967,10 @@ while running:
     _focus_now = bool((chat_composer_focused or chat_composer_tell_to_focused
                        or _blusets_name_focus or inventory_search_focused
                        or (ah_panel_open and
-                           (ah_state["search_focus"]
-                            or ah_state["edit"] is not None))
-                       or (scanzone_panel_open and
-                           (scanzone_input_focus
-                            or scanzone_alias_target is not None))
+                           (_ah_search_field.focused
+                            or _ah_edit_field.focused))
+                       or (scanzone_panel_open
+                           and _scanzone_field.focused)
                        or (sim_import_open and sim_import_field))
                       and not _gt_capturing_active)
     if setting("no_focus_steal"):
