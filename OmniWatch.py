@@ -29345,6 +29345,15 @@ def _ah_commit_edit():
     ah_state["edit_buf"] = ""
 
 
+def _claim_overlay_text_focus():
+    """Give an overlay field exclusive ownership of keyboard text input."""
+    global chat_composer_focused, chat_composer_tell_to_focused
+    global _gt_capturing_active
+    chat_composer_focused = False
+    chat_composer_tell_to_focused = False
+    _gt_capturing_active = False
+
+
 def _ah_handle_event(event):
     if not ah_panel_open:
         return False
@@ -29374,6 +29383,7 @@ def _ah_handle_event(event):
         # search box
         if r.get("search") and r["search"].collidepoint(mx, my):
             _ah_commit_edit()
+            _claim_overlay_text_focus()
             ah_state["search_focus"] = True
             return True
         else:
@@ -29385,6 +29395,7 @@ def _ah_handle_event(event):
             ah_state["search"] = ""
             ah_state["items"] = []
             ah_state["items_scroll"] = 0
+            _claim_overlay_text_focus()
             ah_state["search_focus"] = True
             return True
         if r.get("ah_cats") and r["ah_cats"].collidepoint(mx, my):
@@ -29453,6 +29464,7 @@ def _ah_handle_event(event):
                 ah_state["sell_single"] = 0; return True
             if key == "sellprice":
                 _ah_commit_edit()
+                _claim_overlay_text_focus()
                 ah_state["edit"] = ("sellprice",)
                 ah_state["edit_buf"] = (str(ah_state.get("sell_price", 0))
                                         if ah_state.get("sell_price") else "")
@@ -29474,11 +29486,13 @@ def _ah_handle_event(event):
             if key.startswith("qf:"):
                 _, qi, fld = key.split(":")
                 _ah_commit_edit()
+                _claim_overlay_text_focus()
                 ah_state["edit"] = ("q", int(qi), fld)
                 ah_state["edit_buf"] = str(ah_state["queue"][int(qi)][fld])
                 return True
             if key == "throttle":
                 _ah_commit_edit()
+                _claim_overlay_text_focus()
                 ah_state["edit"] = ("throttle",)
                 ah_state["edit_buf"] = str(ah_state["throttle"])
                 return True
@@ -30022,6 +30036,7 @@ _sz_area_last_click = 0             # ticks of last view click (dbl=recenter)
 scanzone_map_pan    = [0.0, 0.0]    # map pan offset (screen px)
 scanzone_radar_pan  = [0.0, 0.0]    # radar pan offset (screen px)
 scanzone_input      = ""
+scanzone_input_focus = False
 scanzone_results    = []            # [(name, id, index)]  from DAT find
 scanzone_status     = ""
 scanzone_scroll     = 0             # first visible result row
@@ -31343,9 +31358,11 @@ def draw_scanzone_window(surface):
     _alias_mode = scanzone_alias_target is not None
     pygame.draw.rect(surface, (30, 25, 16) if _alias_mode else (20, 22, 28),
                      in_r, border_radius=3)
-    pygame.draw.rect(surface,
-                     (195, 160, 80) if _alias_mode else (90, 100, 120),
-                     in_r, 1, border_radius=3)
+    _input_focused = scanzone_input_focus or _alias_mode
+    pygame.draw.rect(
+        surface,
+        (195, 160, 80) if _input_focused else (90, 100, 120),
+        in_r, 1, border_radius=3)
     if _alias_mode:
         if scanzone_input:
             isurf = fnt.render(scanzone_input, True, (240, 225, 165))
@@ -31362,9 +31379,11 @@ def draw_scanzone_window(surface):
     surface.blit(isurf, (in_r.x + 6,
                          in_r.y + (input_h - isurf.get_height()) // 2))
     caret_x = in_r.x + 6 + fnt.size(scanzone_input)[0] + 1
-    pygame.draw.line(surface,
-                     (235, 210, 140) if _alias_mode else (200, 210, 220),
-                     (caret_x, in_r.y + 4), (caret_x, in_r.y + input_h - 4))
+    if _input_focused:
+        pygame.draw.line(
+            surface,
+            (235, 210, 140) if _alias_mode else (200, 210, 220),
+            (caret_x, in_r.y + 4), (caret_x, in_r.y + input_h - 4))
     _sz_rects["input"] = in_r
 
     # row A: Find | Scan Zone | Coordinates | Clear  (Scan Zone lists every
@@ -32414,6 +32433,7 @@ def draw_scanzone_window(surface):
 
 def _scanzone_handle_event(event):
     global scanzone_panel_open, _sz_drag_off, _sz_resize_off, scanzone_input
+    global scanzone_input_focus
     global scanzone_scroll, scanzone_status, scanzone_results
     global scanzone_panel_w, scanzone_panel_h, scanzone_scan_info
     global scanzone_view, scanzone_spawn_filter, _sz_ctx, scanzone_radar_zoom
@@ -32427,6 +32447,8 @@ def _scanzone_handle_event(event):
         m = pygame.key.get_mods()
         if (m & pygame.KMOD_CTRL) and (m & pygame.KMOD_SHIFT):
             scanzone_panel_open = not scanzone_panel_open
+            if not scanzone_panel_open:
+                scanzone_input_focus = False
             _scanzone_set_radar(scanzone_panel_open
                                 and scanzone_view in ("radar", "map"))
             return True
@@ -32482,6 +32504,8 @@ def _scanzone_handle_event(event):
                     elif act == "alias":
                         scanzone_alias_target = idx
                         scanzone_input = scanzone_aliases.get(idx, "")
+                        scanzone_input_focus = True
+                        _claim_overlay_text_focus()
                         scanzone_status = (
                             "alias for %s \u2014 type, Enter saves"
                             % _scanzone_name_for(idx))
@@ -32505,6 +32529,11 @@ def _scanzone_handle_event(event):
                     return True
             _sz_ctx = None        # click elsewhere closes the menu
             return True
+        if r.get("input") and r["input"].collidepoint(mx, my):
+            _claim_overlay_text_focus()
+            scanzone_input_focus = True
+            return True
+        scanzone_input_focus = False
         if scanzone_alias_target is not None:
             scanzone_alias_target = None
             scanzone_input = ""
@@ -32516,6 +32545,7 @@ def _scanzone_handle_event(event):
             return True
         if r.get("close") and r["close"].collidepoint(mx, my):
             scanzone_panel_open = False
+            scanzone_input_focus = False
             _scanzone_set_radar(False)
             return True
         for _bk, _dragvar in (("listbar", "_sz_listbar_drag"),
@@ -32753,10 +32783,12 @@ def _scanzone_handle_event(event):
                 scanzone_status = "alias cleared"
             scanzone_alias_target = None
             scanzone_input = ""
+            scanzone_input_focus = False
             return True
         if event.key == pygame.K_ESCAPE:
             scanzone_alias_target = None
             scanzone_input = ""
+            scanzone_input_focus = False
             scanzone_status = "alias cancelled"
             return True
         if event.key == pygame.K_BACKSPACE:
@@ -32769,15 +32801,18 @@ def _scanzone_handle_event(event):
             return True
         return True
     if event.type == pygame.KEYDOWN:
-        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            _scanzone_run_find()
-            return True
         if event.key == pygame.K_ESCAPE:
             if _sz_ctx:
                 _sz_ctx = None
                 return True
             scanzone_panel_open = False
+            scanzone_input_focus = False
             _scanzone_set_radar(False)
+            return True
+        if not scanzone_input_focus:
+            return False
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            _scanzone_run_find()
             return True
         if event.key == pygame.K_BACKSPACE:
             scanzone_input = scanzone_input[:-1]
@@ -56794,6 +56829,12 @@ while running:
     # cancel the capture).
     _focus_now = bool((chat_composer_focused or chat_composer_tell_to_focused
                        or _blusets_name_focus or inventory_search_focused
+                       or (ah_panel_open and
+                           (ah_state["search_focus"]
+                            or ah_state["edit"] is not None))
+                       or (scanzone_panel_open and
+                           (scanzone_input_focus
+                            or scanzone_alias_target is not None))
                        or (sim_import_open and sim_import_field))
                       and not _gt_capturing_active)
     if setting("no_focus_steal"):
