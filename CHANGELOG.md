@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.4] — 2026-07-29
+
+### Fixed
+
+- **Typing in the Auction House and Tracker now goes where you’re looking** — with **Keep game focus** on, clicking into the Auction House search box, a sell price or queue field, or the Tracker’s search box didn’t actually hand the keyboard to the overlay, so what you typed went to FFXI instead — often opening the game’s own chat line mid-word. Those fields now take keyboard ownership the moment you click them, and give it straight back when you click away. *(Thanks Gorschu!)*
+- **The Tracker no longer swallows keys when its search box isn’t focused** — with the Tracker panel open, typing meant for somewhere else in the overlay could be quietly captured by the Tracker’s search field. It now only accepts keys once you’ve clicked into it, and the field’s border and caret light up so you can see when it has focus. **Esc** still closes the panel from anywhere.
+- **The Tracker no longer jumps to Radar after a widescan** — every completed widescan forced the view back to Radar, discarding whichever view you were using. A widescan now just refreshes the data and leaves your chosen view (List / Radar / Map) exactly where you put it. *(Thanks again Gorschu!)*
+
 ## [1.9.3] — 2026-07-10
 
 ### Added
