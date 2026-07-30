@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.9.5] — 2026-07-30
+
+### Added
+
+- **Real text editing in the Auction House and Tracker boxes** — the single-line inputs used to be append-and-backspace only. They now behave like text fields anywhere else: click to place the cursor, move with the arrow keys or **Home**/**End**, hold **Shift** to select, **Ctrl+A** to select all, **Delete** as well as Backspace, and long entries scroll inside the box instead of running off the end. The price and quantity fields also reject anything that isn’t a number. All of them — AH search, AH price/quantity, and the Tracker’s search and alias boxes — now share one implementation, so they behave the same way and stay that way. *(Thanks Gorschu!)*
+
+### Fixed
+
+- **The Auction House and population readout no longer wander onto the wrong address** — left logged in for a few hours, both would quietly stop working with a stream of connection-refused errors, and stay broken across restarts even though your world’s address had never changed. Auto-detect locates the search server by looking for a live connection to it on your PC, and that connection only exists for a few minutes after an in-game search or an AH browse. Hours into a session the right answer is simply gone from the table — but the scan kept running every two minutes and would accept *anything* it found on the same port, including an address on your own local network. It then saved that as authoritative. Detection now only accepts one of the sixteen published retail search-server addresses, and it stops scanning entirely once OmniWatch already holds the address your **Server** setting points at.
+- **A bad remembered address can no longer stick permanently** — 1.9.3 stopped deleting the remembered server when a query failed, which was the right call for a timeout, but it also meant a *wrong* address could never be evicted: the failure path cleared only the in-memory copy, and the next lookup read the same bad value straight back off disk. The remembered address is now checked when it’s read and thrown away if it isn’t a real search server, so an already-poisoned one heals itself on the next launch with nothing for you to delete.
+- **Your Server setting now drives the Auction House** — the **Server** picker (**Settings → Header → Server**) was only feeding the Domain Invasion banner and NM lookups. It now resolves the search server for the Auction House and the population readout too, as a direct lookup. If auto-detect ever disagrees with your setting, the AH log says so and names both worlds instead of silently pricing against the wrong market.
+- **A stale population number now looks stale** — a failed poll used to leave the last good reading on the header, indistinguishable from a live one. It now greys out and reads *(no reply)* until the next successful refresh.
+- **Two silent failure paths in the population poller** — a reply that arrived but didn’t decode counted as neither a success nor a failure, which froze the retry logic in place; and a short/truncated packet raised an error type that was being swallowed without counting. Both are now treated as failures, so the poller recovers instead of stalling.
+
 ## [1.9.4] — 2026-07-29
 
 ### Fixed
