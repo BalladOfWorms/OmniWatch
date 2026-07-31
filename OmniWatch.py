@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.9.5 (2026-07-30)"
+OMNIWATCH_BUILD_STAMP = "v1.9.6 (2026-07-31)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.9.5"
+OMNIWATCH_VERSION = "1.9.6"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -7019,6 +7019,13 @@ _mobdb_by_lower = {}
 _DMG_TYPE_ORDER = [
     "Slashing", "Piercing", "H2H", "Impact",
     "Fire", "Ice", "Wind", "Earth", "Lightning", "Water", "Light", "Dark",
+    # The bestiary's resist grid is 16 cells, not 12: BG-wiki publishes a
+    # Ranged column and the Physical / Magical / Breath aggregates alongside
+    # the eight elements and four melee types. They had nowhere to land here,
+    # so mob_individuals.json was silently dropping them. A mob with no value
+    # for one of these simply has no key in `modifiers` and is skipped below,
+    # so an older data file behaves exactly as before.
+    "Ranged", "Physical", "Magical", "Breath",
 ]
 
 def _parse_mobdb_file(path):
@@ -49491,7 +49498,14 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
         # the vertical layout is stable across mobs. Empty list shows "—".
         imm_list = []
         if mobdb_entry:
-            imm_list = decode_immunities(mobdb_entry.get("immunities", 0))
+            # The `immune` string list is the richer source: the bestiary
+            # records 51 distinct immunity terms and only 15 of them have a
+            # bit in _IMMUNITY_FLAGS, so Drain, Aspir, Dark Sleep, Break and
+            # the "Varies" cases exist ONLY here. Fall back to the bitmask
+            # for data files that predate the list being populated.
+            imm_list = [str(x) for x in (mobdb_entry.get("immune") or []) if x]
+            if not imm_list:
+                imm_list = decode_immunities(mobdb_entry.get("immunities", 0))
         cy = _draw_wrapped_items("Imm:", imm_list, (200, 200, 140), cy)
 
         cy = _draw_wrapped_items("STR:", _parts(strengths_out),  COL_TC_STRONG, cy)
