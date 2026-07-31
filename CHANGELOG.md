@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.9.6] — 2026-07-31
+
+### Changed
+
+- **The mob database has been rebuilt from scratch** — the bestiary behind the target card was last built in May, before a family-by-family pass through every monster in the game, and it showed. Belaboring Wasp listed two resistances where the real page has ten, and its detection was recorded as Scent when it actually tracks by sight. Every record has now been regenerated: **7,137 monsters and 1,754 ability descriptions**, with resistances, weaknesses, detection, job, crystal, level range, respawn timer, abilities and spells all refreshed. Nothing was dropped in the process — Besieged allies, Campaign NPCs, livestock and everything else the bestiary never covered are all still there.
+
+### Fixed
+
+- **Ranged, Physical, Magical and Breath resistances now appear on the target card** — the card only ever understood twelve damage types: the eight elements plus Slashing, Piercing, H2H and Impact. The bestiary publishes sixteen. The other four were being read in and silently thrown away, so a mob that takes half damage from ranged attacks looked neutral to them. Xolotl, for one, was hiding **Ranged −50%**, **Magical −25%** and **Breath −50%**. All sixteen now show.
+- **Immunities are no longer cut down to fifteen** — the **Imm:** row was built from a bit-packed field with room for exactly fifteen statuses, and the bestiary records fifty-one. Anything without a slot simply vanished: **Drain** and **Aspir** between them cover 280 monsters each, and **Dark Sleep** another 182, none of which could ever be shown. **193 monsters** displayed a blank Imm: row while their immunities sat in the file unread. The full list is now used. Xolotl reads *Drain, Aspir, Sleep* where it used to read only *Sleep*.
+
 ## [1.9.5] — 2026-07-30
 
 ### Added
