@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.9.5'
+_addon.version  = '1.9.7'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')

@@ -16,11 +16,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.9.6 (2026-07-31)"
+OMNIWATCH_BUILD_STAMP = "v1.9.7 (2026-07-31)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.9.6"
+OMNIWATCH_VERSION = "1.9.7"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -42716,6 +42716,37 @@ def draw_settings_menu(surface):
                          border_radius=2)
 
 
+def _settings_menu_wheel_consume(event):
+    """Scroll the settings dropdown if the wheel turned over it.
+
+    The dropdown is drawn LAST (so it sits on top of every panel) but its
+    wheel handling used to live at the END of the event chain, after the
+    panel handlers. Any open panel underneath it -- Scan Zone and Craft
+    both scroll on the wheel -- claimed the event first and returned, so
+    the menu simply would not scroll wherever it overlapped one. Deciding
+    this up front restores the z-order the drawing already implies, and
+    matches what the warp menu and cheat sheet blocks were already doing
+    by checking `not settings_menu_open`.
+    """
+    global settings_menu_scroll
+    if event.type != pygame.MOUSEWHEEL:
+        return False
+    if not settings_menu_open or settings_menu_panel_rect is None:
+        return False
+    # The genuinely top-most modals still outrank the dropdown; they are
+    # handled further down the chain and swallow the wheel themselves.
+    if sim_import_open or checklist_modal_open or campaigns_modal_open:
+        return False
+    if not settings_menu_panel_rect.collidepoint(pygame.mouse.get_pos()):
+        return False
+    # event.y > 0 = wheel up = show earlier rows. One row (24px) per click,
+    # scaled by the global UI factor. The upper bound is clamped during
+    # render against the current overflow.
+    settings_menu_scroll = max(
+        0, settings_menu_scroll - event.y * round(24 * _menu_g()))
+    return True
+
+
 def dispatch_settings_menu_click(mx, my):
     """Resolve a click at (mx, my) against settings_menu_rects. Returns
     True if the click hit a control (and was dispatched), False if the
@@ -57131,6 +57162,11 @@ while running:
             # Fisher bait/catch fields) is capturing keystrokes.
             pass
 
+        elif _settings_menu_wheel_consume(event):
+            # Settings dropdown is open and the cursor is over it. It draws
+            # above every panel, so it gets the wheel before they do.
+            pass
+
         elif (not _dev_panel_input_blocked()
                 and _loadouts_handle_event(event)):
             # Loadouts window (BLU / Trusts / PUP tabs) consumed the event.
@@ -57236,20 +57272,9 @@ while running:
                 cheatsheet_scroll = max(0, cheatsheet_scroll - event.y * 30)
                 continue
 
-            # Settings menu takes priority — if open and cursor is over
-            # the panel, scroll its content instead of party buff columns
-            # or the inventory dropdown. Wheel-step is 24px (one row).
-            if (settings_menu_open
-                    and settings_menu_panel_rect is not None
-                    and settings_menu_panel_rect.collidepoint(mx, my)):
-                # event.y > 0 = wheel up = scroll content UP (show earlier rows).
-                # Step is one row (24px) scaled by the global UI factor so a
-                # click moves ~one row regardless of scale.
-                settings_menu_scroll = max(0,
-                    settings_menu_scroll - event.y * round(24 * _menu_g()))
-                # Upper bound clamp happens during render against the
-                # current overflow value, so we don't need to clamp here.
-                continue
+            # (The settings dropdown claimed the wheel earlier in the
+            # chain, in _settings_menu_wheel_consume, so that panels
+            # underneath it can no longer take the event first.)
 
             # Inventory dropdown takes priority — if it's open and the
             # cursor is over its panel envelope, scroll the active bag's

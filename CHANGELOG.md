@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.7] — 2026-07-31
+
+### Fixed
+
+- **The settings menu wouldn’t scroll when it overlapped an open panel** — the settings dropdown is taller than the window and has always needed scrolling to reach the lower sections, but the wheel did nothing whenever the menu happened to sit over the Crafting or Tracker panel. Those panels scroll on the wheel too, and they were being offered the event first — so they took it, even though the menu is drawn on top of them and was clearly the thing under the cursor. The dropdown now gets the wheel before any panel underneath it, matching where it sits on screen. Full-screen modals still take priority over the menu, and panels still scroll normally when the menu isn’t covering them.
+
 ## [1.9.6] — 2026-07-31
 
 ### Changed
