@@ -44,6 +44,27 @@ function check_buffs()
 		if buff.id == 194 then -- elegy
 			this_buff['ma_haste'] = -512
 		end
+		-- ── OmniWatch patch ──────────────────────────────
+		-- Myoshu: Ichi (ninjutsu) grants the caster Subtle Blow +10.
+		-- Nothing else in this chain writes Subtle Blow, so without this
+		-- the S.Blow cell showed gear + traits + gifts only and never
+		-- moved when the spell went up.
+		--
+		-- Matched on the STATUS NAME rather than a buff id: the effect is
+		-- reported as "Subtle Blow" or "Subtle Blow Plus" depending on the
+		-- resources version, and a prefix match covers both without
+		-- hardcoding an id. Note this catches ONLY the status of that
+		-- name: Auspice and Conspirator also grant Subtle Blow but carry
+		-- their own status names, so they'd each need their own branch.
+		--
+		-- The +10 is subject to the same 50 Subtle Blow cap as gear and
+		-- traits, which is why the panel still flags a total over 50.
+		if buff.name then
+			local _ow_bn = tostring(buff.name):lower()
+			if _ow_bn:sub(1, 11) == 'subtle blow' then
+				this_buff['Subtle Blow'] = 10
+			end
+		end
 		if buff.id == 58 then -- Aggressor
 			this_buff['Accuracy'] = 25
 			this_buff['Evasion'] = -25

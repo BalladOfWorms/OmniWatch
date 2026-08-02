@@ -5,6 +5,7 @@ import math
 import json
 import os
 import re
+import shutil
 import sys
 import webbrowser
 import urllib.parse
@@ -16,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.9.7 (2026-07-31)"
+OMNIWATCH_BUILD_STAMP = "v1.10.0 (2026-08-01)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.9.7"
+OMNIWATCH_VERSION = "1.10.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1043,6 +1044,14 @@ statistics_settings_modal_rects = []
 profile_name_modal_open  = False
 profile_name_modal_text  = ""
 profile_name_modal_rects = []
+# "save"   — name the live setup and start using it as a profile
+# "rename" — rename an existing profile (profile_name_modal_target)
+profile_name_modal_mode   = "save"
+profile_name_modal_target = ""
+# Set when a name is refused (collision / reserved) so the modal can say
+# why instead of appearing to swallow the click. Cleared on the next
+# keystroke, so correcting the name clears the complaint.
+profile_name_modal_error  = ""
 sim_import_cwd      = ""
 sim_import_file     = None
 sim_import_setpath  = ""
@@ -1104,6 +1113,115 @@ _borderless_drag = None
 _ow_window_resize    = None
 _ow_window_grip_rect = None
 _windowed_size       = [WIDTH, HEIGHT]
+# Where the window sits on the desktop, saved in the layout alongside its
+# size so a profile made for a second monitor reopens on that monitor.
+# [None, None] = never recorded; leave the window wherever the OS put it.
+_windowed_pos        = [None, None]
+
+
+def _ow_get_window_pos():
+    """Screen coords of the window's top-left, or None off-Windows / on any
+    failure. Read from the OS rather than tracked, because the window can be
+    moved by dragging the header, by the full-screen toggle, or by Windows
+    itself when a monitor is unplugged."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        info = pygame.display.get_wm_info()
+        hwnd = info.get("window") or info.get("hwnd") or 0
+        if not hwnd:
+            return None
+        rect = wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd),
+                                           ctypes.byref(rect))
+        return int(rect.left), int(rect.top)
+    except Exception as e:
+        print(f"[OmniWatch] _ow_get_window_pos: {e!r}")
+        return None
+
+
+def _ow_pos_is_on_a_monitor(x, y):
+    """True if (x, y) lands on a display that is actually attached.
+
+    This is the guard that makes second-monitor profiles safe: load one
+    while that monitor is unplugged and the saved coordinates point into
+    nowhere, which on Windows means a window you can see no part of and
+    cannot drag back. MONITOR_DEFAULTTONULL (0) returns 0 for a point on no
+    monitor, which is exactly the test we want. Probes a little inside the
+    window so a position one pixel off an edge doesn't read as off-screen."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        pt = POINT(int(x) + 40, int(y) + 20)
+        return bool(ctypes.windll.user32.MonitorFromPoint(pt, 0))
+    except Exception as e:
+        print(f"[OmniWatch] _ow_pos_is_on_a_monitor: {e!r}")
+        return False
+
+
+def _ow_move_window(x, y):
+    """Move the window without resizing or changing z-order. Refuses to move
+    to a position that isn't on any attached display — better to leave the
+    window where it is than to put it somewhere unreachable."""
+    if sys.platform != "win32":
+        return False
+    if x is None or y is None:
+        return False
+    if not _ow_pos_is_on_a_monitor(x, y):
+        print(f"[OmniWatch] window position ({x}, {y}) is not on any "
+              f"attached display — leaving the window where it is")
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        info = pygame.display.get_wm_info()
+        hwnd = info.get("window") or info.get("hwnd") or 0
+        if not hwnd:
+            return False
+        SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0001, 0x0004, 0x0010
+        fn = ctypes.windll.user32.SetWindowPos
+        fn.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                       ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                       wintypes.UINT]
+        fn.restype = wintypes.BOOL
+        return bool(fn(wintypes.HWND(hwnd), wintypes.HWND(0),
+                       int(x), int(y), 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE))
+    except Exception as e:
+        print(f"[OmniWatch] _ow_move_window: {e!r}")
+        return False
+
+
+def _apply_window_geometry():
+    """Resize and reposition the OS window to the loaded layout's saved
+    values. Called at startup and after a profile switch. Does nothing while
+    full-screen — the restore rect owns the geometry there and stomping it
+    would strand the user in a fullscreen window sized for a profile."""
+    global screen, WIDTH, HEIGHT
+    if globals().get("_fullscreen_saved_rect") is not None:
+        return
+    try:
+        if (_windowed_size and len(_windowed_size) == 2
+                and (int(_windowed_size[0]) != WIDTH
+                     or int(_windowed_size[1]) != HEIGHT)):
+            WIDTH = max(OW_MIN_W, int(_windowed_size[0]))
+            HEIGHT = max(OW_MIN_H, int(_windowed_size[1]))
+            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
+    except Exception as e:
+        print(f"[OmniWatch] _apply_window_geometry (size): {e!r}")
+    try:
+        if _windowed_pos and len(_windowed_pos) == 2:
+            _ow_move_window(_windowed_pos[0], _windowed_pos[1])
+    except Exception as e:
+        print(f"[OmniWatch] _apply_window_geometry (pos): {e!r}")
 
 sim_state = {
     # Legacy fields (main_job/sub_job/merits/jp_spent/gifts) are kept in
@@ -5630,6 +5748,29 @@ equip_slot_rects = {}    # slot_idx -> pygame.Rect, updated each frame by draw_e
 # hover check to show the ability tooltip.
 _mob_ability_rects = []
 
+# Target-card body scroll state, keyed by the card's title label
+# ("TARGET" / "SUB-TARGET") so the two cards scroll independently.
+#   _tc_scroll      : current pixel offset of the stat block
+#   _tc_scroll_max  : overflow in pixels (0 = it all fits, no scrollbar)
+#   _tc_scroll_rect : screen rect of the scrollable body, for wheel hit-tests
+#   _tc_scroll_step : one text row in pixels at the card's current scale
+#   _tc_scroll_of   : which target id the offset belongs to (reset on retarget)
+# _tc_scroll_rect is cleared at the top of every frame and repopulated by
+# whichever cards actually draw, so a card that isn't on screen can't keep
+# swallowing the wheel. All of these are mutated in place, never rebound, so
+# neither the renderer nor the event loop needs a `global` declaration.
+_tc_scroll      = {}
+_tc_scroll_max  = {}
+_tc_scroll_rect = {}
+_tc_scroll_step = {}
+_tc_scroll_of   = {}
+
+# Exact body-content height in pixels as measured by the last render of a
+# card, keyed by (_tc_mob_key(info), scale). target_card_size prefers this
+# over its own line-count estimate — that's what lets the card come out
+# exactly as tall as the mob in front of you needs.
+_tc_measured_h  = {}
+
 # Party-row buff/debuff icon hover: list of (screen_rect, name) tuples,
 # updated each frame by the icon-grid renderer. Consumed at end-of-frame
 # to show the buff name as a small tooltip when the cursor is over an
@@ -5780,6 +5921,10 @@ warp_button_rect    = None    # hit rect (set during draw)
 warp_button_scale   = 1.0     # independent size multiplier (resize handle)
 warp_button_handle_rect = None  # corner resize handle (set during draw)
 _warp_btn_draw_pos  = None    # clamped on-screen draw pos (drag grabs here)
+# Where the travel menu should open, when something other than the floating
+# button opened it (a hotbar slot passes the cursor). None = beside the
+# floating button, which is the original behaviour.
+_warp_menu_anchor   = None
 _warp_btn_drag      = None    # click-or-drag state {grab_dx,..,moved}
 _warp_btn_resize    = None    # {start_scale, anchor_x, anchor_y}
 warp_menu_open      = False   # travel menu popover open?
@@ -5987,6 +6132,19 @@ _stats_save_as_open_at = 0.0
 # MOUSEUP without started → it's a click → toggle hidden.
 # MOUSEUP with started → it's a drag end → commit reorder.
 _stats_cell_drag = None
+
+# Stats-panel-only layout editing. A middle ground between the old "Edit
+# layout" (which opened the JSON in a text editor) and full setup mode
+# (which unlocks EVERY panel for dragging, shows resize grips and fills
+# panels with mock data). With this on, the stats panel behaves exactly as
+# it does in setup mode — cells clickable to hide, draggable to reorder,
+# tray and Save-as visible — and nothing else on screen changes.
+#
+# Deliberately a SEPARATE flag rather than a mode of setup_mode: the whole
+# point is that the rest of the app stays in its normal state, so the two
+# must be able to be true independently. Everything that cares reads
+# _stats_edit_active().
+stats_layout_edit = False
 # Threshold in pixels the cursor must move before we consider it a drag
 # (as opposed to a sloppy click). Generous so accidental wobble still
 # registers as a click for hide-toggle.
@@ -6657,11 +6815,13 @@ def _rebuild_path_constants():
     GEARSWAP_PATH_FILE = os.path.join(cd, "omniwatch_gearswap_path.json")
     BUFF_TIMER_CFG     = os.path.join(cd, "omniwatch_buff_timer.json")
     RECAST_TIMER_CFG   = os.path.join(cd, "omniwatch_recast.json")
-    # Cheat sheet sources. The Common sheet is per-character but shared
-    # across that character's profiles/jobs (the static top section). The
-    # job sheet is per-profile (set below, after the active profile name
-    # is loaded) so it switches with the profile.
+    # Cheat sheet sources. The Common sheet is shared across the
+    # character's profiles (the static top section); the job sheet is one
+    # of the files a profile swaps (see _PROFILE_PARTS). Both are plain
+    # per-character paths — profiles copy files around, they never
+    # repoint these globals.
     CHEATSHEET_COMMON_FILE = os.path.join(cd, "omniwatch_cheatsheet_common.json")
+    CHEATSHEET_JOB_FILE    = os.path.join(cd, "omniwatch_cheatsheet.json")
     # Snapshot of currently-active buffs with absolute Unix timestamps.
     # Written periodically while buffs are active and read at startup to
     # restore timer state across Python reloads when the lua side hasn't
@@ -6671,23 +6831,11 @@ def _rebuild_path_constants():
     # Per-job + global customizable stats panel layouts.
     STATS_LAYOUT_FILE  = os.path.join(cd, "omniwatch_stats_layout.json")
 
-    # Active layout profile for this character. _load_active_profile_name
-    # reads the omniwatch_profile.json pointer (defaults to "Default")
-    # then we rewire LAYOUT_FILE and SETTINGS_FILE to point at the
-    # chosen profile's JSONs. From here on the rest of the addon
-    # uses these globals transparently — no other code needs to
-    # know about profiles.
+    # Which saved profile this character is currently using, if any. The
+    # files above are the LIVE setup and never move; a profile is a saved
+    # copy of some of them. _load_active_profile_name also performs the
+    # one-time migration off the old repointing model.
     _load_active_profile_name()
-    CHEATSHEET_JOB_FILE = _cheatsheet_path_for(active_profile_name)
-    if active_profile_name and active_profile_name != "Default":
-        LAYOUT_FILE   = _layout_path_for(active_profile_name)
-        SETTINGS_FILE = _settings_path_for(active_profile_name)
-        # If the named profile's settings file is missing (e.g. the
-        # user created the profile before settings-snapshot landed),
-        # fall back to the canonical settings file. The first save
-        # in this profile will populate the named file.
-        if not os.path.exists(SETTINGS_FILE):
-            SETTINGS_FILE = os.path.join(cd, "omniwatch_settings.json")
 
 # Initial bind. These point to USER_DIR (no char) until the first
 # PLAYER packet fires — _rebuild_path_constants() runs again then.
@@ -7726,11 +7874,17 @@ def region_for_zone(zone_id):
 #     "label":   string shown on the button. "" hides label, icon-only.
 #     "icon":    optional filename inside icons/ui/, e.g. "discord.png".
 #                "" or null means no icon (label only).
-#     "kind":    "windower" | "shell" | "url" | "file" | "none"
+#     "kind":    "windower" | "action" | "shell" | "url" | "file" | "none"
 #     "command": the thing to run, semantics depend on kind:
 #                  windower → slash-style command without leading "//",
 #                             e.g. "send all /follow Wormfood" or
 #                             "ow dps reset"
+#                  action   → key of a built-in OmniWatch action from
+#                             HOTBAR_ACTIONS ("sing", "calltrust", …).
+#                             These are things with no slash command at
+#                             all: they live in the overlay and depend on
+#                             overlay state, so they're picked from a
+#                             list rather than typed.
 #                  shell    → arbitrary shell command, run with shell=True
 #                  url      → http(s) URL opened in default browser
 #                  file     → path to a file/program to launch via os.startfile
@@ -7782,7 +7936,7 @@ def _normalize_button_entry(raw):
     if not isinstance(raw, dict):
         return {"label": "", "icon": "", "kind": "none", "command": ""}
     kind = str(raw.get("kind", "none")).strip().lower()
-    if kind not in ("windower", "shell", "url", "file", "none"):
+    if kind not in ("windower", "action", "shell", "url", "file", "none"):
         kind = "none"
     color = str(raw.get("color", "") or "")
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
@@ -7937,6 +8091,7 @@ def save_buttons_config():
         }
         with open(BUTTONS_FILE, "w") as f:
             json.dump(envelope, f, indent=2)
+        _profile_mirror(BUTTONS_FILE)
         total = sum(1 for p in hotbar_pages
                     for b in p["buttons"] if b["kind"] != "none")
         print(f"[OmniWatch] saved {len(hotbar_pages)} pages "
@@ -8009,6 +8164,122 @@ def _dispatch_button_on_panel(slot_idx, panel_idx):
     finally:
         buttons_config = saved
 
+# ── Built-in OmniWatch actions, bindable to a hotbar slot ───────────────
+# These are the things the floating buttons do. None of them is a slash
+# command — Cheat Sheet and Warp are overlay windows, and Sing / Call Trust
+# build a UDP payload out of whichever set is active in Loadouts, so there
+# is nothing to type into a "windower" button. Binding one here calls the
+# SAME function the floating button calls, so the two are alternative ways
+# in and the floating buttons are unaffected.
+#
+# Functions are held by NAME and resolved through globals() at click time:
+# every one of them is defined further down the file than this table.
+#
+#   (key, editor label, function name)
+HOTBAR_ACTIONS = [
+    ("sing",       "Sing (start/stop)",  "_sing_button_invoke"),
+    ("calltrust",  "Call Trust",         "_calltrust_invoke"),
+    ("warp",       "Warp menu",          "_warp_toggle_menu"),
+    ("cheatsheet", "Cheat Sheet",        "_cheatsheet_toggle"),
+    ("autora",     "Auto ranged attack", "_hb_toggle_autora"),
+]
+HOTBAR_ACTION_KEYS   = [a[0] for a in HOTBAR_ACTIONS]
+HOTBAR_ACTION_LABELS = {a[0]: a[1] for a in HOTBAR_ACTIONS}
+
+# Transient note from an action fired off the hotbar, drawn at the cursor.
+# The floating buttons show their own note beside themselves; a hotbar
+# press has no such anchor, and "Sing a set once from Loadouts first" is
+# exactly the feedback you must not lose. {"text", "until", "x", "y"}.
+_hb_action_note = None
+
+
+def _hb_toggle_autora():
+    """Flip the lua-side AutoRA loop. Goes through set_setting so the
+    SETTING|autora_enabled message reaches the lua exactly as it does from
+    the settings menu — the hotbar is a second switch on one wire, not a
+    parallel path that could disagree with the menu."""
+    set_setting("autora_enabled", not bool(setting("autora_enabled")))
+
+
+def _hb_action_is_on(key):
+    """True while an action is engaged, so its slot can light up rather
+    than firing blind. A hotbar cell can't relabel itself the way the
+    floating Sing button flips between Start and Stop, so the border is
+    how you tell whether the next press starts or stops."""
+    try:
+        if key == "sing":
+            return bool(globals().get("_brdset_singing"))
+        if key == "warp":
+            return bool(globals().get("warp_menu_open"))
+        if key == "cheatsheet":
+            return bool(globals().get("cheatsheet_window_open"))
+        if key == "autora":
+            return bool(setting("autora_enabled"))
+    except Exception:
+        return False
+    return False
+
+
+def _hotbar_run_action(key):
+    """Run a built-in action from a hotbar slot."""
+    global _hb_action_note, _warp_menu_anchor
+    entry = next((a for a in HOTBAR_ACTIONS if a[0] == key), None)
+    if entry is None:
+        print(f"[OmniWatch] unknown hotbar action {key!r}")
+        return
+    fn = globals().get(entry[2])
+    if not callable(fn):
+        print(f"[OmniWatch] hotbar action {key!r}: {entry[2]} missing")
+        return
+    mx, my = pygame.mouse.get_pos()
+    if key == "warp":
+        # Open the travel menu next to the slot that opened it. Without
+        # this it anchors to the floating Warp button, which is very
+        # possibly hidden — the menu would appear across the screen.
+        _warp_menu_anchor = [mx, my]
+        fn()
+        if not globals().get("warp_menu_open"):
+            _warp_menu_anchor = None
+        return
+    fn()
+    # Mirror the action's own transient note to the cursor, but only when
+    # its floating button isn't on screen to show it — otherwise the same
+    # sentence appears twice.
+    note, btn_rect = None, True
+    if key == "sing":
+        note = globals().get("_sing_msg")
+        btn_rect = globals().get("sing_button_rect")
+    elif key == "calltrust":
+        note = globals().get("_ct_msg")
+        btn_rect = globals().get("calltrust_button_rect")
+    if note and btn_rect is None and time.time() < note[1]:
+        _hb_action_note = {"text": note[0], "until": note[1],
+                           "x": mx, "y": my}
+
+
+def draw_hotbar_action_note(surface):
+    """Draw the pending action note near where it was fired. Cheap no-op
+    on every frame that doesn't have one."""
+    global _hb_action_note
+    if not _hb_action_note:
+        return
+    if time.time() >= _hb_action_note["until"]:
+        _hb_action_note = None
+        return
+    f = get_font("Consolas", 12)
+    ts = f.render(_hb_action_note["text"], True, (225, 225, 205))
+    pad = 6
+    w, h = ts.get_width() + pad * 2, ts.get_height() + pad * 2
+    x = min(max(0, _hb_action_note["x"] - w // 2), max(0, WIDTH - w))
+    y = _hb_action_note["y"] - h - 10
+    if y < 0:
+        y = _hb_action_note["y"] + 16
+    pygame.draw.rect(surface, (26, 26, 34), (x, y, w, h), border_radius=4)
+    pygame.draw.rect(surface, (120, 120, 145), (x, y, w, h), 1,
+                     border_radius=4)
+    surface.blit(ts, (x + pad, y + pad))
+
+
 def dispatch_button(idx):
     """Run the command associated with button index `idx`. Robust to a
     range of failure modes (missing config, bad URLs, shell errors): logs
@@ -8028,6 +8299,9 @@ def dispatch_button(idx):
             payload = cmd.lstrip("/").strip()
             sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
             print(f"[OmniWatch] button '{label}' -> windower //{payload}")
+        elif kind == "action":
+            print(f"[OmniWatch] button '{label}' -> action {cmd}")
+            _hotbar_run_action(cmd.strip().lower())
         elif kind == "url":
             url = cmd if "://" in cmd else "https://" + cmd
             webbrowser.open(url, new=2)
@@ -8781,16 +9055,14 @@ SETTINGS_SCHEMA = [
         "section": "_Hidden",
         "applies": "python",
         "action":  "open_stats_layout",
-        "help":    "Open omniwatch_stats_layout.json in your default "
-                   "text editor. Hide cells by adding their key to the "
-                   "'hidden' array under 'global' (hidden everywhere) "
-                   "or under a job name in 'per_job' (hidden only on "
-                   "that job, in addition to global hides). Re-enter "
-                   "setup mode (//ow setup) to apply changes. For most "
-                   "users it's easier to click cells in setup mode: "
-                   "exiting setup mode auto-saves your moves/hides to the "
-                   "current job, or use the 'Save as' button to target "
-                   "global / another job instead.",
+        "help":    "Turn on setup mode and edit the panel directly: "
+                   "click a cell to hide it, click its chip in the tray "
+                   "to bring it back, drag cells to reorder. Exiting "
+                   "setup saves to the current job; the 'Save as' button "
+                   "targets global or another job instead. (The layout "
+                   "still lives in omniwatch_stats_layout.json if you "
+                   "ever want to hand-edit it, but nothing here needs "
+                   "you to.)",
     },
 
     # ── Recast Timer ────────────────────────────────────────────────
@@ -10002,6 +10274,23 @@ def panel_header_h():
     return max(16, int(22 * g))
 
 
+def panel_header_font():
+    """The title font for those same headers.
+
+    Must scale the SAME way panel_header_h does — global UI scale only,
+    never the per-panel scale. The strip height was already global-only
+    so the bars line up, but the text inside it was sized with _eff(),
+    which folds in each panel's own scale: bump EQUIPMENT's body a notch
+    above STATISTICS and its title comes out a point or two larger, which
+    reads as one panel being bold and the other not."""
+    try:
+        g = float(setting("global_ui_scale") or 1.0)
+    except (TypeError, ValueError):
+        g = 1.0
+    g = max(0.5, min(3.0, g))
+    return get_font("Consolas", 12 * g, bold=True)
+
+
 def _eff(panel_scale):
     """Effective render scale for a panel: its own scale times the
     global UI scale multiplier (global_ui_scale setting). Lets 4K /
@@ -10041,6 +10330,7 @@ def save_settings():
     try:
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=2)
+        _profile_mirror(SETTINGS_FILE)
     except Exception as e:
         print(f"[OmniWatch] Could not save settings: {e}")
 
@@ -10205,41 +10495,6 @@ def _open_buff_config_in_editor():
             print(f"[OmniWatch] could not create buff config: {e!r}")
             return
     _open_path(BUFF_CFG, "buff config")
-
-
-def _open_stats_layout_global():
-    """Open omniwatch_stats_layout.json so the user can edit the GLOBAL
-    layout (the fallback used for any job without a per-job override).
-
-    Adds a helpful comment-like top-level _help field if the file
-    doesn't exist yet. JSON doesn't support real comments, but a
-    leading "_help" string gives users guidance when they first open
-    the file.
-    """
-    if not os.path.exists(STATS_LAYOUT_FILE):
-        try:
-            # Build a starter file: defaults + an in-file help string
-            # listing the available cell keys so users don't have to
-            # guess what to put in the "hidden" array.
-            all_keys = [c[0] for c in STATS_CELLS]
-            starter = {
-                "_help": (
-                    "Hide stat cells by adding their key to "
-                    "the 'hidden' array under 'global' or under "
-                    "a job name in 'per_job'. Re-enter setup "
-                    "mode (//ow setup) to apply changes. "
-                    "Available cell keys: " + ", ".join(all_keys)
-                ),
-                "version": 1,
-                "global": _default_stats_layout(),
-                "per_job": {},
-            }
-            with open(STATS_LAYOUT_FILE, "w") as f:
-                json.dump(starter, f, indent=2)
-        except Exception as e:
-            print(f"[OmniWatch] could not create stats layout: {e!r}")
-            return
-    _open_path(STATS_LAYOUT_FILE, "stats layout (global)")
 
 
 def _open_buff_timer_config_in_editor():
@@ -10539,6 +10794,83 @@ def _apply_transparent_background(on):
         print(f"[OmniWatch] transparent-bg apply failed: {e!r}")
 
 
+def _request_setup_mode(payload="toggle"):
+    """Ask the canonical SETUP handler to turn setup mode on/off/toggle.
+
+    Rather than duplicate the inline SETUP handler in the gearswap drain
+    (which closes over panels_locked, recast_anchor, buff_anchor and
+    re-asserts panel positions on toggle), we send ourselves a UDP packet
+    on port 5005 and let the drain loop run the canonical handler next
+    frame. Single source of truth, one less place to keep in sync."""
+    try:
+        _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            _s.sendto(f"SETUP|{payload}".encode("utf-8"),
+                      ("127.0.0.1", _assigned_ports["gs"]))
+        finally:
+            _s.close()
+        print(f"[OmniWatch] setup mode {payload} requested")
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] setup mode {payload} failed: {e!r}")
+        return False
+
+
+def _stats_edit_active():
+    """True when the stats panel should accept cell edits — either because
+    the whole app is in setup mode, or because just this panel is."""
+    return bool(setup_mode or stats_layout_edit)
+
+
+def _stats_layout_edit_begin():
+    """Start editing the stats layout on the panel itself."""
+    global stats_layout_edit
+    if stats_layout_edit:
+        return
+    # Fresh load from disk, mirroring what entering setup mode does, so an
+    # external edit to omniwatch_stats_layout.json is picked up.
+    try:
+        _load_stats_layout()
+    except Exception as e:
+        print(f"[OmniWatch] stats layout reload failed: {e!r}")
+    stats_layout_edit = True
+    print("[OmniWatch] stats layout editing ON (Esc when done)")
+
+
+def _stats_layout_edit_end():
+    """Finish editing and persist, exactly as leaving setup mode does —
+    session cell moves/hides auto-save to the CURRENT job, and the session
+    layer is dropped. A no-op save when nothing was edited."""
+    global stats_layout_edit
+    if not stats_layout_edit:
+        return
+    stats_layout_edit = False
+    try:
+        _save_session_to_current_job(player_self_mjob)
+    except Exception as e:
+        print(f"[OmniWatch] stats layout save on exit failed: {e!r}")
+    stats_layout_config.pop("_setup_pending", None)
+    print("[OmniWatch] stats layout editing OFF (saved)")
+
+
+def _open_stats_layout_gui():
+    """'Edit layout' from the Statistics dialog: turn setup mode ON and
+    get out of the way.
+
+    This used to open omniwatch_stats_layout.json in a text editor, which
+    made no sense once hiding, reordering and Save-as were all doable on
+    the panel itself. It then turned on full setup mode, which was too far
+    the other way: unlocking every panel, adding resize grips and filling
+    the display with mock data is a lot of upheaval when all you wanted
+    was to shift a couple of cells. It now puts JUST the stats panel into
+    edit mode. Closing both the subdialog and the settings menu matters:
+    they cover the panel you're about to edit."""
+    global statistics_settings_modal_open, settings_menu_open
+    statistics_settings_modal_open = False
+    settings_menu_open = False
+    _stats_layout_edit_begin()
+
+
 def _toggle_setup_mode():
     """Flip setup mode on/off. Setup mode shows resize grips, mock
     data in panels, and unlocks dragging — used to position panels.
@@ -10550,15 +10882,7 @@ def _toggle_setup_mode():
     socket with `SETUP|toggle`. The drain loop picks it up next frame
     and runs through the canonical handler. Single source of truth,
     one less place to keep in sync."""
-    try:
-        _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            _s.sendto(b"SETUP|toggle", ("127.0.0.1", _assigned_ports["gs"]))
-        finally:
-            _s.close()
-        print("[OmniWatch] setup mode toggle requested via settings")
-    except Exception as e:
-        print(f"[OmniWatch] setup mode toggle failed: {e!r}")
+    _request_setup_mode("toggle")
 
 def _restart_overlay():
     """Spawn a fresh copy of OmniWatch and exit the current process.
@@ -11234,7 +11558,7 @@ _SETTINGS_ACTIONS = {
     "clear_gearswap_folder":   _clear_gearswap_folder,
     "reset_zone_timer":        _reset_zone_timer,
     "open_gear_settings":      _open_gear_settings,
-    "open_stats_layout":       _open_stats_layout_global,
+    "open_stats_layout":       _open_stats_layout_gui,
     "exit_omniwatch":          _exit_omniwatch,
     "toggle_fullscreen":       _toggle_fullscreen,
     "open_checklist":          lambda: _open_checklist_modal(),
@@ -19361,7 +19685,11 @@ def resolve_target_card_data(target_sticky):
         fam = infer_family(target_sticky.get("name", "") or "")
     if not fam:
         fam = (ref or {}).get("family", "").lower()
-    abils, achars = _tc_ability_info(ref, fam)
+    # Pass the mobdb entry so the per-mob `abilities` list from
+    # mob_individuals.json is counted here too. Without it the layout sized
+    # the card off the family fallback while the renderer drew the per-mob
+    # list, and the two disagreed on how tall the card was.
+    abils, achars = _tc_ability_info(ref, fam, mobdb)
     return ref, mobdb, fam, abils, achars, mobdb is not None
 
 # Roman-numeral ↔ integer helpers for spell-name condensation.
@@ -19507,251 +19835,408 @@ except Exception as _e:
     print(f"[OmniWatch] could not register setup mocks: {_e}")
 
 # ──────────────────────────────────────────────────────────────────────
-# Layout profiles
+# Profiles
 #
-# A "profile" is a saved snapshot of the layout file (panel anchors,
-# scales, visibility, chat panel size, etc.) named by the user.
-# Profiles let you keep multiple arrangements per character — e.g. a
-# "Full" profile with every panel on a second monitor and a "Compact"
-# profile with just the essentials laid out as an overlay over the
-# game window. Switching the active profile reloads layout state from
-# the named JSON.
+# A profile is a named, saved copy of a character's whole setup: panel
+# layout, every setting (including which panels are visible), the hotbar
+# pages, the cheat sheet's job section, and the window's own size and
+# position. Keep a "2nd monitor" profile with everything spread out and an
+# "Overlay" profile with the essentials sitting over the game window, and
+# switch between them; keep one per job if that suits you better.
 #
-# Storage layout (under USER_DIR/<char>/):
-#   omniwatch_layout.json              ← the active profile's data
-#   omniwatch_layout_<profile>.json    ← saved snapshots, one per profile
-#   omniwatch_profile.json             ← {"active": "<name>"}; defaults to "Default"
+# Storage (under USER_DIR/<char>/):
+#   omniwatch_layout.json            ← THE LIVE SETUP — always. Never moves.
+#   omniwatch_layout_<profile>.json  ← a saved copy of it, one per profile
+#   ... and the same pairing for settings / cheatsheet / buttons
+#   omniwatch_profile.json           ← {"active": "<name>", "model": 2}
+#                                      "" = not tracking a saved profile
 #
-# Switching profiles:
-#   1. save_layout() writes the CURRENT state to omniwatch_layout.json
-#      AND to omniwatch_layout_<current_profile>.json
-#   2. _set_active_profile(name) writes the active name to
-#      omniwatch_profile.json then copies omniwatch_layout_<name>.json
-#      back to omniwatch_layout.json
-#   3. load_layout() runs as normal against omniwatch_layout.json
-#
-# This means an unaware caller that just does open(LAYOUT_FILE) keeps
-# working — they always see the active profile's data.
+# The whole design is in the _PROFILE_PARTS comment below. The short
+# version: nothing repoints, ever. Switching copies files over the live
+# ones and reloads. That is deliberate — the previous design repointed
+# LAYOUT_FILE and SETTINGS_FILE at the profile's own files, which meant
+# every NEW file that wanted to be part of a profile had to be repointed in
+# three separate places, and the cheat sheet's was missed in one of them.
 # ──────────────────────────────────────────────────────────────────────
 
-# Currently active profile name. Persists across restarts via
-# omniwatch_profile.json. Defaults to "Default" for first-run users
-# and characters who've never created a named profile.
-active_profile_name = "Default"
+# Name of the saved profile currently in use, or "" when the live setup
+# isn't tracking any saved profile. Persists per character in
+# omniwatch_profile.json.
+#
+# THE MODEL (rewritten this release):
+#   The plain-named files in the character folder ARE the live setup, always.
+#   No path global ever repoints. A profile is a saved COPY of those files
+#   under a "_<name>" suffix. Switching copies a profile's files over the
+#   live ones and reloads; Save-as copies the live files out under a new
+#   name; and every ordinary autosave mirrors the file it just wrote into
+#   the profile in use, so "in use" keeps meaning "my edits stick to it"
+#   without there ever being a save step.
+#
+#   Three consequences worth knowing before changing anything here:
+#     • "" — nothing in use — is a perfectly valid state. A fresh character
+#       has no profiles at all, and deleting the one you were using drops
+#       you back here without disturbing a single pixel on screen.
+#     • There is no profile called "Default" any more. The old Default WAS
+#       the live setup, so listing it amounted to listing the thing you were
+#       already using, which is what made it confusing.
+#     • Because nothing repoints, adding another file to a profile is one
+#       entry in _PROFILE_PARTS and nothing else. The previous design needed
+#       the path rewired in three separate functions, which is how the cheat
+#       sheet ended up only following a profile switch after a restart.
+active_profile_name = ""
+
+# The files a profile is made of. Each entry is the LIVE filename inside the
+# character folder; its saved copy gets "_<sanitized profile>" before the
+# extension. Order is irrelevant — every operation walks the whole tuple.
+_PROFILE_PARTS = (
+    "omniwatch_layout.json",      # anchors, scales, window size + position
+    "omniwatch_settings.json",    # every schema value, incl. panel visibility
+    "omniwatch_cheatsheet.json",  # the job section of the cheat sheet
+    "omniwatch_buttons.json",     # hotbar pages
+)
+
+# "common" can never be a profile name: omniwatch_cheatsheet_common.json is
+# the SHARED top section of the cheat sheet and lives in the same folder with
+# the same shape as a profile copy. Without this guard it would both show up
+# as a phantom profile in the list and get clobbered by a save.
+_PROFILE_RESERVED = {"common"}
 
 
 def _profile_file_path():
-    """Path to the per-character profile-pointer JSON (the one that
-    just stores which named profile is active)."""
+    """Path to the per-character profile-pointer JSON (which profile is in
+    use, plus the storage-model marker used by the one-time migration)."""
     return os.path.join(_chardir(active_view_char),
                          "omniwatch_profile.json")
 
 
-def _layout_path_for(profile):
-    """Path to the layout JSON for the named profile. The 'Default'
-    profile uses the original omniwatch_layout.json filename to stay
-    backward-compatible with existing layouts; other profiles use the
-    omniwatch_layout_<sanitized>.json form."""
-    if profile == "Default":
-        return os.path.join(_chardir(active_view_char),
-                             "omniwatch_layout.json")
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "Profile"
-    return os.path.join(_chardir(active_view_char),
-                         f"omniwatch_layout_{safe}.json")
+def _profile_safe(name):
+    """Canonical form of a profile name: filename-safe, and what we store.
+
+    Spaces are kept (Windows is fine with them, and "2nd Monitor" reads
+    better than "2nd_Monitor"), but everything else outside this set is
+    replaced. THE STORED NAME IS ALWAYS THIS FORM — if we stored the raw
+    text instead, a name containing, say, a slash would be in use under one
+    spelling while list_profiles() derived another from the filename, and
+    the row for it would never show as in use."""
+    return re.sub(r"[^A-Za-z0-9 _.-]", "_", (name or "").strip()).strip() or "Profile"
 
 
-def _settings_path_for(profile):
-    """Path to the settings JSON for the named profile. Same
-    convention as _layout_path_for — Default keeps the canonical
-    omniwatch_settings.json name; named profiles get a sanitized
-    suffix. This is what makes panel-visibility toggles
-    profile-scoped: SETTINGS_FILE points at the active profile's
-    own copy, so save_settings()/load_settings() naturally use it."""
-    if profile == "Default":
-        return os.path.join(_chardir(active_view_char),
-                             "omniwatch_settings.json")
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "Profile"
-    return os.path.join(_chardir(active_view_char),
-                         f"omniwatch_settings_{safe}.json")
+def _profile_name_ok(name):
+    """(ok, reason). Rejects empty names and the reserved ones."""
+    name = (name or "").strip()
+    if not name:
+        return False, "empty name"
+    if _profile_safe(name).lower() in _PROFILE_RESERVED:
+        return False, f"{name!r} is a reserved name"
+    return True, ""
 
 
-def _cheatsheet_path_for(profile):
-    """Path to the per-profile cheat sheet JSON (the bottom, job-specific
-    section). Mirrors _layout_path_for: Default uses the base filename,
-    named profiles get a sanitized suffix — so the bottom section swaps
-    automatically when the active profile changes."""
-    if profile == "Default":
-        return os.path.join(_chardir(active_view_char),
-                             "omniwatch_cheatsheet.json")
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "Profile"
-    return os.path.join(_chardir(active_view_char),
-                         f"omniwatch_cheatsheet_{safe}.json")
+def _profile_part_path(part, name):
+    """Path to one part of a profile. An empty `name` gives the LIVE file."""
+    cd = _chardir(active_view_char)
+    if not name:
+        return os.path.join(cd, part)
+    stem, ext = os.path.splitext(part)
+    return os.path.join(cd, f"{stem}_{_profile_safe(name)}{ext}")
+
+
+def _profile_paths(name):
+    """[(live_path, saved_copy_path), ...] for every part of `name`."""
+    return [(_profile_part_path(p, ""), _profile_part_path(p, name))
+            for p in _PROFILE_PARTS]
+
+
+def profile_exists(name):
+    """True if any part of this profile is on disk. Deliberately ANY, not
+    ALL: a profile saved before the hotbar joined _PROFILE_PARTS is still a
+    real profile, it just doesn't carry that part yet."""
+    return bool(name) and any(os.path.exists(dst)
+                              for _src, dst in _profile_paths(name))
 
 
 def list_profiles():
-    """Return a sorted list of profile names for the active character.
-    Always includes 'Default' (which maps to the canonical config
-    filenames) plus any omniwatch_layout_<name>.json or
-    omniwatch_settings_<name>.json files present. Picking up both
-    forms means a profile that has settings but somehow lost its
-    layout (or vice versa) still appears in the picker."""
+    """Saved profile names for the active character, sorted.
+
+    SAVED profiles only — the live setup is not one of them, which is why
+    there is no 'Default' entry. A character who has never saved one gets
+    an empty list, and that's a normal state, not an error."""
     cd = _chardir(active_view_char)
-    out = {"Default"}
+    stems = "|".join(re.escape(os.path.splitext(p)[0]) for p in _PROFILE_PARTS)
+    pat = re.compile(rf"^(?:{stems})_([A-Za-z0-9 _.-]+)\.json$")
+    out = set()
     try:
         for entry in os.listdir(cd):
-            m = re.match(
-                r"^omniwatch_(?:layout|settings)_([A-Za-z0-9_.-]+)\.json$",
-                entry)
-            if m:
+            m = pat.match(entry)
+            if m and m.group(1).lower() not in _PROFILE_RESERVED:
                 out.add(m.group(1))
     except Exception as e:
         print(f"[OmniWatch] list_profiles: {e!r}")
     return sorted(out)
 
 
+def _profile_migrate_from_repoint_model(stored):
+    """One-time migration off the pre-copy-model storage.
+
+    Under the old design the live plain files held the DEFAULT profile's
+    data and a named profile's data lived only in its own files, because
+    LAYOUT_FILE/SETTINGS_FILE were repointed at them. So for anyone who was
+    sitting on a named profile, the live files are stale and have to be
+    replaced by that profile's copies or their screen would silently revert.
+
+    The displaced live files are kept as '<stem>.prev.json' — not a profile
+    (the listing regex needs an underscore, so these never appear in the
+    picker) but recoverable by hand if someone wants their old Default back.
+
+    Returns the profile name to adopt."""
+    if not stored or stored == "Default":
+        return ""
+    if not profile_exists(stored):
+        return ""
+    for src, dst in _profile_paths(stored):
+        if not os.path.exists(dst):
+            continue
+        try:
+            if os.path.exists(src):
+                stem, ext = os.path.splitext(src)
+                shutil.copy2(src, f"{stem}.prev{ext}")
+            shutil.copy2(dst, src)
+        except Exception as e:
+            print(f"[OmniWatch] profile migration ({stored!r}): {e!r}")
+    print(f"[OmniWatch] Migrated profile storage: {stored!r} is now the "
+          f"live setup (previous files kept as *.prev.json)")
+    return stored
+
+
 def _load_active_profile_name():
-    """Read the active profile name from omniwatch_profile.json.
-    Falls back to 'Default' if the file doesn't exist or is malformed
-    — never raises, so a corrupt profile file can't break startup."""
+    """Read which profile is in use, migrating old pointer files on the way.
+    Never raises — a corrupt pointer just means 'no profile in use'."""
     global active_profile_name
+    name, model = "", 0
     try:
         with open(_profile_file_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
-        name = data.get("active", "Default")
-        if isinstance(name, str) and name.strip():
-            active_profile_name = name
-            return
+        raw = data.get("active", "")
+        if isinstance(raw, str):
+            name = raw.strip()
+        try:
+            model = int(data.get("model", 0) or 0)
+        except (TypeError, ValueError):
+            model = 0
     except FileNotFoundError:
         pass
     except Exception as e:
         print(f"[OmniWatch] _load_active_profile_name: {e!r}")
-    active_profile_name = "Default"
+
+    if model < 2:
+        # Pre-copy-model pointer. "Default" named the live setup itself, so
+        # it maps to "nothing in use"; a named profile needs its files moved
+        # onto the live ones.
+        name = _profile_migrate_from_repoint_model(name)
+        active_profile_name = name
+        _persist_active_profile_name()
+        return
+
+    # A pointer at a profile whose files were deleted by hand would
+    # otherwise mirror every autosave into a phantom. Drop it.
+    if name and not profile_exists(name):
+        print(f"[OmniWatch] profile {name!r} is gone — using the live setup")
+        name = ""
+    active_profile_name = name
 
 
 def _persist_active_profile_name():
-    """Write the active profile name to omniwatch_profile.json."""
+    """Write the in-use profile name (and the storage-model marker)."""
     try:
         with open(_profile_file_path(), "w", encoding="utf-8") as f:
-            json.dump({"active": active_profile_name}, f, indent=2)
+            json.dump({"active": active_profile_name, "model": 2}, f, indent=2)
     except Exception as e:
         print(f"[OmniWatch] _persist_active_profile_name: {e!r}")
 
 
-def save_profile_as(name):
-    """Save the CURRENT layout state AND settings to a new profile
-    name (or overwrite if it already exists). Switches the active
-    profile to the new name so subsequent saves go to it.
+def _profile_mirror(live_path):
+    """Copy one just-written live file into the profile in use.
 
-    Two files get written for each profile:
-      • omniwatch_layout_<name>.json   — anchors, scales
-      • omniwatch_settings_<name>.json — every show_* toggle and
-        every other settings-schema value (font sizes, opacity,
-        time-zone, ring cycle interval, etc.)
-    This matters because panel visibility is in settings, not in
-    layout — without snapshotting settings, switching profiles
-    couldn't toggle which panels show."""
-    global active_profile_name, LAYOUT_FILE, SETTINGS_FILE
-    name = (name or "").strip() or "Default"
+    This is the whole of 'no save step': ordinary autosaves stay ordinary
+    autosaves, and the profile follows them. No-op when nothing is in use,
+    or when the file isn't part of a profile."""
+    if not active_profile_name:
+        return
+    part = os.path.basename(live_path or "")
+    if part not in _PROFILE_PARTS:
+        return
+    try:
+        dst = _profile_part_path(part, active_profile_name)
+        if os.path.abspath(dst) != os.path.abspath(live_path):
+            shutil.copy2(live_path, dst)
+    except Exception as e:
+        print(f"[OmniWatch] profile mirror {part} -> "
+              f"{active_profile_name!r}: {e!r}")
+
+
+def save_profile_as(name):
+    """Save the live setup as a profile and start using it. Overwrites an
+    existing profile of the same name — that's how you update one."""
+    global active_profile_name
+    ok, why = _profile_name_ok(name)
+    if not ok:
+        print(f"[OmniWatch] save_profile_as: {why}")
+        return False
+    name = _profile_safe(name)
+    # Flush what's on screen first: layout is only written on drag release,
+    # so without this a brand-new profile could miss the move that prompted
+    # the user to save it.
+    try:
+        save_layout()
+        save_settings()
+    except Exception as e:
+        print(f"[OmniWatch] save_profile_as: pre-save: {e!r}")
+    copied = 0
+    for src, dst in _profile_paths(name):
+        # A part with no live file yet (a character who has never touched
+        # the hotbar) is simply not part of this profile. On switch, a
+        # missing part leaves the live file alone rather than blanking it.
+        if not os.path.exists(src):
+            continue
+        try:
+            shutil.copy2(src, dst)
+            copied += 1
+        except Exception as e:
+            print(f"[OmniWatch] save_profile_as {name!r}: {e!r}")
     active_profile_name = name
     _persist_active_profile_name()
-    # Switch path pointers to the new profile. From here on, every
-    # auto-save (settings change, layout-on-quit, etc.) writes to
-    # the new profile's files transparently.
-    LAYOUT_FILE   = _layout_path_for(name)
-    SETTINGS_FILE = _settings_path_for(name)
-    # Snapshot current state to the new profile's files.
-    save_layout()
-    save_settings()
     print(f"[OmniWatch] Saved profile {name!r} for "
-          f"{active_view_char or '?'} "
-          f"(layout + settings snapshotted)")
+          f"{active_view_char or '?'} ({copied} files)")
+    return True
 
 
 def switch_to_profile(name):
-    """Switch the active profile and reload BOTH layout state and
-    settings from disk. Does nothing if the requested profile
-    doesn't exist (other than logging).
+    """Copy a saved profile over the live setup and reload everything it
+    covers: layout, settings (with side effects re-applied), the hotbar, the
+    cheat sheet's job section, and the window's own size and position.
 
-    The reload of settings is what makes panel visibility toggles
-    profile-scoped — every show_* / show_clock / show_ring_cooldown
-    etc. snaps to whatever was last saved for the target profile.
-    Tolerates missing files: if a profile has a layout file but no
-    settings file (or vice versa), the present file is loaded and
-    the absent one is left as-is. This lets users mix-and-match in
-    the rare case they're hand-editing things."""
-    global active_profile_name, LAYOUT_FILE, SETTINGS_FILE, settings
-    name = (name or "").strip() or "Default"
-    layout_target   = _layout_path_for(name)
-    settings_target = _settings_path_for(name)
-    # Existence check — at least one of the two must exist for a
-    # named profile. Default is always considered to exist (the
-    # canonical files may or may not be present, but Default is
-    # the fallback identity).
-    if name != "Default":
-        if not (os.path.exists(layout_target)
-                or os.path.exists(settings_target)):
-            print(f"[OmniWatch] switch_to_profile: {name!r} "
-                  f"does not exist (no layout or settings file)")
-            return
+    Passing "" means 'stop tracking a profile'. The live setup is left
+    exactly as it is and nothing reloads — the screen doesn't move."""
+    global active_profile_name, settings, buttons_config
+    name = (name or "").strip()
+    if not name:
+        active_profile_name = ""
+        _persist_active_profile_name()
+        print("[OmniWatch] No profile in use (live setup unchanged)")
+        return
+    if not profile_exists(name):
+        print(f"[OmniWatch] switch_to_profile: {name!r} does not exist")
+        return
+    if name == active_profile_name:
+        return
+    # Flush the profile we're leaving so the tweak made a second ago isn't
+    # the one thing that doesn't survive the switch.
+    try:
+        save_layout()
+        save_settings()
+    except Exception as e:
+        print(f"[OmniWatch] switch_to_profile: pre-flush: {e!r}")
+
+    for src, dst in _profile_paths(name):
+        if not os.path.exists(dst):
+            continue
+        try:
+            shutil.copy2(dst, src)
+        except Exception as e:
+            print(f"[OmniWatch] switch_to_profile {name!r}: {e!r}")
 
     active_profile_name = name
-    LAYOUT_FILE   = layout_target
-    SETTINGS_FILE = settings_target
     _persist_active_profile_name()
 
-    # Reload layout (always — load_layout already tolerates missing
-    # files gracefully by falling back to defaults).
-    load_layout()
+    try:
+        load_layout()
+    except Exception as e:
+        print(f"[OmniWatch] switch_to_profile: load_layout: {e!r}")
 
-    # Reload settings if the file exists. Otherwise leave the
-    # current in-memory settings dict in place — switching to a
-    # profile that has no settings snapshot just means "same
-    # settings as before, different layout".
-    if os.path.exists(settings_target):
-        try:
-            new_settings = load_settings()
+    # Settings, then re-apply every side effect. Without the second step the
+    # dict holds the right values but live state (opacity, font sizes,
+    # lua-side toggles like show_party_buffs) keeps the previous profile's
+    # until the next manual change. Walk the schema rather than the loaded
+    # keys so button-kind and live_key entries are skipped.
+    try:
+        new_settings = load_settings()
+        if isinstance(new_settings, dict):
             settings.clear()
             settings.update(new_settings)
-            # Re-apply side effects for every loaded key. Without
-            # this step, the in-memory dict has the right values
-            # but live state (window opacity, font sizes, lua-side
-            # toggles like show_party_buffs, etc.) keeps the
-            # previous profile's values until next change. Walk
-            # the schema rather than `new_settings.keys()` so
-            # button-kind entries and live_key entries are skipped
-            # (they have no persistable value to re-apply).
-            for skey in list(settings.keys()):
-                schema = SETTINGS_BY_KEY.get(skey)
-                if not schema:
-                    continue
-                if schema.get("kind") == "button":
-                    continue
-                if schema.get("live_key"):
-                    continue
-                try:
-                    apply_setting_side_effects(skey, settings[skey])
-                except Exception as se:
-                    print(f"[OmniWatch] switch_to_profile: "
-                          f"side-effect for {skey!r} failed: {se!r}")
-            print(f"[OmniWatch] Switched to profile {name!r} "
-                  f"(layout + settings + side-effects)")
+        for skey in list(settings.keys()):
+            schema = SETTINGS_BY_KEY.get(skey)
+            if not schema:
+                continue
+            if schema.get("kind") == "button" or schema.get("live_key"):
+                continue
+            try:
+                apply_setting_side_effects(skey, settings[skey])
+            except Exception as se:
+                print(f"[OmniWatch] switch_to_profile: side-effect for "
+                      f"{skey!r} failed: {se!r}")
+    except Exception as e:
+        print(f"[OmniWatch] switch_to_profile: settings reload: {e!r}")
+
+    # Hotbar. load_buttons_config repopulates hotbar_pages as a side effect
+    # and returns the active page's buttons.
+    try:
+        buttons_config = load_buttons_config()
+    except Exception as e:
+        print(f"[OmniWatch] switch_to_profile: buttons reload: {e!r}")
+
+    # Cheat sheet needs no explicit reload: _load_cheatsheet_file is keyed on
+    # the file's mtime, and we just replaced the file.
+
+    # Window size + position last, so a second-monitor profile lands where
+    # it was saved. Skipped while full-screen (the restore rect owns it).
+    try:
+        _apply_window_geometry()
+    except Exception as e:
+        print(f"[OmniWatch] switch_to_profile: window geometry: {e!r}")
+
+    print(f"[OmniWatch] Now using profile {name!r}")
+
+
+def rename_profile(old, new):
+    """Rename a saved profile — moves each part on disk. Refuses to merge
+    into an existing name; the caller surfaces the failure."""
+    global active_profile_name
+    old = (old or "").strip()
+    ok, why = _profile_name_ok(new)
+    if not ok:
+        print(f"[OmniWatch] rename_profile: {why}")
+        return False
+    new = _profile_safe(new)
+    if not old or old == new:
+        return False
+    if profile_exists(new):
+        print(f"[OmniWatch] rename_profile: {new!r} already exists")
+        return False
+    moved = 0
+    for part in _PROFILE_PARTS:
+        src = _profile_part_path(part, old)
+        dst = _profile_part_path(part, new)
+        try:
+            if os.path.exists(src):
+                os.replace(src, dst)
+                moved += 1
         except Exception as e:
-            print(f"[OmniWatch] switch_to_profile: settings reload "
-                  f"failed for {name!r}: {e!r}")
-    else:
-        print(f"[OmniWatch] Switched to profile {name!r} "
-              f"(layout only; no settings snapshot for this profile)")
+            print(f"[OmniWatch] rename_profile {old!r}->{new!r}: {e!r}")
+    if moved and active_profile_name == old:
+        active_profile_name = new
+        _persist_active_profile_name()
+    print(f"[OmniWatch] Renamed profile {old!r} -> {new!r} ({moved} files)")
+    return moved > 0
 
 
 def delete_profile(name):
-    """Delete a named profile's layout AND settings files. The
-    'Default' profile cannot be deleted (it's the underlying
-    canonical config files). If the deleted profile was active,
-    falls back to Default."""
-    if name == "Default":
-        print("[OmniWatch] delete_profile: cannot delete Default")
+    """Delete a saved profile. The LIVE setup is deliberately untouched, so
+    deleting the profile you're using just stops tracking it — nothing on
+    screen moves, and you can save it again under another name."""
+    global active_profile_name
+    if not name:
         return
-    for path in (_layout_path_for(name), _settings_path_for(name)):
+    for part in _PROFILE_PARTS:
+        path = _profile_part_path(part, name)
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -19759,7 +20244,8 @@ def delete_profile(name):
         except Exception as e:
             print(f"[OmniWatch] delete_profile: {e!r} ({path})")
     if active_profile_name == name:
-        switch_to_profile("Default")
+        active_profile_name = ""
+        _persist_active_profile_name()
 
 
 def save_layout():
@@ -19796,6 +20282,11 @@ def save_layout():
             "loadouts_pos": (list(globals().get("_loadouts_pos"))
                              if globals().get("_loadouts_pos") else None),
             "ow_window_size": list(_windowed_size),
+            # Where the window is right now, so a profile built for a second
+            # monitor reopens there. Read live from the OS; if that fails
+            # (non-Windows, or no HWND yet) keep whatever we last loaded
+            # rather than writing nulls over a good saved position.
+            "ow_window_pos": list(_ow_get_window_pos() or _windowed_pos),
             "buff_anchor":     buff_anchor,
             "buff_scale":      buff_scale,
             "dps_anchor":      dps_anchor,
@@ -19851,6 +20342,7 @@ def save_layout():
               f"equip_anchor={equip_anchor}, target_anchor={target_anchor}, "
               f"cheatsheet_button_pos={cheatsheet_button_pos}) "
               f"to {LAYOUT_FILE}")
+        _profile_mirror(LAYOUT_FILE)
     except Exception as e:
         print(f"[OmniWatch] Could not save layout: {e}")
 
@@ -19863,6 +20355,7 @@ def load_layout():
     global recast_anchor, recast_scale
     global cheatsheet_pos, cheatsheet_w, cheatsheet_h, cheatsheet_scroll
     global cheatsheet_button_pos, cheatsheet_button_scale, _windowed_size
+    global _windowed_pos
     global warp_button_pos, warp_button_scale
     global calltrust_button_pos, calltrust_button_scale
     global sing_button_pos, sing_button_scale, _brdset_active
@@ -20021,6 +20514,17 @@ def load_layout():
                                   max(OW_MIN_H, int(ows[1]))]
             except (TypeError, ValueError):
                 _windowed_size = [OW_DEFAULT_W, OW_DEFAULT_H]
+        # Window position. Not clamped here — a coordinate on a monitor
+        # that isn't attached right now is only a problem at the moment we
+        # try to move, and _ow_move_window is what refuses it. Clamping on
+        # load would quietly forget the position and the profile would stop
+        # returning to that monitor once it came back.
+        owp = data.get("ow_window_pos")
+        if isinstance(owp, list) and len(owp) == 2:
+            try:
+                _windowed_pos = [int(owp[0]), int(owp[1])]
+            except (TypeError, ValueError):
+                _windowed_pos = [None, None]
 
         ba = data.get("buff_anchor")
         if ba and len(ba) == 3:
@@ -20207,17 +20711,13 @@ settings["autora_enabled"] = False
 # addon; the box re-fires fisher start when you flip it on).
 settings["fisher_enabled"] = False
 load_layout()
-# Apply the saved windowed size (the window was created at the default
-# size above; resize it to the user's last windowed box if one is saved).
+# Apply the saved windowed size AND position (the window was created at the
+# default size above). Same path a profile switch uses, so the two can't
+# drift apart.
 try:
-    if (_windowed_size and len(_windowed_size) == 2
-            and (int(_windowed_size[0]) != WIDTH
-                 or int(_windowed_size[1]) != HEIGHT)):
-        WIDTH  = max(OW_MIN_W, int(_windowed_size[0]))
-        HEIGHT = max(OW_MIN_H, int(_windowed_size[1]))
-        screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
+    _apply_window_geometry()
 except Exception as e:
-    print(f"[OmniWatch] apply saved window size failed: {e!r}")
+    print(f"[OmniWatch] apply saved window geometry failed: {e!r}")
 # Reload the buff config too. It first loaded at module import (against
 # the GLOBAL path, before the character was known), but the menu link
 # and all editing happen on the PER-CHARACTER file. Without this reload
@@ -21560,6 +22060,10 @@ def _cheatsheet_persist(which):
                                         "groups": data["groups"]})
         except OSError:
             _cheatsheet_cache.pop(path, None)
+        # The job sheet is one of the files a profile carries; the common
+        # sheet is shared across the character's profiles and isn't.
+        if which != "common":
+            _profile_mirror(path)
     except Exception as e:
         print(f"[OmniWatch] cheat sheet save {path}: {e!r}")
 
@@ -33789,7 +34293,12 @@ def _warp_send(command):
 
 def _warp_toggle_menu():
     global warp_menu_open, warp_config, warp_confirm, warp_menu_scroll
+    global _warp_menu_anchor
     warp_confirm = None
+    # Clear any hotbar anchor: the floating button is the caller here, so
+    # the menu should sit beside it. _hotbar_run_action re-sets this after
+    # calling us when the press came from a slot instead.
+    _warp_menu_anchor = None
     warp_menu_open = not warp_menu_open
     if warp_menu_open:
         warp_menu_scroll = 0
@@ -33965,8 +34474,15 @@ def draw_warp_menu(surface):
     h = pad + scroll_h + sep_h + pinned_h + foot_blk + pad
 
     sw, shh = surface.get_size()
-    ax = (_warp_btn_draw_pos[0] if _warp_btn_draw_pos else PANEL_X)
-    ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
+    # Anchor priority: whatever opened the menu this time (a hotbar slot
+    # sets _warp_menu_anchor to the cursor), then the floating button's
+    # drawn position, then the panel edge.
+    _anchor = globals().get("_warp_menu_anchor")
+    if _anchor:
+        ax, ay = int(_anchor[0]), int(_anchor[1])
+    else:
+        ax = (_warp_btn_draw_pos[0] if _warp_btn_draw_pos else PANEL_X)
+        ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
     bh = warp_button_rect.height if warp_button_rect else 24
     my0 = ay + bh + 4
     if my0 + h > shh:
@@ -34101,8 +34617,15 @@ def draw_warp_confirm(surface):
         + btn_h + pad
 
     sw, shh = surface.get_size()
-    ax = (_warp_btn_draw_pos[0] if _warp_btn_draw_pos else PANEL_X)
-    ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
+    # Anchor priority: whatever opened the menu this time (a hotbar slot
+    # sets _warp_menu_anchor to the cursor), then the floating button's
+    # drawn position, then the panel edge.
+    _anchor = globals().get("_warp_menu_anchor")
+    if _anchor:
+        ax, ay = int(_anchor[0]), int(_anchor[1])
+    else:
+        ax = (_warp_btn_draw_pos[0] if _warp_btn_draw_pos else PANEL_X)
+        ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
     bh = warp_button_rect.height if warp_button_rect else 24
     y0 = ay + bh + 4
     if y0 + h > shh:
@@ -35171,14 +35694,16 @@ def draw_char_view_dropdown(surface):
     # Discover characters via the shared helper. Same enumeration
     # logic the header uses to decide whether to show a dropdown.
     chars = list_known_characters()
-    # Pull profiles for the ACTIVE character so we can size the
-    # panel correctly upfront. list_profiles() always returns at
-    # least ["Default"] so this set is non-empty whenever there's
-    # an active character.
-    profiles = list_profiles() if active_view_char else ["Default"]
-    # Profile block size: separator (~6) + header (~14) + N profile
-    # rows + Save-as row, all at 18px each.
-    profile_rows_h = 20 + (len(profiles) + 1) * 18
+    # Pull profiles for the ACTIVE character so we can size the panel
+    # correctly upfront. This can legitimately be empty — a character who
+    # has never saved one has none, and the live setup is not listed as a
+    # profile because it is simply what you are using.
+    profiles = list_profiles() if active_view_char else []
+    # Profile block size: separator (~6) + header (~14) + N profile rows +
+    # Save-as row, all at 18px each. An empty list still reserves one row
+    # for the "(none saved yet)" note — no saved profiles is a normal state
+    # now that the live setup isn't listed as one.
+    profile_rows_h = 20 + (max(1, len(profiles)) + 1) * 18
 
     pad   = 6
     row_h = 20
@@ -35247,65 +35772,88 @@ def draw_char_view_dropdown(surface):
     # mismatched casing), the entire profile UI silently disappeared.
     # Rendering it unconditionally as its own section guarantees the
     # save row is always reachable.
-    if profiles:
-        # Separator line above the profile section so it reads as
-        # distinct from the character list.
-        pygame.draw.line(surface, (60, 60, 75),
-                         (panel_x + 8, cy + 2),
-                         (panel_x + panel_w - 8, cy + 2))
-        cy += 4
-        # Small header label.
-        section_who = active_view_char or "(no character)"
-        hdr_label = f"Profiles for {section_who}"
-        hs = f_dim.render(hdr_label, True, (180, 180, 200))
-        surface.blit(hs, (panel_x + 8, cy))
-        cy += hs.get_height() + 2
-        for prof in profiles:
-            prow_rect = pygame.Rect(panel_x + 12, cy,
-                                     panel_w - 16, 18)
-            ph = prow_rect.collidepoint(pygame.mouse.get_pos())
-            if ph:
-                pygame.draw.rect(surface, (38, 42, 56), prow_rect)
-            is_active_prof = (prof == active_profile_name)
-            p_prefix = "●" if is_active_prof else "○"
-            p_color  = ((140, 220, 140) if is_active_prof
-                        else (200, 205, 220))
-            p_label  = f"{p_prefix} {prof}"
-            ps = f_profile.render(p_label, True, p_color)
-            surface.blit(ps,
-                (panel_x + 20,
-                 cy + (18 - ps.get_height()) // 2))
-            # Delete button on the right (except Default).
-            if prof != "Default":
-                del_rect = pygame.Rect(prow_rect.right - 18,
-                                        cy + 3, 14, 12)
-                pygame.draw.rect(surface, (90, 50, 60),
-                                 del_rect, border_radius=2)
-                dx = f_profile.render("×", True, (240, 200, 200))
-                surface.blit(dx,
-                    (del_rect.x + (del_rect.w - dx.get_width()) // 2,
-                     del_rect.y + (del_rect.h - dx.get_height()) // 2 - 1))
-                char_view_dropdown_rects.append(
-                    (del_rect, {"kind": "delete_profile",
-                                "name": prof}))
-            char_view_dropdown_rects.append((prow_rect, {
-                "kind": "select_profile", "name": prof,
-            }))
-            cy += 18
-        # "+ Save current as new profile…" row — clearly highlighted
-        # in light blue so it stands out as the action row.
-        new_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
-        nh = new_rect.collidepoint(pygame.mouse.get_pos())
-        if nh:
-            pygame.draw.rect(surface, (45, 55, 80), new_rect)
-        ns = f_profile.render("+ Save current as new profile…", True,
-                               (180, 200, 255))
-        surface.blit(ns,
-            (panel_x + 20, cy + (18 - ns.get_height()) // 2))
-        char_view_dropdown_rects.append((new_rect, {
-            "kind": "new_profile",
+    # Separator line above the profile section so it reads as distinct
+    # from the character list. Drawn unconditionally: even with no saved
+    # profiles the section exists, because the save row lives in it.
+    pygame.draw.line(surface, (60, 60, 75),
+                     (panel_x + 8, cy + 2),
+                     (panel_x + panel_w - 8, cy + 2))
+    cy += 4
+    # Small header label.
+    section_who = active_view_char or "(no character)"
+    hdr_label = f"Profiles for {section_who}"
+    hs = f_dim.render(hdr_label, True, (180, 180, 200))
+    surface.blit(hs, (panel_x + 8, cy))
+    cy += hs.get_height() + 2
+
+    if not profiles:
+        # No saved profiles is a normal state, not an error — the live
+        # setup is simply not tracking one. Say so plainly instead of
+        # showing a placeholder row that looks clickable.
+        es = f_dim.render("(none saved yet)", True, COL_LABEL_DIM)
+        surface.blit(es, (panel_x + 20, cy + (18 - es.get_height()) // 2))
+        cy += 18
+
+    for prof in profiles:
+        prow_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
+        ph = prow_rect.collidepoint(pygame.mouse.get_pos())
+        if ph:
+            pygame.draw.rect(surface, (38, 42, 56), prow_rect)
+        # Filled dot = the profile in use. Nothing filled means the live
+        # setup isn't tracking any of them, which is where you start and
+        # where deleting the one you were on puts you back.
+        is_active_prof = bool(active_profile_name) and (prof == active_profile_name)
+        p_prefix = "\u25cf" if is_active_prof else "\u25cb"
+        p_color  = ((140, 220, 140) if is_active_prof
+                    else (200, 205, 220))
+        # Clip the name so a long one can't run under the two buttons.
+        p_label = f"{p_prefix} {prof}"
+        while (f_profile.size(p_label)[0] > prow_rect.width - 50
+               and len(p_label) > 4):
+            p_label = p_label[:-1]
+        if p_label != f"{p_prefix} {prof}":
+            p_label += "\u2026"
+        ps = f_profile.render(p_label, True, p_color)
+        surface.blit(ps, (panel_x + 20, cy + (18 - ps.get_height()) // 2))
+
+        # Delete on the right, rename just left of it. Every saved profile
+        # gets both now — there's no undeletable entry any more.
+        del_rect = pygame.Rect(prow_rect.right - 18, cy + 3, 14, 12)
+        pygame.draw.rect(surface, (90, 50, 60), del_rect, border_radius=2)
+        dx = f_profile.render("\u00d7", True, (240, 200, 200))
+        surface.blit(dx,
+            (del_rect.x + (del_rect.w - dx.get_width()) // 2,
+             del_rect.y + (del_rect.h - dx.get_height()) // 2 - 1))
+        char_view_dropdown_rects.append(
+            (del_rect, {"kind": "delete_profile", "name": prof}))
+
+        ren_rect = pygame.Rect(del_rect.x - 18, cy + 3, 14, 12)
+        pygame.draw.rect(surface, (52, 58, 78), ren_rect, border_radius=2)
+        rx = f_profile.render("\u270e", True, (200, 210, 235))
+        surface.blit(rx,
+            (ren_rect.x + (ren_rect.w - rx.get_width()) // 2,
+             ren_rect.y + (ren_rect.h - rx.get_height()) // 2 - 1))
+        char_view_dropdown_rects.append(
+            (ren_rect, {"kind": "rename_profile", "name": prof}))
+
+        char_view_dropdown_rects.append((prow_rect, {
+            "kind": "select_profile", "name": prof,
         }))
         cy += 18
+
+    # "+ Save current setup as…" row — highlighted in light blue so it
+    # reads as the action row. This is the Save-as: it copies whatever is
+    # on screen right now into a new profile (or over an existing one of
+    # the same name) and starts using it.
+    new_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
+    nh = new_rect.collidepoint(pygame.mouse.get_pos())
+    if nh:
+        pygame.draw.rect(surface, (45, 55, 80), new_rect)
+    ns = f_profile.render("+ Save current setup as\u2026", True,
+                           (180, 200, 255))
+    surface.blit(ns, (panel_x + 20, cy + (18 - ns.get_height()) // 2))
+    char_view_dropdown_rects.append((new_rect, {"kind": "new_profile"}))
+    cy += 18
 
 
 def dispatch_char_view_dropdown_click(mx, my):
@@ -35346,8 +35894,21 @@ def dispatch_char_view_dropdown_click(mx, my):
                 # cancelling the modal returns the user to the same
                 # picker they were on.
                 global profile_name_modal_open, profile_name_modal_text
+                global profile_name_modal_mode, profile_name_modal_target
                 profile_name_modal_open = True
+                profile_name_modal_mode = "save"
+                profile_name_modal_target = ""
                 profile_name_modal_text = ""
+                return True
+            elif kind == "rename_profile":
+                # Same modal, rename mode: prefilled with the current name
+                # so a small correction doesn't mean retyping it.
+                target = action.get("name") or ""
+                if target:
+                    profile_name_modal_open = True
+                    profile_name_modal_mode = "rename"
+                    profile_name_modal_target = target
+                    profile_name_modal_text = target
                 return True
             elif kind == "delete_profile":
                 target = action.get("name")
@@ -39253,13 +39814,14 @@ def dispatch_inventory_settings_click(mx, my):
 _STATISTICS_MODAL_ROWS = [
     ("show_statistics",    "Show statistics panel", "bool"),
     ("open_gear_settings", "Gear settings",         "action"),
-    ("open_stats_layout",  "Edit stats layout",     "action"),
+    ("open_stats_layout",  "Edit layout",           "action"),
 ]
 
 # Per-row helper text, keyed by setting_key. Rendered as a small
 # italic line directly below the row in the modal. None / missing =
 # no helper, render as a plain row.
 _STATISTICS_ROW_HELPERS = {
+    "open_stats_layout":  "Setup mode: click cells to hide, drag to reorder.",
     "open_gear_settings": "Define self or ally gear that affects buffs.",
 }
 
@@ -39793,7 +40355,55 @@ def draw_profile_name_modal(surface):
 
     sw, sh = surface.get_size()
     mw = min(380, sw - 40)
-    mh = 130
+    pad = 14
+
+    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    label_font = pygame.font.SysFont("Consolas", 12)
+    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
+
+    _renaming = (profile_name_modal_mode == "rename")
+    if profile_name_modal_error:
+        _sub = profile_name_modal_error
+        _sub_col = (230, 150, 150)
+    elif _renaming:
+        _sub = f"Renaming {profile_name_modal_target!r}."
+        _sub_col = (160, 160, 175)
+    elif active_profile_name:
+        # Say which profile is in use. Without this the dialog gives no
+        # hint that your edits are ALREADY being saved into one, and the
+        # obvious reading of an empty name box is "nothing is saved until
+        # I type something here".
+        _sub = (f"Already saving to {active_profile_name!r} as you work. "
+                f"Name a new one here, or retype it to overwrite.")
+        _sub_col = (160, 160, 175)
+    else:
+        _sub = ("Saves layout, settings, hotbar and cheat sheet. "
+                "An existing name is overwritten.")
+        _sub_col = (160, 160, 175)
+
+    # Wrap the subtitle to the panel, then size the panel to the result.
+    # It used to be one blit into a fixed 130px-tall box, so any sentence
+    # wider than the panel ran straight out past the border and over the
+    # game behind it. Measuring first means the box can't be too small for
+    # its own text, whatever we put in there later.
+    _wrap_w = mw - pad * 2
+    _sub_lines, _cur = [], ""
+    for _word in _sub.split():
+        _try = (_cur + " " + _word).strip()
+        if _cur and small_font.size(_try)[0] > _wrap_w:
+            _sub_lines.append(_cur)
+            _cur = _word
+        else:
+            _cur = _try
+    if _cur:
+        _sub_lines.append(_cur)
+    if not _sub_lines:
+        _sub_lines = [""]
+
+    field_h, btn_h = 26, 24
+    mh = (pad + title_font.get_height() + 2
+          + small_font.get_height() * len(_sub_lines) + 10
+          + field_h + 10 + btn_h + pad)
     mx = (sw - mw) // 2
     my = (sh - mh) // 2
 
@@ -39809,23 +40419,19 @@ def draw_profile_name_modal(surface):
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     profile_name_modal_rects.append((panel, {"action": "pn_panel_bg"}))
 
-    title_font = pygame.font.SysFont("Consolas", 14, bold=True)
-    label_font = pygame.font.SysFont("Consolas", 12)
-    small_font = pygame.font.SysFont("Consolas", 10, italic=True)
-
-    pad = 14
     cy_y = my + pad
-    t = title_font.render("Save layout profile", True, (220, 200, 150))
+    t = title_font.render(
+        ("Rename profile" if _renaming else "Save current setup as"),
+        True, (220, 200, 150))
     surface.blit(t, (mx + pad, cy_y))
     cy_y += t.get_height() + 2
-    s = small_font.render(
-        "Names the current layout. Switch profiles via the character "
-        "dropdown.", True, (160, 160, 175))
-    surface.blit(s, (mx + pad, cy_y))
-    cy_y += s.get_height() + 10
+    for _line in _sub_lines:
+        _ls = small_font.render(_line, True, _sub_col)
+        surface.blit(_ls, (mx + pad, cy_y))
+        cy_y += _ls.get_height()
+    cy_y += 10
 
     # Text field.
-    field_h = 26
     field_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, field_h)
     pygame.draw.rect(surface, (18, 22, 30), field_rect, border_radius=3)
     pygame.draw.rect(surface, (140, 160, 200), field_rect, 1,
@@ -39833,6 +40439,13 @@ def draw_profile_name_modal(surface):
     # Render the user-typed string + a blinking-style caret.
     caret_on = ((time.time() * 2) % 2) < 1.0
     shown = profile_name_modal_text + ("│" if caret_on else " ")
+    # Keep the TAIL when the name outgrows the field: the caret is at the
+    # end, so scrolling off the front is the only version where you can
+    # still see what you're typing. Without this a long name spilled
+    # straight through the field's right border.
+    _field_inner = field_rect.width - 12
+    while len(shown) > 1 and label_font.size(shown)[0] > _field_inner:
+        shown = shown[1:]
     txt_surf = label_font.render(shown, True, (220, 220, 235))
     surface.blit(txt_surf,
         (field_rect.x + 6,
@@ -39840,7 +40453,7 @@ def draw_profile_name_modal(surface):
     cy_y += field_h + 10
 
     # Cancel + Save buttons.
-    btn_w, btn_h = 90, 24
+    btn_w = 90
     save_x = mx + mw - pad - btn_w
     cancel_x = save_x - btn_w - 8
     save_rect   = pygame.Rect(save_x, cy_y, btn_w, btn_h)
@@ -39869,8 +40482,40 @@ def draw_profile_name_modal(surface):
         (cancel_rect, {"action": "pn_cancel"}))
 
 
+def _profile_name_modal_commit():
+    """Apply the modal in whichever mode it's in. Leaves the modal OPEN
+    with an error line when the name is refused — closing it would look
+    like the rename silently worked."""
+    global profile_name_modal_open, profile_name_modal_text
+    global profile_name_modal_error
+    name = profile_name_modal_text.strip()
+    if not name:
+        return
+    if profile_name_modal_mode == "rename":
+        if name == profile_name_modal_target:
+            profile_name_modal_open = False
+            profile_name_modal_text = ""
+            profile_name_modal_error = ""
+            return
+        if profile_exists(name):
+            profile_name_modal_error = f"A profile named {name!r} already exists."
+            return
+        ok = rename_profile(profile_name_modal_target, name)
+        if not ok:
+            profile_name_modal_error = "That name can't be used."
+            return
+    else:
+        if not save_profile_as(name):
+            profile_name_modal_error = "That name can't be used."
+            return
+    profile_name_modal_open = False
+    profile_name_modal_text = ""
+    profile_name_modal_error = ""
+
+
 def dispatch_profile_name_modal_click(mx, my):
     global profile_name_modal_open, profile_name_modal_text
+    global profile_name_modal_error
     if not profile_name_modal_open:
         return False
     for rect, action in reversed(profile_name_modal_rects):
@@ -39880,15 +40525,12 @@ def dispatch_profile_name_modal_click(mx, my):
         if what == "pn_backdrop" or what == "pn_cancel":
             profile_name_modal_open = False
             profile_name_modal_text = ""
+            profile_name_modal_error = ""
             return True
         if what == "pn_panel_bg":
             return True
         if what == "pn_save":
-            name = profile_name_modal_text.strip()
-            if name:
-                save_profile_as(name)
-                profile_name_modal_open = False
-                profile_name_modal_text = ""
+            _profile_name_modal_commit()
             return True
     return False
 
@@ -39897,26 +40539,26 @@ def handle_profile_name_modal_keydown(event):
     """Route a pygame.KEYDOWN event into the profile-name text field.
     Returns True if consumed. Called from the main event loop."""
     global profile_name_modal_open, profile_name_modal_text
+    global profile_name_modal_error
     if not profile_name_modal_open:
         return False
     if event.key == pygame.K_ESCAPE:
         profile_name_modal_open = False
         profile_name_modal_text = ""
+        profile_name_modal_error = ""
         return True
     if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
-        name = profile_name_modal_text.strip()
-        if name:
-            save_profile_as(name)
-            profile_name_modal_open = False
-            profile_name_modal_text = ""
+        _profile_name_modal_commit()
         return True
     if event.key == pygame.K_BACKSPACE:
         profile_name_modal_text = profile_name_modal_text[:-1]
+        profile_name_modal_error = ""
         return True
     # Accept printable characters with reasonable length cap.
     ch = event.unicode
     if ch and ch.isprintable() and len(profile_name_modal_text) < 40:
         profile_name_modal_text += ch
+        profile_name_modal_error = ""
         return True
     return True   # consume any other key while modal is open
 
@@ -46636,7 +47278,19 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                     cell_bg = (tuple(min(255, c + 28) for c in _cc)
                                if is_hover else _cc)
             pygame.draw.rect(surface, cell_bg, rect, border_radius=3)
-            pygame.draw.rect(surface, border_col, rect, 1, border_radius=3)
+            # An engaged action (singing, menu open, AutoRA armed) gets a
+            # thicker bright border. Deliberately a border and not a
+            # background swap, so the user's own colour choice survives.
+            _engaged = (entry is not None
+                        and entry.get("kind") == "action"
+                        and _hb_action_is_on(
+                            (entry.get("command") or "").strip().lower()))
+            if _engaged:
+                pygame.draw.rect(surface, (120, 225, 140), rect, 2,
+                                 border_radius=3)
+            else:
+                pygame.draw.rect(surface, border_col, rect, 1,
+                                 border_radius=3)
 
             if entry is None:
                 continue
@@ -46708,7 +47362,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
 
 HOTBAR_EDIT_FORM_H   = 248   # height of the inline form panel
 HOTBAR_EDIT_FIELD_H  = 22
-HOTBAR_KINDS         = ["windower", "shell", "url", "file", "none"]
+HOTBAR_KINDS         = ["windower", "action", "shell", "url", "file", "none"]
 
 
 def _hotbar_editor_get_focused_text():
@@ -47073,9 +47727,40 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
         hotbar_editor_rects.append((next_rect, {"kind": "kind_step", "delta": 1}))
         cy += HOTBAR_EDIT_FIELD_H + 6
 
-        # Row 3: Command
-        _draw_field_label("Command", cy)
-        _draw_text_input("command", cy)
+        # Row 3: Command. For the "action" kind there is nothing to type —
+        # the command is one of a fixed set of built-ins — so the text box
+        # becomes the same [<] value [>] cycler the Kind row uses.
+        if hotbar_edit_draft.get("kind", "none") == "action":
+            _draw_field_label("Action", cy)
+            _act_key = (hotbar_edit_draft.get("command", "") or "").strip().lower()
+            _act_text = HOTBAR_ACTION_LABELS.get(_act_key, "(pick one)")
+            _act_surf = field_font.render(_act_text, True, (220, 220, 230))
+            _abw = 18
+            _anext = pygame.Rect(control_x + control_w - _abw,
+                                 cy + (HOTBAR_EDIT_FIELD_H - 16) // 2,
+                                 _abw, 16)
+            _aval_x = _anext.x - 6 - _act_surf.get_width()
+            _aprev = pygame.Rect(_aval_x - 6 - _abw,
+                                 cy + (HOTBAR_EDIT_FIELD_H - 16) // 2,
+                                 _abw, 16)
+            pygame.draw.rect(surface, (60, 60, 75), _aprev, border_radius=2)
+            pygame.draw.rect(surface, (60, 60, 75), _anext, border_radius=2)
+            _als = field_font.render("<", True, (220, 220, 230))
+            _ars = field_font.render(">", True, (220, 220, 230))
+            surface.blit(_als, (_aprev.x + (_aprev.w - _als.get_width()) // 2,
+                                _aprev.y + (_aprev.h - _als.get_height()) // 2))
+            surface.blit(_ars, (_anext.x + (_anext.w - _ars.get_width()) // 2,
+                                _anext.y + (_anext.h - _ars.get_height()) // 2))
+            surface.blit(_act_surf,
+                (_aval_x,
+                 cy + (HOTBAR_EDIT_FIELD_H - _act_surf.get_height()) // 2))
+            hotbar_editor_rects.append((_aprev, {"kind": "action_step",
+                                                 "delta": -1}))
+            hotbar_editor_rects.append((_anext, {"kind": "action_step",
+                                                 "delta": 1}))
+        else:
+            _draw_field_label("Command", cy)
+            _draw_text_input("command", cy)
         cy += HOTBAR_EDIT_FIELD_H + 6
 
         # Row 4: Icon — small thumb preview + "Pick…" button + clear.
@@ -47358,6 +48043,30 @@ def dispatch_hotbar_editor_click(mx, my):
                     idx = 0
                 idx = (idx + action["delta"]) % len(HOTBAR_KINDS)
                 hotbar_edit_draft["kind"] = HOTBAR_KINDS[idx]
+                # Switching INTO the action kind: seed a valid action so
+                # the slot isn't left inert with a stale command string
+                # (an empty command reads as unconfigured everywhere).
+                if (hotbar_edit_draft["kind"] == "action"
+                        and (hotbar_edit_draft.get("command", "") or "")
+                        .strip().lower() not in HOTBAR_ACTION_KEYS):
+                    hotbar_edit_draft["command"] = HOTBAR_ACTION_KEYS[0]
+                # Leaving it: a bare action key is meaningless as a
+                # command/URL/path, so clear rather than leave a trap.
+                elif (hotbar_edit_draft["kind"] != "action"
+                        and (hotbar_edit_draft.get("command", "") or "")
+                        .strip().lower() in HOTBAR_ACTION_KEYS):
+                    hotbar_edit_draft["command"] = ""
+        elif kind == "action_step":
+            if hotbar_edit_draft is not None:
+                cur = (hotbar_edit_draft.get("command", "") or "").strip().lower()
+                try:
+                    aidx = HOTBAR_ACTION_KEYS.index(cur)
+                except ValueError:
+                    aidx = 0 if action["delta"] > 0 else len(HOTBAR_ACTION_KEYS) - 1
+                    hotbar_edit_draft["command"] = HOTBAR_ACTION_KEYS[aidx]
+                else:
+                    aidx = (aidx + action["delta"]) % len(HOTBAR_ACTION_KEYS)
+                    hotbar_edit_draft["command"] = HOTBAR_ACTION_KEYS[aidx]
         elif kind == "pick_icon":
             _refresh_ui_icon_listing()
             hotbar_icon_picker_open = True
@@ -47767,14 +48476,30 @@ TC_ABILITY_H  = 13    # per-ability-line
 TC_PAD        = 5
 TC_MAX_ABIL   = 8     # cap on visible ability lines (before "+N more")
 TC_FADE_SEC   = 3.0   # seconds to fully fade after target lost
+# Right-hand gutter for the wrapped body rows (Imm / STR / WK / Spells /
+# Abil / Misc). Two jobs: it keeps long lists off the card's border instead
+# of laying them right up against it, and it's where the body scrollbar sits
+# when the stat block overflows. Applied on top of TC_PAD.
+TC_BODY_GUTTER = 8
+# How much taller than the old line-count reserve the stat block may grow
+# before it scrolls instead. That reserve was a guess — a flat ten-line
+# allowance for STR/WK wrap plus a chars-per-line estimate for the ability
+# row — so a mob with a big ability and spell list ran off the bottom of the
+# card. The card now sizes itself to the height the body actually measured,
+# up to this ceiling; past it, the body scrolls.
+TC_BODY_GROW  = 1.25
 
 COL_TC_BG       = (22, 22, 30)
 COL_TC_BORDER   = (65, 65, 85)
 COL_TC_HEADER   = (32, 32, 45)
 COL_TC_NAME     = (230, 230, 245)
 COL_TC_HEX      = (130, 130, 160)
-COL_TC_STRONG   = (120, 220, 120)
-COL_TC_WEAK     = (230, 110, 110)
+# Read from the player's side, not the monster's: a resistance is bad news
+# for you, so STR: is red and WK: is green. (These were the other way round
+# through 1.9.8 — the row a green STR: line highlighted was the one damage
+# type you should NOT have been using.)
+COL_TC_STRONG   = (230, 110, 110)
+COL_TC_WEAK     = (120, 220, 120)
 COL_TC_LABEL    = (140, 140, 170)
 COL_TC_ABILITY  = (200, 200, 215)
 
@@ -48726,10 +49451,21 @@ def _tc_ability_info(mob_ref, family_key, mobdb_entry=None):
     total = sum(len(n) for n in names) + max(0, (len(names) - 1) * 2)
     return len(names), total
 
+def _tc_mob_key(info):
+    """Identity of whatever is on the card, for the measured-height cache.
+    Name + zone + kind: the same name in two zones can resolve to different
+    bestiary rows (level range, respawn), and a PC named after a monster
+    must not inherit that monster's measurements."""
+    if not info:
+        return ""
+    kind = info.get("kind", "") or ("pc" if info.get("is_pc", 0) else "mob")
+    return f"{(info.get('name') or '').lower()}|{info.get('zone_id', 0)}|{kind}"
+
+
 def target_card_size(scale, ability_count, has_aggro_row=True, has_detect_row=True,
                      sw_extra_lines=10, has_debuffs=False, has_buffs=False,
                      has_cast=False, ability_chars=0, kind="mob",
-                     comments_chars=0):
+                     comments_chars=0, mob_key=""):
     """Return (width, height) for the card at this scale.
     Height accounts for: header + icon + HP bar + level/family line +
     aggro row + detection row + strengths + weaknesses + abilities + misc.
@@ -48743,7 +49479,10 @@ def target_card_size(scale, ability_count, has_aggro_row=True, has_detect_row=Tr
     Spells/Abilities sections, so we don't allocate vertical space for
     them in that case (keeps PC cards compact).
     `comments_chars` is the length of mob_ref['comments']. Reserved for
-    the Misc row (mob + trust only)."""
+    the Misc row (mob + trust only).
+    `mob_key` is _tc_mob_key(info). When the renderer has already drawn this
+    mob at this scale it recorded the stat block's true height, and that
+    measurement is used in place of the line-count estimate below."""
     scale = _eff(scale)
     w = int(TC_WIDTH * scale)
     # Each visible status column adds to the width.
@@ -48756,14 +49495,19 @@ def target_card_size(scale, ability_count, has_aggro_row=True, has_detect_row=Tr
     # Both mobs AND trusts get an abilities row; only mobs get the
     # STR/WK/Imm/Spells stat block above it.
     has_action_list = is_mob or is_trust
-    h = int((TC_TITLE_H +                    # TARGET/SUB-TARGET title strip
-             TC_HEADER_H + TC_ICON_H + TC_HP_H +
-             TC_SECTION_H +                 # level/family line
-             (TC_SECTION_H if has_aggro_row  else 0) +
-             (TC_SECTION_H if has_detect_row else 0) +
-             (TC_SECTION_H * 2 if is_mob else 0) +    # strengths + weaknesses
-             (TC_SECTION_H * max(0, sw_extra_lines) if is_mob else 0) +  # wrap reserve
-             TC_PAD * 3) * scale)
+    # Fixed chrome above the stat block. This mirrors the renderer's cursor
+    # arithmetic exactly — title + header + icon + 2px + HP bar + one pad —
+    # so the measured body height below lands on the same pixel the body
+    # actually starts at.
+    chrome = (int(TC_TITLE_H * scale) + int(TC_HEADER_H * scale) +
+              int(TC_ICON_H * scale) + 2 + int(TC_HP_H * scale) +
+              int(TC_PAD * scale))
+    # Line-count estimate for the stat block, in unscaled units.
+    body = (TC_SECTION_H +                 # level/family line
+            (TC_SECTION_H if has_aggro_row  else 0) +
+            (TC_SECTION_H if has_detect_row else 0) +
+            (TC_SECTION_H * 2 if is_mob else 0) +    # strengths + weaknesses
+            (TC_SECTION_H * max(0, sw_extra_lines) if is_mob else 0))  # wrap reserve
     # Abilities row: wrapped flow layout. Estimate line count from total
     # character length of the name list (names + ", " separators). The card
     # body is ~TC_WIDTH px wide; at the font we use, that fits ~28 chars per
@@ -48778,7 +49522,7 @@ def target_card_size(scale, ability_count, has_aggro_row=True, has_detect_row=Tr
             # ceil division
             wrap_lines = max(1, (effective_chars + chars_per_line - 1) // chars_per_line)
         # Label line + wrapped content. Also a small bottom padding.
-        h += int((TC_SECTION_H * wrap_lines + TC_PAD) * scale)
+        body += TC_SECTION_H * wrap_lines + TC_PAD
     # Misc row reserves space when comments_chars > 0. Same chars-per-line
     # estimate as abilities, less the "Misc: " label width.
     if has_action_list and comments_chars > 0:
@@ -48787,10 +49531,27 @@ def target_card_size(scale, ability_count, has_aggro_row=True, has_detect_row=Tr
         wrap_lines = 1
         if effective_chars > 0:
             wrap_lines = max(1, (effective_chars + chars_per_line - 1) // chars_per_line)
-        h += int((TC_SECTION_H * wrap_lines + TC_PAD // 2) * scale)
+        body += TC_SECTION_H * wrap_lines + TC_PAD // 2
+    # The estimate is a ceiling now, not the answer. TC_BODY_GROW gives the
+    # block a quarter more room than the old reserve did, and when the
+    # renderer has already drawn this mob we use what it measured — it knows
+    # exactly how many lines the wrap produced, which no character count can.
+    # Anything past the ceiling scrolls, so a long ability list can no longer
+    # run off the bottom of the card no matter how far the estimate is out.
+    body_est = int(body * scale)
+    body_px  = int(body_est * TC_BODY_GROW)
+    measured = _tc_measured_h.get((mob_key, round(scale, 3))) if mob_key else None
+    if measured is not None:
+        body_px = max(int(TC_SECTION_H * scale), min(int(measured), body_px))
+    # Status columns run the full height of the card, so when either is
+    # showing keep at least the old reserve — shrinking to fit the stat
+    # block would push buffs into "+N more" that used to be listed.
+    if has_debuffs or has_buffs:
+        body_px = max(body_px, body_est)
+    h = chrome + body_px + int(TC_PAD * 2 * scale)
     # Cast strip: one line for casting, one for just-cast. ~2 section rows.
     if has_cast:
-        h += int(TC_SECTION_H * 2 * scale + TC_PAD * scale)
+        h += int(TC_SECTION_H * 2 * scale) + int(TC_PAD * scale)
     return w, h
 
 
@@ -48909,7 +49670,8 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     w, h = target_card_size(scale, _abil_count, aggro_row, aggro_row,
                             has_debuffs=has_debuffs, has_buffs=has_buffs,
                             has_cast=has_cast, ability_chars=_abil_chars,
-                            kind=_info_kind, comments_chars=_comments_chars)
+                            kind=_info_kind, comments_chars=_comments_chars,
+                            mob_key=_tc_mob_key(info))
     core_w = int(TC_WIDTH * s)    # width of the mob-info area
 
     # Render to an offscreen surface so we can apply alpha (for fade).
@@ -49350,6 +50112,37 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     card.blit(hp_main, (tx, ty))
     cy = hp_y + hp_h + int(TC_PAD * s)
 
+    # ── Scrollable body ─────────────────────────────────────────────────
+    # Everything from here down to the status columns — level line, aggro,
+    # senses, Imm/STR/WK/Spells/Abil, Misc — draws inside a clipped
+    # viewport. The card is normally sized to exactly this block's measured
+    # height (see target_card_size), so nothing is hidden; when a mob's
+    # abilities and spells need more than TC_BODY_GROW allows, the surplus
+    # scrolls instead of being painted off the bottom edge and lost.
+    body_top    = cy
+    cast_res    = ((int(TC_SECTION_H * 2 * s) + int(TC_PAD * s))
+                   if has_cast else 0)
+    body_view_h = max(int(TC_SECTION_H * s),
+                      h - int(TC_PAD * 2 * s) - cast_res - body_top)
+    _sc_key = title_label
+    # A new target starts at the top. Tracked by target id rather than by
+    # the card's own state so tabbing back to a mob keeps your place.
+    if _tc_scroll_of.get(_sc_key) != tid:
+        _tc_scroll_of[_sc_key] = tid
+        _tc_scroll[_sc_key] = 0
+    body_scroll = max(0, min(int(_tc_scroll.get(_sc_key, 0)),
+                             int(_tc_scroll_max.get(_sc_key, 0))))
+    _tc_scroll[_sc_key] = body_scroll
+    # Clip to the text limit rather than the full column: the gutter has to
+    # stay clear for the scrollbar, and it is also what stops an over-long
+    # single item (or a six-sense mob's detection row) from being laid right
+    # up against the border.
+    card.set_clip(pygame.Rect(0, body_top,
+                              max(1, core_w - int(TC_PAD * s)
+                                  - int(TC_BODY_GUTTER * s)),
+                              body_view_h))
+    cy -= body_scroll
+
     # ── MobDB-derived info ──────────────────────────────────────────────
     f_sec   = get_font("Consolas", 10 * s, bold=True)
     f_sec_v = get_font("Consolas", 10 * s)
@@ -49375,7 +50168,8 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
         # Right-aligned on the same row with a "Respawn:" prefix.
         resp_full = f"Respawn: {respawn_text}"
         rs_surf = f_dim.render(resp_full, True, COL_TC_LABEL)
-        card.blit(rs_surf, (core_w - rs_surf.get_width() - pad, cy))
+        card.blit(rs_surf, (core_w - rs_surf.get_width() - pad
+                            - int(TC_BODY_GUTTER * s), cy))
     cy += int(TC_SECTION_H * s)
 
     # Aggression row: Aggro, Links, TrueSight — each shown only when true.
@@ -49444,8 +50238,9 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
         card.blit(lbl, (pad, start_y))
         line_x_start = pad + lbl.get_width() + 4
         indent_x     = pad + lbl.get_width() + 4
-        avail_w      = core_w - indent_x - pad
-        max_line_w   = core_w - pad - indent_x
+        gutter       = int(TC_BODY_GUTTER * s)
+        avail_w      = core_w - indent_x - pad - gutter
+        max_line_w   = core_w - pad - gutter - indent_x
 
         if not items_formatted_parts:
             card.blit(f_sec_v.render("—", True, color), (line_x_start, start_y))
@@ -49479,7 +50274,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
         lbl = f_sec.render(label_text, True, COL_TC_LABEL)
         card.blit(lbl, (pad, start_y))
         indent_x = pad + lbl.get_width() + 4
-        max_line_w = core_w - pad - indent_x
+        max_line_w = core_w - pad - int(TC_BODY_GUTTER * s) - indent_x
         rects = []
         if not parts:
             card.blit(f_sec_v.render("—", True, color), (indent_x, start_y))
@@ -49669,6 +50464,11 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
                 "Abil:", parts, COL_TC_ABILITY, cy)
             for i, r in enumerate(item_rects):
                 if i < len(ability_entries):
+                    # An ability name scrolled out of the viewport is not on
+                    # screen and must not still answer the hover tooltip.
+                    if (r.bottom <= body_top
+                            or r.y >= body_top + body_view_h):
+                        continue
                     _mob_ability_rects.append((
                         pygame.Rect(r.x + x, r.y + y, r.width, r.height),
                         ability_entries[i],
@@ -49708,7 +50508,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
             lbl = f_sec.render("Misc:", True, COL_TC_LABEL)
             card.blit(lbl, (pad, cy))
             indent_x   = pad + lbl.get_width() + 4
-            max_line_w = core_w - pad - indent_x
+            max_line_w = core_w - pad - int(TC_BODY_GUTTER * s) - indent_x
             current = ""
             for w in words:
                 cand = (current + " " + w) if current else w
@@ -49724,6 +50524,38 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
                 card.blit(f_sec_v.render(current, True, misc_color),
                           (indent_x, cy))
                 cy += int(TC_SECTION_H * s)
+
+    # ── Close the scrollable body ────────────────────────────────────────
+    # cy has been running with the scroll subtracted, so add it back to get
+    # the block's true height. This is the number the next size calculation
+    # uses, which is what makes the card self-correcting: however far the
+    # line-count estimate was out, the frame after it is right.
+    body_content_h = (cy + body_scroll) - body_top
+    card.set_clip(None)
+    body_over = max(0, body_content_h - body_view_h)
+    _tc_scroll_max[_sc_key]  = body_over
+    _tc_scroll_step[_sc_key] = max(1, int(TC_SECTION_H * s))
+    _tc_scroll_rect[_sc_key] = pygame.Rect(x, y + body_top, core_w, body_view_h)
+    if body_scroll > body_over:
+        _tc_scroll[_sc_key] = body_over
+    _tc_measured_h[(_tc_mob_key(info), round(s, 3))] = body_content_h
+    if len(_tc_measured_h) > 512:
+        # Session-long cache of one small int per mob; clear rather than
+        # grow without bound. Everything re-measures on its next draw.
+        _tc_measured_h.clear()
+
+    if body_over > 0:
+        # Slim scrollbar in the gutter the wrapped rows now leave free.
+        sb_w = max(3, int(4 * s))
+        sb_x = core_w - int(TC_PAD * s) - sb_w
+        pygame.draw.rect(card, COL_TC_BORDER,
+                         (sb_x, body_top, sb_w, body_view_h), border_radius=2)
+        knob_h = int(body_view_h * body_view_h / float(body_content_h))
+        knob_h = max(int(14 * s), min(knob_h, body_view_h))
+        knob_y = body_top + int((body_view_h - knob_h)
+                                * (body_scroll / float(body_over)))
+        pygame.draw.rect(card, (150, 150, 180),
+                         (sb_x, knob_y, sb_w, knob_h), border_radius=2)
 
     # ── Status columns (right side): debuffs, then buffs ────────────────────
     # Only rendered when the mob has statuses — card width already reserved.
@@ -49904,7 +50736,13 @@ STATS_CELLS = [
     ("double attack",         "DA",            "multiattack", "normal"),
     ("triple attack",         "TA",            "multiattack", "normal"),
     ("quadruple attack",      "QA",            "multiattack", "normal"),
+    # Crit rate is gear-only: it comes through Gear_info's extras, and the
+    # JP-gift allow-list deliberately excludes it, so nothing else adds to it.
+    ("critical hit rate",     "Crit",          "multiattack", "normal"),
     ("store tp",              "STP",           "multiattack", "normal"),
+    # Subtle Blow sits with Store TP: both are about the TP economy of a
+    # fight, one yours and one the mob's.
+    ("subtle blow",           "S.Blow",        "multiattack", "normal"),
     # Accuracy / attack / ranged
     ("accuracy",       "Acc1",     "accatt", "normal"),
     ("accuracy2",      "Acc2",     "accatt", "normal"),
@@ -49921,9 +50759,15 @@ STATS_CELLS = [
     ("magic evasion",         "MEva", "defense", "normal"),
     ("evasion",               "Eva",  "defense", "normal"),
     ("defense",               "Def",  "defense", "normal"),
+    # Enmity is gear-only: nothing else feeds the 'enmity' key, so the
+    # cell shows exactly what you're wearing.
+    ("enmity",                "Emn.", "defense", "normal"),
     # Caster mods & sustain
     ("fast cast",         "Fast Cast",   "caster", "normal"),
     ("quick magic",       "Quick Magic", "caster", "normal"),
+    # Spell interruption rate: lower is better, so it's an inverted cell
+    # (see INVERT_SIGN_CELLS) — a negative reading is the good one.
+    ("spell interruption rate", "S.Int.",  "caster", "normal"),
     ("magic accuracy",    "MAcc",        "caster", "normal"),
     ("magic attack bonus","MAB",         "caster", "normal"),
     ("regen",             "Regen",       "caster", "normal"),
@@ -49965,6 +50809,18 @@ STATS_CELLS_BY_KEY = {c[0]: c for c in STATS_CELLS}
 # regardless of which "section" it originally belonged to. The section
 # field in STATS_CELLS is preserved for default-ordering reference but
 # no longer constrains placement.
+#
+# This one number decides the whole grid shape: panel WIDTH is
+# STATS_COLS_PER_ROW * cell_w, and row count is the visible-cell count
+# divided by it. Changing it rewraps every row — cell ORDER is preserved,
+# but where the row breaks fall is not, so a layout lined up at one width
+# won't look the same at another.
+#
+# It was briefly exposed as a pair of Columns / Rows settings and that was
+# removed on request: two knobs that interact (one a minimum width, one a
+# target height) are easy to get into a shape you didn't intend and hard
+# to reason about from a settings dialog. A fixed grid is the calmer
+# default. Hiding cells is the supported way to make the panel smaller.
 STATS_COLS_PER_ROW = 7
 
 
@@ -50023,6 +50879,17 @@ def _flatten_legacy_order(order_field):
     return flat
 
 
+# Where a cell added in a later version should land inside a layout the
+# user saved before it existed. Keyed by the new cell, valued by the cell
+# it should follow. See the insertion loop in _resolve_stats_layout.
+_STATS_NEW_CELL_AFTER = {
+    "subtle blow":             "store tp",
+    "enmity":                  "defense",
+    "critical hit rate":       "quadruple attack",
+    "spell interruption rate": "quick magic",
+}
+
+
 def _resolve_stats_layout(job):
     """Return the effective layout for a given main job string ('BLM', etc).
 
@@ -50055,12 +50922,22 @@ def _resolve_stats_layout(job):
     else:
         order = [c[0] for c in STATS_CELLS]
 
-    # Append any new cells defined in STATS_CELLS that aren't in the
-    # saved order (handles version upgrades where new stats are added).
+    # Absorb any new cells defined in STATS_CELLS that aren't in the saved
+    # order (version upgrades). A plain append would drop them AFTER the
+    # trailing "_empty" spacer cells, so a newly added stat would show up
+    # adrift below a row of blanks on every existing layout. Put each one
+    # next to the cell it belongs with instead, and only fall back to the
+    # end when that anchor has been hidden or removed.
     seen = set(order)
     for c in STATS_CELLS:
-        if c[0] not in seen:
+        if c[0] in seen:
+            continue
+        anchor = _STATS_NEW_CELL_AFTER.get(c[0])
+        if anchor and anchor in order:
+            order.insert(order.index(anchor) + 1, c[0])
+        else:
             order.append(c[0])
+        seen.add(c[0])
 
     return {"hidden": hidden, "order": order}
 
@@ -50264,6 +51141,52 @@ def _toggle_stats_cell_hidden(cell_key, current_job):
     stats_layout_config["_setup_pending"] = {"for_job": current_job, "layout": payload}
 
 
+def _is_stats_spacer(cell_key):
+    """True for the deliberately-blank spacer cells (_empty1..N).
+
+    Outside setup mode these render as nothing at all, so they're how a
+    user leaves a gap in the grid. That makes them the natural target for
+    'put this stat in that empty slot'."""
+    return bool(cell_key) and cell_key.startswith("_empty")
+
+
+def _swap_stats_cells(cell_key, target_key, current_job):
+    """Exchange two cells' positions in the flat order.
+
+    Used when a drag lands on (or starts from) an empty spacer. The
+    ordinary reorder is a remove-then-insert, which slides every cell
+    between the source and the target along by one — fine when you're
+    genuinely re-sequencing, but wrong when you're filling a gap: you
+    asked to move ONE cell into an empty slot and the whole grid
+    reflowed. A swap moves exactly two things and leaves the rest alone,
+    and since one of them is blank the visible result is the cell you
+    dragged appearing in the gap you dropped it on."""
+    if cell_key not in STATS_CELLS_BY_KEY:
+        return
+    if target_key not in STATS_CELLS_BY_KEY:
+        return
+    if cell_key == target_key:
+        return
+    layout = _get_active_stats_layout(current_job)
+    order = list(layout["order"])
+    if cell_key not in order or target_key not in order:
+        # One of them isn't placed yet — nothing to exchange, fall back
+        # to the ordinary path so the drag still does something.
+        _reorder_stats_cell(cell_key,
+                            order.index(target_key) if target_key in order
+                            else len(order),
+                            current_job)
+        return
+    i, j = order.index(cell_key), order.index(target_key)
+    order[i], order[j] = order[j], order[i]
+    payload = {
+        "hidden": sorted(layout["hidden"]),
+        "order":  order,
+    }
+    stats_layout_config["_setup_pending"] = {"for_job": current_job,
+                                             "layout": payload}
+
+
 def _reorder_stats_cell(cell_key, target_idx, current_job):
     """Move a cell to a new position in the linear order.
 
@@ -50361,6 +51284,7 @@ PERCENT_CELLS = {
     "dual wield", "dw trait", "dw needed",
     "weapon skill damage",
     "fast cast", "quick magic",
+    "critical hit rate", "spell interruption rate",
     "damage taken", "physical damage taken", "magic damage taken",
     "breath damage taken",
     "movement speed",
@@ -50370,6 +51294,10 @@ PERCENT_CELLS = {
 INVERT_SIGN_CELLS = {
     "damage taken", "physical damage taken", "magic damage taken",
     "breath damage taken",
+    # Spell interruption rate is a "down" stat: gear reads "Spell
+    # interruption rate down 20%", which lands here as -20. Less is better,
+    # so the sign colouring has to be flipped exactly like damage taken.
+    "spell interruption rate",
 }
 
 # Cells that show absolute totals (skill + base + gear + buffs + food)
@@ -50406,7 +51334,16 @@ STAT_CAPS = {
     "fast cast":              80,    # FC cap (gear+JA combined)
     "quick magic":            50,    # commonly-cited soft cap; gear-only
     "store tp":               100,
+    # 50 is the cap on gear AND traits combined, which is exactly what this
+    # panel shows (the lua folds job traits and JP gifts in, same as it does
+    # for DA / TA / Fast Cast). So the red flag is correct and useful here:
+    # past 50 the surplus does nothing and the gear could be doing something
+    # else. Don't remove this on the theory that 50 is gear-only.
     "subtle blow":            50,
+    "enmity":                 100,   # game caps total enmity at +/-100
+    # A floor, not a ceiling (see INVERT_SIGN_CELLS): interruption rate
+    # can't drop below -100%, so anything past that is wasted.
+    "spell interruption rate": -100,
     "movement speed":         60,    # +60% over base is the true game cap
                                       #   (160% total). Gear-only cap is ~25,
                                       #   but with Bolter's Roll the displayed
@@ -50421,11 +51358,35 @@ STAT_CAPS = {
 STATS_CELL_W     = 56     # logical per-cell width at scale 1
 STATS_CELL_H     = 30     # logical per-cell height at scale 1 (two lines)
 STATS_ELEM_CELL_W = 74    # wider since element labels are longer
+# Unused since the v2.0 linear-flow rebuild — kept only so old references
+# don't break. STATS_COLS_PER_ROW is the live one; don't edit these
+# expecting the grid to change.
 STATS_GRID_COLS  = 7
 STATS_ELEM_COLS  = 4
 STATS_PAD        = 4
 STATS_TITLE_H    = 22
 STATS_SECTION_GAP = 4
+
+def _stats_render_order(order, hidden, setup_mode):
+    """The cells the panel will actually lay out, in order.
+
+    Setup mode shows everything, hidden cells included (dimmed, so they
+    can be clicked back). Normal mode drops the hidden ones — and then
+    drops any spacer cells left dangling at the END.
+
+    That last step is the point: a spacer's whole job is to hold a gap
+    BETWEEN two stats. Once nothing follows it, it is holding a gap
+    against nothing while still costing a slot, and the panel reserves
+    height for it. With four of them sitting at the end of the default
+    order that was a whole row of the panel drawing nothing at all.
+    Interior spacers are untouched — those are doing their job."""
+    if setup_mode:
+        return list(order)
+    out = [k for k in order if k not in hidden]
+    while out and out[-1].startswith("_empty"):
+        out.pop()
+    return out
+
 
 def stats_panel_size(scale, _unused=None, job=None, setup_mode=False):
     """Return (panel_w, panel_h) for the stats panel at scale.
@@ -50444,8 +51405,6 @@ def stats_panel_size(scale, _unused=None, job=None, setup_mode=False):
     title_h = panel_header_h()   # shared with EQUIPMENT (global scale only)
     gap     = max(2,  int(STATS_SECTION_GAP * scale))
 
-    panel_w = STATS_COLS_PER_ROW * cell_w + pad * 2
-
     try:
         layout = _get_active_stats_layout(job)
     except Exception:
@@ -50453,13 +51412,14 @@ def stats_panel_size(scale, _unused=None, job=None, setup_mode=False):
     hidden = layout["hidden"]
     order  = layout["order"]
 
-    # Count cells we'll actually render.
-    if setup_mode:
-        n_cells = len(order)             # all cells (hidden ones dimmed)
-    else:
-        n_cells = sum(1 for k in order if k not in hidden)
+    # Count cells we'll actually render — same helper the renderer uses,
+    # so the reserved height can't disagree with what gets drawn.
+    n_cells = len(_stats_render_order(order, hidden, setup_mode))
 
-    rows = (n_cells + STATS_COLS_PER_ROW - 1) // STATS_COLS_PER_ROW if n_cells else 0
+    cols    = STATS_COLS_PER_ROW
+    panel_w = cols * cell_w + pad * 2
+
+    rows = (n_cells + cols - 1) // cols if n_cells else 0
     panel_h = title_h + rows * cell_h + pad * 2
     # Minimum height — keep at least one cell row visible to make panel
     # discoverable even when fully empty.
@@ -50641,11 +51601,52 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     pygame.draw.rect(surface, COL_PANEL,    (x, bg_y, panel_w, panel_h), border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, bg_y, panel_w, panel_h), 1, border_radius=4)
 
+    # ── Where the panel will actually land ──────────────────────────────
+    # Setup mode makes the panel BIGGER than it will be in play: hidden
+    # cells still take their slots (dimmed, so they can be clicked back),
+    # trailing spacers aren't trimmed, and the tray + Save-as block adds a
+    # chunk on top of that. So the box you're dragging around is not the
+    # box you end up with, and positioning it against the game window is
+    # guesswork. Outline the real footprint — the size stats_panel_size
+    # reports with setup_mode off, at this same top-left — so you can
+    # place it exactly. Only drawn when the two actually differ.
+    if setup_mode:
+        try:
+            _live_w, _live_h = stats_panel_size(_raw_scale, job=job,
+                                                setup_mode=False)
+            if (_live_w, _live_h) != (panel_w, panel_h) or bg_y != y:
+                _dash = max(4, int(6 * scale))
+                _col = (120, 200, 255)
+                # Dashed rectangle: solid would read as another panel.
+                for _dx in range(0, _live_w, _dash * 2):
+                    _seg = min(_dash, _live_w - _dx)
+                    pygame.draw.line(surface, _col, (x + _dx, y),
+                                     (x + _dx + _seg, y))
+                    pygame.draw.line(surface, _col, (x + _dx, y + _live_h),
+                                     (x + _dx + _seg, y + _live_h))
+                for _dy in range(0, _live_h, _dash * 2):
+                    _seg = min(_dash, _live_h - _dy)
+                    pygame.draw.line(surface, _col, (x, y + _dy),
+                                     (x, y + _dy + _seg))
+                    pygame.draw.line(surface, _col, (x + _live_w, y + _dy),
+                                     (x + _live_w, y + _dy + _seg))
+                _ff = get_font("Consolas", 8 * scale, bold=True)
+                _fs = _ff.render("actual size on exit", True, _col)
+                # Inside the outline's bottom-right, or just above the
+                # line when the outline is too short to hold the label.
+                _fx = x + _live_w - _fs.get_width() - 4
+                _fy = y + _live_h - _fs.get_height() - 2
+                if _fy < y:
+                    _fy = y + _live_h + 2
+                surface.blit(_fs, (_fx, _fy))
+        except Exception as _e:
+            print(f"[OmniWatch] setup footprint outline: {_e!r}")
+
     # Title bar.
     pygame.draw.rect(surface, COL_EV_HEADER,
                      (x + 1, y + 1, panel_w - 2, title_h - 1), border_radius=3)
     draw_accent_stripe(surface, x, bg_y, panel_h, ACCENT_STATS)
-    title_font = get_font("Consolas", 12 * scale, bold=True)
+    title_font = panel_header_font()
     t_surf = title_font.render("STATISTICS", True, COL_EV_TITLE)
     surface.blit(t_surf, (x + 6, y + (title_h - t_surf.get_height()) // 2))
     pygame.draw.line(surface, COL_SLOT_BDR,
@@ -50826,14 +51827,12 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     # click-to-restore). In normal mode they're skipped and remaining
     # cells flow up.
     cur_y = y + title_h + pad
-    if setup_mode:
-        cells_to_render = list(order)
-    else:
-        cells_to_render = [k for k in order if k not in hidden]
+    cells_to_render = _stats_render_order(order, hidden, setup_mode)
 
+    cols = STATS_COLS_PER_ROW
     for idx, key in enumerate(cells_to_render):
-        row = idx // STATS_COLS_PER_ROW
-        col = idx % STATS_COLS_PER_ROW
+        row = idx // cols
+        col = idx % cols
         cx = x + pad + col * cell_w
         cy = cur_y + row * cell_h
         meta = STATS_CELLS_BY_KEY.get(key)
@@ -50888,7 +51887,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                               is_hidden=(key in hidden))
 
     # Update cur_y for the tray/save-as block below.
-    rows_rendered = (len(cells_to_render) + STATS_COLS_PER_ROW - 1) // STATS_COLS_PER_ROW
+    rows_rendered = (len(cells_to_render) + cols - 1) // cols
     cur_y = cur_y + rows_rendered * cell_h
 
     # Placeholder cells in the trailing partial row (setup mode only).
@@ -50897,14 +51896,14 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     # slots so users can see where they're free to drop cells. Skipped
     # in normal play to keep the panel clean.
     if setup_mode and len(cells_to_render) > 0:
-        filled_in_last_row = len(cells_to_render) % STATS_COLS_PER_ROW
+        filled_in_last_row = len(cells_to_render) % cols
         if filled_in_last_row > 0:
             last_row_idx = rows_rendered - 1
             ph_cy = cur_y - cell_h   # top of the last (partial) row
             ph_font = get_font("Consolas", int(16 * scale), bold=True)
             ph_color = (60, 70, 85)        # faint outline
             plus_color = (75, 90, 110)     # faint '+' text
-            for ph_col in range(filled_in_last_row, STATS_COLS_PER_ROW):
+            for ph_col in range(filled_in_last_row, cols):
                 ph_cx = x + pad + ph_col * cell_w
                 # Outline.
                 pygame.draw.rect(surface, ph_color,
@@ -51015,13 +52014,35 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                       btn_y + (btn_h - btn_label.get_height()) // 2))
         _stats_save_as_button_rect = (btn_x, btn_y, btn_w, btn_h)
 
-        # Brief hint text to the left of the button.
+        # Brief hint text to the left of the button. The full sentence is
+        # wider than the panel at most scales, and it used to be blitted
+        # at full length underneath the button — the tail of it came out
+        # the far side and read as garbled text around "Save as". Fit it
+        # to the gap instead, dropping clauses from the end until it does.
         hint_font = get_font("Consolas", 8 * scale)
-        hint_surf = hint_font.render(
-            "Click cells to hide \u2022 drag to reorder \u2022 "
-            "exit setup to save to this job (Save as \u25BC for global)",
-            True, (140, 140, 140))
-        surface.blit(hint_surf, (x + pad, btn_y + (btn_h - hint_surf.get_height()) // 2))
+        hint_avail = max(0, btn_x - (x + pad) - int(8 * scale))
+        # How you LEAVE differs by mode, and getting that wrong strands
+        # the user: panel-only editing has no setup-mode toggle to flip.
+        _leave = ("press Esc" if (stats_layout_edit and not setup_mode)
+                  else "exit setup")
+        hint_options = [
+            (f"Click cells to hide \u2022 drag to reorder \u2022 "
+             f"{_leave} to save to this job (Save as \u25BC for global)"),
+            (f"Click to hide \u2022 drag to reorder \u2022 "
+             f"{_leave} to save"),
+            "Click to hide \u2022 drag to reorder",
+            "Click to hide",
+        ]
+        hint_text = ""
+        for _cand in hint_options:
+            if hint_font.size(_cand)[0] <= hint_avail:
+                hint_text = _cand
+                break
+        if hint_text:
+            hint_surf = hint_font.render(hint_text, True, (140, 140, 140))
+            surface.blit(hint_surf,
+                         (x + pad,
+                          btn_y + (btn_h - hint_surf.get_height()) // 2))
 
         # If the dropdown is open, render it OVER everything below the
         # button. Anchored to the button. List: Current job (top),
@@ -51137,8 +52158,9 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
     pygame.draw.rect(surface, COL_PANEL,    (x, y, panel_w, panel_h), border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, panel_w, panel_h), 1, border_radius=4)
 
-    # Title bar
-    title_font = get_font("Consolas", 12 * scale, bold=True)
+    # Title bar. Font comes from the shared helper, not this panel's own
+    # scale — see panel_header_font().
+    title_font = panel_header_font()
     pygame.draw.rect(surface, COL_EV_HEADER, (x + 1, y + 1, panel_w - 2, title_h - 1), border_radius=3)
     # Accent stripe AFTER the title bar so it paints over the title-bar's
     # left edge — otherwise the title bar (which spans the full inner
@@ -52364,6 +53386,10 @@ while running:
     click_targets.clear()
     # Reset mob-ability hover regions.
     _mob_ability_rects.clear()
+    # Reset target-card scroll hit-test geometry. The offsets themselves
+    # (_tc_scroll) persist; only the rects are rebuilt, so a card that
+    # stops drawing stops claiming the wheel.
+    _tc_scroll_rect.clear()
     _party_buff_icon_rects.clear()
     # Reset hotbar editor anchor — set during the buttons panel render
     # if it happens this frame; if not, the editor is skipped at draw
@@ -53559,6 +54585,13 @@ while running:
                                 print("[OmniWatch] stats auto-save on exit "
                                       f"failed: {_e2!r}")
                             stats_layout_config.pop("_setup_pending", None)
+                            # Full setup mode has just saved and cleared
+                            # the session layer, so a panel-only edit
+                            # session left running underneath it would
+                            # have nothing left to commit. Drop it rather
+                            # than leave the panel silently editable.
+                            stats_layout_edit = False
+# Threshold in pixels the cursor must move before we consider it a drag
                 except Exception as _e:
                     print(f"[OmniWatch] stats layout transition failed: {_e!r}")
                 # When setup mode toggles, force recast and buff panels to
@@ -55645,7 +56678,8 @@ while running:
     tcw, tch = target_card_size(target_scale, _tc_abils, _tc_aggrow, _tc_aggrow,
                                 has_debuffs=_tc_has_db, has_buffs=_tc_has_bf,
                                 has_cast=_tc_has_cast, ability_chars=_tc_achars,
-                                kind=_tc_kind, comments_chars=_tc_cchars)
+                                kind=_tc_kind, comments_chars=_tc_cchars,
+                                mob_key=_tc_mob_key(target_sticky))
     if target_anchor is None:
         target_anchor = ["tr", PANEL_X, layout_top() + PANEL_X]
     if dragging_key != "__target__":
@@ -55679,7 +56713,8 @@ while running:
                                        has_cast=_tc_has_cast_st,
                                        ability_chars=_tc_achars_st,
                                        kind=_tc_kind_st,
-                                       comments_chars=_tc_cchars_st)
+                                       comments_chars=_tc_cchars_st,
+                                       mob_key=_tc_mob_key(target_sticky_st))
     if target_anchor_st is None:
         # Directly below the main card's default position: add tch + a gap.
         target_anchor_st = ["tr", PANEL_X, layout_top() + PANEL_X + tch + 8]
@@ -56595,7 +57630,7 @@ while running:
     if setting("show_statistics"):
         draw_stats_panel(screen, stats_pos[0], stats_pos[1],
                          player_self_mjob, player_stats, stats_scale,
-                         setup_mode=setup_mode)
+                         setup_mode=_stats_edit_active())
         draw_resize_grip(screen, stats_pos[0] + sw, stats_pos[1] + sh)
 
     # ── Target card (fades out after TC_FADE_SEC of no target) ──────────────
@@ -57045,6 +58080,11 @@ while running:
                 screen.blit(_bs, (_tx + _pad, _ty + _pad))
                 break
 
+    # ── Hotbar action note ───────────────────────────────────────────────
+    # Feedback for an action fired from a hotbar slot ("no set chosen yet").
+    # Drawn last so it sits above every panel, like a tooltip.
+    draw_hotbar_action_note(screen)
+
     # ── Whole-display hide gate ──────────────────────────────────────────────
     # When the user has toggled the display off (for a cutscene, etc.),
     # wipe everything that was just drawn this frame and leave a blank
@@ -57305,6 +58345,27 @@ while running:
                         inventory_search_scroll = max(
                             0, inventory_search_scroll - event.y)
                         continue
+
+            # Target / sub-target stat block. Both cards draw above the
+            # chat and party panels, so they take the wheel before those —
+            # but only while the body actually overflows, so a card that
+            # fits passes the event straight through to whatever is under
+            # it. Sub-target is checked first: it draws last, so where the
+            # two overlap it is the one on top.
+            _tc_took_wheel = False
+            for _sc_k in ("SUB-TARGET", "TARGET"):
+                _sc_r = _tc_scroll_rect.get(_sc_k)
+                _sc_m = int(_tc_scroll_max.get(_sc_k, 0))
+                if (_sc_m > 0 and _sc_r is not None
+                        and _sc_r.collidepoint(mx, my)):
+                    _sc_step = max(1, int(_tc_scroll_step.get(_sc_k, 15)))
+                    _tc_scroll[_sc_k] = max(0, min(
+                        _sc_m,
+                        int(_tc_scroll.get(_sc_k, 0)) - event.y * _sc_step))
+                    _tc_took_wheel = True
+                    break
+            if _tc_took_wheel:
+                continue
 
             # Chat panel scroll. event.y > 0 = wheel up = view earlier
             # messages (positive offset). event.y < 0 = wheel down =
@@ -57662,6 +58723,13 @@ while running:
                 if settings_menu_open:
                     settings_menu_open = False
                     continue
+                # Panel-only stats editing. Below the dialogs (they're the
+                # more urgent thing to dismiss) but above the rest, and
+                # only when full setup mode ISN'T on — in that case Esc
+                # should keep whatever meaning setup mode gives it.
+                if stats_layout_edit and not setup_mode:
+                    _stats_layout_edit_end()
+                    continue
                 if warp_confirm is not None:
                     warp_confirm = None
                     continue
@@ -57890,7 +58958,7 @@ while running:
             #   3) Tray chips (click chip to un-hide that cell)
             #   4) Cell click (toggle hidden state)
             # Click anywhere else with the dropdown open closes it.
-            if setup_mode:
+            if _stats_edit_active():
                 consumed = False
                 # Dropdown items first (only when open).
                 if _stats_save_as_open and _stats_save_as_dropdown_rects:
@@ -59446,6 +60514,7 @@ while running:
                     # act as drop targets for end-of-list positions).
                     mx, my = event.pos
                     target_idx = None
+                    swap_with = None
                     best = None
                     for entry in _stats_cell_click_rects:
                         rx, ry, rw, rh = entry["rect"]
@@ -59472,9 +60541,20 @@ while running:
                         # ones dimmed in their default slots). So target
                         # index in the rendered list maps directly to the
                         # full_order index.
+                        swap_with = None
                         if is_ph:
                             # Placeholder drop → insert at end.
                             target_idx = len(full_order)
+                        elif (_is_stats_spacer(target_key)
+                                or _is_stats_spacer(drag["key"])):
+                            # Dropping a stat into an empty slot (or an
+                            # empty slot onto a stat) is a placement, not a
+                            # re-sequence: exchange the two and leave every
+                            # other cell exactly where it was. The
+                            # left-half/right-half test below is
+                            # deliberately skipped — you're aiming AT the
+                            # gap, not between it and its neighbour.
+                            swap_with = target_key
                         else:
                             if target_key in full_order:
                                 base_idx = full_order.index(target_key)
@@ -59482,7 +60562,10 @@ while running:
                                     target_idx = base_idx
                                 else:
                                     target_idx = base_idx + 1
-                    if target_idx is not None:
+                    if swap_with is not None:
+                        _swap_stats_cells(drag["key"], swap_with,
+                                          player_self_mjob)
+                    elif target_idx is not None:
                         _reorder_stats_cell(drag["key"], target_idx,
                                             player_self_mjob)
                 continue
@@ -59537,7 +60620,7 @@ while running:
                             _fam = infer_family(target_sticky.get("name", "") or "")
                         if not _fam:
                             _fam = (_ref or {}).get("family", "").lower()
-                        _abils, _achars = _tc_ability_info(_ref, _fam)
+                        _abils, _achars = _tc_ability_info(_ref, _fam, _mdb)
                         _stat  = mob_statuses.get((target_sticky or {}).get("id", 0), {})
                         _cstate = mob_cast_state.get((target_sticky or {}).get("id", 0))
                         _hcast  = bool(_cstate and (_cstate.get("casting") or _cstate.get("last_cast")))
@@ -59551,7 +60634,8 @@ while running:
                                                    has_cast=_hcast,
                                                    ability_chars=_achars,
                                                    kind=(target_sticky or {}).get("kind", "mob"),
-                                                   comments_chars=_cchars)
+                                                   comments_chars=_cchars,
+                                                   mob_key=_tc_mob_key(target_sticky))
                         target_anchor = anchor_for_pos(target_pos[0], target_pos[1],
                                                         pw, ph, WIDTH, HEIGHT)
                 elif dragging_key == "__target_st__":
@@ -59567,7 +60651,7 @@ while running:
                             _fam = infer_family(target_sticky_st.get("name", "") or "")
                         if not _fam:
                             _fam = (_ref or {}).get("family", "").lower()
-                        _abils, _achars = _tc_ability_info(_ref, _fam)
+                        _abils, _achars = _tc_ability_info(_ref, _fam, _mdb)
                         _stat  = mob_statuses.get((target_sticky_st or {}).get("id", 0), {})
                         _cstate = mob_cast_state.get((target_sticky_st or {}).get("id", 0))
                         _hcast  = bool(_cstate and (_cstate.get("casting") or _cstate.get("last_cast")))
@@ -59581,7 +60665,8 @@ while running:
                                                    has_cast=_hcast,
                                                    ability_chars=_achars,
                                                    kind=(target_sticky_st or {}).get("kind", "mob"),
-                                                   comments_chars=_cchars)
+                                                   comments_chars=_cchars,
+                                                   mob_key=_tc_mob_key(target_sticky_st))
                         target_anchor_st = anchor_for_pos(
                             target_pos_st[0], target_pos_st[1], pw, ph, WIDTH, HEIGHT)
                 elif dragging_key == "__recast__":
