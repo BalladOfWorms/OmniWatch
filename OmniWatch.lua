@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.10.0'
+_addon.version  = '1.10.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -90,13 +90,17 @@ do
 end
 
 -- ── Currency cache (tier-1 + tier-2) ──────────────────────────────────────
--- Six currencies that surface in the OmniWatch header cycler:
+-- The currencies that surface in the OmniWatch header cycler:
 --   gil          — already in windower.ffxi.get_items().gil (no packet needed)
 --   sparks       — Sparks of Eminence  (tier-1, packet 0x113)
 --   accolades    — Unity Accolades     (tier-1, packet 0x113)
 --   gallimaufry  — Gallimaufry         (tier-2, packet 0x118)
 --   temenos      — Temenos Units       (tier-2, packet 0x118)
 --   apollyon     — Apollyon Units      (tier-2, packet 0x118)
+--   escha_beads  — Escha Beads         (tier-2, packet 0x118)
+--   nyzul_tokens — Nyzul Isle tokens   (tier-2, packet 0x118)
+--   ichor        — Therion Ichor       (tier-2, packet 0x118)
+--   potpourri    — Potpourri           (tier-2, packet 0x118)
 --
 -- Filled by the incoming-chunk handler below as the server pushes these
 -- packets (which it does on zone change, opening the currency menu, etc.).
@@ -118,6 +122,7 @@ _G._ow_currency_cache = {
     escha_beads  = 0,
     nyzul_tokens = 0,
     ichor        = 0,
+    potpourri    = 0,
 }
 -- Timestamp (os.clock) of the last outbound currency request. Used to
 -- throttle re-requests to once every CURRENCY_REQUEST_INTERVAL seconds.
@@ -561,15 +566,14 @@ function ow_user_config_dir()
     return windower.addon_path .. 'data'
 end
 
--- ── Self-contained trust-buff-loss probe ──────────────────────────────
--- Writes 0x076 per-member buff lines DIRECTLY to a log file from this
--- file, with zero dependency on the chat module / _loader / buff_events
--- (those layers kept getting out of sync across deploys and silently
--- swallowed the probe). Toggle with //ow trustprobe [on|off]. The log
--- lands next to the addon's data dir as ow_trustprobe.log.
--- trustprobe toggle. Global (no 'local') on purpose: the main chunk is
--- at Lua 5.1's 200-local limit, and globals don't consume a slot.
-_ow_trustprobe_on = false
+-- (The trust-buff probes lived here. Removed 2026-08-03 once the question
+-- was settled: 0x076 is the ONLY incoming packet in the whole protocol
+-- that describes another entity's buffs — Windower's own fields.lua has
+-- just three buff arrays, and the other two, 0x037 and 0x063 sub-type 9,
+-- are the local player's — and it is never sent for a trust-only party.
+-- Reconstructing trust buffs from the 0x028/0x029 event stream remains
+-- possible but was not pursued. Don't re-add a probe here without a new
+-- lead; this ground is covered.)
 -- Master flag for the unified //ow chatdebug command. Drives every chat
 -- probe at once. Global for the same 200-local-limit reason.
 _ow_chatdebug_on = false
@@ -579,19 +583,6 @@ _ow_chatdebug_on = false
 -- and clear (sending REMOVE) when the mob takes real HP damage. Global
 -- for the 200-local-limit reason.
 _ow_mob_absorb_buffs = {}
-function _ow_trustprobe_log(line)
-    if not _ow_trustprobe_on then return end
-    -- Write through the SAME proven writer the other probes use
-    -- (buff_events._probe_log, exposed as _chat._probe_log), which
-    -- reliably creates data/ow_classify_probe.log. Our own io.open
-    -- writer kept failing on path resolution, so don't maintain a
-    -- second path — reuse the one that works. Output lands in
-    -- ow_classify_probe.log alongside the other probe lines.
-    if _chat and _chat._probe_log then
-        _chat._probe_log(line)
-    end
-end
-
 function ow_user_config_path()
     return ow_user_config_dir() .. '/user_config.lua'
 end
@@ -2739,7 +2730,8 @@ local function _ow_emit_inventory_snapshot()
         local payload = string.format(
             'CURRENCY|gil=%d;sparks=%d;accolades=%d;' ..
             'gallimaufry=%d;temenos=%d;apollyon=%d;' ..
-            'escha_beads=%d;nyzul_tokens=%d;ichor=%d',
+            'escha_beads=%d;nyzul_tokens=%d;ichor=%d;' ..
+            'potpourri=%d',
             gil_val,
             tonumber(cur.sparks) or 0,
             tonumber(cur.accolades) or 0,
@@ -2748,7 +2740,8 @@ local function _ow_emit_inventory_snapshot()
             tonumber(cur.apollyon) or 0,
             tonumber(cur.escha_beads) or 0,
             tonumber(cur.nyzul_tokens) or 0,
-            tonumber(cur.ichor) or 0)
+            tonumber(cur.ichor) or 0,
+            tonumber(cur.potpourri) or 0)
         udp_inv:send(_OW_MB_TAG(payload))
     end)
 
@@ -3314,6 +3307,12 @@ do
         -- form exists on some forks.
         ['Therion Ichor']      = 'ichor',
         ['Ichor']              = 'ichor',
+        -- Potpourri (Sortie / Odyssey-era currency). Confirmed
+        -- against Windower's live fields.lua: a single 'Potpourri'
+        -- label, signed int at 0x50 of 0x118 — no alternate
+        -- spellings in the wild, so unlike the entries above this
+        -- one needs only a single key.
+        ['Potpourri']          = 'potpourri',
     }
 
     ow_safe_register('incoming chunk', function(id, data)
@@ -6091,6 +6090,13 @@ function _ow_nyzul_boot()
     end
 
     ow_safe_register('zone change', function(new, old)
+        -- Wyvern-level haste is removed on zone. Zoning dismisses the pet
+        -- anyway, so ow_wyvern_ja_haste's identity check would catch it;
+        -- this just makes it immediate.
+        if type(_G._ow_wyvern) == 'table' then
+            _G._ow_wyvern.links = 0
+            _G._ow_wyvern.pet_index = nil
+        end
         if new == 72 and old == 77 then
             zone_timer = 0; has_armband = false
         else
@@ -8927,6 +8933,7 @@ do
                 song_restore_equip()
             else
                 windower.send_command('gs c set extrasongsmode ' .. IDLE_MODE)
+                emit_chat('extrasongsmode -> ' .. IDLE_MODE .. ' (idle)')
             end
             push_state('idle')
             emit_chat('Rotation complete.')
@@ -8954,6 +8961,7 @@ do
                     _send_mode = _ml .. 'lock'
                 end
                 windower.send_command('gs c set extrasongsmode ' .. _send_mode)
+                emit_chat('extrasongsmode -> ' .. tostring(_send_mode))
             end
             st.idx = st.idx + 1
             coroutine.schedule(do_step, MODE_DELAY)
@@ -9024,6 +9032,7 @@ do
                     song_restore_equip()
                 else
                     windower.send_command('gs c set extrasongsmode ' .. IDLE_MODE)
+                    emit_chat('extrasongsmode -> ' .. IDLE_MODE .. ' (idle)')
                 end
                 push_state('idle')
                 emit_chat('Singing stopped.')
@@ -9053,7 +9062,14 @@ do
             if tok ~= '' then
                 local nm, mode, mar = tok:match('^(.-)%^(.-)%^(.-)$')
                 if nm and nm ~= '' then
-                    if mode == nil or mode == '' then mode = 'fulllength' end
+                    -- Lowercase here, not at send time. The change test
+                    -- below is a raw string compare, so a mode that ever
+                    -- arrived capitalised would emit a spurious extra mode
+                    -- step (or, worse, compare unequal to itself across
+                    -- songs). Normalising once at the boundary means every
+                    -- later comparison and lookup sees the same form.
+                    mode = tostring(mode or ''):lower()
+                    if mode == '' then mode = 'fulllength' end
                     if mode ~= last_mode then
                         steps[#steps + 1] = { kind = 'mode', mode = mode }
                         last_mode = mode
@@ -9065,6 +9081,25 @@ do
             end
         end
         if #steps == 0 then emit_chat('Set is empty.'); push_state('idle'); return end
+        -- Log the resolved plan, not just its length. "Singing 8 step(s)"
+        -- says nothing about WHICH steps, so a rotation that never sent the
+        -- mode you expected was indistinguishable in the log from one that
+        -- did. Now the plan is on record before a single packet goes out.
+        do
+            local _desc = {}
+            for _, sp in ipairs(steps) do
+                if sp.kind == 'mode' then
+                    _desc[#_desc + 1] = 'mode:' .. tostring(sp.mode)
+                elseif sp.kind == 'song' then
+                    _desc[#_desc + 1] = tostring(sp.name)
+                        .. (sp.dummy and ' (dummy)' or '')
+                else
+                    _desc[#_desc + 1] = tostring(sp.kind)
+                        .. (sp.name and (':' .. sp.name) or '')
+                end
+            end
+            emit_chat('plan: ' .. table.concat(_desc, ' -> '))
+        end
         st.steps = steps
         st.idx = 1
         st.retries = 0
@@ -10135,6 +10170,8 @@ end)
 -- load message (links here) and //ow help.
 local PW_COMMANDS_HELP = {
     {'help',                  'Show this list of commands.'},
+    {'petdump',               'Write every field of the current pet\'s mob '
+                              .. 'entry to omniwatch.log.'},
     {'debug',                 'Toggle diagnostic chat output (action packets, '
                               .. 'Bolter\'s rolls, gearswap state echoes).'},
     {'setup',                 'Open the config overlay (Song+ / Phantom Roll+ / Geomancy+ / Unity Rank).'},
@@ -10466,6 +10503,36 @@ ow_safe_register('addon command', function(command, ...)
             _ow_buff_debug = _saved_dbg
         else
             ow_chat(207, '[OW dwtest] no stats computed')
+        end
+    elseif command == 'petdump' then
+        -- Dump every field Windower exposes for the current pet. There is
+        -- no "pet table" stored anywhere in OmniWatch — this is whatever
+        -- windower.ffxi.get_mob_by_target('pet') returns, which is a mob
+        -- entry like any other entity on screen. Printed rather than
+        -- guessed at because the field set varies by pet type and by
+        -- Windower build.
+        --
+        -- Output goes to omniwatch.log ONLY, through ow_chat, like every
+        -- other //ow diagnostic. An earlier version also printed to the
+        -- game chat; he asked for that removed. The log is where he reads
+        -- these. Don't reintroduce add_to_chat here.
+        local pm = windower.ffxi.get_mob_by_target
+                   and windower.ffxi.get_mob_by_target('pet')
+        if not pm then
+            ow_chat(207, '[OW petdump] no pet out — '
+                .. 'get_mob_by_target(\'pet\') returned nil')
+        else
+            local keys = {}
+            for k in pairs(pm) do keys[#keys + 1] = tostring(k) end
+            table.sort(keys)
+            ow_chat(207, string.format('[OW petdump] %s: %d fields',
+                tostring(pm.name or '?'), #keys))
+            for _, k in ipairs(keys) do
+                local v = pm[k]
+                if type(v) == 'table' then v = '<table>' end
+                ow_chat(207, string.format('[OW petdump]   %s = %s',
+                    k, tostring(v)))
+            end
         end
     elseif command == 'geartrace' then
         -- Toggle a one-shot tracer in Gear_Processing.lua's
@@ -11447,7 +11514,7 @@ ow_safe_register('addon command', function(command, ...)
         --   %APPDATA%/OmniWatch/chatdebug_log.txt
         -- Replaces the old separate commands (textcapture, chatpktdebug,
         -- chatpkttrace, chathex, droppedmodes, buffwearprobe,
-        -- battleclassify, debuffapplyprobe, trustprobe, and the old
+        -- battleclassify, debuffapplyprobe, and the old
         -- per-emit chatdebug echo) — flipping chatdebug flips them all.
         -- Usage: //ow chatdebug [on|off]
         local target
@@ -11460,7 +11527,6 @@ ow_safe_register('addon command', function(command, ...)
 
         -- Plain module flags (no _chat dependency).
         _ow_text_capture  = target
-        _ow_trustprobe_on = target
 
         -- Chat-module probe setters. Guarded — if the chat module isn't
         -- loaded we still toggle the plain flags above.
@@ -11605,14 +11671,40 @@ ow_safe_register('addon command', function(command, ...)
                     '[OW]   %s = %s', k:upper(), tostring(p.stats[k])))
             end
         end
-        ow_chat(207, '[OW] player.merits:')
+        -- Dump the merits table WHOLE, not just the seven attributes it
+        -- used to probe. The open question this exists to answer is
+        -- whether windower exposes GROUP 1/2 job merits (Empathy,
+        -- Rapid Shot, Spell Interruption Rate...) or only the stat
+        -- merits — everything that wants to read a merit count is
+        -- blocked on that, and nothing in the code can answer it.
+        -- Circumstantial evidence says no: the BRD config makes the
+        -- user type their minne/minuet/madrigal merits in by hand.
         if p.merits then
-            for _, k in ipairs({'str','dex','vit','agi','int','mnd','chr'}) do
-                ow_chat(207, string.format(
-                    '[OW]   %s = %s', k:upper(), tostring(p.merits[k])))
+            local mk = {}
+            for k in pairs(p.merits) do mk[#mk + 1] = tostring(k) end
+            table.sort(mk)
+            ow_chat(207, string.format('[OW] player.merits: %d keys', #mk))
+            for _, k in ipairs(mk) do
+                local v = p.merits[k]
+                if type(v) == 'table' then v = '<table>' end
+                ow_chat(207, string.format('[OW]   %s = %s', k, tostring(v)))
             end
         else
-            ow_chat(207, '[OW]   (no merits table)')
+            ow_chat(207, '[OW] player.merits: (no merits table)')
+        end
+        -- Job points for the main job, alongside. The DRG wyvern work
+        -- needs jp_spent to test the "+3% double attack per wyvern
+        -- level at 1200 JP" claim.
+        local mj = p.main_job
+        local jpd = mj and p.job_points and p.job_points[mj:lower()]
+        if jpd then
+            ow_chat(207, string.format(
+                '[OW] job_points[%s]: jp=%s jp_spent=%s cp=%s',
+                tostring(mj), tostring(jpd.jp), tostring(jpd.jp_spent),
+                tostring(jpd.cp)))
+        else
+            ow_chat(207, string.format(
+                '[OW] job_points[%s]: (none)', tostring(mj)))
         end
         ow_chat(207,
             '[OW] Compare to /checkparam (which shows the TOTAL).')
@@ -12086,22 +12178,6 @@ end
 
 -- ── Buff packet handler ──────────────────────────────────────────────────────
 ow_safe_register('incoming chunk', function(id, original)
-    -- Handler-entry probe: when trustprobe is on, log which packet ids
-    -- THIS handler actually receives. Throttled to once per id per ~3s to
-    -- avoid flood. If 0x076 (=118) never appears here while other ids do,
-    -- the handler isn't being routed 0x076. If NOTHING appears, the
-    -- handler isn't running. If 0x076 DOES appear, the block logic is the
-    -- problem. Decisive either way.
-    if _ow_trustprobe_on then
-        _ow_entry_seen = _ow_entry_seen or {}
-        local nowt = os.time()
-        if (nowt - (_ow_entry_seen[id] or 0)) >= 3 then
-            _ow_entry_seen[id] = nowt
-            _ow_trustprobe_log(string.format(
-                '[%s] [entry] handler1 received id=0x%03X (%d)',
-                os.date('%H:%M:%S'), id, id))
-        end
-    end
     if id == 0x076 then
         local me = windower.ffxi.get_player()
         local my_id = me and me.id or 0
@@ -12135,31 +12211,19 @@ ow_safe_register('incoming chunk', function(id, original)
                     _chat.debug_party_member_dump(playerId, buffs)
                 end
 
-                -- trustprobe member dump. When //ow trustprobe is on,
-                -- write this member's class + buff
-                -- ids into the shared probe log (ow_classify_probe.log,
-                -- via _chat._probe_log). Greppable by the
-                -- [0x076-member] tag. Authoritative diagnostic for
-                -- whether trusts carry buffs in 0x076 and whether the
-                -- array drops on wear-off.
-                if _ow_trustprobe_on then
-                    local cls = 'other'
-                    if _chat and _chat.classify_entity then
-                        local c = _chat.classify_entity(playerId)
-                        if c then cls = c end
-                    end
-                    local idstrs = {}
-                    for _, b in ipairs(buffs) do idstrs[#idstrs+1] = tostring(b) end
-                    _ow_trustprobe_log(string.format(
-                        '[%s] [0x076-member] pid=%d class=%s nbuffs=%d ids={%s}',
-                        os.date('%H:%M:%S'), playerId, cls, #buffs,
-                        table.concat(idstrs, ',')))
-                end
-
-                -- Party-member buff-LOSS detection. FFXI only fires a
-                -- 0x029 wear-off action-message for the LOCAL player, so a
-                -- party/alliance member dropping a buff is reflected ONLY
-                -- here (the periodic 0x076 snapshot). Diff this member's
+                -- Party-member buff-LOSS detection by 0x076 diff.
+                --
+                -- NOTE (2026-08-03): the old claim here — that FFXI fires
+                -- a 0x029 wear-off message for the LOCAL player only — is
+                -- WRONG. The chat panel demonstrably shows "Joachim loses
+                -- 'March'" for trusts, and 0x076 never arrives for a
+                -- trust-only party (two probe sessions, 26 distinct packet
+                -- ids, no 118). So per-target status messages DO come
+                -- through for other party members, and reconstructing
+                -- trust buffs from the 0x028/0x029 event stream is the
+                -- only route left if it's ever wanted. This diff path
+                -- still stands for real PCs, where 0x076 does arrive.
+                -- Diff this member's
                 -- previous buff multiset against the new one; for each
                 -- buff whose count dropped, synthesize a "loses X" chat
                 -- event via the chat module.
@@ -13925,6 +13989,19 @@ local function handle_incoming_action(act)
     -- tier to V for the stat panel.
     if cat == 6 or cat == 11 then
         pcall(_ow_detect_item_protect_shell, act, actor_id)
+    end
+
+    -- Spirit Link (DRG): resolved BY NAME through res.job_abilities rather
+    -- than a hardcoded id, matching how the self-buff JAs below are
+    -- dispatched. Only our own casts count.
+    if cat == 6 and act.param then
+        local _me = windower.ffxi.get_player()
+        if _me and actor_id == _me.id then
+            local _ab = res.job_abilities and res.job_abilities[act.param]
+            if _ab and (_ab.en == 'Spirit Link') then
+                pcall(ow_wyvern_note_spirit_link)
+            end
+        end
     end
 
     -- Diagnostic: show every action category we receive so we can see
@@ -18255,6 +18332,8 @@ local _OW_AUG_TAG_ABBREV = {
     ['magic evasion']         = 'MEva',
     ['defense']               = 'Def',
     ['magic defense bonus']   = 'MDB',
+    ['magic def. bonus']      = 'MDB',
+    ['rapid shot']            = 'R.Shot',
     ['cure potency']          = 'CurP',
     ['blood pact damage']     = 'BPD',
     ['pet: damage taken']     = 'PetDT',
@@ -18518,6 +18597,84 @@ end
 
 -- Compute magic-haste, JA-haste, and total-haste from player.buffs.
 -- Returns (gear_haste_capped, magic_haste_capped, ja_haste_capped, total_haste).
+-- ── DRG wyvern-level JA haste ───────────────────────────────────────────
+-- A Dragoon gains +2% Job Ability haste per wyvern level, capping at +10%
+-- after 5 levels. Wyvern levels come from EXP transferred by Spirit Link,
+-- and Spirit Link only transfers EXP if the player has EMPATHY merits:
+-- 200 XP per merit level per cast, and the wyvern caps at 1,000 XP. So a
+-- 5/5 Empathy Dragoon maxes the bonus on the FIRST Spirit Link.
+--
+-- None of this is observable directly. It grants no buff icon and no
+-- status id, so ow_compute_haste's buff-id scan can never see it, and the
+-- pet's mob entry carries no level (confirmed by //ow petdump on a live
+-- wyvern: 26 fields, hpp is a percentage, no level anywhere). It has to
+-- be inferred from Spirit Link casts.
+--
+-- The inference is deliberately biased LOW. It only ever counts casts we
+-- actually witnessed on the wyvern currently out, so loading the addon
+-- mid-session or missing an action packet UNDERSTATES the haste until the
+-- next Spirit Link, and never overstates it. This value feeds Total
+-- Haste, and a total that is occasionally 10 short is recoverable while
+-- one that is occasionally 10 over quietly ruins the panel's credibility.
+--
+-- Reset happens by pet identity rather than by event: a wyvern that is
+-- gone, dead, or has a different mob index than the casts were counted
+-- against starts back at zero. Zoning and entering an instance both
+-- dismiss the pet, so that covers the wiki's removal conditions without
+-- needing to enumerate them. There is a zone-change reset as well, purely
+-- as belt and braces.
+--
+-- Stored on _G: the main chunk is at Lua 5.1's 200-local ceiling.
+_G._ow_wyvern = { links = 0, pet_index = nil }
+
+function ow_wyvern_note_spirit_link()
+    -- Called from the action handler on a witnessed Spirit Link by us.
+    local st = _G._ow_wyvern
+    if type(st) ~= 'table' then return end
+    local pet = windower.ffxi.get_mob_by_target
+                and windower.ffxi.get_mob_by_target('pet')
+    if not pet then return end
+    -- Bind the count to THIS wyvern here rather than waiting for the next
+    -- stats push, so a Spirit Link in the same frame the wyvern appears
+    -- isn't discarded by the identity check below.
+    if st.pet_index ~= pet.index then
+        st.links = 0
+        st.pet_index = pet.index
+    end
+    st.links = st.links + 1
+end
+
+function ow_wyvern_ja_haste()
+    local p = windower.ffxi.get_player()
+    if not p or p.main_job ~= 'DRG' then return 0 end
+    local st = _G._ow_wyvern
+    if type(st) ~= 'table' then return 0 end
+    local pet = windower.ffxi.get_mob_by_target
+                and windower.ffxi.get_mob_by_target('pet')
+    if not pet or (tonumber(pet.hpp) or 0) <= 0 then
+        st.links = 0
+        st.pet_index = nil
+        return 0
+    end
+    if st.pet_index ~= pet.index then
+        -- Different wyvern than we were counting for: freshly called, so
+        -- it is back at level 1 with no transferred EXP.
+        st.links = 0
+        st.pet_index = pet.index
+        return 0
+    end
+    local emp = 0
+    if type(p.merits) == 'table' then
+        emp = tonumber(p.merits.empathy) or 0
+    end
+    -- Without Empathy, Spirit Link transfers no EXP at all and the wyvern
+    -- never levels — the bonus simply does not exist for that character.
+    if emp <= 0 or st.links <= 0 then return 0 end
+    local lv = st.links * emp
+    if lv > 5 then lv = 5 end
+    return lv * 2
+end
+
 local function ow_compute_haste(gear_haste_pct)
     local player = windower.ffxi.get_player()
     local ma_haste, ja_haste = 0, 0
@@ -18574,6 +18731,23 @@ local function ow_compute_haste(gear_haste_pct)
                         ja_haste = ja_haste + entry.pct
                     end
                 end
+            end
+        end
+    end
+
+    -- Wyvern levels (DRG). Added here rather than at the stats-push site
+    -- so it lands in BOTH 'ja haste' and the total, which are computed
+    -- from the same locals. Returns 0 for every other job.
+    do
+        local wy = ow_wyvern_ja_haste()
+        if wy > 0 then
+            ja_haste = ja_haste + wy
+            if _ow_buff_debug then
+                ow_chat(207, string.format(
+                    '[OW wyvern] +%d%% JA haste (%d spirit link(s), '
+                    .. 'empathy %s)', wy, (_G._ow_wyvern or {}).links or 0,
+                    tostring((windower.ffxi.get_player() or {}).merits
+                             and windower.ffxi.get_player().merits.empathy)))
             end
         end
     end
@@ -18652,13 +18826,13 @@ local _PW_ROLL_EFFECT_MAP = {
     ["MAB"]                 = "magic attack bonus",             -- Wizard's (gear key)
     ["M.Acc"]               = "magic accuracy",                 -- Warlock's
     ["M.Eva"]               = "magic evasion",                  -- Runeist's
-    ["M.Def"]               = "magic defense bonus",            -- Magus's
+    ["M.Def"]               = "magic def. bonus",               -- Magus's
     ["Conserve MP"]         = "conserve mp",                    -- Scholar's
     ["Magic Attack Bonus"]  = "magic attack bonus",             -- alt naming
     ["Magic Accuracy"]      = "magic accuracy",
     ["Magic Atk. Bonus"]    = "magic attack bonus",
-    ["Magic Def. Bonus"]    = "magic defense bonus",
-    ["Magic Defense"]       = "magic defense bonus",
+    ["Magic Def. Bonus"]    = "magic def. bonus",
+    ["Magic Defense"]       = "magic def. bonus",
     -- Cast / casting rolls
     ["Fast Cast"]           = "fast cast",                      -- Caster's
     ["Snapshot"]            = "snapshot",                       -- Courser's
@@ -19837,12 +20011,40 @@ function ow_compute_stats()
                         ['critical hit rate']   = 'Critical hit rate',
                         ['critical hit damage'] = 'Critical hit damage',
                         ['subtle blow']         = 'Subtle Blow',
+                        ['cure potency']        = 'Cure Potency',
+                        ['rapid shot']          = 'Rapid Shot',
                     }
                     for panel_key, gi_key in pairs(_GI_GEAR_EXTRA) do
                         if type(Gear_info[gi_key]) == 'number'
                            and Gear_info[gi_key] ~= 0 then
                             stats[panel_key] = (stats[panel_key] or 0)
                                              + Gear_info[gi_key]
+                        end
+                    end
+
+                    -- ── Conditional "Pet Alive:" gear ────────────────────
+                    -- Sroda-series pieces grant the MASTER a bonus only
+                    -- while a pet is out (Sroda earring: "Double Attack"+7%
+                    -- Pet Alive). Gear_Processing parses those into
+                    -- 'Pet Alive <stat>' keys WITHOUT deciding whether they
+                    -- apply — it has to, because each item's parsed stats
+                    -- are cached the first time they're seen, and a pet
+                    -- comes and goes many times over that cache's life.
+                    -- The decision belongs here instead: this runs on every
+                    -- stats push, so summoning or losing a pet is reflected
+                    -- on the next one.
+                    --
+                    -- get_mob_by_target('pet') returns nil with no pet, so
+                    -- the hpp test is belt-and-braces for the frame or two
+                    -- around a death where the mob may still resolve.
+                    local _pet = windower.ffxi.get_mob_by_target
+                                 and windower.ffxi.get_mob_by_target('pet')
+                    if _pet and (tonumber(_pet.hpp) or 0) > 0 then
+                        for panel_key, gi_key in pairs(_GI_GEAR_EXTRA) do
+                            local pv = Gear_info['Pet Alive ' .. gi_key]
+                            if type(pv) == 'number' and pv ~= 0 then
+                                stats[panel_key] = (stats[panel_key] or 0) + pv
+                            end
                         end
                     end
                 end
@@ -20183,7 +20385,7 @@ function ow_compute_stats()
                     'defense', 'evasion',
                     'accuracy', 'attack',
                     'magic accuracy', 'magic attack bonus',
-                    'magic evasion', 'magic defense bonus',
+                    'magic evasion', 'magic def. bonus',
                     'ranged accuracy', 'ranged attack',
                 }
                 for _, sk in ipairs(_UNITY_OVERLAY_KEYS) do

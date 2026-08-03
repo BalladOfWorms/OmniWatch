@@ -21,14 +21,16 @@ OmniWatch puts the live state of your character and party in one place:
 - **Buff timer panel** — duration bars for active buffs that color-shift as they're about to wear off
 - **DPS tracker** — rolling-window damage tracking with sparklines, per-encounter logging to CSV/JSONL, optional party-member damage tracking
 - **Chat panel** — floating, resizable chat log with tabs (World, LS1/LS2, Party, Battle, Buffs, Debuffs, Mob, two user-customizable tabs, System, Gearswap), unread badges per tab, scrollback, and a built-in composer for sending say/tell/reply/shout/yell/linkshell messages without opening the game's chat field. Per-job routing rules let you decide which combat events land in which tab.
-- **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB, elemental affinity, fast cast, store TP, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses
-- **Hotbar** — customizable button panel for slash commands, items, gearswap calls, and macros
+- **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB/MDB, elemental affinity, fast cast, store TP, enmity, subtle blow, crit rate, spell interruption, cure potency, rapid shot, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses. Which cells appear, and in what order, is yours to arrange — globally or per job
+- **Hotbar** — customizable button panel for slash commands, items, gearswap calls, macros, and OmniWatch's own actions (Sing, Call Trust, Warp menu, Cheat Sheet, Auto ranged attack)
+- **Cheat sheet** — your own keybind / macro reference as an overlay window, with a shared section and a per-job section, editable in place
+- **Profiles** — save a whole setup (panel layout, settings, hotbar, cheat sheet, stat cells) under a name and switch between them; one for the second monitor, one per job, whatever suits
 - **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection
 - **Auction House panel** — Buy and Sell tabs in one window. Buy: live item search (singles and stacks listed separately, in-game style), a multi-item bid queue with per-item start / max / increment prices and a throttle, and a results log. Sell: your inventory with a single/stack + price form and your seven active listings. **Click an item's `$`** to pull its current listing counts and last ~10 real sales (date · seller → buyer · price) straight from your world's search server — the same data FFXIAH shows, in-game with no website. Right-click any item to open its FFXIAH price page.
 - **Header strip** — Vana'diel game clock with element/moon phase, current zone + region, character switcher, settings gear
 - **Sim mode** — what-if calculator: change job, level, JP, ML, gear, food, BRD songs (marches/minuets/madrigals), and COR rolls (Chaos/Samurai/Tactician's with optional Crooked Cards + optimal job toggles) and see the resulting stats live without applying anything in-game. While open it takes over the equipment panel to preview your picked gear, with hover tooltips on sim items.
 
-Move the whole overlay by holding **Shift** and dragging; reposition and resize individual panels in setup mode (`//ow setup`). Per-character configs save layout, settings, blacklists, aliases, and hotbar bindings to `%APPDATA%\OmniWatch\<charname>\`.
+Move the whole overlay by holding **Shift** and dragging; reposition and resize individual panels in setup mode (`//ow setup`). Per-character configs save layout, settings, blacklists, aliases, hotbar bindings, cheat sheet, and stat-cell layout to `%APPDATA%\OmniWatch\<charname>\`, and any of it can be captured as a named **profile** you switch between.
 
 ## Requirements
 
@@ -128,17 +130,24 @@ Inside you'll find:
 ├── omniwatch_dps_log.jsonl       # global DPS encounter log
 ├── omniwatch_dps_log.csv         # global DPS summary
 ├── omniwatch_warp.json           # warp button destinations (fallback/editable)
+├── user_config.lua               # lua-side overrides (//ow config writes here)
 ├── logs\                         # crash logs
 └── <charname>\                   # one folder per character
     ├── omniwatch_layout.json     # panel positions & scales
     ├── omniwatch_settings.json   # toggles from settings dropdown
+    ├── omniwatch_stats_layout.json        # which stat cells show, and where
+    ├── omniwatch_cheatsheet.json          # cheat sheet, job section
+    ├── omniwatch_cheatsheet_common.json   # cheat sheet, shared section
+    ├── omniwatch_profile.json    # which profile is in use
     ├── omniwatch_buffs.json      # buff blacklist / aliases
     ├── omniwatch_buff_timer.json # buff-duration overrides
     ├── omniwatch_recast.json     # recast tracker config
     ├── omniwatch_buttons.json    # hotbar button bindings
     ├── omniwatch_mobs.json       # learned mob abilities
     ├── omniwatch_zones.json      # zone → region mapping
-    └── omniwatch_gearswap_path.json
+    ├── brd_songgear.lua          # BRD song-gear config (only if you use it)
+    ├── omniwatch_gearswap_path.json
+    └── *_<profile name>.json     # saved profile copies of the above
 ```
 
 The settings menu's "Edit ..." entries (e.g. "Edit buff blacklist") open the right file in your default text editor.
@@ -452,11 +461,15 @@ Full character stat grid in `/checkparam` style. Each cell is computed from skil
 
 **Cells**:
 - Primary stats: STR / DEX / VIT / AGI / INT / MND / CHR
-- Combat: Accuracy, Attack, Critical Rate, DA / TA / QA, Store TP
-- Ranged: Ranged Accuracy, Ranged Attack, Snapshot
-- Defenses: DT / PDT / MDT / BDT, Magic Evasion, Evasion, Defense
-- Caster: Fast Cast, Quick Magic, MAcc, MAB, Regen, Refresh, Regain
+- Combat: Accuracy, Attack, Critical Rate, DA / TA / QA, Store TP, Subtle Blow
+- Ranged: Ranged Accuracy, Ranged Attack, Snapshot, Rapid Shot
+- Defenses: DT / PDT / MDT / BDT, Magic Evasion, Magic Def. Bonus, Evasion, Defense, Enmity
+- Caster: Fast Cast, Quick Magic, Spell Interruption, Cure Potency, MAcc, MAB, Regen, Refresh, Regain
 - Elemental affinity: Fire, Ice, Wind, Earth, Lightning, Water, Light, Dark
+
+Cells that have a known ceiling turn red past it (Store TP 100, Subtle Blow 50, gear haste 25, and so on) so surplus is visible at a glance. Cure Potency reads the first tier only — `"Cure" potency received` and `"Cure" potency II` are separate stats and aren't counted.
+
+**Arranging the panel.** Open **Settings ▸ Statistics ▸ Edit layout** to rearrange cells: drag any cell to move it, drop one onto a blank slot to place it there without shuffling its neighbours, and click a cell to hide it (hidden cells collect in a tray at the bottom of the panel — click one to bring it back). Leave gaps wherever you like; blank slots are real cells you can drag around. **Save as** commits your arrangement either **globally** or to the **current job**, so a BLM layout and a WAR layout can differ and swap themselves when you change job. Saving globally clears the current job's own layout so what you saved is what you see. Note this is separate from setup mode, which handles the panel's *size and position* — see Edit-mode below.
 
 **Server-pushed stat updates**: OmniWatch passively listens for server-side stat packets (0x061, 0x063) that fire on roll cast, gear change, and buff change. When captured, these refresh the Attack and Accuracy values to match what the server says they are — including most roll bonuses. **Caveat**: there's no reliable way to detect every variant of these packets, so certain proc-style effects (most notably the Lanun gear set's chance to boost a roll's accuracy bonus) may not always be reflected immediately. Att/Def usually update; Acc updates are best-effort.
 
@@ -508,6 +521,8 @@ Customizable row of buttons for slash commands, items, gearswap calls, or macros
 - An icon (from `icons/ui/`)
 - A click action (a `/text` command, a `//gs` call, etc.)
 - Optional right-click action
+
+**OmniWatch actions.** A button can also fire one of OmniWatch's own features instead of a game command — **Sing** (start/stop the active BRD set), **Call Trust**, **Warp menu**, **Cheat Sheet**, and **Auto ranged attack**. Pick the action when editing the button. This is the tidy way to use those features without their floating buttons on screen: turn the floating button off in settings and put it on the hotbar instead — the window or menu still opens from the hotbar slot.
 
 Edit via the settings menu's "Edit hotbar" option, or live by entering setup mode and clicking buttons. Multiple pages supported via a small page indicator.
 
@@ -587,6 +602,31 @@ more to read, hit Enter in the game to advance. Draws only at the
 live bottom of the scrollback and fades a few seconds after the
 dialog ends.
 
+### Cheat sheet
+
+Your own keybind and macro reference, as an overlay window. Open it with the floating **[CS]** button (drag to move, corner grip to resize, both remembered) or from a hotbar button. Two stacked sections:
+
+- **Global keybinds** — shared across every character and job
+- **Job keybinds** — the current profile's own sheet, titled with the profile name
+
+Each section holds named groups laid out into columns, and every row is a key plus a description. Edit it in the window itself: add, rename and remove groups and rows, and pick which column a group sits in. Content is stored as JSON per character (`omniwatch_cheatsheet_common.json` for the shared section, `omniwatch_cheatsheet.json` for the job section) and a sanitised default sheet ships with the addon, so there's something to look at before you write your own.
+
+**Show cheat sheet** in Settings ▸ Misc controls the floating **[CS]** button only. The window itself opens from wherever you press it, so you can hide the button and drive it from the hotbar.
+
+### Profiles
+
+A profile is a **named snapshot of your whole setup** — panel positions and scales, every setting, your hotbar pages, the cheat sheet's job section, and your stat-cell layout. Switch between them from the character dropdown in the header, where your saved profiles list under your characters.
+
+Use them for whatever splits your setups: a compact layout for a laptop screen and a spread-out one for the second monitor, a caster arrangement and a melee arrangement, one per job, one for parsing and one for questing.
+
+- **+ Save current setup as…** at the bottom of the dropdown captures everything as it stands right now under a name you type.
+- **Default** sits at the top and is a real saved profile, not a label for "whatever I'm using". It's your **baseline**: switching to it puts the setup back the way it was. An evening of rearranging never quietly becomes the new Default — the only thing that moves it is explicitly saving over it.
+- **Switching** copies the profile over your live files and reloads everything it covers, so the screen redraws into the new arrangement immediately. The profile you're leaving is saved first, so a tweak made a second ago survives the switch.
+- **Writes happen when you leave** — on switching away and on closing OmniWatch, not on every adjustment. Your live setup is still written immediately, so nothing is lost in a crash; it's only the profile copy that lags.
+- The pencil renames a profile and the red **✕** deletes it. Deleting the one you're using drops you back to Default and never touches your live setup. A profile saved before a given file joined the system simply doesn't carry that part, and switching to it leaves your current version alone rather than blanking it.
+
+Profiles are per character, and live in the same folder as the rest of that character's config with the profile name appended (e.g. `omniwatch_layout_Second Monitor.json`).
+
 ### Warp button
 
 One-click travel across nine superwarp networks, fired through the [superwarp](https://github.com/lorand-ffxi/superwarp) addon (install it alongside OmniWatch). A small floating button — drag it anywhere, resize it by the corner handle, both persist — **pulses teal whenever any network's NPC is within superwarp's 6-yalm interaction range**: Home Point and Survival Guide crystals, Adoulin Waypoints, Abyssea Confluxes (and the town teleporter NPCs), Eschan Portals, Assault Runic Portals, Proto-Waypoints, Unity concierges, and Voidwatch Atmacite Refiners. Only NPCs count for proximity — a player who happens to share a teleporter's name won't light anything up.
@@ -607,11 +647,11 @@ Top of the overlay, always visible. Left to right:
 - **Weather** — current and next weather symbols for your zone. Hide with **Show weather**.
 - **Events button** — opens the events modal. Its fixed banner area carries three rows of two boxes above the scrollable campaign / event list: the rotating limited-time **Records of Eminence** objective and the current **Domain Invasion** zone (from whereisdi.com) on top; **crafting guild hours** — cycles the nine guilds, showing OPEN / CLOSED plus an "open until" / "closed until" / "holiday" line computed from the Vana'diel clock — and **Where Is NM** — Limbus (Apollyon / Temenos) NM & ??? spawns for your server from whereisnm.com — in the middle; and **airship / ferry** schedules with auto-cycling countdowns at the bottom. The Domain Invasion and Where Is NM boxes both follow your **Header → Server** setting. Hide with **Show events**.
 - **Points tracker** — one of EXP / CP / Exemplar at a time; pick which in the Header Configure modal.
-- **Currency cycler** — auto-rotates through enabled currencies (Gil, Sparks, Accolades, Gallimaufry, Temenos, Apollyon, Beads, Tokens, Ichor). Pick which to show and the rotation interval (2–10 seconds) in the **Currency cycler** Configure modal.
+- **Currency cycler** — auto-rotates through enabled currencies (Gil, Sparks, Accolades, Gallimaufry, Temenos, Apollyon, Beads, Tokens, Ichor, Potpourri). Pick which to show and the rotation interval (2–10 seconds) in the **Currency cycler** Configure modal.
 - **Inventory button** — opens the inventory dropdown.
 - **OS clock** — local-time HH:MM (or HH:MM:SS) clock sitting just to the left of the zone block. Driven by your computer's clock, not Vana'diel time. Click to open the **Stopwatch + Countdown** modal. Configurable in the Header Configure modal: **Show OS clock**, **Show clock seconds**, and **Clock time zone** (`Local` for your computer time, or one of `UTC / PST / MST / CST / EST / BRT / GMT / CET / EET / JST / KST / AEST` for tracking event times in other zones — `Local` is DST-aware; named zones use standard time offsets).
 - **Right side** — zone timer, region, zone name, mini map, coords. Hide the entire right block with **Show location**.
-- **Character switcher** — click your character name to switch which character's config files are active. Useful for pre-tweaking settings for an alt while logged in on your main.
+- **Character switcher / profile picker** — click your character name for a dropdown with your characters at the top and that character's saved **profiles** below. Switching character changes which config files are active (useful for pre-tweaking an alt's settings while logged in on your main); picking a profile swaps the whole saved setup in. See **Profiles** below.
 - **Settings gear** — opens the dropdown.
 
 The clock, zone, weather, and events data are fed from the lua side; if anything freezes, check the addon is loaded with `//lua list`.
@@ -628,6 +668,8 @@ The clock, zone, weather, and events data are fed from the lua side; if anything
 ### Edit-mode
 
 Run `//ow setup` in-game to drop into setup mode — every panel becomes draggable and resizable, with mock data populated so you can position things without being in a fight. Run `//ow setup` again (or click the banner at the top) to exit.
+
+Setup mode handles **size and placement only**. Rearranging the *contents* of the Statistics panel is a separate mode, opened from **Settings ▸ Statistics ▸ Edit layout**, which puts just that panel into cell-editing and leaves everything else alone. While it's open the panel grows to make room for the hidden-cell tray and the Save-as button, and a dashed outline shows the footprint it'll return to when you're done.
 
 ### GearSwap reference detection
 
@@ -699,7 +741,7 @@ Your engaged sets then provide the tiers, e.g. `sets.engaged.MaxHaste`, `sets.en
 
 ### User config (advanced)
 
-`OmniWatch\data\user_config.lua` holds settings the lua side reads at addon load:
+`%APPDATA%\OmniWatch\user_config.lua` holds settings the lua side reads at addon load (it moved out of the addon folder so a reinstall or an update can't overwrite it):
 - `blu_dw_override` — pin a manual BLU dual-wield % if the spell-set scanner doesn't match what the game shows
 
 Use `//ow config <key> <value>` in-game to write to `user_config` without editing the file by hand.
@@ -729,11 +771,19 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 - `//ow blu` — BLU set-spell diagnostic: lists equipped set spells, trait points per category, tier reached, gift bonus applied
 - `//ow testcast` — emit a synthetic cast-start event on yourself for renderer testing
 - `//ow serverstats [on|off|debug|status|trace]` — control passive stat packet listener
+- `//ow dwtest` — print the dual-wield computation and the `gs c hasteinfo <N>` being sent
+- `//ow petdump` — write every field of your current pet's entity entry to the log
+- `//ow geartrace` — trace gear description parsing (verifies a new `gearinfo` build is loaded)
+- `//ow gearcache_clear` (alias `cachebust`) — rebuild the parsed-item cache from scratch
+- `//ow chatdebug [on|off]` — one switch for every chat-panel diagnostic; output goes to the log
+
+Diagnostic output goes to `omniwatch.log` in `%APPDATA%\OmniWatch\`, not to game chat.
 
 **Config**:
 - `//ow config` — list current user_config values
 - `//ow config <key> <value>` — set a user_config value (e.g. `blu_dw_override 8`)
 - `//ow config reset` — zero everything
+- `//ow brdgear [gearswap|omniwatch]` — pick who equips BRD song gear (see BRD Song Sets)
 
 ## File layout
 
@@ -755,7 +805,6 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 │   ├── Martial_Arts_Gear.lua     # MA delay-reduction items
 │   ├── Set_bonus_by_item_id.lua  # set-bonus tables
 │   ├── Unity_Gear.lua            # Unity-shop gear
-│   ├── user_config.lua           # user overrides (auto-written)
 │   ├── omniwatch_stats.lua       # auto-generated for gearswap
 │   ├── mob_individuals.json      # per-mob overrides (image, abilities)
 │   └── mobdata\
@@ -777,6 +826,10 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
 └── <charname>\                   # per-character config
     ├── omniwatch_layout.json     # panel positions & scales
     ├── omniwatch_settings.json   # toggles from settings dropdown
+    ├── omniwatch_stats_layout.json         # stat-cell layout (global + per job)
+    ├── omniwatch_cheatsheet.json           # cheat sheet, job section
+    ├── omniwatch_cheatsheet_common.json    # cheat sheet, shared section
+    ├── omniwatch_profile.json    # which profile is in use
     ├── omniwatch_buffs.json      # which buffs to track / hide / alias
     ├── omniwatch_buff_timer.json # buff-duration overrides
     ├── omniwatch_recast.json     # recast-tracker config
@@ -785,7 +838,9 @@ Use `//ow config <key> <value>` in-game to write to `user_config` without editin
     ├── omniwatch_chat_routing-<JOB>.json   #   per-job override (e.g. -COR.json)
     ├── omniwatch_mobs.json       # learned mob abilities
     ├── omniwatch_zones.json      # zone → region mapping
-    └── omniwatch_gearswap_path.json
+    ├── brd_songgear.lua          # BRD song-gear config (only if you use it)
+    ├── omniwatch_gearswap_path.json
+    └── *_<profile name>.json     # saved profile copies of the above
 ```
 
 The `%APPDATA%\OmniWatch\` folder is created automatically the first time you run the overlay. Per-character subfolders are created the first time a given character logs in.
@@ -809,7 +864,8 @@ The lua addon hooks Windower events (`prerender`, `incoming chunk`, `incoming te
 | 5010 | DPS events |
 | 5011 | python → lua commands (inbound to lua) |
 | 5012 | Inventory snapshot |
-| 5013 | Chat panel events (chat text + synthesized battle log) |
+| 5013 | Chat panel events (chat text, say/party/tell/LS/yell/system) |
+| 5014 | Battle log events (synthesized from 0x028 / 0x029) |
 | 5015 | Skillchain state + weaponskill suggestions |
 
 **Ports are assigned dynamically, not fixed.** The numbers above are the legacy defaults (and the fallback if discovery is unavailable). At startup each side binds its sockets to an **OS-assigned port** — immune to the reserved-port conflicts that some machines have in the 5000–5015 range (Windows WinNAT / Hyper-V / WSL / Docker) — and publishes the resulting port map to a small file under `%APPDATA%\OmniWatch\`: the overlay writes `ow_ports_py.txt`, the addon writes its command port to `ow_ports_lua.txt`, and each reads the other's. The files are re-read when they change, so the two halves find each other no matter which starts first, and re-sync automatically across a `//lua reload` or an overlay restart. The two halves remain independent — restart either side without restarting the other.

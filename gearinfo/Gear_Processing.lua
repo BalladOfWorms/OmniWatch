@@ -51,6 +51,8 @@ local _AUGMENT_NAME_TO_KEY = {
 	['Magic Attack Bonus']   = 'Magic Atk. Bonus',
 	['Magic Evasion']        = 'Magic Evasion',
 	['Magic Def. Bonus']     = 'Magic Def. Bonus',
+	['Rapid Shot']           = 'Rapid Shot',
+	['"Rapid Shot"']         = 'Rapid Shot',
 	['DEF']    = 'DEF',
 	-- Multi-hit modifiers (the false-positive prone ones — anchored
 	-- match means "Double Attack" only matches the whole augment name,
@@ -65,6 +67,16 @@ local _AUGMENT_NAME_TO_KEY = {
 	['Store TP']  = 'Store TP',
 	['Fast Cast'] = 'Fast Cast',
 	['Dual Wield'] = 'Dual Wield',
+	-- Cure potency. This is the AUGMENT path (Telchine, JSE capes,
+	-- Ambuscade gear) and it is entirely separate from the item
+	-- DESCRIPTION path in desypher_description — a stat has to be
+	-- registered in BOTH or it only lands for one kind of gear. Most
+	-- cure potency in practice is augmented, not printed on the item.
+	-- Both spellings: the decoded augment text quotes the spell name,
+	-- but not every source does.
+	['"Cure" potency'] = 'Cure Potency',
+	['Cure potency']   = 'Cure Potency',
+	['Cure Potency']   = 'Cure Potency',
 	-- DT family
 	['Damage taken']           = 'DT',
 	['Physical damage taken']  = 'PDT',
@@ -391,7 +403,7 @@ function check_for_augments(item)
 	
 end
 
-function desypher_description(discription_string, item_t)
+function desypher_description(discription_string, item_t, _in_pet_alive_clause)
 	
 	-- Diagnostic: trace every call. _ow_gear_trace toggled via
 	-- //ow geartrace. Prints first 100 chars of the input so we can
@@ -450,6 +462,50 @@ function desypher_description(discription_string, item_t)
 		end
 	end
 
+	-- ── "Pet Alive:" conditional clause ────────────────────────────────
+	-- Sroda-series gear reads e.g.
+	--   Evasion-10 Magic Evasion-10 Pet Alive: "Double Attack"+7% Pet melee attack DMG+10
+	-- Two separate problems live in that one line.
+	--
+	-- (a) "Pet melee attack DMG+10" is the PET's damage, but 'DMG' is in
+	--     valid_strings and the clause splitter above only knows 'Pet:' —
+	--     "Pet Alive:" contains no "Pet:" substring, so nothing was
+	--     stripped and the player was silently credited with damage+10.
+	--     Rewritten to an underscore name that isn't in valid_strings, the
+	--     same trick used for Weapon Skill Accuracy below.
+	--
+	-- (b) The master's own bonus is real but CONDITIONAL. It is NOT
+	--     evaluated here: find_all_values caches each item's parsed stats,
+	--     so anything decided at parse time freezes at whatever was true
+	--     then. (The 'Citizen of <nation>:' handler above has that flaw —
+	--     harmless only because nation never changes mid-session. A pet
+	--     dying and being resummoned would make it visibly wrong.)
+	--     Instead the clause is parsed into separate 'Pet Alive <stat>'
+	--     keys, cached like any other stat, and the CALLER decides whether
+	--     to count them by checking live pet state on each stats push.
+	--     NOTE the lowercasing: renaming it 'Pet_melee_attack_DMG' is NOT
+	--     enough, because the bare 'DMG' pattern still finds that substring
+	--     and reads the +10 straight off it. The name has to stop containing
+	--     'DMG' at all — same reason 'Weapon Skill Accuracy' becomes
+	--     'Weapon_skill_accuracy' rather than 'Weapon_Skill_Accuracy' below.
+	discription_string = string.gsub(discription_string,
+		'Pet melee attack DMG', 'Pet_melee_attack_dmg')
+	local pet_alive_clause = nil
+	if not _in_pet_alive_clause then
+		local a, b = discription_string:find('Pet Alive:%s*')
+		if a then
+			local tail = discription_string:sub(b + 1)
+			-- The clause ends where the next pet-directed sentence starts.
+			-- Descriptions have had their newlines flattened to spaces by
+			-- the caller, so there is no line break to delimit on.
+			local stop = tail:find('Pet_melee') or tail:find('Pet:')
+			              or tail:find('Pet melee') or (#tail + 1)
+			pet_alive_clause = tail:sub(1, stop - 1)
+			discription_string = discription_string:sub(1, a - 1)
+			                     .. ' ' .. tail:sub(stop)
+		end
+	end
+
 	-- string that need modifying to stop clashing
 	discription_string = string.gsub(discription_string, 'Ranged Accuracy%s?', 'Ranged_accuracy') 
 	discription_string = string.gsub(discription_string, 'Rng.%s?Acc.%s?', 'Ranged_accuracy')  
@@ -487,7 +543,7 @@ function desypher_description(discription_string, item_t)
 	-- gmatch in the main loop picks up the "Accuracy+10" substring of
 	-- "Weapon Skill Accuracy+10" and adds +10 to Accuracy, which is
 	-- wrong (WS Accuracy applies only during weapon skills, not to the
-	-- general acc total). Without these rewrites Cooper saw a +10 WS
+	-- general acc total). Without these rewrites BalladOfWorms saw a +10 WS
 	-- Accuracy ring inflating his idle Accuracy by 10.
 	--
 	-- We rewrite to underscore variants so the bare-stat pattern
@@ -564,6 +620,13 @@ function desypher_description(discription_string, item_t)
 	elseif discription_string:contains('Luopan:') then
 		str_table = discription_string:psplit("Luopan:")
 		discription_string = str_table[1]
+	-- 'Automaton:' was in parse_augment_line's prefix list but NOT here, so
+	-- an automaton line in an item DESCRIPTION was never stripped and its
+	-- stats were credited to the master: 'Automaton: Attack+20' added 20
+	-- Attack to the puppetmaster. Measured, not theorised.
+	elseif discription_string:contains('Automaton:') then
+		str_table = discription_string:psplit("Automaton:")
+		discription_string = str_table[1]
 	elseif discription_string:contains('Latent effect:') then
 		str_table = discription_string:psplit("Latent effect:")
 		discription_string = str_table[1]
@@ -576,11 +639,41 @@ function desypher_description(discription_string, item_t)
 								'Accuracy','Acc.','Attack','Atk.',
 								'Ranged_accuracy', 'Ranged_attack',
 								'Magic_accuracy', 'Magic Atk. Bonus',
+								-- 'Magic Def. Bonus' has had a de-quoting gsub above
+								-- and a stat_table slot for ages but was never listed
+								-- here, so it only ever arrived from augments and was
+								-- dropped off item descriptions.
+								'Magic Def. Bonus',
+								-- Same story for Magic Evasion: the rewrite above turns
+								-- 'Magic Evasion' into 'Magic_evasion' so the bare
+								-- 'Evasion' pattern can't grab it, temp_key maps it
+								-- back, but the underscore form was never listed here —
+								-- so MEva printed on an item was dropped and only
+								-- augmented MEva reached the panel.
+								'Magic_evasion',
+								'\"Rapid Shot\"',
 								'Haste','\"Slow\"','\"Store TP\"','\"Dual Wield\"','\"Fast Cast\"','\"Martial Arts\"',
 								'\"Regain\"',
 								'DMG','PDT','MDT','BDT','D_T','MDT_2','PDT_2',
 								'Evasion',
-								'Critical hit damage' ,'Critical hit rate', 
+								'Critical hit damage' ,'Critical hit rate',
+								-- Quoted multi-hit / Subtle Blow names. These were
+								-- already mapped in temp_key below but MISSING here,
+								-- so the loop never built a pattern for them and
+								-- every '"Double Attack"+N%' in an item description
+								-- was dropped. The quotes are what make them safe:
+								-- the bare 'Attack' pattern can't reach across the
+								-- closing quote to the number.
+								'\"Double Attack\"','\"Triple Attack\"','\"Quadruple Attack\"','\"Subtle Blow\"',
+								-- Cure potency. The strict pattern below (optional
+								-- colon, at most ONE space, then the number) is what
+								-- keeps this from also swallowing '"Cure" potency
+								-- received +N%' and '"Cure" potency II +N%' — both
+								-- have a word between the name and the number, so
+								-- neither matches. They are genuinely different stats
+								-- with their own caps; add them as their own entries
+								-- if they're ever wanted, don't loosen this one.
+								'\"Cure\" potency',
 								"Hand%-to%-Hand skill", "Dagger skill", "Sword skill", "Great sword skill", "Axe skill", "Great axe skill",  "Scythe skill", "Polearm skill", 
 								"Katana skill", "Great katana skill", "Club skill",  "Staff skill", "Archery skill", "Marksmanship skill" , "Throwing skill","Guarding skill","Evasion skill","Shield skill","Parrying skill",
 								"Divine Magic skill","Healing Magic skill","Enhancing Magic skill","Enfeebling Magic skill","Elemental Magic skill","Dark Magic skill","Summoning Magic skill","Ninjutsu skill","Singing skill",
@@ -614,6 +707,9 @@ function desypher_description(discription_string, item_t)
 		['\"Quadruple Attack\"'] = 'Quadruple Attack',
 		['\"Triple Attack\"'] = 'Triple Attack',
 		['\"Double Attack\"'] = 'Double Attack',
+		['\"Subtle Blow\"'] = 'Subtle Blow',
+		['\"Cure\" potency'] = 'Cure Potency',
+		['\"Rapid Shot\"'] = 'Rapid Shot',
 	}
 	
 	for k, v in pairs(valid_strings) do
@@ -666,6 +762,16 @@ function desypher_description(discription_string, item_t)
 		windower.add_to_chat(207, '[OW gear-trace] temp_table: '
 		                          .. table.concat(parts, ', '))
 	end
+	-- Fold the held-back "Pet Alive:" clause in under prefixed keys. The
+	-- recursion runs the clause through this same parser (so it gets every
+	-- rewrite and every stat name for free) with the guard set so it can't
+	-- re-enter. Nothing here decides whether the bonus APPLIES — that is
+	-- the caller's job, on every stats push, against live pet state.
+	if pet_alive_clause and pet_alive_clause ~= '' then
+		for k, v in pairs(desypher_description(pet_alive_clause, item_t, true)) do
+			temp_table['Pet Alive ' .. k] = v
+		end
+	end
 	return temp_table
 end
 
@@ -675,7 +781,7 @@ function get_equip_stats(equipment_table)
 	-- several stat keys. The gate at line ~520 (`if stat_table[key]`)
 	-- treats uninitialized keys as falsy and SILENTLY DROPS any
 	-- equipped contribution. So an item with "Magic Accuracy+40"
-	-- (e.g. Cooper's Ternion Dagger +1's Unity augment) had its
+	-- (e.g. BalladOfWorms' Ternion Dagger +1's Unity augment) had its
 	-- Magic Accuracy contribution discarded entirely — the
 	-- find_all_values pipeline parsed it correctly into the slot,
 	-- but get_equip_stats then dropped it because the key was nil.
@@ -713,6 +819,20 @@ function get_equip_stats(equipment_table)
 									['Subtle Blow']      = 0,
 									['Fast Cast']        = 0,
 									['Regain']           = 0,
+									['Cure Potency']     = 0,
+									['Rapid Shot']       = 0,
+
+									-- Conditional "Pet Alive:" contributions, summed
+									-- separately from the unconditional ones. The
+									-- gate below is `if stat_table[key]`, so a key
+									-- that isn't initialised here is silently
+									-- dropped no matter how well it parsed.
+									['Pet Alive Double Attack']      = 0,
+									['Pet Alive Triple Attack']      = 0,
+									['Pet Alive Quadruple Attack']   = 0,
+									['Pet Alive Critical hit rate']  = 0,
+									['Pet Alive Critical hit damage']= 0,
+									['Pet Alive Subtle Blow']        = 0,
 
 									['main'] = {['skill'] = '', value = 0}, ['sub'] = {['skill'] = '', value = 0}, ['range'] = {['skill'] = '', value = 0}, ['ammo'] = {['skill'] = '', value = 0},
 								}

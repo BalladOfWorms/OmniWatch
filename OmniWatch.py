@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.10.0 (2026-08-01)"
+OMNIWATCH_BUILD_STAMP = "v1.10.1 (2026-08-02)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.10.0"
+OMNIWATCH_VERSION = "1.10.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -29,10 +29,32 @@ print("=" * 70)
 print(f"  OmniWatch build: {OMNIWATCH_BUILD_STAMP}")
 print(f"  If this banner doesn't appear, the rebuild used a stale .py")
 print("=" * 70)
+
+
+def _ow_app_dir():
+    """The folder the user actually sees OmniWatch living in.
+
+    For a PyInstaller build that is the folder holding OmniWatch.exe
+    (`sys.executable`). `__file__` is NOT that folder in a frozen build —
+    it points inside the temporary _MEIPASS extraction directory, which
+    is wiped on exit and is not where side files get dropped. Running
+    from source, this is the folder holding OmniWatch.py.
+    """
+    try:
+        if getattr(sys, "frozen", False):
+            return os.path.dirname(os.path.abspath(sys.executable))
+    except Exception:
+        pass
+    try:
+        if "__file__" in globals():
+            return os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        pass
+    return os.path.abspath(".")
+
+
 try:
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__))
-                           if "__file__" in dir() else ".",
-                           "omniwatch_build_stamp.txt"),
+    with open(os.path.join(_ow_app_dir(), "omniwatch_build_stamp.txt"),
               "w", encoding="utf-8") as _bs:
         _bs.write(OMNIWATCH_BUILD_STAMP + "\n")
 except Exception:
@@ -61,6 +83,10 @@ _update_available   = False      # True once a newer release is confirmed
 _update_latest_ver  = ""         # e.g. "1.6.3" (tag without the leading v)
 _update_html_url    = ""         # release page to open in the browser
 _update_check_done  = False      # guards against re-checking
+_update_forced      = False      # True only when the TEST override file is on
+_update_force_src   = ""         # absolute path of the file that forced it
+_update_force_poll_t = 0.0       # time.time() of the last override re-stat
+_FORCE_UPDATE_NAME  = "ow_force_update.txt"
 
 def _parse_version(s):
     """Turn a version string into a tuple of ints (1, 6, 2) for
@@ -80,6 +106,46 @@ def _parse_version(s):
         except (ValueError, TypeError):
             break
     return tuple(parts)
+
+def _force_update_file():
+    """Absolute path of the ow_force_update.txt test override if one
+    exists anywhere we look, else None.
+
+    Looks in the folder holding OmniWatch.exe / OmniWatch.py AND in the
+    process working directory — those are different folders when the lua
+    side launches the overlay, which is how a stray copy can keep the
+    button on after the "obvious" one has been deleted.
+
+    A copy inside PyInstaller's _MEIPASS extraction folder is ignored on
+    purpose: a file accidentally frozen into the build cannot be deleted
+    by the user, so honouring it would pin the button on permanently with
+    nothing on disk to remove.
+    """
+    try:
+        _mp = getattr(sys, "_MEIPASS", "") or ""
+        # NOT abspath("") — that returns the CWD, which would make the
+        # working-directory candidate below look like a _MEIPASS path and
+        # get skipped, silently killing half the search.
+        meipass = os.path.abspath(_mp) if _mp else ""
+    except Exception:
+        meipass = ""
+    seen = []
+    for root in (_ow_app_dir(), os.path.abspath(".")):
+        try:
+            cand = os.path.abspath(os.path.join(root, _FORCE_UPDATE_NAME))
+        except Exception:
+            continue
+        if cand in seen:
+            continue
+        seen.append(cand)
+        if meipass and cand.startswith(meipass + os.sep):
+            continue
+        try:
+            if os.path.isfile(cand):
+                return cand
+        except Exception:
+            pass
+    return None
 
 def _update_check_worker():
     """Background worker: query the GitHub Releases API for the latest
@@ -157,37 +223,75 @@ def _start_update_check():
     """Kick off the one-shot update check on a daemon thread so it can
     never delay startup or block shutdown."""
     global _update_check_done, _update_available, _update_latest_ver
-    global _update_html_url
+    global _update_html_url, _update_forced, _update_force_src
     if _update_check_done:
         return
     # Test override: because the developer is always on the current
     # version, the button would never show in normal use. Drop a file
-    # named 'ow_force_update.txt' next to the executable (or in the
-    # working dir) to FORCE the "Update available" button on — it points
-    # at the real releases page so the click can be verified too. Delete
-    # the file to return to normal. No rebuild needed.
+    # named 'ow_force_update.txt' beside OmniWatch.exe (or in the working
+    # dir) to FORCE the "Update available" button on — it points at the
+    # real releases page so the click can be verified too. Delete the
+    # file to return to normal; the button drops within ~2 s (see
+    # _update_force_poll), no restart and no rebuild needed.
     try:
-        here = (os.path.dirname(os.path.abspath(__file__))
-                if "__file__" in globals() else ".")
-        for cand in (os.path.join(here, "ow_force_update.txt"),
-                     "ow_force_update.txt"):
-            if os.path.isfile(cand):
-                _update_available  = True
-                _update_latest_ver = "TEST"
-                _update_html_url   = (
-                    f"https://github.com/{OMNIWATCH_GITHUB_OWNER}/"
-                    f"{OMNIWATCH_GITHUB_REPO}/releases/latest")
-                _update_check_done = True
-                print("[OmniWatch] update button FORCED on via "
-                      "ow_force_update.txt (test override)")
-                return
+        forced = _force_update_file()
     except Exception:
-        pass
+        forced = None
+    if forced:
+        _update_available  = True
+        _update_forced     = True
+        _update_force_src  = forced
+        _update_latest_ver = "TEST"
+        _update_html_url   = (
+            f"https://github.com/{OMNIWATCH_GITHUB_OWNER}/"
+            f"{OMNIWATCH_GITHUB_REPO}/releases/latest")
+        _update_check_done = True
+        # Print the resolved path, not just the filename: the whole point
+        # of failing to turn this off is not knowing which copy is live.
+        print("[OmniWatch] update button FORCED on by test override file: "
+              f"{forced} (delete THAT file to turn it off)")
+        return
+    _update_forced    = False
+    _update_force_src = ""
     try:
         t = threading.Thread(target=_update_check_worker, daemon=True)
         t.start()
     except Exception:
         _update_check_done = True
+
+def _update_force_poll():
+    """Drop the forced "Update available" button as soon as the test file
+    is deleted, instead of holding it for the rest of the session.
+
+    The startup check runs exactly once, so a file removed after launch
+    used to leave the button stuck on with nothing on disk explaining it.
+    Called from the settings-menu size and draw paths; re-stats at most
+    once every 2 s and only while the button is FORCED, so a real update
+    never touches this path and the normal case costs one bool test.
+    """
+    global _update_force_poll_t, _update_check_done, _update_available
+    global _update_forced, _update_force_src
+    global _update_latest_ver, _update_html_url
+    if not _update_forced:
+        return
+    now = time.time()
+    if now - _update_force_poll_t < 2.0:
+        return
+    _update_force_poll_t = now
+    try:
+        if _force_update_file():
+            return
+    except Exception:
+        return
+    print("[OmniWatch] test override file is gone — dropping the forced "
+          "update button and running the real check")
+    _update_available  = False
+    _update_forced     = False
+    _update_force_src  = ""
+    _update_latest_ver = ""
+    _update_html_url   = ""
+    _update_check_done = False
+    _start_update_check()
 
 # ---------------------------------------------------------------------------
 # Crash logger
@@ -5332,19 +5436,20 @@ inventory_slip_state   = {}    # {slip_id: {"name": str, "items": [...]}}
 _inv_slip_buffer       = {}    # accumulator while a snapshot is in progress
 
 # ── Header currency cycler state ────────────────────────────────────────
-# The header used to show just gil. Now it cycles through up to six
-# currencies (gil + 5 tier-1/2 currencies) populated by the lua side
-# via the CURRENCY|key=val;... wire packet. Each currency is shown for
-# `header_currency_cycle_seconds` (settings-controlled) before advancing.
+# The header used to show just gil. Now it cycles through every currency
+# in CURRENCY_CYCLE_KEYS (gil + the tier-1/2 currencies) populated by the
+# lua side via the CURRENCY|key=val;... wire packet. Each currency is shown
+# for `header_currency_cycle_seconds` (settings-controlled) before advancing.
 #
 # Display order is the order of CURRENCY_CYCLE_KEYS below — that's also
-# what the settings panel uses for the six show_currency_<name> toggles,
+# what the settings panel uses for the show_currency_<name> toggles,
 # so the user's mental model (Gil → Sparks → Accolades → …) matches
 # what they see on screen.
 currency_state = {
     "gil": 0, "sparks": 0, "accolades": 0,
     "gallimaufry": 0, "temenos": 0, "apollyon": 0,
     "escha_beads": 0, "nyzul_tokens": 0, "ichor": 0,
+    "potpourri": 0,
 }
 
 # Teleport-ring recharge state. Populated from RINGS UDP messages
@@ -9728,8 +9833,8 @@ SETTINGS_SCHEMA = [
                    "the points-tracker toggle + type.",
     },
     # ── Currency cycler (condensed into a subdialog) ─────────────────
-    # The gil block in the header now cycles through up to six
-    # currencies; the per-currency toggles + cycle interval were
+    # The gil block in the header cycles through the currencies in
+    # CURRENCY_CYCLE_KEYS; the per-currency toggles + cycle interval were
     # collapsed into a single "Configure" button to keep the main
     # settings list short. Clicking opens currency_settings_modal.
     {
@@ -9740,10 +9845,10 @@ SETTINGS_SCHEMA = [
         "section": "Header",
         "applies": "python",
         "action":  "open_currency_settings",
-        "help":    "Open the currency cycler settings: which of the "
-                   "six currencies (Gil, Sparks, Accolades, "
-                   "Gallimaufry, Temenos, Apollyon) appear in the "
-                   "header rotation, and how long each is shown.",
+        "help":    "Open the currency cycler settings: which currencies "
+                   "(Gil, Sparks, Accolades, Gallimaufry, Temenos, "
+                   "Apollyon, Beads, Tokens, Ichor, Potpourri) appear in "
+                   "the header rotation, and how long each is shown.",
     },
     # ── Inventory configure ──────────────────────────────────────────
     # Inventory button visibility + the GearSwap folder picker live
@@ -9945,6 +10050,15 @@ SETTINGS_SCHEMA = [
     {
         "key":     "show_currency_ichor",
         "label":   "(internal) show ichor",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "",
+    },
+    {
+        "key":     "show_currency_potpourri",
+        "label":   "(internal) show potpourri",
         "kind":    "bool",
         "default": True,
         "section": "_Hidden",
@@ -10817,9 +10931,21 @@ def _request_setup_mode(payload="toggle"):
 
 
 def _stats_edit_active():
-    """True when the stats panel should accept cell edits — either because
-    the whole app is in setup mode, or because just this panel is."""
-    return bool(setup_mode or stats_layout_edit)
+    """True when the stats panel should accept CELL edits.
+
+    Deliberately NOT tied to global setup mode. The two jobs were sharing
+    one mode and getting in each other's way: setup mode covered the whole
+    panel in cell hit rects, so every click meant "pick up a cell" and the
+    panel itself could no longer be moved or resized — the thing setup mode
+    exists to do. They are separate now:
+
+      setup mode          → size and placement of the panel (grip + drag)
+      Statistics ▸ Edit layout → the cell grid (reorder, hide, Save as)
+
+    Both can be on at once if you enter cell editing while setup mode is
+    up; cell rects only exist in the second, so the grip stays reachable.
+    """
+    return bool(stats_layout_edit)
 
 
 def _stats_layout_edit_begin():
@@ -11133,7 +11259,7 @@ def _open_hotbar_editor():
 def _open_currency_settings():
     """Open the currency cycler subdialog. Closes the parent settings
     dropdown so the modal isn't visually competing with it. The modal
-    reads/writes the six show_currency_* booleans + the cycle-interval
+    reads/writes the show_currency_* booleans + the cycle-interval
     int directly via the settings system; on close, settings are auto-
     persisted by the standard save path."""
     global currency_settings_modal_open, settings_menu_open
@@ -19893,6 +20019,11 @@ _PROFILE_PARTS = (
     "omniwatch_settings.json",    # every schema value, incl. panel visibility
     "omniwatch_cheatsheet.json",  # the job section of the cheat sheet
     "omniwatch_buttons.json",     # hotbar pages
+    # The Statistics cell layout — which stats are shown, in what order,
+    # globally and per job. It was missing, so "save my BLM setup as a
+    # profile" saved everything about that setup EXCEPT the stat panel's
+    # contents, and switching profiles left the cells wherever they were.
+    "omniwatch_stats_layout.json",
 )
 
 # "common" can never be a profile name: omniwatch_cheatsheet_common.json is
@@ -20185,6 +20316,15 @@ def switch_to_profile(name):
 
     # Cheat sheet needs no explicit reload: _load_cheatsheet_file is keyed on
     # the file's mtime, and we just replaced the file.
+
+    # Stats cell layout DOES need one — it's parsed into stats_layout_config
+    # at load and nothing re-reads the file on its own, so without this the
+    # new profile's file is on disk while the old profile's cells stay on
+    # screen until the next restart.
+    try:
+        _load_stats_layout()
+    except Exception as e:
+        print(f"[OmniWatch] switch_to_profile: stats layout reload: {e!r}")
 
     # Window size + position last, so a second-monitor profile lands where
     # it was saved. Skipped while full-screen (the restore rect owns it).
@@ -22443,6 +22583,15 @@ def _cheatsheet_toggle():
     """Open/close the cheat sheet window (floating [CS] button / [X])."""
     global cheatsheet_window_open
     cheatsheet_window_open = not cheatsheet_window_open
+
+
+def _clear_cheatsheet_button_rects():
+    """Null just the floating [CS] launcher's hit rects, leaving the
+    window's rects intact. Used when `show_cheatsheet` hides the launcher
+    but the window is still on screen (opened from a hotbar action)."""
+    global cheatsheet_button_rect, cheatsheet_button_handle_rect
+    cheatsheet_button_rect = None
+    cheatsheet_button_handle_rect = None
 
 
 def _clear_cheatsheet_rects():
@@ -35421,6 +35570,7 @@ def settings_menu_size():
     placeholder_h = round(18 * g)  # "(no settings yet)" row for empty sections
     pad   = round(8 * g)
     # Group entries by section so we know which sections are empty.
+    _update_force_poll()
     _secs = _settings_sections()
     grouped = {sec: [] for sec in _secs}
     for s in SETTINGS_SCHEMA:
@@ -35498,6 +35648,9 @@ CURRENCY_CYCLE_KEYS = [
     ("escha_beads",  "Beads",       "show_currency_escha_beads"),
     ("nyzul_tokens", "Tokens",      "show_currency_nyzul_tokens"),
     ("ichor",        "Ichor",       "show_currency_ichor"),
+    # Potpourri — Sortie / Odyssey-era tier-2 currency, field label
+    # 'Potpourri' at offset 0x50 of the 0x118 packet we already parse.
+    ("potpourri",    "Potpourri",   "show_currency_potpourri"),
 ]
 
 # ── Header points tracker ────────────────────────────────────────────
@@ -43038,6 +43191,7 @@ def draw_settings_menu(surface):
     # Group by section so we can render each section in canonical order
     # (regardless of where its entries appear in the schema list) and
     # know which sections are empty.
+    _update_force_poll()
     _secs = _settings_sections()
     grouped = {sec: [] for sec in _secs}
     for s in SETTINGS_SCHEMA:
@@ -50751,12 +50905,14 @@ STATS_CELLS = [
     ("snapshot",       "Snapshot", "accatt", "normal"),
     ("ranged accuracy","RAcc",     "accatt", "normal"),
     ("ranged attack",  "RAtt",     "accatt", "normal"),
+    ("rapid shot",     "R.Shot",   "accatt", "normal"),
     # Damage taken / defenses
     ("damage taken",          "DT",   "defense", "normal"),
     ("physical damage taken", "PDT",  "defense", "normal"),
     ("magic damage taken",    "MDT",  "defense", "normal"),
     ("breath damage taken",   "BDT",  "defense", "normal"),
     ("magic evasion",         "MEva", "defense", "normal"),
+    ("magic def. bonus",      "MDB",  "defense", "normal"),
     ("evasion",               "Eva",  "defense", "normal"),
     ("defense",               "Def",  "defense", "normal"),
     # Enmity is gear-only: nothing else feeds the 'enmity' key, so the
@@ -50768,6 +50924,7 @@ STATS_CELLS = [
     # Spell interruption rate: lower is better, so it's an inverted cell
     # (see INVERT_SIGN_CELLS) — a negative reading is the good one.
     ("spell interruption rate", "S.Int.",  "caster", "normal"),
+    ("cure potency",      "Cure Pot",    "caster", "normal"),
     ("magic accuracy",    "MAcc",        "caster", "normal"),
     ("magic attack bonus","MAB",         "caster", "normal"),
     ("regen",             "Regen",       "caster", "normal"),
@@ -50790,13 +50947,40 @@ STATS_CELLS = [
     # placeholders the user can drag around. Outside setup mode they
     # render as truly invisible blanks — the slot they occupy stays
     # empty in the grid (no border, no content) so user-placed gaps
-    # between cells are preserved. Default count is 4 to fill out the
-    # trailing partial row of the panel. The section field is
-    # informational only (not used in the v2 linear renderer).
+    # between cells are preserved. The section field is informational
+    # only (not used in the v2 linear renderer).
+    #
+    # This is a POOL, not a fixed count. _stats_pad_order picks however
+    # many are needed to round the grid out to whole rows and leaves the
+    # rest out of the order entirely, so adding a stat cell is a one-line
+    # change here and nothing else. (It used to be an invariant you had to
+    # remember: "keep len(STATS_CELLS) a multiple of STATS_COLS_PER_ROW",
+    # which is exactly the kind of thing that gets forgotten and brings
+    # back a ragged last row nothing can be dropped into.) The pool is
+    # sized to cover the worst case — every spacer dragged into the
+    # interior, leaving none to pad with.
     ("_empty1", "empty", "empty", "normal"),
     ("_empty2", "empty", "empty", "normal"),
     ("_empty3", "empty", "empty", "normal"),
     ("_empty4", "empty", "empty", "normal"),
+    # _empty5..7 exist purely to fill the last row. The grid is
+    # STATS_COLS_PER_ROW wide, so a cell count that isn't a multiple of it
+    # leaves a ragged tail. That tail used to be drawn as synthetic "+"
+    # boxes which inserted-at-end on drop, sliding every cell after the
+    # source along by one. Real spacers instead: they look like every
+    # other empty cell, they swap on drop, and _stats_render_order drops
+    # trailing spacers outside cell editing so normal play is unchanged.
+    # INVARIANT: keep len(STATS_CELLS) a multiple of STATS_COLS_PER_ROW —
+    # add or remove spacers here whenever a stat cell is added.
+    ("_empty5", "empty", "empty", "normal"),
+    ("_empty6", "empty", "empty", "normal"),
+    ("_empty7", "empty", "empty", "normal"),
+    ("_empty8", "empty", "empty", "normal"),
+    ("_empty9", "empty", "empty", "normal"),
+    ("_empty10", "empty", "empty", "normal"),
+    ("_empty11", "empty", "empty", "normal"),
+    ("_empty12", "empty", "empty", "normal"),
+    ("_empty13", "empty", "empty", "normal"),
 ]
 
 # Quick lookup by key.
@@ -50824,6 +51008,37 @@ STATS_CELLS_BY_KEY = {c[0]: c for c in STATS_CELLS}
 STATS_COLS_PER_ROW = 7
 
 
+def _stats_pad_order(order):
+    """Round a flat cell order out to a whole number of grid rows.
+
+    The panel packs cells STATS_COLS_PER_ROW at a time, so an order whose
+    length isn't a multiple of that leaves a ragged last row: slots that
+    aren't cells, can't be dropped into, and used to be drawn as synthetic
+    "+" boxes with their own broken drop behaviour. Padding with real
+    spacers makes the tail ordinary empty cells instead.
+
+    Surplus TRAILING spacers are dropped first and then exactly as many as
+    are needed are added back from the pool in STATS_CELLS. Interior
+    spacers are never touched — a gap the user put between two stats is
+    the whole point of them, and it counts toward the length like any
+    other cell.
+
+    Uses the "_empty" prefix directly rather than _is_stats_spacer: this
+    runs at import time (via _default_stats_layout) and that helper is
+    defined further down the file.
+    """
+    out = [k for k in order]
+    while out and str(out[-1]).startswith("_empty"):
+        out.pop()
+    need = (-len(out)) % STATS_COLS_PER_ROW
+    if need:
+        placed = set(out)
+        spare = [c[0] for c in STATS_CELLS
+                 if c[0].startswith("_empty") and c[0] not in placed]
+        out.extend(spare[:need])
+    return out
+
+
 def _default_stats_layout():
     """Build the default layout config (everything visible, default order).
 
@@ -50832,7 +51047,7 @@ def _default_stats_layout():
     STATS_CELLS in section order — but the user can drag cells anywhere
     after that.
     """
-    return {"hidden": [], "order": [c[0] for c in STATS_CELLS]}
+    return {"hidden": [], "order": _stats_pad_order([c[0] for c in STATS_CELLS])}
 
 
 # In-memory cache of the stats layout config, populated from disk.
@@ -50887,6 +51102,9 @@ _STATS_NEW_CELL_AFTER = {
     "enmity":                  "defense",
     "critical hit rate":       "quadruple attack",
     "spell interruption rate": "quick magic",
+    "cure potency":            "spell interruption rate",
+    "rapid shot":              "ranged attack",
+    "magic def. bonus":        "magic evasion",
 }
 
 
@@ -50938,6 +51156,15 @@ def _resolve_stats_layout(job):
         else:
             order.append(c[0])
         seen.add(c[0])
+
+    # Drop anything the catalogue no longer defines. A key that isn't in
+    # STATS_CELLS_BY_KEY can't render (the draw loop skips it) but still
+    # occupies a slot, so leaving it in means an invisible dead cell that
+    # nothing can be dropped onto — and it throws the row count off.
+    order = [k for k in order if k in STATS_CELLS_BY_KEY]
+
+    # Round out to whole rows last, after every add and removal above.
+    order = _stats_pad_order(order)
 
     return {"hidden": hidden, "order": order}
 
@@ -51075,6 +51302,20 @@ def _save_stats_layout_as(target, current_job):
     # Resolve target slot.
     if target == "global":
         slot = stats_layout_config.setdefault("global", _default_stats_layout())
+        # A per-job layout OUTRANKS global in _resolve_stats_layout, and one
+        # is written automatically for the current job every time you leave
+        # cell editing without using Save as. So on any job you had ever
+        # edited before, saving to global wrote the right thing to the right
+        # place and then the panel snapped straight back to the older
+        # per-job layout — indistinguishable from the save being ignored.
+        # Choosing "global" while standing on this job means "this is my
+        # layout": drop the override that would hide it. Every OTHER job's
+        # layout is left alone.
+        per_job = stats_layout_config.get("per_job") or {}
+        if current_job and current_job in per_job:
+            per_job.pop(current_job, None)
+            print(f"[OmniWatch] stats save-as global: dropped the "
+                  f"{current_job} layout that was shadowing it")
     else:
         per_job = stats_layout_config.setdefault("per_job", {})
         slot = per_job.setdefault(target, {"hidden": [], "order": []})
@@ -51285,6 +51526,7 @@ PERCENT_CELLS = {
     "weapon skill damage",
     "fast cast", "quick magic",
     "critical hit rate", "spell interruption rate",
+    "cure potency",
     "damage taken", "physical damage taken", "magic damage taken",
     "breath damage taken",
     "movement speed",
@@ -51344,6 +51586,10 @@ STAT_CAPS = {
     # A floor, not a ceiling (see INVERT_SIGN_CELLS): interruption rate
     # can't drop below -100%, so anything past that is wasted.
     "spell interruption rate": -100,
+    # Gear cure potency caps at 50%. NOTE this is the FIRST tier only —
+    # '"Cure" potency II' is a separate stat with its own cap and is not
+    # parsed or shown, so nothing here double-counts it.
+    "cure potency":           50,
     "movement speed":         60,    # +60% over base is the true game cap
                                       #   (160% total). Gear-only cap is ~25,
                                       #   but with Bolter's Roll the displayed
@@ -51890,41 +52136,6 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     rows_rendered = (len(cells_to_render) + cols - 1) // cols
     cur_y = cur_y + rows_rendered * cell_h
 
-    # Placeholder cells in the trailing partial row (setup mode only).
-    # When the last row isn't full (e.g. 52 cells = 7 full rows + 3 in
-    # row 8 leaves 4 empty slots), draw faint '+' boxes in the empty
-    # slots so users can see where they're free to drop cells. Skipped
-    # in normal play to keep the panel clean.
-    if setup_mode and len(cells_to_render) > 0:
-        filled_in_last_row = len(cells_to_render) % cols
-        if filled_in_last_row > 0:
-            last_row_idx = rows_rendered - 1
-            ph_cy = cur_y - cell_h   # top of the last (partial) row
-            ph_font = get_font("Consolas", int(16 * scale), bold=True)
-            ph_color = (60, 70, 85)        # faint outline
-            plus_color = (75, 90, 110)     # faint '+' text
-            for ph_col in range(filled_in_last_row, cols):
-                ph_cx = x + pad + ph_col * cell_w
-                # Outline.
-                pygame.draw.rect(surface, ph_color,
-                                 (ph_cx, ph_cy, cell_w, cell_h), 1)
-                # Center the '+' symbol.
-                plus_surf = ph_font.render("+", True, plus_color)
-                surface.blit(plus_surf,
-                             (ph_cx + (cell_w - plus_surf.get_width()) // 2,
-                              ph_cy + (cell_h - plus_surf.get_height()) // 2))
-                # Register click region. Use a synthetic key like
-                # "__ph_<index>" so drag-to-here works — _reorder_stats_cell
-                # treats this as "insert at end of order list".
-                # The MOUSEBUTTONUP handler looks for closest cell rect;
-                # placeholders count as drop targets for the trailing
-                # positions.
-                _stats_cell_click_rects.append({
-                    "key":  f"__placeholder_{ph_col}",
-                    "rect": (ph_cx, ph_cy, cell_w, cell_h),
-                    "is_placeholder": True,
-                })
-
     # ── Setup-mode UI: hidden cells tray + Save as button ────────────────
     if setup_mode:
         # Tray sits below the grid area. Header text + chips for each
@@ -52095,8 +52306,8 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
             if drag_meta:
                 cur_mx = _stats_cell_drag["cur_x"]
                 cur_my = _stats_cell_drag["cur_y"]
-                # v2.0+ linear flow: ALL cells (including placeholders)
-                # are candidate drop targets. No section filter.
+                # v2.0+ linear flow: every cell, empty spacers
+                # included, is a candidate drop target. No section filter.
                 if _stats_cell_click_rects:
                     best = None
                     for entry in _stats_cell_click_rects:
@@ -52108,12 +52319,14 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                             best = (d2, entry, rx, ry, rw, rh)
                     if best is not None:
                         _, entry, rx, ry, rw, rh = best
-                        is_ph = entry.get("is_placeholder", False)
-                        if is_ph:
-                            # Placeholder = drop-at-end. Highlight the
-                            # whole placeholder cell rather than a thin
-                            # bar (since "before/after" is ambiguous on
-                            # an empty slot).
+                        # Highlight the whole cell when the drop will
+                        # SWAP (either side is an empty spacer) and a thin
+                        # insert bar when it will resequence — matching
+                        # what the MOUSEBUTTONUP handler actually does.
+                        # "Before/after" is meaningless on an empty slot:
+                        # you're aiming AT it.
+                        if (_is_stats_spacer(entry["key"])
+                                or _is_stats_spacer(_stats_cell_drag["key"])):
                             pygame.draw.rect(surface, (255, 200, 80),
                                              (rx, ry, rw, rh), 2,
                                              border_radius=2)
@@ -55113,7 +55326,7 @@ while running:
             elif raw.startswith("CURRENCY|"):
                 # Format: CURRENCY|gil=N;sparks=N;accolades=N;gallimaufry=N;
                 #                  temenos=N;apollyon=N;escha_beads=N;
-                #                  nyzul_tokens=N;ichor=N
+                #                  nyzul_tokens=N;ichor=N;potpourri=N
                 # Single line, fixed schema. Unknown keys are ignored
                 # (forward compat — lua side could add a new currency
                 # without breaking older python). The dict update is
@@ -56640,7 +56853,8 @@ while running:
     # dimensions reflect the active layout (hidden cells reduce height).
     # Without this the anchor positioning math would use the
     # "all-cells-visible" size and the panel would visually drift.
-    sw, sh = stats_panel_size(stats_scale, job=player_self_mjob, setup_mode=setup_mode)
+    sw, sh = stats_panel_size(stats_scale, job=player_self_mjob,
+                              setup_mode=_stats_edit_active())
     if stats_anchor is None:
         # Default offset places it to the right of the equipment panel,
         # below the header so it doesn't overlap the clock.
@@ -56833,11 +57047,17 @@ while running:
         pet_hpp  = m.get("pet_hpp", 0)
         pet_tp_v = m.get("pet_tp",  0)
         if pet_name and setting("party_show_pets"):
-            # Name + HP% in one chunk so they share color (HP-tinted on
-            # crit, dim otherwise — keeps the row from looking busy).
-            hp_text  = f"{pet_name} {pet_hpp}%"
-            hp_color_ = hp_color(pet_hpp, flash) if pet_hpp < 75 else COL_LABEL_DIM
-            pet_surfs.append(d["f_label"].render(hp_text, True, hp_color_))
+            # Name and HP% are drawn as two chunks with their own colors.
+            # The name is HP-full green so the pet reads as yours at a
+            # glance; the HP% runs the real HP ramp (green → yellow →
+            # orange → red, flashing under 30) the whole way up rather
+            # than sitting dim until it drops below 75. A pet at full
+            # health therefore reads as one continuous green, and the
+            # number is the thing that changes color as it takes damage.
+            pet_surfs.append(d["f_label"].render(f"{pet_name} ", True,
+                                                 COL_HP_HI))
+            pet_surfs.append(d["f_label"].render(f"{pet_hpp}%", True,
+                                                 hp_color(pet_hpp, flash)))
             if pet_tp_v and pet_tp_v > 0:
                 # Separator + TP in TP-bar color. Capped to 3000 like
                 # the main TP bar; pet TP can technically exceed that
@@ -57717,15 +57937,21 @@ while running:
     else:
         _clear_header_click_rects()
 
-    # ── Cheat sheet button + window (toggled by the floating [CS] button) ───
-    # The button floats on the overlay (draggable); the window draws above
-    # panels but below the settings dropdown / modals. Both are suppressed
-    # while the whole display is hidden.
-    if display_hidden or not setting("show_cheatsheet"):
+    # ── Cheat sheet button + window ─────────────────────────────────────────
+    # `show_cheatsheet` governs the FLOATING [CS] LAUNCHER ONLY — the window
+    # draws whenever it is open, because the launcher is no longer the only
+    # way in. The hotbar "cheatsheet" action flips cheatsheet_window_open
+    # too, and this gate used to swallow the window along with the button:
+    # turning the launcher off to move it onto the hotbar left the hotbar
+    # slot toggling a flag that nothing ever drew.
+    if display_hidden:
         _clear_cheatsheet_rects()
     else:
         draw_cheatsheet_window(screen)
-        draw_cheatsheet_button(screen)
+        if setting("show_cheatsheet"):
+            draw_cheatsheet_button(screen)
+        else:
+            _clear_cheatsheet_button_rects()
         draw_cheatsheet_ctx_menu(screen)
 
     # ── BLU Spellsets launcher + window ──────────────────────────────────
@@ -57739,9 +57965,11 @@ while running:
         _brdset_clear_rects()
 
     # ── Warp button + travel menu (floating, pulses when in range) ──────────
-    # Floats on the overlay (draggable/resizable); the menu draws above
-    # panels. Suppressed when the display is hidden or the setting is off.
-    if display_hidden or not setting("show_warp"):
+    # `show_warp` governs the FLOATING BUTTON ONLY, for the same reason as
+    # the cheat sheet above: the hotbar "warp" action opens the travel menu
+    # directly (anchored at the slot via _warp_menu_anchor), so hiding the
+    # button must not take the menu with it.
+    if display_hidden:
         warp_button_rect = None
         warp_button_handle_rect = None
         warp_menu_rects = []
@@ -57749,7 +57977,11 @@ while running:
         warp_confirm_rects = []
         warp_confirm_rect = None
     else:
-        draw_warp_button(screen)
+        if setting("show_warp"):
+            draw_warp_button(screen)
+        else:
+            warp_button_rect = None
+            warp_button_handle_rect = None
         draw_warp_menu(screen)
         draw_warp_confirm(screen)
 
@@ -59012,14 +59244,6 @@ while running:
                     for entry in _stats_cell_click_rects:
                         rx, ry, rw, rh = entry["rect"]
                         if rx <= mx < rx + rw and ry <= my < ry + rh:
-                            # Placeholders are drop-target-only; can't be
-                            # dragged or clicked to toggle (there's no
-                            # cell behind them). Consume the click so it
-                            # doesn't fall through to panel drag, but
-                            # don't initiate a drag from one.
-                            if entry.get("is_placeholder"):
-                                consumed = True
-                                break
                             _stats_cell_drag = {
                                 "key":     entry["key"],
                                 "down_x":  mx,
@@ -59958,7 +60182,8 @@ while running:
             # 3. Stats panel.
             if hit is None and stats_pos is not None:
                 sx2, sy2 = stats_pos
-                spw, sph = stats_panel_size(stats_scale, job=player_self_mjob, setup_mode=setup_mode)
+                spw, sph = stats_panel_size(stats_scale, job=player_self_mjob,
+                                            setup_mode=_stats_edit_active())
                 if (sx2 + spw - RESIZE_GRIP) <= mx < (sx2 + spw) and \
                    (sy2 + sph - RESIZE_GRIP) <= my < (sy2 + sph):
                     hit = ("stats", "__stats__", sx2, sy2, "resize", spw, sph, stats_scale)
@@ -60510,8 +60735,7 @@ while running:
                 else:
                     # Real drag. Linear flow model (v2.0+): cell can drop
                     # ANYWHERE — find the click rect whose center is
-                    # closest to the cursor (including placeholders, which
-                    # act as drop targets for end-of-list positions).
+                    # closest to the cursor.
                     mx, my = event.pos
                     target_idx = None
                     swap_with = None
@@ -60526,7 +60750,6 @@ while running:
                     if best is not None:
                         d2, entry, rx, rw = best
                         target_key = entry["key"]
-                        is_ph = entry.get("is_placeholder", False)
                         # Build the rendered-order list (linear order
                         # filtered by visibility, same as the renderer
                         # used to lay out cells this frame).
@@ -60542,10 +60765,7 @@ while running:
                         # index in the rendered list maps directly to the
                         # full_order index.
                         swap_with = None
-                        if is_ph:
-                            # Placeholder drop → insert at end.
-                            target_idx = len(full_order)
-                        elif (_is_stats_spacer(target_key)
+                        if (_is_stats_spacer(target_key)
                                 or _is_stats_spacer(drag["key"])):
                             # Dropping a stat into an empty slot (or an
                             # empty slot onto a stat) is a placement, not a
