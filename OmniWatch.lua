@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.10.2'
+_addon.version  = '1.11.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -9779,6 +9779,69 @@ local function _ow_drain_inbound()
             local ok, berr = pcall(_ow_brdset_command, rest)
             if not ok then
                 ow_chat(123, '[OmniWatch] brdset error: ' .. tostring(berr))
+            end
+        elseif head == 'TARGET' then
+            -- Click-to-target from the party panel.
+            --
+            -- windower.ffxi.set_target() was the first attempt and it does
+            -- NOT work — the call returned without error and the game's
+            -- target never changed. The route that does work is injecting
+            -- an INCOMING 0x058 (the packet the server sends to move your
+            -- cursor), which is how xurion's ffxi-targeter addon does it:
+            --
+            --   packets.inject(packets.new('incoming', 0x058, {
+            --       ['Player'] = player.id,
+            --       ['Target'] = <entity id>,
+            --       ['Player Index'] = player.index,
+            --   }))
+            --
+            -- Note it identifies the target by ENTITY ID, not by index —
+            -- which is why the payload carries the id as well. Same
+            -- packets.new + packets.inject pair the bazaar code uses; the
+            -- managed API fills in the sync counter that raw injects miss.
+            --
+            -- Payload: "<index>|<name>|<id>".
+            local p_idx, p_name, p_id = rest:match('^(%-?%d*)|([^|]*)|(%-?%d*)$')
+            local idx = tonumber(p_idx)
+            local tid = tonumber(p_id)
+            local nm  = p_name or ''
+            local me  = windower.ffxi.get_player()
+
+            -- Prefer a LIVE mob entry over whatever the party packet last
+            -- reported: its id is authoritative and it tells us whether
+            -- the entity can be targeted at all right now.
+            local mob
+            if idx and idx > 0 and windower.ffxi.get_mob_by_index then
+                mob = windower.ffxi.get_mob_by_index(idx)
+            end
+            if (not mob or mob.name ~= nm) and nm ~= ''
+               and windower.ffxi.get_mob_by_name then
+                mob = windower.ffxi.get_mob_by_name(nm) or mob
+            end
+            if mob and mob.id and mob.id ~= 0 then tid = mob.id end
+
+            if not me then
+                ow_chat(207, '[OW target] no player data')
+            elseif not tid or tid == 0 then
+                ow_chat(207, string.format(
+                    '[OW target] no entity id for %s (index %s) — not in '
+                    .. 'this zone?', tostring(nm), tostring(p_idx)))
+            elseif mob and mob.valid_target == false then
+                ow_chat(207, string.format(
+                    '[OW target] %s is not a valid target right now',
+                    tostring(nm)))
+            else
+                local ok_t, err_t = pcall(function()
+                    packets.inject(packets.new('incoming', 0x058, {
+                        ['Player']       = me.id,
+                        ['Target']       = tid,
+                        ['Player Index'] = me.index,
+                    }))
+                end)
+                ow_chat(207, string.format(
+                    '[OW target] %s id=%d -> inject 0x058 ok=%s%s',
+                    tostring(nm), tid, tostring(ok_t),
+                    ok_t and '' or (' err=' .. tostring(err_t))))
             end
         elseif head == 'CMD' then
             -- Hotbar buttons of kind="windower" send their command

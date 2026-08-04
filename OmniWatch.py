@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.10.2 (2026-08-03)"
+OMNIWATCH_BUILD_STAMP = "v1.11.0 (2026-08-03)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.10.2"
+OMNIWATCH_VERSION = "1.11.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -2156,6 +2156,41 @@ def _cmd_addr():
 # All sim messages go to _cmd_addr() (lua's discovered command port).
 # Lua's drain handler
 # multiplexes SIM/SIM_MODE/SETTING prefixes off the same socket.
+def _send_target(mob_index, name="", player_id=0):
+    """Ask the lua side to target a party member.
+
+    Not a slash command - FFXI has no /target - so this rides its own
+    TARGET| header on the same socket the SIM/CMD messages use, and the
+    lua calls windower.ffxi.set_target(). The index is already on the
+    party wire (field 11), used until now only to detect what a mob is
+    aiming at.
+
+    The NAME is sent too. The index on the party wire is whatever the
+    last party packet carried, and it goes stale across a zone or a
+    resummon; the lua can re-resolve a live index from the name when the
+    index it was handed doesn't take.
+
+    The entity ID goes too. Targeting is done by injecting an incoming
+    0x058, and that packet identifies its target by ID, not index.
+    """
+    try:
+        idx = int(mob_index or 0)
+    except (TypeError, ValueError):
+        idx = 0
+    try:
+        pid = int(player_id or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    nm = str(name or "").replace("|", "")
+    if idx <= 0 and pid <= 0 and not nm:
+        return
+    try:
+        sock_cmd_out.sendto(f"TARGET|{idx}|{nm}|{pid}".encode("utf-8"),
+                            _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] send_target failed: {e!r}")
+
+
 def _sim_send_mode(on):
     """Tell lua to enter or leave sim mode."""
     try:
@@ -6154,7 +6189,13 @@ hotbar_panel_pages = {}         # {panel_idx: page_idx}
 # leave edit mode.
 hotbar_edit_mode      = False
 hotbar_edit_slot      = -1       # -1 = no slot picked yet; show "select a slot"
-hotbar_edit_draft     = None     # working copy of buttons_config[hotbar_edit_slot]
+hotbar_edit_draft     = None     # working copy of the slot being edited
+# Which CONTENT PAGE the editor is acting on. None = the primary panel's
+# current page (the legacy behaviour). With several hotbar panels on
+# screen, each shows a different page, so "slot 3" is ambiguous without
+# this — editing was hard-wired to panel 0 and clicking a slot on any
+# other panel did nothing at all.
+hotbar_edit_page      = None
 hotbar_focused_field  = None     # "label" | "command" | None
 hotbar_text_cursor    = 0        # caret index within the focused field's text
 hotbar_text_blink_t0  = 0.0      # time.time() at last cursor reset (controls blink phase)
@@ -6222,6 +6263,12 @@ click_targets   = []
 # Stats panel click regions (only populated in setup mode):
 # Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click toggles hidden.
 _stats_cell_click_rects = []
+# Click-to-target hit rects for the party panel: one per member, covering
+# the name/job/pet column (everything left of the bars). Rebuilt in place
+# every frame by the party draw - assigned with a slice so the draw code
+# needs no `global` declaration.
+party_name_click_rects = []
+
 # Tray hidden-cell chip click regions:
 # Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click un-hides.
 _stats_tray_click_rects = []
@@ -8004,8 +8051,8 @@ def region_for_zone(zone_id):
 # Ordering is row-major: indices 0–5 = top row, 6–11 = bottom row.
 _BUTTONS_DEFAULT = {
     "_README": [
-        "OmniWatch button panel: 20 entries (10 wide x 2 tall, row-major).",
-        "Indices 0-9 = top row, 10-19 = bottom row.",
+        "OmniWatch button panel: 28 entries (14 wide x 2 tall, row-major).",
+        "Indices 0-13 = top row, 14-27 = bottom row.",
         "Each entry has fields: label, icon, kind, command.",
         "kind can be:",
         "  windower - slash command without the leading // (e.g. 'ow dps')",
@@ -8095,8 +8142,48 @@ def _empty_page(name="Page"):
 # show as empty slots until they're populated. Set conservatively; can
 # be increased later without breaking existing configs.
 HOTBAR_PAGE_COUNT = 12
-HOTBAR_SLOTS_PER_PAGE = 26   # 13 cols x 2 rows (was 10x2=20; old saves
-                             # auto-pad to 26 in load_buttons_config)
+HOTBAR_SLOTS_PER_PAGE = 30   # the CEILING (15 cols x 2 rows), not the
+                             # live page size — see _hotbar_page_slots().
+                             # Kept as a constant because it's the width
+                             # every page is padded to on disk, so the
+                             # stored shape doesn't churn every time the
+                             # user drags the cells-per-row setting.
+
+
+def _btn_cols():
+    """Cells per hotbar row. User-set, 5-15.
+
+    Read through this rather than BTN_COLS, which is only the default.
+    Clamped here so a hand-edited settings file can't produce a panel
+    with zero or a thousand columns.
+    """
+    try:
+        n = int(setting("hotbar_cols"))
+    except (TypeError, ValueError):
+        n = BTN_COLS
+    return max(5, min(15, n))
+
+
+def _hotbar_page_slots():
+    """How many slots are VISIBLE on a page at the current width."""
+    return _btn_cols() * BTN_ROWS
+
+
+def _hotbar_ensure_slots():
+    """Make sure every page has the full ceiling of slots.
+
+    Called from the hotbar draw. Idempotent and O(pages), so the cost is
+    nothing, and it means widening the panel never finds a short list.
+    Narrowing is non-destructive by construction: the extra buttons stay
+    in the list, they're simply not drawn, and they come back intact when
+    the panel is widened again.
+    """
+    for pg in hotbar_pages:
+        btns = pg.get("buttons")
+        if not isinstance(btns, list):
+            pg["buttons"] = btns = []
+        while len(btns) < HOTBAR_SLOTS_PER_PAGE:
+            btns.append(_empty_button())
 
 # Active page state. Initialized in load_buttons_config() once pages have
 # been resolved. The render/click code reads buttons_config which always
@@ -8143,8 +8230,11 @@ def load_buttons_config():
             entries = p.get("buttons", [])
             if not isinstance(entries, list):
                 entries = []
-            normalized = [_normalize_button_entry(e)
-                          for e in entries[:HOTBAR_SLOTS_PER_PAGE]]
+            # NO slicing here. Truncating to the page size would delete
+            # buttons the moment the user narrowed the panel, and they'd
+            # be gone for good on the next save. Keep everything, pad up
+            # to the ceiling.
+            normalized = [_normalize_button_entry(e) for e in entries]
             while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
                 normalized.append(_empty_button())
             pages.append({
@@ -8155,8 +8245,7 @@ def load_buttons_config():
         # Legacy single-page format. Migrate: page 1 carries the existing
         # buttons; pages 2..N are empty.
         entries = raw.get("buttons", [])
-        normalized = [_normalize_button_entry(e)
-                      for e in entries[:HOTBAR_SLOTS_PER_PAGE]]
+        normalized = [_normalize_button_entry(e) for e in entries]
         while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
             normalized.append(_empty_button())
         pages.append({"name": "Page 1", "buttons": normalized})
@@ -8183,7 +8272,7 @@ def save_buttons_config():
     try:
         envelope = {
             "_README": [
-                "OmniWatch hotbar config (paged, 13x2 = 26 buttons per page).",
+                "OmniWatch hotbar config (paged, 14x2 = 28 buttons per page).",
                 "",
                 "Top-level shape:",
                 "  pages: list of {name, buttons[20]} dicts",
@@ -8246,16 +8335,26 @@ def _hotbar_panel_set_page(panel_idx, page_idx):
     else:
         hotbar_panel_pages[panel_idx] = new_page
 
+def _hotbar_panel_page(panel_idx):
+    """Which content page a given hotbar panel is currently showing.
+
+    Panel 0 tracks the legacy global; panels 1..N default to their own
+    index. Factored out because the dispatcher, the editor and the click
+    handler all need the same answer and had been deriving it separately
+    (which is how the editor ended up hard-wired to panel 0).
+    """
+    if panel_idx == 0:
+        return hotbar_panel_pages.get(0, hotbar_current_page)
+    return hotbar_panel_pages.get(panel_idx, panel_idx)
+
+
 def _dispatch_button_on_panel(slot_idx, panel_idx):
     """Run the command for slot_idx on the given panel's current page.
     Looks up the right buttons list rather than relying on the global
     buttons_config (which may be the wrong page in multi-mode)."""
     if not hotbar_pages:
         return
-    if panel_idx == 0:
-        page_idx = hotbar_panel_pages.get(0, hotbar_current_page)
-    else:
-        page_idx = hotbar_panel_pages.get(panel_idx, panel_idx)
+    page_idx = _hotbar_panel_page(panel_idx)
     if page_idx < 0 or page_idx >= len(hotbar_pages):
         return
     page_buttons = hotbar_pages[page_idx].get("buttons", [])
@@ -9622,6 +9721,22 @@ SETTINGS_SCHEMA = [
         "section": "_Hidden",
         "applies": "python",
         "help":    "Show the user-button hotbar panel.",
+    },
+    {
+        "key":     "hotbar_cols",
+        "label":   "(internal) hotbar cells per row",
+        "kind":    "int",
+        "default": 14,
+        "min":     5,
+        "max":     15,
+        "step":    1,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "How many button cells each hotbar row holds. Rows "
+                   "stay at 2, so a page holds twice this many slots. "
+                   "Narrowing does NOT delete buttons past the new "
+                   "width — they stay in the file and reappear if you "
+                   "widen again.",
     },
     {
         "key":     "hotbar_visible_count",
@@ -11251,10 +11366,13 @@ def _open_hotbar_editor():
     select a slot — user picks one by clicking on the hotbar."""
     global hotbar_edit_mode, hotbar_edit_slot, hotbar_edit_draft
     global settings_menu_open, hotbar_focused_field
-    global hotbar_icon_picker_open
+    global hotbar_icon_picker_open, hotbar_edit_page
     hotbar_edit_mode = True
     hotbar_edit_slot = -1
     hotbar_edit_draft = None
+    # Unpin any page left over from a previous session's edit, so the
+    # editor starts out following the primary panel again.
+    hotbar_edit_page = None
     hotbar_focused_field = None
     hotbar_icon_picker_open = False
     settings_menu_open = False        # close the dropdown so the hotbar's visible
@@ -40888,10 +41006,11 @@ _SUBDIALOG_CONFIGS = {
     },
     "hotbar": {
         "title":    "HotBar",
-        "subtitle": "Hotbar panel, hotbar count, and slot editor.",
+        "subtitle": "Hotbar panel, hotbar count, row width, and slot editor.",
         "rows": [
             ("show_hotbar",          "Show hotbar",     "bool"),
             ("hotbar_visible_count", "Hotbars shown",   "int"),
+            ("hotbar_cols",          "Cells per row",   "int"),
             ("edit_hotbar",          "Edit hotbar",     "action"),
         ],
         "helpers": {},
@@ -47212,10 +47331,10 @@ def draw_chat_panel(surface, x, y, locked=False):
 
 
 # ── Button panel ─────────────────────────────────────────────────────────
-# 6 wide × 2 tall grid of user-configurable buttons. Each button runs the
+# 14 wide × 2 tall grid of user-configurable buttons. Each button runs the
 # command in buttons_config[idx] when clicked. Layout: BTN_W per button,
 # BTN_H per row, BTN_GAP between, BTN_PAD on the outer edge.
-BTN_COLS    = 13
+BTN_COLS    = 14   # default only — see _btn_cols(); never read directly
 BTN_ROWS    = 2
 BTN_W       = 56
 BTN_H       = 36
@@ -47232,7 +47351,8 @@ def buttons_panel_size(scale=1.0):
     gap    = max(2, int(BTN_GAP * s))
     pad    = max(3, int(BTN_PAD * s))
     hdr_h  = max(14, int(BTN_HDR_H * s))
-    pw = pad * 2 + cell_w * BTN_COLS + gap * (BTN_COLS - 1)
+    _cols = _btn_cols()
+    pw = pad * 2 + cell_w * _cols + gap * (_cols - 1)
     ph = pad * 2 + hdr_h + cell_h * BTN_ROWS + gap * BTN_ROWS
     return pw, ph
 
@@ -47249,6 +47369,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
           panel_idx > 0) or buttons_rects (for panel_idx == 0).
     """
     global buttons_rects, buttons_panel_rects
+    _hotbar_ensure_slots()
     s = max(0.5, min(2.5, float(_eff(scale))))
     cell_w = max(28, int(BTN_W * s))
     cell_h = max(20, int(BTN_H * s))
@@ -47381,9 +47502,10 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     surface.blit(ind_surf, (ind_x + 3,
                             nav_y + (hdr_h - ind_surf.get_height()) // 2))
 
+    _ncols = _btn_cols()
     for row in range(BTN_ROWS):
-        for col in range(BTN_COLS):
-            idx = row * BTN_COLS + col
+        for col in range(_ncols):
+            idx = row * _ncols + col
             entry = page_buttons[idx] if idx < len(page_buttons) else None
             bx = x + pad + col * (cell_w + gap)
             by = y + pad + hdr_h + gap + row * (cell_h + gap)
@@ -48273,12 +48395,12 @@ def dispatch_hotbar_editor_click(mx, my):
                     print(f"[OmniWatch] saved page name: {new_name!r}")
                 elif (isinstance(hotbar_edit_slot, int)
                         and 0 <= hotbar_edit_slot < len(buttons_config)):
-                    buttons_config[hotbar_edit_slot] = _normalize_button_entry(
+                    _hotbar_edit_buttons()[hotbar_edit_slot] = _normalize_button_entry(
                         hotbar_edit_draft)
                     save_buttons_config()
                     print(f"[OmniWatch] saved slot "
                           f"{hotbar_edit_slot + 1}: "
-                          f"{buttons_config[hotbar_edit_slot]}")
+                          f"{_hotbar_edit_buttons()[hotbar_edit_slot]}")
             hotbar_edit_slot = -1
             hotbar_edit_draft = None
             hotbar_focused_field = None
@@ -48325,11 +48447,11 @@ def dispatch_hotbar_editor_click(mx, my):
                     and 0 <= hotbar_edit_slot < len(buttons_config)):
                 _empty = {"label": "", "icon": "",
                           "kind": "none", "command": ""}
-                buttons_config[hotbar_edit_slot] = \
+                _hotbar_edit_buttons()[hotbar_edit_slot] = \
                     _normalize_button_entry(dict(_empty))
                 save_buttons_config()
                 hotbar_edit_draft = dict(
-                    buttons_config[hotbar_edit_slot])
+                    _hotbar_edit_buttons()[hotbar_edit_slot])
                 hotbar_focused_field = None
                 hotbar_icon_picker_open = False
                 print(f"[OmniWatch] hotbar slot "
@@ -48338,7 +48460,22 @@ def dispatch_hotbar_editor_click(mx, my):
     return False
 
 
-def hotbar_select_slot(slot_idx):
+def _hotbar_edit_buttons():
+    """The button list the editor is currently acting on.
+
+    Falls back to buttons_config (the primary panel's current page) when
+    no page has been pinned, which keeps every pre-existing call site
+    behaving exactly as before. Note that when the pinned page IS the
+    primary's current page these are the SAME list object, so writes
+    land in both views either way.
+    """
+    if (hotbar_edit_page is not None
+            and 0 <= hotbar_edit_page < len(hotbar_pages)):
+        return hotbar_pages[hotbar_edit_page]["buttons"]
+    return buttons_config
+
+
+def hotbar_select_slot(slot_idx, page_idx=None):
     """Switch the editor's focus to a different slot, copying the
     current saved state into the draft. Called from the hotbar
     panel's click handler when in edit mode.
@@ -48348,10 +48485,18 @@ def hotbar_select_slot(slot_idx):
     a single editable field that mirrors hotbar_pages[current]["name"].
     """
     global hotbar_edit_slot, hotbar_edit_draft, hotbar_focused_field
-    global hotbar_icon_picker_open
+    global hotbar_icon_picker_open, hotbar_edit_page
+    # Pin the page this edit belongs to. None keeps the legacy behaviour
+    # (primary panel's current page) so existing callers are unaffected.
+    hotbar_edit_page = (page_idx
+                        if (isinstance(page_idx, int)
+                            and 0 <= page_idx < len(hotbar_pages))
+                        else None)
+    _page_for_name = (hotbar_edit_page if hotbar_edit_page is not None
+                      else hotbar_current_page)
     if slot_idx == "__page_name__":
         hotbar_edit_slot = "__page_name__"
-        cur_page = hotbar_pages[hotbar_current_page] if hotbar_pages else None
+        cur_page = hotbar_pages[_page_for_name] if hotbar_pages else None
         cur_name = (cur_page and cur_page.get("name")) or ""
         # Reuse the same draft shape; only "label" gets used for the name.
         hotbar_edit_draft = {
@@ -48360,15 +48505,16 @@ def hotbar_select_slot(slot_idx):
         hotbar_focused_field = "label"   # auto-focus so user can type
         hotbar_icon_picker_open = False
         print(f"[OmniWatch] hotbar editor: editing page name "
-              f"(page {hotbar_current_page + 1})")
+              f"(page {_page_for_name + 1})")
         return
-    if 0 <= slot_idx < len(buttons_config):
+    _btns = _hotbar_edit_buttons()
+    if 0 <= slot_idx < len(_btns):
         hotbar_edit_slot = slot_idx
-        hotbar_edit_draft = dict(buttons_config[slot_idx])
+        hotbar_edit_draft = dict(_btns[slot_idx])
         hotbar_focused_field = None
         hotbar_icon_picker_open = False
         print(f"[OmniWatch] hotbar editor: now editing slot "
-              f"{slot_idx + 1}")
+              f"{slot_idx + 1} on page {_page_for_name + 1}")
 
 
 def _hotbar_slot_at_pos(mx, my):
@@ -57104,6 +57250,9 @@ while running:
     _show_party_draw = setting("show_party") if "show_party" in settings else True
     _party_draw_order = panel_order if _show_party_draw else []
 
+    # Slice-assign rather than rebind: keeps the module-level list object
+    # so no `global` is needed inside this draw path.
+    party_name_click_rects[:] = []
     for name in _party_draw_order:
         m      = members_by_name[name]
         px, py = panel_positions[name]
@@ -57119,6 +57268,13 @@ while running:
 
         bx = px + d["bars_x_off"]
         by = py + int(10 * escale)
+
+        # Click-to-target: the name column, i.e. everything left of the
+        # bars. Deliberately not the whole row - the bars carry their own
+        # readouts and a stray click while reading HP shouldn't retarget.
+        party_name_click_rects.append(
+            (pygame.Rect(px, py, max(1, bx - px), rh),
+             m.get("mob_index", 0), name, m.get("player_id", 0)))
 
         # Name + job/level stacked vertically, centred in the name column.
         # Pulse red if any current target (main or sub) is locked onto OR
@@ -59308,6 +59464,34 @@ while running:
                 dispatch_campaigns_modal_click(mx, my)
                 continue
 
+            # Click-to-target a party member by clicking their name.
+            # Skipped in setup mode, where a click on a panel means
+            # "pick this up and move it" - the same conflict that made
+            # the stats grid unusable, so don't recreate it here.
+            if not setup_mode:
+                _hit_target = None
+                for _rect, _midx, _nm, _pid in party_name_click_rects:
+                    if _rect.collidepoint(mx, my):
+                        _hit_target = (_midx, _nm, _pid)
+                        break
+                if _hit_target is not None:
+                    # Feedback at the cursor, not just in a log file.
+                    # "Clicking the name does nothing" has two completely
+                    # different causes — the click never reaching here, or
+                    # the game refusing the target — and they're
+                    # indistinguishable on screen without this. If the
+                    # note appears and the target doesn't change, the
+                    # click side is fine and the problem is in game.
+                    _hb_action_note = {
+                        "text": f"target: {_hit_target[1]}",
+                        "until": time.time() + 1.5,
+                        "x": mx, "y": my}
+                    print(f"[OmniWatch] click-to-target: {_hit_target[1]} "
+                          f"(mob index {_hit_target[0]})")
+                    _send_target(_hit_target[0], _hit_target[1],
+                                 _hit_target[2])
+                    continue
+
             # Stats-panel setup-mode interactions. Only active while in
             # setup mode. Priority order:
             #   1) Save-as dropdown items (if open — eats click)
@@ -59875,14 +60059,12 @@ while running:
                                        else target_panel))
                                 _hotbar_panel_set_page(target_panel, cur + 1)
                             elif payload_kind == "__page_name__":
-                                # Treat as editing the name field. Editor
-                                # acts on the primary panel only.
-                                if target_panel == 0:
-                                    hotbar_select_slot(payload_kind)
+                                hotbar_select_slot(
+                                    payload_kind,
+                                    _hotbar_panel_page(target_panel))
                             slot_hit = True
                             break
-                        # Numeric index = a real button slot. The editor
-                        # only operates on the primary panel.
+                        # Numeric index = a real button slot.
                         #
                         # Drag-and-drop: instead of selecting immediately
                         # on MOUSEBUTTONDOWN, ARM a drag candidate. We
@@ -59897,7 +60079,16 @@ while running:
                         # Empty slots can't initiate a useful drag (nothing
                         # to move), so fall through to the click path
                         # immediately for them.
-                        if target_panel == 0:
+                        # Drag-to-rearrange stays a PRIMARY-panel gesture:
+                        # it swaps within one page and its drop targets are
+                        # that panel's slots, so extending it across panels
+                        # is a separate piece of work. Selecting a slot to
+                        # EDIT now works on any panel — that's the part
+                        # that was broken, and it needs no drag machinery.
+                        _pg = _hotbar_panel_page(target_panel)
+                        if target_panel != 0:
+                            hotbar_select_slot(payload_kind, _pg)
+                        else:
                             slot_idx_ = payload_kind
                             slot_btn = (buttons_config[slot_idx_]
                                         if 0 <= slot_idx_ < len(buttons_config)
@@ -61700,5 +61891,32 @@ try:
     _save_buff_state_snapshot(force=True)
 except Exception:
     pass
+
+# Commit any in-progress stat-cell arrangement.
+#
+# Cell moves and hides are held in stats_layout_config["_setup_pending"],
+# which is IN-MEMORY ONLY — _save_stats_layout strips it before writing.
+# Until now the only thing that committed it was leaving cell-edit mode
+# cleanly, so an arrangement made and left open survived a `//lua reload`
+# (the overlay process keeps running) but was lost on a real restart:
+# the panel came back in whatever state was last committed, which reads
+# exactly like "some cells moved around by themselves".
+#
+# The pending layer still exists and still isn't written on every drag —
+# that's what keeps mid-edit fiddling from clobbering a good layout — it
+# just no longer dies with the process.
+try:
+    _pending = stats_layout_config.get("_setup_pending")
+    if _pending:
+        # Commit directly rather than via _stats_layout_edit_end(), which
+        # returns early when stats_layout_edit is already False — the
+        # pending layer can outlive the flag, and that case is exactly
+        # the one being rescued here.
+        _save_session_to_current_job(_pending.get("for_job")
+                                     or player_self_mjob)
+        stats_layout_config.pop("_setup_pending", None)
+        print("[OmniWatch] committed pending stats layout on exit")
+except Exception as e:
+    print(f"[OmniWatch] stats layout commit on exit failed: {e!r}")
 _stop_global_typing_hook()   # release the keyboard hook BEFORE exit (atexit is the backstop)
 pygame.quit()

@@ -1,6 +1,22 @@
 # Changelog
 
+## [1.11.0] — 2026-08-03
+
+### Added
+
+- **Choose how many cells a hotbar row holds** — anywhere from 5 to 15, under **Settings ▸ HotBar ▸ Configure ▸ Cells per row**. Rows stay at two, so a page holds twice whatever you pick; the default is 14, up from 13. Narrowing never deletes anything — buttons past the new width stay in the file and come back the moment you widen again.
+- **Click a party member's name to target them** — clicking the name column of any row in the party panel targets that player in game, alliance members included, so a hotbar button aimed at `<t>` acts on them. A small note by the cursor confirms who you picked. The bars are left alone, so reading someone's HP doesn't retarget by accident, and it's off while you're in setup mode, where a click on a panel means "move this". Someone in another zone, or otherwise not targetable at that moment, is reported rather than failing quietly.
+
+### Fixed
+
+- **Stat cell arrangements survive closing the game** — while you're rearranging cells, the new layout is held separately from the saved one so that mid-edit fiddling can't clobber a good arrangement. It was only ever written to disk when you left cell-editing, though, which meant an arrangement left open survived a `//lua reload` — the overlay keeps running through those — but was lost if the game or the machine went down, and the panel came back in whatever state was last committed. It's now committed on the way out as well.
+- **Every hotbar can be edited, not just the first one** — with more than one hotbar on screen, clicking a slot on any but the primary panel did nothing. The editor was hard-wired to the first panel, and since each panel shows a different page, it had no way to know which page a click belonged to. It follows the panel you clicked now. Dragging buttons to rearrange them is still a primary-panel gesture; only editing was affected.
+
 ## [1.10.2] — 2026-08-03
+
+### Changed
+
+- **Stat values in gear tooltips are tinted** — the "+20", "-10" and "+10%" figures on an item's own stat lines now read in a light blue against the white labels, so a dense piece isn't a solid wall of text. It's a lighter shade than the one used for augments, so a glance still separates what's printed on the item from what's been augmented onto it. Numbers that are part of a label rather than a bonus — DEF:127, Delay:240 — are left alone.
 
 ### Added
 
@@ -19,7 +35,6 @@
 ### Changed
 
 - **Setup mode and the Statistics cell grid are separate jobs now** — setup mode exists to move and size panels, but on the Statistics panel it had quietly taken on a second job as well. Every cell in the grid was a drag target while setup mode was up, which covered nearly the whole panel, so clicking it always meant "pick up a stat" and there was no longer anywhere to grab to move or resize the panel itself. Setup mode now does size and placement only. Rearranging, hiding and saving cell layouts lives where the rest of its settings already are — **Settings ▸ Statistics ▸ Edit layout** — which puts just that one panel into cell-editing mode and leaves every other panel alone.
-- **Stat values in gear tooltips are tinted** — the "+20", "-10" and "+10%" figures on an item's own stat lines now read in a light blue against the white labels, so a dense piece isn't a solid wall of text. It's a lighter shade than the one used for augments, so a glance still separates what's printed on the item from what's been augmented onto it. Numbers that are part of a label rather than a bonus — DEF:127, Delay:240 — are left alone.
 - **Your pet's name and health are colour-coded in the party panel** — the name is drawn in the same green as a full health bar, and the percentage beside it now runs the full colour ramp as the pet takes damage rather than staying grey until it drops below three-quarters.
 
 ### Added
