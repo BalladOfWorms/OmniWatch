@@ -56,9 +56,8 @@ local M = {}
 -- BG-wiki's Talk:Honor March (Byrthnoth's testing). Chaos Roll table
 -- per FFXIonline 2007 thread (DRK column = with-optimal-job).
 --
--- Hunter's Roll, Madrigal, etc. NOT YET MODELED — add to this table
--- with correct values from wiki when needed. Format makes adding new
--- entries data-only; no compute changes required.
+-- Add new entries to this table with values from the wiki; the format
+-- makes it data-only, no compute changes required.
 
 local BUFF_DATA = {
     honor_march = {
@@ -181,6 +180,46 @@ local BUFF_DATA = {
         optimal_job = '',  -- no job-based bonus; uses gear path
         per_plus = 1, plus_max = 11,
         notes = "Regain. Lucky 5, Unlucky 8. Navarch's Frac +2 adds +10.",
+    },
+    fighters_roll = {
+        -- Fighter's Roll. Double Attack rate. Lucky 5, Unlucky 9.
+        -- Optimal job WAR adds +5 to every value (the "Bonus" row on
+        -- the wiki page).
+        --
+        -- !! POTENCY IS THE SHAKIEST TABLE IN THIS FILE !! BG-wiki
+        -- carries an explicit warning on it: the numbers came from a
+        -- now-defunct JP site, nobody knows where that site got them,
+        -- and tools able to measure Double Attack rate to this
+        -- precision did not exist at the time. Treat a Fighter's Roll
+        -- figure in sim as indicative, not authoritative, and do not
+        -- "correct" other DA math to agree with it.
+        job = 'COR', name = "Fighter's Roll", kind = 'roll',
+        stat = 'double_attack',
+        potency_no_opt   = {1, 2, 3, 4, 10, 5, 6, 6, 1, 7, 15},
+        potency_with_opt = {6, 7, 8, 9, 15, 10, 11, 11, 6, 12, 20},
+        optimal_job = 'WAR',
+        per_plus = 1, plus_max = 11,
+        notes = 'DA%. Lucky 5, Unlucky 9. WAR in party adds +5. '
+             .. 'Potency table is flagged unreliable on BG-wiki.',
+    },
+    hunters_roll = {
+        -- Hunter's Roll. Accuracy AND Ranged Accuracy, the same amount
+        -- to both — hence extra_stats_same below rather than two
+        -- entries. Lucky 4, Unlucky 8. Optimal job RNG adds +15.
+        --
+        -- NOT modeled: Barataria Ring (+5), which the wiki notes adds
+        -- +25 accuracy to the roll's effect. That's a gear effect on
+        -- the roller, not a property of the roll, and sim has no slot
+        -- for "what the COR is wearing" — leave it out rather than
+        -- bake someone else's ring into the number.
+        job = 'COR', name = "Hunter's Roll", kind = 'roll',
+        stat = 'accuracy',
+        extra_stats_same = {'ranged_accuracy'},
+        potency_no_opt   = {10, 13, 15, 40, 18, 20, 25, 5, 28, 30, 50},
+        potency_with_opt = {25, 28, 30, 55, 33, 35, 40, 20, 43, 45, 65},
+        optimal_job = 'RNG',
+        per_plus = 5, plus_max = 11,
+        notes = 'Acc + R.Acc. Lucky 4, Unlucky 8. RNG in party adds +15.',
     },
     valor_madrigal = {
         -- Valor Madrigal: BRD acc song (tier I). Base +6 acc with
@@ -306,6 +345,29 @@ local BUFF_DATA = {
         stat = 'snapshot',
         base = 30,
         notes = 'Snapshot +30%. Overwritten by Haste/Haste II.',
+    },
+    myoshu_ichi = {
+        -- Myoshu: Ichi (NIN ninjutsu, lvl 85, ninja tool "kabenro").
+        -- "Reduces TP dealt when striking an enemy" — Subtle Blow +10
+        -- on the caster, per BG-wiki's notes. Self-target, 5:00.
+        --
+        -- BG-wiki states outright that this is affected by the 50
+        -- Subtle Blow cap, which lines up with the panel's own
+        -- STAT_CAPS entry — so a sim'd NIN whose gear already reaches
+        -- 50 gains nothing real from it, and the cell going red past 50
+        -- is the panel working, not an error.
+        job = 'NIN', name = 'Myoshu: Ichi', kind = 'spell',
+        stat = 'subtle_blow',
+        base = 10,
+        notes = 'Subtle Blow +10. Self, 5:00. Subject to the 50 cap.',
+    },
+    kakka_ichi = {
+        -- Kakka: Ichi (NIN ninjutsu, lvl 93, ninja tool "ryuno").
+        -- "Increases your TP gain" — Store TP +10. Self-target, 5:00.
+        job = 'NIN', name = 'Kakka: Ichi', kind = 'spell',
+        stat = 'store_tp',
+        base = 10,
+        notes = 'Store TP +10. Self, 5:00.',
     },
     embrava = {
         -- Embrava (SCH enhancing magic, lvl 5 w/ Tabula Rasa). A single
@@ -595,6 +657,13 @@ local _STAT_NORMALIZE = {
     -- the canonical 'store tp' key (with space); buff_data uses the
     -- underscore form for lua-friendly keys, so normalize here.
     store_tp    = {'store tp',    function(v) return v end},
+    -- Myoshu: Ichi. Underscore form here, spaced form on the panel.
+    subtle_blow = {'subtle blow', function(v) return v end},
+    -- Hunter's / Fighter's Roll. Underscore form here, spaced form on
+    -- the panel; without these they'd pass through unnormalized and
+    -- land under keys no cell reads.
+    ranged_accuracy = {'ranged accuracy', function(v) return v end},
+    double_attack   = {'double attack',   function(v) return v end},
     str         = {'str',         function(v) return v end},
     dex         = {'dex',         function(v) return v end},
     vit         = {'vit',         function(v) return v end},
@@ -683,6 +752,19 @@ function M.compute_active_buff_stats()
                 local p = math.min(def.plus_max, math.max(0, entry.plus or 0))
                 local add = base + (def.per_plus or 0) * p
                 raw[def.stat] = (raw[def.stat] or 0) + add * mult
+                -- extra_stats_same: further stats that receive the
+                -- IDENTICAL computed amount, boosts included. Hunter's
+                -- Roll grants one number to both accuracy and ranged
+                -- accuracy, so listing it once and fanning out here
+                -- keeps them from drifting apart if the table is ever
+                -- corrected. (Songs use extra_stats / extra_stats_scaled
+                -- and spells use extra_stats_flat for their own shapes;
+                -- rolls had no equivalent until now.)
+                if def.extra_stats_same then
+                    for _, stat_key in ipairs(def.extra_stats_same) do
+                        raw[stat_key] = (raw[stat_key] or 0) + add * mult
+                    end
+                end
             elseif def.kind == 'spell' then
                 -- Flat add. No multiplier (mult is always 1.0 for
                 -- spells — they don't have SV/Marcato/CC equivalents).

@@ -849,6 +849,24 @@ function get_equip_stats(equipment_table)
 		for equip_slot, equipped_item in pairs(equipment_table) do
 			--log(equip_slot)
 			for key, value in pairs(equipped_item) do
+				-- //ow whystat <stat>: name every piece contributing to one
+				-- stat. The panel shows a single summed number, so "why is
+				-- this 77 when I count 20?" was unanswerable without reading
+				-- every item by hand. Logged before the summing gate below so
+				-- a contribution that gets DROPPED (uninitialised stat_table
+				-- key) still shows up — that's its own class of bug and the
+				-- trace should expose it rather than hide it.
+				if _ow_whystat and type(value) == 'number' and value ~= 0
+				   and tostring(key):lower() == _ow_whystat then
+					if ow_chat then
+						ow_chat(207, string.format(
+							'[OW whystat] %-10s %-28s %s%s%s',
+							tostring(equip_slot),
+							tostring(equipped_item.en or '?'),
+							(value > 0 and '+' or ''), tostring(value),
+							stat_table[key] and '' or '   (DROPPED: key not in stat_table)'))
+					end
+				end
 				--if equip_slot == 'main' then log(key) end
 				if stat_table[key] or (key == 'skill' and stat_table[value..' skill']) then
 					if equipped_item["category"]=="Weapon" then
@@ -923,6 +941,16 @@ function get_equip_stats(equipment_table)
 				if v >= Set_bonus_by_Set_ID[k]["minimum peices"] then
 					if Set_bonus_by_Set_ID[k]["bonus"][v] then
 						for key, value in pairs(Set_bonus_by_Set_ID[k]["bonus"][v]) do
+							-- Set bonuses are a SECOND source on top of the
+							-- per-piece values above, and an easy one to forget
+							-- when hand-counting a set. Trace them too.
+							if _ow_whystat and type(value) == 'number' and value ~= 0
+							   and tostring(key):lower() == _ow_whystat and ow_chat then
+								ow_chat(207, string.format(
+									'[OW whystat] %-10s set bonus id %-18s %s%s',
+									'(set)', tostring(k),
+									(value > 0 and '+' or ''), tostring(value)))
+							end
 							if stat_table[key] then
 								stat_table[key] = stat_table[key] + value
 							end

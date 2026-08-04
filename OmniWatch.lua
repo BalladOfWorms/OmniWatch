@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.10.1'
+_addon.version  = '1.10.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -564,6 +564,25 @@ function ow_user_config_dir()
     end
     -- Fallback: legacy in-addon location.
     return windower.addon_path .. 'data'
+end
+
+-- //ow whystat plumbing. _ow_whystat gates the per-PIECE trace inside
+-- Gear_Processing's get_equip_stats; _ow_whystat_pending gates the
+-- NON-GEAR report below, which has to wait for the next stats push
+-- because that's where traits, gifts and buff-table values are applied.
+-- Globals (no 'local') on purpose: the main chunk is at Lua 5.1's
+-- 200-local ceiling.
+_ow_whystat = nil
+_ow_whystat_pending = nil
+
+function _ow_ws(stage, before, after)
+    -- Log one stage's contribution to the stat under investigation.
+    if not _ow_whystat_pending then return end
+    local b, a = tonumber(before) or 0, tonumber(after) or 0
+    if a ~= b then
+        ow_chat(207, string.format('[OW whystat] %-22s %+d  (running total %s)',
+            stage, a - b, tostring(a)))
+    end
 end
 
 -- (The trust-buff probes lived here. Removed 2026-08-03 once the question
@@ -10172,6 +10191,12 @@ local PW_COMMANDS_HELP = {
     {'help',                  'Show this list of commands.'},
     {'petdump',               'Write every field of the current pet\'s mob '
                               .. 'entry to omniwatch.log.'},
+    {'whystat <stat>',        'Break a stats-panel number down by source — '
+                              .. 'every gear piece contributing to it, plus '
+                              .. 'set bonuses. e.g. whystat subtle blow'},
+    {'dumpdesc',              'Write each equipped item\'s raw description '
+                              .. 'to omniwatch.log, non-printable bytes '
+                              .. 'escaped as \\xNN.'},
     {'debug',                 'Toggle diagnostic chat output (action packets, '
                               .. 'Bolter\'s rolls, gearswap state echoes).'},
     {'setup',                 'Open the config overlay (Song+ / Phantom Roll+ / Geomancy+ / Unity Rank).'},
@@ -10533,6 +10558,123 @@ ow_safe_register('addon command', function(command, ...)
                 ow_chat(207, string.format('[OW petdump]   %s = %s',
                     k, tostring(v)))
             end
+        end
+    elseif command == 'whystat' then
+        -- //ow whystat <stat name> — break a stats-panel number down by
+        -- source. Gear is per piece (plus set bonuses) from
+        -- Gear_Processing; the job-trait and JP-gift portions are printed
+        -- from the compute side. Everything goes to omniwatch.log.
+        local want = table.concat(args, ' '):lower():gsub('^%s+', '')
+                                                    :gsub('%s+$', '')
+        if want == '' then
+            ow_chat(207, '[OW whystat] usage: //ow whystat <stat name>'
+                      .. '  e.g. //ow whystat subtle blow')
+        else
+            _ow_whystat = want
+            ow_chat(207, string.format(
+                '[OW whystat] --- %s: gear breakdown ---', want))
+            -- Force a recompute so the trace fires on the CURRENT set,
+            -- then clear the flag so it doesn't run every tick.
+            -- refresh_all is the loader's real entry point (there is no
+            -- refresh_gear); it re-runs get_equip_stats, which is where
+            -- the per-piece trace above fires from.
+            local ok = false
+            if _gi and _gi.refresh_all then
+                ok = pcall(_gi.refresh_all)
+            end
+            -- Gear_info keys are title-cased ('Subtle Blow'); match on
+            -- lowercase so the user can type the stat however they like.
+            local total = nil
+            pcall(function()
+                if type(Gear_info) == 'table' then
+                    for k, v in pairs(Gear_info) do
+                        if tostring(k):lower() == want
+                           and type(v) == 'number' then
+                            total = v
+                            break
+                        end
+                    end
+                end
+            end)
+            ow_chat(207, string.format(
+                '[OW whystat] gear total for %s: %s%s', want,
+                (total == nil) and '(no such gear stat)' or tostring(total),
+                ok and '' or '   (refresh unavailable — values may be stale)'))
+            -- Job level traits + JP gifts, the two non-gear sources the
+            -- panel folds in. Named explicitly because "my gear says 20"
+            -- is usually a complete count of the GEAR and nothing else.
+            local p2 = windower.ffxi.get_player()
+            if p2 then
+                ow_chat(207, string.format(
+                    '[OW whystat] job traits + gifts are added on top of the '
+                    .. 'above (%s%s/%s%s); panel value = gear + traits + gifts '
+                    .. '+ buffs.',
+                    tostring(p2.main_job), tostring(p2.main_job_level),
+                    tostring(p2.sub_job), tostring(p2.sub_job_level)))
+            end
+            _ow_whystat = nil
+            -- The non-gear sources (traits, gifts, buff table) are applied
+            -- during the stats push, not here, so arm a one-shot report
+            -- that fires on the next one and clears itself.
+            _ow_whystat_pending = want
+            ow_chat(207, '[OW whystat] non-gear breakdown follows on the '
+                      .. 'next stats push (about a second)...')
+        end
+    elseif command == 'dumpdesc' then
+        -- Print each equipped item's RAW description with every
+        -- non-printable byte escaped as \xNN. The element icons in gear
+        -- text ("<fire>+15 <ice>+15" on Carrier's Sash) are control-range
+        -- bytes, and every layer that touches the string strips them —
+        -- which is why the tooltip shows the +15s with nothing saying
+        -- which element. Escaping them is the only way to see how they're
+        -- actually encoded before trying to translate them.
+        local ok_i, inv = pcall(windower.ffxi.get_items)
+        if not ok_i or type(inv) ~= 'table' or type(inv.equipment) ~= 'table' then
+            ow_chat(207, '[OW dumpdesc] could not read equipment table')
+        else
+            local n = 0
+            for slot_name, ref in pairs(inv.equipment) do
+                -- get_items().equipment is FLAT, not nested: every slot
+                -- appears TWICE, as '<slot>' holding the inventory index
+                -- and '<slot>_bag' holding the bag number. Both are plain
+                -- numbers. The previous version treated each key as a
+                -- slot in its own right and assumed bag 0 — so it read
+                -- '<slot>_bag' (a bag id) as an inventory index and paired
+                -- every real slot with the wrong bag, which is why the
+                -- dump showed a mannequin head under 'waist' and printed
+                -- 30 entries for 16 slots. Walk the non-_bag keys only and
+                -- pull each one's bag from its partner.
+                local name = tostring(slot_name)
+                local bag, idx
+                if type(ref) == 'number' and not name:match('_bag$') then
+                    idx = ref
+                    bag = tonumber(inv.equipment[name .. '_bag']) or 0
+                end
+                -- index 0 means the slot is empty.
+                if idx and idx > 0 then
+                    local it
+                    pcall(function()
+                        it = windower.ffxi.get_items(bag, idx)
+                    end)
+                    local id = it and it.id
+                    if id and id ~= 0 and res and res.item_descriptions then
+                        local rec = res.item_descriptions[id]
+                        local d = rec and (rec.en or rec.enl)
+                        if d then
+                            local esc = tostring(d):gsub('[^\32-\126]',
+                                function(c)
+                                    return string.format('\\x%02X', c:byte())
+                                end)
+                            n = n + 1
+                            ow_chat(207, string.format(
+                                '[OW dumpdesc] %-10s %s',
+                                tostring(slot_name), esc))
+                        end
+                    end
+                end
+            end
+            ow_chat(207, string.format(
+                '[OW dumpdesc] %d equipped item description(s) written.', n))
         end
     elseif command == 'geartrace' then
         -- Toggle a one-shot tracer in Gear_Processing.lua's
@@ -20010,16 +20152,42 @@ function ow_compute_stats()
                         ['quadruple attack']    = 'Quadruple Attack',
                         ['critical hit rate']   = 'Critical hit rate',
                         ['critical hit damage'] = 'Critical hit damage',
-                        ['subtle blow']         = 'Subtle Blow',
+                        -- ['subtle blow'] REMOVED 2026-08-03. Same case as
+                        -- Fast Cast above: GearInfo's compute_player_stats
+                        -- ALREADY returns gear Subtle Blow in
+                        -- stats['subtle blow'], so copying
+                        -- Gear_info['Subtle Blow'] on top counted it twice.
+                        -- Proved by //ow whystat: the gear stage logged
+                        -- '+31 (running total 62)' — i.e. the same 31 was
+                        -- already there before this loop ran. BRD99/NIN53
+                        -- with 31 of gear and a 15 trait was showing 77
+                        -- instead of 46. Job/trait/gift Subtle Blow comes
+                        -- from the JOB_TRAITS + gift paths and is unaffected.
                         ['cure potency']        = 'Cure Potency',
                         ['rapid shot']          = 'Rapid Shot',
                     }
+                    local _ws_before = _ow_whystat_pending
+                        and (stats[_ow_whystat_pending] or 0) or 0
                     for panel_key, gi_key in pairs(_GI_GEAR_EXTRA) do
                         if type(Gear_info[gi_key]) == 'number'
                            and Gear_info[gi_key] ~= 0 then
                             stats[panel_key] = (stats[panel_key] or 0)
                                              + Gear_info[gi_key]
                         end
+                    end
+                    if _ow_whystat_pending then
+                        -- Print the value ALREADY present before this loop.
+                        -- Anything non-zero here came from GearInfo's own
+                        -- compute_player_stats return — which is exactly how
+                        -- the Subtle Blow double-count was found, and the
+                        -- first thing to check for any other stat in
+                        -- _GI_GEAR_EXTRA.
+                        ow_chat(207, string.format(
+                            '[OW whystat] %-22s %s  (from GearInfo compute, '
+                            .. 'BEFORE the gear copy)',
+                            'baseline', tostring(_ws_before)))
+                        _ow_ws('gear (Gear_info)', _ws_before,
+                               stats[_ow_whystat_pending] or 0)
                     end
 
                     -- ── Conditional "Pet Alive:" gear ────────────────────
@@ -20159,6 +20327,8 @@ function ow_compute_stats()
                             'double attack', 'triple attack', 'subtle blow',
                             'fast cast', 'regen', 'refresh',
                         }
+                        local _ws_b2 = _ow_whystat_pending
+                            and (stats[_ow_whystat_pending] or 0) or 0
                         for _, trait in ipairs(TRAIT_KEYS) do
                             local add = 0
                             if main_job then
@@ -20170,6 +20340,10 @@ function ow_compute_stats()
                             if add ~= 0 then
                                 stats[trait] = (stats[trait] or 0) + add
                             end
+                        end
+                        if _ow_whystat_pending then
+                            _ow_ws('job level traits', _ws_b2,
+                                   stats[_ow_whystat_pending] or 0)
                         end
                         if _ow_cast_debug then
                             ow_chat(207, string.format(
@@ -20580,11 +20754,22 @@ function ow_compute_stats()
                         ['martial arts']         = 'Martial Arts',
                         ['snapshot']             = 'Snapshot',  -- Courser's Roll
                     }
+                    local _ws_b3 = _ow_whystat_pending
+                        and (stats[_ow_whystat_pending] or 0) or 0
                     for sk, bk in pairs(_BI_BUFF_STAMP) do
                         local v = Buffs_inform[bk] or 0
                         if v ~= 0 then
                             stats[sk] = (stats[sk] or 0) + v
                         end
+                    end
+                    if _ow_whystat_pending then
+                        _ow_ws('buffs (Buffs_inform)', _ws_b3,
+                               stats[_ow_whystat_pending] or 0)
+                        ow_chat(207, string.format(
+                            '[OW whystat] FINAL %s = %s',
+                            _ow_whystat_pending,
+                            tostring(stats[_ow_whystat_pending])))
+                        _ow_whystat_pending = nil
                     end
                     -- Elemental resistances: Carols (and Tier II Carols)
                     -- write to Buffs_inform.<Element> Resist via the

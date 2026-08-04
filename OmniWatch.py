@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.10.1 (2026-08-02)"
+OMNIWATCH_BUILD_STAMP = "v1.10.2 (2026-08-03)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.10.1"
+OMNIWATCH_VERSION = "1.10.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1449,6 +1449,8 @@ SIM_BUFF_CATALOG = [
     ("chaos_roll",      "Rolls",    "Chaos Roll",      "roll", 11),
     ("sam_roll",        "Rolls",    "Samurai Roll",    "roll", 11),
     ("tactician_roll",  "Rolls",    "Tactician's Roll","roll", 11),
+    ("fighters_roll",   "Rolls",    "Fighter's Roll",  "roll", 11),
+    ("hunters_roll",    "Rolls",    "Hunter's Roll",   "roll", 11),
     ("indi_fury",       "Geomancy", "Indi / Geo Fury",      "song", 10),
     ("indi_haste",      "Geomancy", "Indi / Geo Haste",     "song", 10),
     ("indi_precision",  "Geomancy", "Indi / Geo Precision", "song", 10),
@@ -1460,6 +1462,10 @@ SIM_BUFF_CATALOG = [
     ("spell_flurry",    "Spells",   "Flurry",          "spell", 0),
     ("spell_flurry2",   "Spells",   "Flurry II",       "spell", 0),
     ("embrava",         "Spells",   "Embrava",         "spell", 0),
+    # NIN ninjutsu self-buffs. Same flat 'spell' kind — no tiers, no
+    # toggles, and their potency doesn't scale with anything sim knows.
+    ("myoshu_ichi",     "Spells",   "Myoshu: Ichi",    "spell", 0),
+    ("kakka_ichi",      "Spells",   "Kakka: Ichi",     "spell", 0),
     # Blue Magic: self-cast BLU spells. Same flat 'spell' kind as the
     # Spells bucket; kept as its own category because players think of
     # BLU buffs separately. Modeled on their magic-haste piece (see
@@ -51302,20 +51308,23 @@ def _save_stats_layout_as(target, current_job):
     # Resolve target slot.
     if target == "global":
         slot = stats_layout_config.setdefault("global", _default_stats_layout())
-        # A per-job layout OUTRANKS global in _resolve_stats_layout, and one
-        # is written automatically for the current job every time you leave
-        # cell editing without using Save as. So on any job you had ever
-        # edited before, saving to global wrote the right thing to the right
-        # place and then the panel snapped straight back to the older
-        # per-job layout — indistinguishable from the save being ignored.
-        # Choosing "global" while standing on this job means "this is my
-        # layout": drop the override that would hide it. Every OTHER job's
-        # layout is left alone.
+        # A per-job layout OUTRANKS global in _resolve_stats_layout, so any
+        # job holding one would ignore what was just saved here. Clearing
+        # only the current job wasn't enough — the panel looked right until
+        # the next job change, then reverted.
+        #
+        # "Global" means global: every per-job layout goes. That is the
+        # only reading under which the option does what its name says, and
+        # the only one that leaves no invisible overrides behind — they
+        # aren't listed anywhere, so a shadow you can't see is a shadow you
+        # can't fix. Save as <JOB> is how you get one back, deliberately.
         per_job = stats_layout_config.get("per_job") or {}
-        if current_job and current_job in per_job:
-            per_job.pop(current_job, None)
-            print(f"[OmniWatch] stats save-as global: dropped the "
-                  f"{current_job} layout that was shadowing it")
+        if per_job:
+            dropped = sorted(per_job.keys())
+            per_job.clear()
+            print(f"[OmniWatch] stats save-as global: cleared per-job "
+                  f"layouts that would have overridden it: "
+                  f"{', '.join(dropped)}")
     else:
         per_job = stats_layout_config.setdefault("per_job", {})
         slot = per_job.setdefault(target, {"hidden": [], "order": []})
@@ -51337,10 +51346,18 @@ def _save_stats_layout_as(target, current_job):
 
 
 def _save_session_to_current_job(current_job):
-    """Auto-save session edits to the CURRENT job on setup mode exit.
+    """Auto-save session edits when cell editing ends.
 
-    Same semantics as _save_stats_layout_as(current_job, current_job).
-    No-op if there are no session edits.
+    Writes back to the slot the layout CAME FROM — the current job's own
+    layout if one already exists, otherwise global.
+
+    It used to write to per_job.<current job> unconditionally, which
+    minted a job-specific layout every time you rearranged cells on a job,
+    without asking and without any sign it had happened. Those invisible
+    per-job layouts outrank global, so "Save as global" would appear to
+    work and then be overruled the moment you changed job. A per-job
+    layout is now only ever created by explicitly choosing that job in
+    Save as.
     """
     if not current_job:
         print(f"[OmniWatch] stats auto-save SKIPPED: no current_job "
@@ -51351,9 +51368,10 @@ def _save_session_to_current_job(current_job):
         print(f"[OmniWatch] stats auto-save SKIPPED: no pending edits "
               f"for {current_job}")
         return
-    print(f"[OmniWatch] stats auto-save: writing pending edits to "
-          f"per_job.{current_job}")
-    _save_stats_layout_as(current_job, current_job)
+    per_job = stats_layout_config.get("per_job") or {}
+    target  = current_job if current_job in per_job else "global"
+    print(f"[OmniWatch] stats auto-save: writing pending edits to {target}")
+    _save_stats_layout_as(target, current_job)
     print(f"[OmniWatch] stats auto-save done. File: {STATS_LAYOUT_FILE}")
 
 
@@ -51613,22 +51631,34 @@ STATS_PAD        = 4
 STATS_TITLE_H    = 22
 STATS_SECTION_GAP = 4
 
+# Sentinel a hidden cell becomes in normal mode. The "_empty" prefix is
+# load-bearing twice over: the trailing-trim below treats it as a spacer,
+# and the draw loop's STATS_CELLS_BY_KEY lookup misses it and skips to the
+# next slot, so it renders as blank space.
+_STATS_HIDDEN_SLOT = "_empty__hidden"
+
+
 def _stats_render_order(order, hidden, setup_mode):
     """The cells the panel will actually lay out, in order.
 
     Setup mode shows everything, hidden cells included (dimmed, so they
-    can be clicked back). Normal mode drops the hidden ones — and then
-    drops any spacer cells left dangling at the END.
+    can be clicked back).
 
-    That last step is the point: a spacer's whole job is to hold a gap
-    BETWEEN two stats. Once nothing follows it, it is holding a gap
-    against nothing while still costing a slot, and the panel reserves
-    height for it. With four of them sitting at the end of the default
-    order that was a whole row of the panel drawing nothing at all.
-    Interior spacers are untouched — those are doing their job."""
+    Normal mode BLANKS hidden cells rather than removing them. Removing
+    them used to close the gap, which pulled every cell after the hidden
+    one back a slot and re-wrapped the rows — so hiding one stat quietly
+    rearranged the whole panel, and the arrangement you saw while editing
+    was not the arrangement you got when you left. Nothing moves now
+    unless it is dragged: a hidden cell holds its slot as blank space,
+    exactly like an empty cell placed there deliberately.
+
+    Trailing spacers are still dropped, hidden-blanks included: a gap's
+    whole job is to separate two things, and once nothing follows it, it
+    is holding a gap against nothing while the panel still reserves a row
+    of height for it. Interior spacers are untouched — those are working."""
     if setup_mode:
         return list(order)
-    out = [k for k in order if k not in hidden]
+    out = [(_STATS_HIDDEN_SLOT if k in hidden else k) for k in order]
     while out and out[-1].startswith("_empty"):
         out.pop()
     return out
@@ -51640,7 +51670,7 @@ def stats_panel_size(scale, _unused=None, job=None, setup_mode=False):
     v2.0+ uses a uniform-cell linear flow:
       - All cells are STATS_CELL_W wide
       - STATS_COLS_PER_ROW cells per row
-      - Hidden cells reflow automatically (NORMAL mode)
+      - Hidden cells hold their slot as blank space (NORMAL mode)
       - Hidden cells take their default slot dimmed (SETUP mode)
       - Setup mode reserves extra space for the tray + Save-as button
     """
@@ -52635,6 +52665,76 @@ def draw_help_tooltip(surface, mx, my, lines, screen_w, screen_h):
             cy += line_h // 2
 
 
+# FFXI writes the element icons in item descriptions as Unicode Private
+# Use Area characters, one per element, starting at U+E000. Confirmed by
+# dumping a Carrier's Sash description raw: its eight resistance entries
+# come through as \xEE\x80\x80..\xEE\x80\x87 — UTF-8 for U+E000..U+E007 —
+# each followed by "+15". Nothing renders them (Consolas has no glyph
+# there), which is why the tooltip showed a column of bare "+15"s with no
+# indication of which element each belonged to.
+#
+# The ORDER is FFXI's canonical element order. The sash grants an equal
+# +15 to all eight, so his dump can't distinguish them on its own — this
+# is the standard ordering used everywhere else in the game (and in this
+# file's own STATS_ELEM_ROWS). Worth a sanity check against a
+# single-element piece if one is handy; if it's off, it'll be off by a
+# rotation, not scrambled.
+_ELEM_ICON_NAMES = ("Fire", "Ice", "Wind", "Earth",
+                    "Lightning", "Water", "Light", "Dark")
+_ELEM_ICON_MAP = {chr(0xE000 + i): nm for i, nm in enumerate(_ELEM_ICON_NAMES)}
+
+
+def _expand_pua_icons(s):
+    """Replace FFXI's Private Use Area icon characters with readable text.
+
+    Known element icons become their element name, so "\ue000+15" reads
+    "Fire+15". Any OTHER PUA character becomes a visible <U+XXXX> marker
+    rather than being dropped: an unknown icon that silently vanishes is
+    indistinguishable from a stat that isn't there, which is the bug this
+    whole function exists to fix.
+    """
+    if not s:
+        return s
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if ch in _ELEM_ICON_MAP:
+            out.append(_ELEM_ICON_MAP[ch])
+        elif 0xE000 <= o <= 0xF8FF:
+            out.append(f"<U+{o:04X}>")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+# Signed stat values in a description line: "+20", "-10", "+10%", and the
+# Unity Ranking range form "+10~15". Anchored on the sign so a bare number
+# after a colon (DEF:5, Delay:240) or inside a name (Minuet V) is left
+# alone — those aren't the bonus, they're part of the label.
+_TT_VALUE_RE = re.compile(r"[+\-]\d+(?:~\d+)?%?")
+
+
+def _tt_split_values(line, base_col, val_col):
+    """Split a description line into [(text, color), ...] runs so the
+    numeric bonuses can be tinted apart from their labels.
+
+    Base-stat lines are one flat colour otherwise, which makes a dense
+    piece ("DEF:127 HP+54 MP+59 STR+23 DEX+23 ...") read as a wall. Only
+    the signed values change colour; the labels keep the body colour.
+    Returns a single-run list when the line has no values, so the caller
+    can treat both cases the same way.
+    """
+    segs, pos = [], 0
+    for m in _TT_VALUE_RE.finditer(line or ""):
+        if m.start() > pos:
+            segs.append((line[pos:m.start()], base_col))
+        segs.append((m.group(0), val_col))
+        pos = m.end()
+    if pos < len(line or ""):
+        segs.append((line[pos:], base_col))
+    return segs or [(line or "", base_col)]
+
+
 def _tt_normalize_line(s):
     """Tidy a raw FFXI description line for display.
 
@@ -52648,6 +52748,9 @@ def _tt_normalize_line(s):
     """
     if not s:
         return s
+    # Element icons first, so the name lands before the spacing collapse
+    # below tidies the line.
+    s = _expand_pua_icons(s)
     # Normalize assorted dash glyphs to a plain hyphen. Covers the
     # unicode hyphen/dash block (U+2010-2015), the minus sign (U+2212),
     # the fullwidth hyphen (U+FF0D) and the katakana prolonged-sound mark
@@ -52738,6 +52841,10 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     COL_NAME = (255, 240, 180)
     COL_STAT = (215, 220, 230)
     COL_AUG  = (150, 215, 255)   # augments stand out in light blue
+    # The "+N" on a BASE stat line. Deliberately lighter than COL_AUG so a
+    # glance still separates "printed on the item" from "augmented onto
+    # it" — the two sections would otherwise read as the same blue.
+    COL_STAT_VAL = (190, 230, 255)
     COL_META = (165, 165, 180)   # ilvl / level / jobs footer, dimmer
 
     # Body rows (name + stat lines + augments), each wrapped to MAX_TEXT_W.
@@ -52766,7 +52873,25 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
             if not sl or sl == name:
                 continue
             for wl in _tt_wrap(f_stat, sl, MAX_TEXT_W):
-                rows.append(f_stat.render(wl, True, COL_STAT))
+                # Tint the signed values. Composed as segments on one row
+                # rather than rendered as a single string; wrapping still
+                # happens first, on the whole line, so the measured width
+                # is unchanged and the column stays the same shape.
+                segs = _tt_split_values(wl, COL_STAT, COL_STAT_VAL)
+                if len(segs) == 1:
+                    rows.append(f_stat.render(segs[0][0], True, segs[0][1]))
+                    continue
+                surfs = [f_stat.render(t, True, c) for t, c in segs if t]
+                if not surfs:
+                    continue
+                w = sum(su.get_width() for su in surfs)
+                h = max(su.get_height() for su in surfs)
+                row = pygame.Surface((max(1, w), h), pygame.SRCALPHA)
+                cx = 0
+                for su in surfs:
+                    row.blit(su, (cx, 0))
+                    cx += su.get_width()
+                rows.append(row)
 
     for ag in (info.get("augments") or []):
         ag = _tt_normalize_line(ag)

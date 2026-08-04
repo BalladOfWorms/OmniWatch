@@ -469,7 +469,11 @@ Full character stat grid in `/checkparam` style. Each cell is computed from skil
 
 Cells that have a known ceiling turn red past it (Store TP 100, Subtle Blow 50, gear haste 25, and so on) so surplus is visible at a glance. Cure Potency reads the first tier only — `"Cure" potency received` and `"Cure" potency II` are separate stats and aren't counted.
 
-**Arranging the panel.** Open **Settings ▸ Statistics ▸ Edit layout** to rearrange cells: drag any cell to move it, drop one onto a blank slot to place it there without shuffling its neighbours, and click a cell to hide it (hidden cells collect in a tray at the bottom of the panel — click one to bring it back). Leave gaps wherever you like; blank slots are real cells you can drag around. **Save as** commits your arrangement either **globally** or to the **current job**, so a BLM layout and a WAR layout can differ and swap themselves when you change job. Saving globally clears the current job's own layout so what you saved is what you see. Note this is separate from setup mode, which handles the panel's *size and position* — see Edit-mode below.
+**Arranging the panel.** Open **Settings ▸ Statistics ▸ Edit layout** to rearrange cells: drag any cell to move it, drop one onto a blank slot to place it there without shuffling its neighbours, and click a cell to hide it (hidden cells collect in a tray at the bottom of the panel — click one to bring it back). Leave gaps wherever you like; blank slots are real cells you can drag around.
+
+**Nothing moves unless you drag it.** A hidden cell holds its place as blank space rather than closing the gap, so hiding one stat never rearranges the ones below it and the panel you build while editing is the panel you get when you leave. (A hidden cell at the very end is the one exception — it gives its row back instead of reserving empty height.)
+
+**Save as** commits your arrangement either **globally** or to the **current job**, so a BLM layout and a WAR layout can differ and swap themselves when you change job. A job layout takes priority over the global one, so saving globally clears any job layouts that would override it — picking a job in **Save as** is the only way to create one. Note this is all separate from setup mode, which handles the panel's *size and position* — see Edit-mode below.
 
 **Server-pushed stat updates**: OmniWatch passively listens for server-side stat packets (0x061, 0x063) that fire on roll cast, gear change, and buff change. When captured, these refresh the Attack and Accuracy values to match what the server says they are — including most roll bonuses. **Caveat**: there's no reliable way to detect every variant of these packets, so certain proc-style effects (most notably the Lanun gear set's chance to boost a roll's accuracy bonus) may not always be reflected immediately. Att/Def usually update; Acc updates are best-effort.
 
@@ -502,9 +506,9 @@ What-if calculator that runs alongside the overlay. Open via the settings menu o
 - **Food** — pick from a catalog
 - **Active buffs** — add as many as you want from a two-stage picker:
   - **BRD songs**: Honor March, Victory March, Advancing March, Minuet I-V, Valor Madrigal, Blade Madrigal. Each with a +/- on the song-tier ("Plus" — instrument level), and side-by-side checkboxes for **Soul Voice** and **Marcato** boosts
-  - **COR rolls**: Chaos Roll, Samurai Roll, Tactician's Roll. Each with a roll-value picker (1-11), and side-by-side checkboxes for **C. Cards** (Crooked Cards) and **Job present** (optimal-job bonus)
+  - **COR rolls**: Chaos Roll, Samurai Roll, Tactician's Roll, Fighter's Roll, Hunter's Roll. Each with a roll-value picker (1-11), and side-by-side checkboxes for **C. Cards** (Crooked Cards) and **Job present** (optimal-job bonus). Hunter's Roll raises accuracy and ranged accuracy together; Fighter's Roll raises double attack, though BG-wiki flags that roll's potency table as unreliable so treat its figures as indicative
   - **Geomancy**: Indi / Geo Fury, Indi / Geo Haste, Indi / Geo Precision (Indicolure and Geocolure forms share potency). Each with a **Plus** +/- for the number of Geomancy+ points from gear (0-10; Eminent Bell 3, Dunna/Bagua 5, Bagua +1 6, Bagua +2 7, Idris 10), and side-by-side checkboxes for **Bolster** and **Blaze of Glory** (each doubles potency; they don't stack with each other)
-  - **Spells**: Haste, Haste II, Flurry, Flurry II, and **Embrava** (SCH) — flat-potency buffs with no extra toggles
+  - **Spells**: Haste, Haste II, Flurry, Flurry II, **Embrava** (SCH), and the ninjutsu self-buffs **Myoshu: Ichi** (Subtle Blow +10) and **Kakka: Ichi** (Store TP +10) — flat-potency buffs with no extra toggles
 
 The resulting stats panel updates live as you tweak values — no in-game commitment. Useful for "do I have enough Store TP for a 5-hit build with this song setup?" or "what's my fast cast going to be after I add Erratic Flutter to my BLU set?"
 
@@ -619,11 +623,11 @@ A profile is a **named snapshot of your whole setup** — panel positions and sc
 
 Use them for whatever splits your setups: a compact layout for a laptop screen and a spread-out one for the second monitor, a caster arrangement and a melee arrangement, one per job, one for parsing and one for questing.
 
-- **+ Save current setup as…** at the bottom of the dropdown captures everything as it stands right now under a name you type.
-- **Default** sits at the top and is a real saved profile, not a label for "whatever I'm using". It's your **baseline**: switching to it puts the setup back the way it was. An evening of rearranging never quietly becomes the new Default — the only thing that moves it is explicitly saving over it.
-- **Switching** copies the profile over your live files and reloads everything it covers, so the screen redraws into the new arrangement immediately. The profile you're leaving is saved first, so a tweak made a second ago survives the switch.
-- **Writes happen when you leave** — on switching away and on closing OmniWatch, not on every adjustment. Your live setup is still written immediately, so nothing is lost in a crash; it's only the profile copy that lags.
-- The pencil renames a profile and the red **✕** deletes it. Deleting the one you're using drops you back to Default and never touches your live setup. A profile saved before a given file joined the system simply doesn't carry that part, and switching to it leaves your current version alone rather than blanking it.
+- **+ Save current setup as…** at the bottom of the dropdown captures everything as it stands right now under a name you type. That's the only save step there is.
+- **There's no Default entry**, and no "unsaved" state to worry about. The list shows only profiles you've saved, with a filled dot on the one in use. Using none of them is normal — a character who has never saved one sees *(none saved yet)*.
+- **A profile is a workspace, not a snapshot.** Whatever you change is saved as you change it, into whichever profile is in use. Worth knowing: rearranging things while a profile is active changes *that* profile, so if you want a variant, save it under a new name rather than expecting the original to stay put.
+- **Switching** copies the profile over your live files and reloads everything it covers, so the screen redraws into the new arrangement immediately, and the setup it replaced is kept on disk as `*.prev.json` files in your character folder.
+- The pencil renames a profile and the red **✕** deletes it. Deleting the one you're on simply stops tracking it and moves nothing on screen. A profile saved before a given file joined the system doesn't carry that part, and switching to it leaves your current version alone rather than blanking it.
 
 Profiles are per character, and live in the same folder as the rest of that character's config with the profile name appended (e.g. `omniwatch_layout_Second Monitor.json`).
 
