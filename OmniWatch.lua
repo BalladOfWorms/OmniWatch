@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.11.0'
+_addon.version  = '1.11.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -9783,6 +9783,19 @@ local function _ow_drain_inbound()
         elseif head == 'TARGET' then
             -- Click-to-target from the party panel.
             --
+            -- CORRECTION (2026-08-03): an earlier comment here claimed
+            -- FFXI has no /target command. It does — `/ta <name>` — and
+            -- XivParty targets party members with exactly that, via
+            -- windower.send_command('input /ta ' .. name) on mouse
+            -- release. So the CMD path WOULD have worked, by name.
+            --
+            -- We stay on the packet route deliberately: it addresses the
+            -- entity by ID rather than by name, so a name the chat parser
+            -- mangles can't break it, and it's confirmed working here. If
+            -- it ever needs replacing, `input /ta <name>` is the simpler
+            -- fallback and inherits the game's own range and
+            -- line-of-sight rules for free.
+            --
             -- windower.ffxi.set_target() was the first attempt and it does
             -- NOT work — the call returned without error and the game's
             -- target never changed. The route that does work is injecting
@@ -9800,7 +9813,9 @@ local function _ow_drain_inbound()
             -- packets.new + packets.inject pair the bazaar code uses; the
             -- managed API fills in the sync counter that raw injects miss.
             --
-            -- Payload: "<index>|<name>|<id>".
+            -- Payload: "<index>|<name>|<id>". The name is carried for the
+            -- live re-resolve below, and is also what a /ta fallback
+            -- would need.
             local p_idx, p_name, p_id = rest:match('^(%-?%d*)|([^|]*)|(%-?%d*)$')
             local idx = tonumber(p_idx)
             local tid = tonumber(p_id)

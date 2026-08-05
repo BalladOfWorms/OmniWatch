@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.11.1] — 2026-08-03
+
+### Changed
+
+- **Hovering a party member's name tells you it's clickable** — a gold "Click to target: <name>" tooltip follows the cursor while you're over the name column, replacing the note that used to appear only after you'd already clicked. A confirmation of something you just did was the wrong moment for it; nothing else about the panel advertises that the names do anything. It stays quiet in setup mode, where a click moves the panel instead.
+- **Drag a hotbar button onto another hotbar to move it to that page** — with two or more hotbars on screen the page arrows disappear, since each panel is locked to its own page, and that left no way at all to move a button between pages. Dragging now works from and to any hotbar, in either direction. **Hold Ctrl while you drop to copy instead**, leaving the original in place — handy when a second page shares half its buttons with the first.
+- **Cancelling a warp takes you back to the travel menu** — it used to close everything, so picking the wrong destination out of a long list meant reopening and drilling back down. The menu comes back with the group you were in still open. Clicking away from the confirmation does the same thing; only confirming the warp closes the lot.
+- **The travel menu opens collapsed** — groups left expanded from last time made it open tall and already scrolled, so what you wanted was rarely what was on screen. It starts short now and you drill in from there.
+- **The travel menu and its confirmation box can be dragged, and stay where you put them** — grab either anywhere that isn't a row or a button and move it; from then on it opens in that spot rather than beside whatever it was launched from. Clicking outside still closes them, as before. Until you move it the first time it places itself, looking around its anchor for a position that doesn't cover your party cards and falling back to whichever covers least on a cramped screen — it used to land squarely on top of the members with no way to shift it.
+
+### Fixed
+
+- **Renaming a hotbar page renames the one you clicked** — with more than one hotbar on screen, editing a page name from any of them wrote the new name onto the first panel's page instead. Clicking a page name now opens the editor for that panel's own page, and an empty name falls back to that page's number rather than the first one's.
+- **Party names no longer react through anything drawn over them** — with the travel menu, the Settings dropdown or the character/profile menu open across the party panel, hovering it still raised the "Click to target" tooltip for the member underneath, and clicking still targeted them. Every panel hit-test now checks for a menu, popover or floating button over that point first, and the tooltip stays quiet entirely while a settings dialog is open. The same check covers the Cheat Sheet window and the equipment tooltip, which had its own copy of the rule.
+
+
 ## [1.11.0] — 2026-08-03
 
 ### Added

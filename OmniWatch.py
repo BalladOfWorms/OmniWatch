@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.11.0 (2026-08-03)"
+OMNIWATCH_BUILD_STAMP = "v1.11.1 (2026-08-03)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.11.0"
+OMNIWATCH_VERSION = "1.11.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -6072,6 +6072,16 @@ _warp_btn_draw_pos  = None    # clamped on-screen draw pos (drag grabs here)
 # floating button, which is the original behaviour.
 _warp_menu_anchor   = None
 _warp_btn_drag      = None    # click-or-drag state {grab_dx,..,moved}
+# Remembered position of the travel MENU itself (not the button). None =
+# never moved, so it auto-places beside whatever opened it and dodges the
+# party cards. Once dragged it stays put, because a popover that keeps
+# relocating itself is worse than one in a spot you chose.
+warp_menu_pos       = None    # [x, y] once the user has dragged it
+_warp_menu_drag     = None    # {grab_dx, grab_dy}
+# Same for the warp CONFIRM box, which is a second popover with the same
+# problem — it opens beside the anchor and lands on whatever is there.
+warp_confirm_pos    = None    # [x, y] once the user has dragged it
+_warp_confirm_drag  = None
 _warp_btn_resize    = None    # {start_scale, anchor_x, anchor_y}
 warp_menu_open      = False   # travel menu popover open?
 
@@ -6263,6 +6273,36 @@ click_targets   = []
 # Stats panel click regions (only populated in setup mode):
 # Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click toggles hidden.
 _stats_cell_click_rects = []
+def _overlay_blocks_point(pos):
+    """True when a floating button or popover covers this point.
+
+    The party panel, the equipment panel and friends all draw BEFORE the
+    floating overlays, so their hit rects still answer "yes" for a point
+    the user can only see the overlay at. Anything that hit-tests a panel
+    from the mouse position has to ask this first, or it acts on what's
+    underneath — which is how the travel menu ended up firing the
+    click-to-target tooltip and the target itself through its own body.
+    """
+    # settings_menu_panel_rect is the Settings dropdown's envelope. It's
+    # not a "floating button" but it behaves like one here: it draws over
+    # the panels and the click-to-target hint was showing through it.
+    for r in (warp_button_rect, warp_menu_rect, warp_confirm_rect,
+              cheatsheet_button_rect, cheatsheet_window_rect,
+              globals().get("settings_menu_panel_rect"),
+              (globals().get("char_view_dropdown_panel_rect")
+               if globals().get("char_view_dropdown_open") else None)):
+        try:
+            if r is not None and r.collidepoint(pos):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+# Full-row rects for every drawn party panel, so overlays can position
+# themselves clear of the cards instead of landing on top of them.
+party_panel_rects = []
+
 # Click-to-target hit rects for the party panel: one per member, covering
 # the name/job/pet column (everything left of the bars). Rebuilt in place
 # every frame by the party draw - assigned with a slice so the draw code
@@ -8486,6 +8526,61 @@ def draw_hotbar_action_note(surface):
         y = _hb_action_note["y"] + 16
     pygame.draw.rect(surface, (26, 26, 34), (x, y, w, h), border_radius=4)
     pygame.draw.rect(surface, (120, 120, 145), (x, y, w, h), 1,
+                     border_radius=4)
+    surface.blit(ts, (x + pad, y + pad))
+
+
+# Gold, so the hint reads as an affordance rather than as data — every
+# other colour on the party row means something (HP band, TP, claim).
+COL_TARGET_HINT = (255, 205, 70)
+
+
+def draw_party_target_hint(surface):
+    """Tooltip under the cursor while hovering a party member's name.
+
+    Replaces the note that used to appear AFTER clicking. A confirmation
+    of something you already did is the wrong moment for this: the point
+    is to tell you the name is clickable BEFORE you click it, since
+    nothing else about the panel advertises that.
+
+    Silent in setup mode, where a click moves the panel instead — the
+    hint would be promising something that won't happen.
+    """
+    if setup_mode or not party_name_click_rects:
+        return
+    # Modals sit above everything and take the whole click; a hint
+    # promising "click to target" over one is a lie. Read through
+    # globals() so adding or renaming a modal can't raise here.
+    for _flag in ("currency_settings_modal_open", "party_settings_modal_open",
+                  "display_settings_modal_open", "header_settings_modal_open",
+                  "inventory_settings_modal_open", "clock_modal_open",
+                  "statistics_settings_modal_open", "profile_name_modal_open",
+                  "checklist_modal_open", "campaigns_modal_open"):
+        if globals().get(_flag):
+            return
+    mx, my = pygame.mouse.get_pos()
+    if _overlay_blocks_point((mx, my)):
+        return
+    hover_name = None
+    for rect, _midx, nm, _pid in party_name_click_rects:
+        if rect.collidepoint(mx, my):
+            hover_name = nm
+            break
+    if not hover_name:
+        return
+    f = get_font("Consolas", 12)
+    ts = f.render(f"Click to target: {hover_name}", True, COL_TARGET_HINT)
+    pad = 6
+    w, h = ts.get_width() + pad * 2, ts.get_height() + pad * 2
+    # Below-right of the cursor, flipped back inside the window at the
+    # edges so a member near the bottom or right doesn't lose the hint.
+    x, y = mx + 14, my + 18
+    if x + w > WIDTH:
+        x = max(0, mx - w - 8)
+    if y + h > HEIGHT:
+        y = max(0, my - h - 8)
+    pygame.draw.rect(surface, (26, 26, 34), (x, y, w, h), border_radius=4)
+    pygame.draw.rect(surface, COL_TARGET_HINT, (x, y, w, h), 1,
                      border_radius=4)
     surface.blit(ts, (x + pad, y + pad))
 
@@ -20537,6 +20632,8 @@ def save_layout():
             "scanzone_w":      globals().get("scanzone_panel_w", 400),
             "scanzone_h":      globals().get("scanzone_panel_h", 340),
             "warp_button_pos": warp_button_pos,
+            "warp_menu_pos": warp_menu_pos,
+            "warp_confirm_pos": warp_confirm_pos,
             "warp_button_scale": warp_button_scale,
             "calltrust_button_pos": calltrust_button_pos,
             "calltrust_button_scale": calltrust_button_scale,
@@ -20620,7 +20717,8 @@ def load_layout():
     global cheatsheet_pos, cheatsheet_w, cheatsheet_h, cheatsheet_scroll
     global cheatsheet_button_pos, cheatsheet_button_scale, _windowed_size
     global _windowed_pos
-    global warp_button_pos, warp_button_scale
+    global warp_button_pos, warp_button_scale, warp_menu_pos
+    global warp_confirm_pos
     global calltrust_button_pos, calltrust_button_scale
     global sing_button_pos, sing_button_scale, _brdset_active
     global buff_anchor, buff_scale
@@ -20730,6 +20828,22 @@ def load_layout():
             cheatsheet_button_scale = max(0.5, min(5.0, float(cbs)))
         except (TypeError, ValueError):
             cheatsheet_button_scale = 1.0
+        wcp = data.get("warp_confirm_pos")
+        if isinstance(wcp, list) and len(wcp) == 2:
+            try:
+                warp_confirm_pos = [int(wcp[0]), int(wcp[1])]
+            except (TypeError, ValueError):
+                warp_confirm_pos = None
+        else:
+            warp_confirm_pos = None
+        wmp = data.get("warp_menu_pos")
+        if isinstance(wmp, list) and len(wmp) == 2:
+            try:
+                warp_menu_pos = [int(wmp[0]), int(wmp[1])]
+            except (TypeError, ValueError):
+                warp_menu_pos = None
+        else:
+            warp_menu_pos = None
         wbp = data.get("warp_button_pos")
         if isinstance(wbp, list) and len(wbp) == 2:
             try:
@@ -34567,6 +34681,8 @@ def _warp_send(command):
 def _warp_toggle_menu():
     global warp_menu_open, warp_config, warp_confirm, warp_menu_scroll
     global _warp_menu_anchor
+    # _warp_expanded is only mutated in place below (.clear()), never
+    # rebound, so it needs no global declaration.
     warp_confirm = None
     # Clear any hotbar anchor: the floating button is the caller here, so
     # the menu should sit beside it. _hotbar_run_action re-sets this after
@@ -34575,6 +34691,11 @@ def _warp_toggle_menu():
     warp_menu_open = not warp_menu_open
     if warp_menu_open:
         warp_menu_scroll = 0
+        # Open collapsed. Groups left expanded from the last visit made
+        # the menu open long and pre-scrolled, so the thing you wanted
+        # was rarely the thing on screen. A short list you drill into
+        # beats a tall one you have to scan.
+        _warp_expanded.clear()
         # Re-read the JSON on open so hand-edits to omniwatch_warp.json
         # take effect without restarting the overlay.
         warp_config = None
@@ -34762,7 +34883,49 @@ def draw_warp_menu(surface):
         my0 = ay - h - 4
     mx0 = max(0, min(int(ax), sw - w))
     my0 = max(0, min(int(my0), shh - h))
-    warp_menu_rect = pygame.Rect(mx0, my0, w, h)
+
+    # A position the user dragged to wins outright — no anchoring, no
+    # dodging. Still clamped, so a menu parked near an edge survives a
+    # resolution change instead of stranding off screen.
+    if warp_menu_pos is not None:
+        mx0 = max(0, min(int(warp_menu_pos[0]), sw - w))
+        my0 = max(0, min(int(warp_menu_pos[1]), shh - h))
+        warp_menu_rect = pygame.Rect(mx0, my0, w, h)
+        _skip_autoplace = True
+    else:
+        _skip_autoplace = False
+
+    # Keep clear of the party cards. The menu is a popover anchored to
+    # whatever opened it, so with the warp button (or a hotbar slot) near
+    # the party panel it lands squarely on top of the members — and it
+    # isn't draggable, so there's no way out of that by hand. Try the
+    # obvious alternatives around the anchor and take the first that
+    # doesn't cover a card; if every one does, keep the least-covering,
+    # so a cramped screen degrades instead of jumping somewhere useless.
+    def _covered(rx, ry):
+        cand = pygame.Rect(rx, ry, w, h)
+        return sum(cand.clip(pr).width * cand.clip(pr).height
+                   for pr in party_panel_rects if cand.colliderect(pr))
+
+    if party_panel_rects and not _skip_autoplace:
+        _best = (_covered(mx0, my0), mx0, my0)
+        if _best[0] > 0:
+            for _cx, _cy in ((int(ax) - w, my0),          # left of anchor
+                             (int(ax) + 4, ay - h - 4),   # above it
+                             (int(ax) - w, ay - h - 4),   # above-left
+                             (sw - w, my0),               # flush right
+                             (0, my0)):                   # flush left
+                _cx = max(0, min(int(_cx), sw - w))
+                _cy = max(0, min(int(_cy), shh - h))
+                _sc = _covered(_cx, _cy)
+                if _sc < _best[0]:
+                    _best = (_sc, _cx, _cy)
+                if _sc == 0:
+                    break
+        mx0, my0 = _best[1], _best[2]
+
+    if not _skip_autoplace:
+        warp_menu_rect = pygame.Rect(mx0, my0, w, h)
 
     pygame.draw.rect(surface, (28, 28, 36), (mx0, my0, w, h), border_radius=5)
     pygame.draw.rect(surface, COL_BORDER, (mx0, my0, w, h), 1, border_radius=5)
@@ -34903,8 +35066,13 @@ def draw_warp_confirm(surface):
     y0 = ay + bh + 4
     if y0 + h > shh:
         y0 = ay - h - 4
-    x0 = max(0, min(int(ax), sw - w))
-    y0 = max(0, min(int(y0), shh - h))
+    # A dragged position wins, clamped so it can't strand off screen.
+    if warp_confirm_pos is not None:
+        x0 = max(0, min(int(warp_confirm_pos[0]), sw - w))
+        y0 = max(0, min(int(warp_confirm_pos[1]), shh - h))
+    else:
+        x0 = max(0, min(int(ax), sw - w))
+        y0 = max(0, min(int(y0), shh - h))
     warp_confirm_rect = pygame.Rect(x0, y0, w, h)
 
     pygame.draw.rect(surface, (30, 30, 40), (x0, y0, w, h), border_radius=6)
@@ -35991,6 +36159,10 @@ def draw_char_view_dropdown(surface):
     panel_y = char_view_button_rect.bottom + 2
     if panel_x + panel_w > WIDTH:
         panel_x = max(0, WIDTH - panel_w)
+
+    global char_view_dropdown_panel_rect
+    char_view_dropdown_panel_rect = pygame.Rect(panel_x, panel_y,
+                                                panel_w, panel_h)
 
     pygame.draw.rect(surface, (28, 28, 36),
                      (panel_x, panel_y, panel_w, panel_h),
@@ -48386,15 +48558,27 @@ def dispatch_hotbar_editor_click(mx, my):
             if hotbar_edit_draft is not None:
                 if hotbar_edit_slot == "__page_name__":
                     # Page name save: trim, fall back to "Page N" on empty.
+                    #
+                    # Writes to the page the editor was opened FOR, not
+                    # the primary panel's current page. Those are the
+                    # same thing with one hotbar up and different things
+                    # with several — renaming from the second panel used
+                    # to relabel the first one instead.
+                    _pg = (hotbar_edit_page
+                           if (hotbar_edit_page is not None
+                               and 0 <= hotbar_edit_page < len(hotbar_pages))
+                           else hotbar_current_page)
                     new_name = (hotbar_edit_draft.get("label", "") or "").strip()
                     if not new_name:
-                        new_name = f"Page {hotbar_current_page + 1}"
+                        new_name = f"Page {_pg + 1}"
                     if hotbar_pages:
-                        hotbar_pages[hotbar_current_page]["name"] = new_name
+                        hotbar_pages[_pg]["name"] = new_name
                     save_buttons_config()
-                    print(f"[OmniWatch] saved page name: {new_name!r}")
+                    print(f"[OmniWatch] saved page {_pg + 1} name: "
+                          f"{new_name!r}")
                 elif (isinstance(hotbar_edit_slot, int)
-                        and 0 <= hotbar_edit_slot < len(buttons_config)):
+                        and 0 <= hotbar_edit_slot
+                        < len(_hotbar_edit_buttons())):
                     _hotbar_edit_buttons()[hotbar_edit_slot] = _normalize_button_entry(
                         hotbar_edit_draft)
                     save_buttons_config()
@@ -48554,6 +48738,60 @@ def _hotbar_nav_arrow_at_pos(mx, my):
     return None
 
 
+def _hotbar_drop_target(mx, my):
+    """(slot, page) under the cursor across EVERY visible hotbar panel.
+
+    _hotbar_slot_at_pos only knows the primary panel, which was fine when
+    the page arrows were the way to reach another page — but those hide
+    as soon as a second panel is up, and each panel is then locked to its
+    own page. So with the multi-panel layout there was no way at all to
+    move a button between pages. Resolving the drop against every panel
+    turns "drag it onto the other hotbar" into the obvious gesture.
+
+    Returns (None, None) for a drop on chrome or empty space.
+    """
+    for panel_idx, entries in (buttons_panel_rects or {}).items():
+        for rect, payload in entries:
+            if not rect.collidepoint(mx, my):
+                continue
+            # Panel 0 stores a bare slot index; the others store
+            # (slot, panel_idx). Anything else is chrome (nav arrows).
+            if isinstance(payload, int):
+                return payload, _hotbar_panel_page(panel_idx)
+            if (isinstance(payload, tuple) and len(payload) == 2
+                    and isinstance(payload[0], int)):
+                return payload[0], _hotbar_panel_page(panel_idx)
+    return None, None
+
+
+def _hotbar_copy_slot(src, dst, src_page=None, dst_page=None):
+    """Copy a button onto another slot, leaving the source untouched.
+
+    The copy half of the same drag: a plain drop SWAPS (moving a button,
+    and whatever was in the way comes back with you), Ctrl-drop
+    OVERWRITES the destination with a duplicate. Building a second page
+    that shares half its buttons with the first is otherwise a lot of
+    retyping.
+    """
+    if src_page is None:
+        src_page = hotbar_current_page
+    if dst_page is None:
+        dst_page = hotbar_current_page
+    if not (0 <= src_page < len(hotbar_pages)
+            and 0 <= dst_page < len(hotbar_pages)):
+        return
+    src_buttons = hotbar_pages[src_page]["buttons"]
+    dst_buttons = hotbar_pages[dst_page]["buttons"]
+    if not (0 <= src < len(src_buttons) and 0 <= dst < len(dst_buttons)):
+        return
+    if src_page == dst_page and src == dst:
+        return
+    dst_buttons[dst] = dict(src_buttons[src])
+    save_buttons_config()
+    print(f"[OmniWatch] hotbar: copied slot {src + 1} (page {src_page + 1}) "
+          f"to slot {dst + 1} (page {dst_page + 1})")
+
+
 def _hotbar_swap_slots(src, dst, src_page=None, dst_page=None):
     """Swap two slots — optionally across different pages — and persist.
 
@@ -48682,8 +48920,13 @@ def draw_hotbar_drag_overlay(surface):
     #    elsewhere, the source slot isn't on screen and dimming its
     #    coordinates would just darken whatever slot now happens to
     #    occupy that screen position.
-    on_source_page = (hotbar_drag.get("src_page", hotbar_current_page)
-                      == hotbar_current_page)
+    # "Still on screen" is not the same as "on the primary panel's page"
+    # once several hotbars are up — each shows its own page, so a button
+    # dragged out of panel 2 is still visible there. Ask every panel.
+    _src_pg = hotbar_drag.get("src_page", hotbar_current_page)
+    on_source_page = any(_hotbar_panel_page(_pi) == _src_pg
+                         for _pi in (buttons_panel_rects or {})) \
+        or _src_pg == hotbar_current_page
     if on_source_page:
         dim = pygame.Surface((clipped.width, clipped.height),
                              pygame.SRCALPHA)
@@ -57253,6 +57496,7 @@ while running:
     # Slice-assign rather than rebind: keeps the module-level list object
     # so no `global` is needed inside this draw path.
     party_name_click_rects[:] = []
+    party_panel_rects[:] = []
     for name in _party_draw_order:
         m      = members_by_name[name]
         px, py = panel_positions[name]
@@ -57275,6 +57519,7 @@ while running:
         party_name_click_rects.append(
             (pygame.Rect(px, py, max(1, bx - px), rh),
              m.get("mob_index", 0), name, m.get("player_id", 0)))
+        party_panel_rects.append(pygame.Rect(px, py, pw, rh))
 
         # Name + job/level stacked vertically, centred in the name column.
         # Pulse red if any current target (main or sub) is locked onto OR
@@ -58482,12 +58727,8 @@ while running:
     # this the rich item tooltip paints through them while the cursor is on
     # the button or its menu. Covers the Warp button + travel menu and the
     # Cheat Sheet button + window.
-    if not _suppress_tooltip:
-        for _frect in (warp_button_rect, warp_menu_rect, warp_confirm_rect,
-                       cheatsheet_button_rect, cheatsheet_window_rect):
-            if _frect is not None and _frect.collidepoint(mpos):
-                _suppress_tooltip = True
-                break
+    if not _suppress_tooltip and _overlay_blocks_point(mpos):
+        _suppress_tooltip = True
     if hotbar_edit_mode:
         _ed_anchor = globals().get("_hotbar_editor_anchor")
         if _ed_anchor is not None:
@@ -58597,6 +58838,7 @@ while running:
     # Feedback for an action fired from a hotbar slot ("no set chosen yet").
     # Drawn last so it sits above every panel, like a tooltip.
     draw_hotbar_action_note(screen)
+    draw_party_target_hint(screen)
 
     # ── Whole-display hide gate ──────────────────────────────────────────────
     # When the user has toggled the display off (for a cutscene, etc.),
@@ -59468,24 +59710,19 @@ while running:
             # Skipped in setup mode, where a click on a panel means
             # "pick this up and move it" - the same conflict that made
             # the stats grid unusable, so don't recreate it here.
-            if not setup_mode:
+            if not setup_mode and not _overlay_blocks_point((mx, my)):
                 _hit_target = None
                 for _rect, _midx, _nm, _pid in party_name_click_rects:
                     if _rect.collidepoint(mx, my):
                         _hit_target = (_midx, _nm, _pid)
                         break
                 if _hit_target is not None:
-                    # Feedback at the cursor, not just in a log file.
-                    # "Clicking the name does nothing" has two completely
-                    # different causes — the click never reaching here, or
-                    # the game refusing the target — and they're
-                    # indistinguishable on screen without this. If the
-                    # note appears and the target doesn't change, the
-                    # click side is fine and the problem is in game.
-                    _hb_action_note = {
-                        "text": f"target: {_hit_target[1]}",
-                        "until": time.time() + 1.5,
-                        "x": mx, "y": my}
+                    # No cursor note here any more — the hover tooltip
+                    # (draw_party_target_hint) says what the click will do
+                    # BEFORE it happens, which is the useful moment. The
+                    # log line stays: it's what separates "the click never
+                    # arrived" from "the game refused the target" when
+                    # something goes wrong.
                     print(f"[OmniWatch] click-to-target: {_hit_target[1]} "
                           f"(mob index {_hit_target[0]})")
                     _send_target(_hit_target[0], _hit_target[1],
@@ -59611,11 +59848,35 @@ while running:
                     if _rect.collidepoint(mx, my):
                         _picked = _act
                         break
+                if _picked is None and warp_confirm_rect is not None \
+                        and warp_confirm_rect.collidepoint(mx, my):
+                    # Empty space inside the box is its drag handle, the
+                    # same deal as the travel menu: the buttons are the
+                    # only other targets, and a click OUTSIDE still
+                    # dismisses, so nothing is lost by not treating a
+                    # click on the body as a cancel.
+                    warp_confirm_pos = [warp_confirm_rect.x,
+                                        warp_confirm_rect.y]
+                    _warp_confirm_drag = {
+                        "grab_dx": mx - warp_confirm_rect.x,
+                        "grab_dy": my - warp_confirm_rect.y,
+                        "moved":   False,
+                    }
+                    continue
                 if _picked == "warp":
                     _cmd = warp_confirm.get("command")
                     if _cmd:
                         _warp_send(_cmd)
+                    warp_confirm = None
+                    continue
+                # Cancel — and a click outside the box, which means the
+                # same thing — goes BACK to the travel menu rather than
+                # closing everything. Picking the wrong destination out
+                # of a long list shouldn't cost you the whole list; the
+                # menu keeps the group you drilled into, so you land
+                # where you were rather than at the top.
                 warp_confirm = None
+                warp_menu_open = True
                 continue
 
             # Warp travel menu (when open) takes priority: clicking a
@@ -59672,6 +59933,23 @@ while running:
                         break
                 if _consumed_toggle:
                     # Keep the menu open so the user can drill into points.
+                    continue
+                # Empty space INSIDE the menu is the drag handle — the
+                # headers, the padding, the footer. It used to dismiss
+                # the menu, which is the less useful of the two: clicking
+                # OUTSIDE still closes it, so nothing is lost, and a
+                # popover you can reposition beats one you can only
+                # close. The first drag also pins the menu: from then on
+                # it opens where you left it instead of chasing its
+                # anchor around.
+                if (warp_menu_rect is not None
+                        and warp_menu_rect.collidepoint(mx, my)):
+                    warp_menu_pos = [warp_menu_rect.x, warp_menu_rect.y]
+                    _warp_menu_drag = {
+                        "grab_dx": mx - warp_menu_rect.x,
+                        "grab_dy": my - warp_menu_rect.y,
+                        "moved":   False,
+                    }
                     continue
                 warp_menu_open = False
                 continue
@@ -60085,40 +60363,47 @@ while running:
                         # is a separate piece of work. Selecting a slot to
                         # EDIT now works on any panel — that's the part
                         # that was broken, and it needs no drag machinery.
+                        # Drag arms on ANY panel, not just the primary.
+                        # It was primary-only when the drop was too, and
+                        # that left the cross-panel move one-directional:
+                        # you could drag out of the first hotbar but never
+                        # into it. The source PAGE comes from the panel
+                        # you grabbed from, so a drag out of panel 2 moves
+                        # that page's button.
                         _pg = _hotbar_panel_page(target_panel)
-                        if target_panel != 0:
-                            hotbar_select_slot(payload_kind, _pg)
+                        slot_idx_ = payload_kind
+                        _src_buttons = []
+                        if 0 <= _pg < len(hotbar_pages):
+                            _src_buttons = hotbar_pages[_pg].get("buttons", [])
+                        slot_btn = (_src_buttons[slot_idx_]
+                                    if 0 <= slot_idx_ < len(_src_buttons)
+                                    else None)
+                        is_populated = bool(slot_btn and (
+                            slot_btn.get("label")
+                            or slot_btn.get("icon")
+                            or (slot_btn.get("kind") != "none"
+                                and slot_btn.get("command"))))
+                        if is_populated:
+                            hotbar_drag = {
+                                "src_slot":     slot_idx_,
+                                "src_page":     _pg,
+                                "anchor_x":     mx,
+                                "anchor_y":     my,
+                                "active":       False,
+                                "src_rect":     rect.copy(),
+                                # Page-flip dwell state for moving
+                                # a button to a different page mid-
+                                # drag. Populated by MOUSEMOTION
+                                # when the cursor hovers over a
+                                # nav arrow.
+                                "hover_arrow":  None,   # None | "prev" | "next"
+                                "hover_start":  0.0,    # time.time() of dwell start
+                            }
                         else:
-                            slot_idx_ = payload_kind
-                            slot_btn = (buttons_config[slot_idx_]
-                                        if 0 <= slot_idx_ < len(buttons_config)
-                                        else None)
-                            is_populated = bool(slot_btn and (
-                                slot_btn.get("label")
-                                or slot_btn.get("icon")
-                                or (slot_btn.get("kind") != "none"
-                                    and slot_btn.get("command"))))
-                            if is_populated:
-                                hotbar_drag = {
-                                    "src_slot":     slot_idx_,
-                                    "src_page":     hotbar_current_page,
-                                    "anchor_x":     mx,
-                                    "anchor_y":     my,
-                                    "active":       False,
-                                    "src_rect":     rect.copy(),
-                                    # Page-flip dwell state for moving
-                                    # a button to a different page mid-
-                                    # drag. Populated by MOUSEMOTION
-                                    # when the cursor hovers over a
-                                    # nav arrow.
-                                    "hover_arrow":  None,   # None | "prev" | "next"
-                                    "hover_start":  0.0,    # time.time() of dwell start
-                                }
-                            else:
-                                # Empty: just go straight to select
-                                # (lets user click an empty slot to
-                                # start editing it).
-                                hotbar_select_slot(slot_idx_)
+                            # Empty: just go straight to select
+                            # (lets user click an empty slot to
+                            # start editing it).
+                            hotbar_select_slot(slot_idx_, _pg)
                         slot_hit = True
                         break
                     if slot_hit:
@@ -60161,12 +60446,15 @@ while running:
                             _hotbar_panel_set_page(target_panel, cur + 1)
                             button_hit = True
                         elif payload_kind == "__page_name__":
-                            # Click on page name → enter edit mode (only
-                            # the primary panel hosts the editor).
-                            if target_panel == 0:
-                                _open_hotbar_editor()
-                                hotbar_select_slot("__page_name__")
-                                button_hit = True
+                            # Click on page name → enter edit mode, for
+                            # THIS panel's page. The editor itself is a
+                            # single window, but what it edits follows
+                            # the panel you clicked.
+                            _open_hotbar_editor()
+                            hotbar_select_slot(
+                                "__page_name__",
+                                _hotbar_panel_page(target_panel))
+                            button_hit = True
                         break
                     # Numeric index = a real button slot. Dispatch on the
                     # right panel's current page.
@@ -60961,6 +61249,22 @@ while running:
                 save_layout()
                 continue
 
+            # ── Warp confirm drag release ──────────────────────────
+            if _warp_confirm_drag is not None:
+                _moved = _warp_confirm_drag["moved"]
+                _warp_confirm_drag = None
+                if _moved:
+                    save_layout()
+                continue
+
+            # ── Travel menu drag release ───────────────────────────
+            if _warp_menu_drag is not None:
+                _moved = _warp_menu_drag["moved"]
+                _warp_menu_drag = None
+                if _moved:
+                    save_layout()
+                continue
+
             # ── Floating Warp button: click vs drag ────────────────
             # Unmoved = click → toggle the travel menu. Moved = reposition
             # → persist the new button location.
@@ -61022,22 +61326,36 @@ while running:
                 hotbar_drag = None
                 if drag["active"]:
                     mx_u, my_u = event.pos
-                    dst = _hotbar_slot_at_pos(mx_u, my_u)
+                    # Resolve against EVERY panel, not just the primary,
+                    # so dropping onto a second hotbar moves the button
+                    # to that panel's page.
+                    dst, dst_page = _hotbar_drop_target(mx_u, my_u)
+                    if dst is None:
+                        dst = _hotbar_slot_at_pos(mx_u, my_u)
+                        dst_page = hotbar_current_page
                     src_page = drag.get("src_page", hotbar_current_page)
-                    dst_page = hotbar_current_page
+                    # Ctrl copies instead of moving.
+                    _copying = bool(pygame.key.get_mods() & pygame.KMOD_CTRL)
                     # Reject drops on chrome (nav arrows, etc.) and
                     # drops on the SAME (page, slot) as the source.
                     if dst is not None and not (
                             src_page == dst_page
                             and dst == drag["src_slot"]):
-                        _hotbar_swap_slots(
-                            drag["src_slot"], dst,
-                            src_page=src_page, dst_page=dst_page)
+                        if _copying:
+                            _hotbar_copy_slot(
+                                drag["src_slot"], dst,
+                                src_page=src_page, dst_page=dst_page)
+                        else:
+                            _hotbar_swap_slots(
+                                drag["src_slot"], dst,
+                                src_page=src_page, dst_page=dst_page)
                     # else: invalid drop, fall back to nothing.
                 else:
                     # Click, not drag. Honor the user's selection
-                    # intent now that we know it wasn't a drag.
-                    hotbar_select_slot(drag["src_slot"])
+                    # intent now that we know it wasn't a drag — on the
+                    # page it was grabbed from, not the primary's.
+                    hotbar_select_slot(drag["src_slot"],
+                                       drag.get("src_page"))
                 continue
 
             # End stats cell drag/click (setup mode only).
@@ -61623,6 +61941,28 @@ while running:
                     _sing_btn_drag["moved"] = True
                 sing_button_pos[0] = nx
                 sing_button_pos[1] = ny
+
+        elif event.type == pygame.MOUSEMOTION and _warp_confirm_drag is not None:
+            mx, my = event.pos
+            nx = mx - _warp_confirm_drag["grab_dx"]
+            ny = my - _warp_confirm_drag["grab_dy"]
+            if (warp_confirm_pos is None
+                    or abs(nx - warp_confirm_pos[0]) > 2
+                    or abs(ny - warp_confirm_pos[1]) > 2):
+                _warp_confirm_drag["moved"] = True
+            warp_confirm_pos = [nx, ny]
+
+        elif event.type == pygame.MOUSEMOTION and _warp_menu_drag is not None:
+            # Drag the travel menu. Position is stored, not the offset, so
+            # the next open lands exactly here.
+            mx, my = event.pos
+            nx = mx - _warp_menu_drag["grab_dx"]
+            ny = my - _warp_menu_drag["grab_dy"]
+            if (warp_menu_pos is None
+                    or abs(nx - warp_menu_pos[0]) > 2
+                    or abs(ny - warp_menu_pos[1]) > 2):
+                _warp_menu_drag["moved"] = True
+            warp_menu_pos = [nx, ny]
 
         elif event.type == pygame.MOUSEMOTION and _warp_btn_drag is not None:
             # Drag the floating Warp button (same click-vs-drag logic as the
