@@ -855,6 +855,25 @@ function M.emit_chat(mode, sender_name, text)
         --       classifier; the name carries the 0x7F 0xFC wrapper so the
         --       self-keep logic below treats it as your own line.
         [211] = true,
+        -- 213 — your OWN outgoing LINKSHELL 2 chat echoes here, as
+        --       "[2]<YourName> body". Confirmed via chatdebug:
+        --       "[TXT] mode=213 len=18 text=[[2]<Wormfood> ..]" right
+        --       after an LS2 send.
+        --
+        --       Why this is needed at all: LS chat normally comes from
+        --       the 0x017 PACKET path (chat_packets.lua), and mode 27 is
+        --       in the drop set above so the text copy is discarded in
+        --       favour of it. That works for everyone ELSE's LS2 — but
+        --       the packet path doesn't carry your own sends, so your own
+        --       LS2 line only exists here. Being >= MAX_REAL_CHAT_MODE it
+        --       was then dropped by the filter below, and the user's own
+        --       LS2 messages never reached the panel while everybody
+        --       else's did. Exactly the same shape as Unity mode 211
+        --       above.
+        --
+        --       LS1 is unaffected — its own-send echo already reaches the
+        --       panel, which is why only LS2 looked broken.
+        [213] = true,
     }
     if mode >= MAX_REAL_CHAT_MODE and not REAL_HIGH_MODES[mode] then
         -- Silently drop. Previously this printed a one-line preview of
@@ -904,6 +923,72 @@ function M.emit_chat(mode, sender_name, text)
     -- text means a wrapped PC name → member chat → drop. No wrapper →
     -- NPC dialogue → keep. Checked on the RAW text before any marker
     -- stripping below removes the wrapper bytes.
+    -- ── Own-echo auto-translate repair ──────────────────────────────
+    -- Windower mangles the auto-translate id on the echo of your OWN
+    -- outgoing chat: whatever phrase you typed arrives as bare FD bytes,
+    -- so the line renders as just your name with an empty body. Captured
+    -- from a real session:
+    --   party : mode 5   text=[(Wormfood) \xFD\xFD]
+    --   LS1   : mode 6   text=[[1]<Wormfood> \xFD\xFD]
+    --   LS2   : mode 213 text=[[2]<Wormfood> \xFD\xFD]
+    --   Unity : mode 211 text=[{Wormfood} \xFD\xFD]
+    --
+    -- The outgoing-text hook in OmniWatch.lua already resolved the typed
+    -- phrase and stashed it under the mode from _OW_OUT_CHAT_CMDS. This
+    -- used to run for mode 211 only, so Unity was the one channel where
+    -- your auto-translate survived. Keyed off the STORE now rather than a
+    -- hardcoded mode list — every channel the outgoing hook knows about
+    -- is repaired, and a channel it doesn't know simply finds nothing and
+    -- falls through unchanged.
+    --
+    -- The four sender prefixes differ per channel, so all three shapes
+    -- are tried: "{Name} ", "(Name) ", and "[N]<Name> ".
+    -- Mode-specific entry first, then the wildcard 'last' the outgoing
+    -- hook always sets. The wildcard is what covers sends made by
+    -- selecting a channel in the chat bar instead of typing a command —
+    -- which is most of them, and which stored nothing at all before.
+    if _G._ow_own_outgoing_suppress
+       and (_G._ow_own_outgoing_suppress[mode]
+            or _G._ow_own_outgoing_suppress.last) then
+        local by_mode = _G._ow_own_outgoing_suppress[mode] ~= nil
+        local sup = _G._ow_own_outgoing_suppress[mode]
+                    or _G._ow_own_outgoing_suppress.last
+        if sup and sup.resolved and (os.clock() - (sup.ts or 0)) < 1.0 then
+            if by_mode then _G._ow_own_outgoing_suppress[mode] = nil end
+            _G._ow_own_outgoing_suppress.last = nil
+            -- Replace the MANGLED SPAN, not a matched prefix. Every
+            -- channel writes your name differently and matching each
+            -- shape was a losing game — captured from one session:
+            --   say    "Wormfood : \xFD\xFD"
+            --   shout  "Wormfood[RiverneB01]: \xFD\xFD"
+            --   party  "(Wormfood) \xFD\xFD"
+            --   LS1    "[1]<Wormfood> \xFD\xFD"
+            --   LS2    "[2]<Wormfood> \xFD\xFD"
+            --   Unity  "{Wormfood} \xFD\xFD"
+            -- Six shapes and counting, and a missed one silently left
+            -- the body empty. What IS constant is the wreckage: the
+            -- auto-translate collapses to a run of 0xFD bytes. So cut
+            -- from the first 0xFD to the last and drop the resolved
+            -- phrase in, which keeps whatever prefix the channel used
+            -- without needing to recognise it.
+            local first_fd = text:find('\253', 1, true)
+            local last_fd
+            for k = #text, 1, -1 do
+                if text:byte(k) == 0xFD then last_fd = k break end
+            end
+            if first_fd and last_fd and last_fd >= first_fd then
+                text = text:sub(1, first_fd - 1) .. sup.resolved
+                       .. text:sub(last_fd + 1)
+            else
+                -- No FD wreckage: the echo came through intact, so
+                -- there's nothing to repair. Put the entry back for the
+                -- mangled echo that may still be on its way.
+                if by_mode then _G._ow_own_outgoing_suppress[mode] = sup end
+                _G._ow_own_outgoing_suppress.last = sup
+            end
+        end
+    end
+
     if mode == 212 or mode == 211 then
         -- Your OWN outgoing Unity echo (mode 211) carries autotranslate as
         -- bare FD bytes (Windower mangles the AT id on the echo), so an
@@ -912,21 +997,6 @@ function M.emit_chat(mode, sender_name, text)
         -- text hook (OmniWatch.lua) captured the INTACT typed phrase and
         -- stored the resolved "{Phrase}" body keyed by mode 211. Swap the
         -- mangled body for it here so your Unity message displays in full.
-        if mode == 211 and _G._ow_own_outgoing_suppress then
-            local sup = _G._ow_own_outgoing_suppress[211]
-            if sup and sup.resolved and (os.clock() - (sup.ts or 0)) < 1.0 then
-                _G._ow_own_outgoing_suppress[211] = nil
-                -- Preserve the "{Name} " sender prefix (literal braces +
-                -- trailing space) and replace everything after it with the
-                -- resolved phrase. If no recognizable prefix, replace whole.
-                local prefix = text:match('^(%b{}%s)')
-                if prefix then
-                    text = prefix .. sup.resolved
-                else
-                    text = sup.resolved
-                end
-            end
-        end
         if text:find('\127\252', 1, true) then
             -- Wrapped PC name → member-chat duplicate of the clean mode-33
             -- packet. Drop it — UNLESS it's your OWN message (mode 211 is
@@ -1240,6 +1310,32 @@ function M.emit_chat(mode, sender_name, text)
         text         = text,
         segments     = {},   -- raw incoming text has no word-level coloring
     }
+
+    -- Colour YOUR OWN name so your lines are recognisable at a glance in
+    -- any channel. Unity was the only one that did this, because its
+    -- wrapper bytes happened to produce a coloured name segment; every
+    -- other channel drew the whole line in one colour.
+    --
+    -- Done by finding the player name rather than by matching a prefix:
+    -- each channel writes it differently ("Name : ", "Name[Zone]: ",
+    -- "(Name) ", "[1]<Name> ", "[2]<Name> ", "{Name} ") and matching six
+    -- shapes has already failed twice. The name itself is the constant.
+    -- Restricted to the first 30 chars so someone MENTIONING your name
+    -- mid-sentence doesn't get a blue word in the middle of their line —
+    -- the same window the own-echo check uses.
+    do
+        local _p = windower.ffxi.get_player()
+        local _pn = _p and _p.name or nil
+        if _pn and _pn ~= '' and text and text ~= '' then
+            local a, b = text:find(_pn, 1, true)
+            if a and a <= 30 then
+                ev.segments = {
+                    { text = text:sub(1, b),     color = 'self_name' },
+                    { text = text:sub(b + 1),    color = 'default'   },
+                }
+            end
+        end
+    end
     _ring.text_ring.push(ev)
 
     if M.debug then

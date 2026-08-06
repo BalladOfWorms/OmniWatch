@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.11.1'
+_addon.version  = '1.11.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -5615,6 +5615,22 @@ end)
 -- (see the inbound drain). Ported from ScanZone (Project Tako); the
 -- 0x0E field offsets are unchanged. Globals (not locals) to stay clear
 -- of the 200-local chunk cap.
+-- Outstanding 0x16 entity-update requests, keyed by entity index:
+--   _ow_sz_pending[index] = os.clock() when it was asked for
+--
+-- This USED TO BE a single slot (_ow_sz_scan_index + _ow_sz_scanning), and
+-- that was the bug behind "only the last mob I added gets tracked". The
+-- overlay polls its roster round-robin and fires several scan requests
+-- back to back in one tick; each one overwrote the single slot, so only
+-- the LAST request of a burst could ever be matched. Every earlier
+-- reply arrived with a non-matching index and was thrown away — those
+-- entries never got HP or position, so they never registered as spawned,
+-- never alerted, and never auto-targeted until the passive radar picked
+-- them up at close range.
+--
+-- A set, so every reply in flight finds its request.
+_ow_sz_pending    = {}
+-- Kept for compatibility with anything still reading them.
 _ow_sz_scanning   = false
 _ow_sz_scan_index = -1
 
@@ -5633,6 +5649,13 @@ end
 function _ow_scanzone_scan(index)
     index = tonumber(index)
     if not index then return end
+    -- Drop requests the server never answered so the table can't grow
+    -- without bound (a despawned index simply gets no reply).
+    local _nowc = os.clock()
+    for _k, _t in pairs(_ow_sz_pending) do
+        if _nowc - _t > 15 then _ow_sz_pending[_k] = nil end
+    end
+    _ow_sz_pending[index] = _nowc
     _ow_sz_scan_index = index
     _ow_sz_scanning   = true
     local lo = index % 256
@@ -5645,10 +5668,13 @@ end
 
 ow_safe_register('incoming chunk', function(id, data)
     if id ~= 0x0E then return end
-    if not _ow_sz_scanning then return end
     local tindex = data:unpack('h', 0x08 + 1)
-    if tindex ~= _ow_sz_scan_index then return end
-    _ow_sz_scanning   = false
+    -- Match against every outstanding request, not just the newest one.
+    if not _ow_sz_pending[tindex] then return end
+    _ow_sz_pending[tindex] = nil
+    if next(_ow_sz_pending) == nil then
+        _ow_sz_scanning = false
+    end
     _ow_sz_scan_index = -1
 
     local mask = data:byte(0x0A + 1) or 0
@@ -9841,6 +9867,11 @@ local function _ow_drain_inbound()
                 ow_chat(207, string.format(
                     '[OW target] no entity id for %s (index %s) — not in '
                     .. 'this zone?', tostring(nm), tostring(p_idx)))
+            elseif mob and (tonumber(mob.hpp) or 1) <= 0 then
+                -- valid_target alone still passes for something that has
+                -- just died, so check HP too before aiming at a corpse.
+                ow_chat(207, string.format(
+                    '[OW target] %s is dead', tostring(nm)))
             elseif mob and mob.valid_target == false then
                 ow_chat(207, string.format(
                     '[OW target] %s is not a valid target right now',
@@ -17259,7 +17290,16 @@ _OW_OUT_CHAT_CMDS = {
     ['p']         = 5,  ['party']      = 5,
     ['s']         = 1,  ['say']        = 1,
     ['l']         = 6,  ['linkshell']  = 6,  ['ls']  = 6,
-    ['l2']        = 27, ['linkshell2'] = 27, ['ls2'] = 27,
+    -- LS2 maps to 213, the mode its OWN-SEND ECHO arrives on — not 27,
+    -- which is the mode OTHER people's LS2 arrives on. This value is used
+    -- only as the key into _ow_own_outgoing_suppress, and emit.lua looks
+    -- that store up by the mode of the line it is currently handling. A
+    -- key of 27 was therefore never read: the mode-27 text copy is in the
+    -- drop set (the 0x017 packet path handles other people's LS2), so
+    -- nothing ever came looking for it. Meanwhile the 213 echo carried
+    -- the auto-translate body as bare FD bytes with no substitution
+    -- available, so an AT-only LS2 message rendered as nothing at all.
+    ['l2']        = 213, ['linkshell2'] = 213, ['ls2'] = 213,
     ['sh']        = 3,  ['shout']      = 3,
     ['em']        = 9,  ['emote']      = 9,
     ['u']         = 211, ['unity']     = 211,  -- Unity chat; outgoing echo
@@ -17297,12 +17337,29 @@ ow_safe_register('outgoing text', function(mode, text, blocked)
     -- echo path unharmed.
     if not text:find(string.char(0xFD), 1, true) then return end
 
-    -- Parse leading command. Accept "/p", "/party", "/l2", etc.
-    -- (case-insensitive, alphanumeric so /l2 and /ls2 match).
+    -- Parse an optional leading command ("/p", "/party", "/l2"...),
+    -- case-insensitive and alphanumeric so /l2 and /ls2 both match.
+    --
+    -- A command is NOT required. Requiring one was the bug that made
+    -- this whole path dead for most sends: selecting a channel in the
+    -- game's chat bar and typing sends the body with NO slash prefix at
+    -- all. Confirmed from a session log —
+    --   [OW otext] hex: FD 02 02 01 0B FD          (no command)
+    --   [OW otext] hex: 2F 79 65 6C 6C 20 FD ...   ("/yell ...")
+    -- The first bailed at the match, the second at the lookup (yell
+    -- isn't in the table). Either way nothing was ever stored, so every
+    -- repair on the emit side had nothing to work with.
+    --
+    -- We don't actually need to know the channel here: the ECHO carries
+    -- its own mode, and it arrives within a second. So resolve the
+    -- phrase and park it under a wildcard key that emit.lua falls back
+    -- to when it has no mode-specific entry.
     local cmd, rest = text:match('^/(%w+)%s+(.+)$')
-    if not cmd then return end
-    local emit_mode = _OW_OUT_CHAT_CMDS[cmd:lower()]
-    if not emit_mode then return end   -- tell/yell/non-chat: not ours
+    local emit_mode = cmd and _OW_OUT_CHAT_CMDS[cmd:lower()] or nil
+    if not rest then
+        -- No recognizable command prefix: the whole line is the body.
+        rest = text
+    end
 
     local ok, err = pcall(function()
         local resolved = _ow_resolve_outgoing_at(rest)
@@ -17317,9 +17374,14 @@ ow_safe_register('outgoing text', function(mode, text, blocked)
         -- gate). We do NOT emit our own line here — routing it back
         -- through emit_chat would hit the DROPPED_CHAT_MODES gate and be
         -- dropped, since the sender is in the sender arg, not the text.
-        _ow_own_outgoing_suppress[emit_mode] = {
-            resolved = resolved, ts = os.clock(),
-        }
+        local entry = { resolved = resolved, ts = os.clock() }
+        -- Wildcard: consumed by whichever own-echo arrives first. This
+        -- is the one that actually fires for channel-bar sends.
+        _ow_own_outgoing_suppress.last = entry
+        -- Mode-specific key too, when the command told us the channel.
+        if emit_mode then
+            _ow_own_outgoing_suppress[emit_mode] = entry
+        end
     end)
     if not ok and _chat and _chat.is_debug and _chat.is_debug() then
         ow_chat(123, '[OW otext] resolve failed: ' .. tostring(err))

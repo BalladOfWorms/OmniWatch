@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.11.1 (2026-08-03)"
+OMNIWATCH_BUILD_STAMP = "v1.11.2 (2026-08-05)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.11.1"
+OMNIWATCH_VERSION = "1.11.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -2949,6 +2949,16 @@ CHAT_MODE_PALETTE = {
     # duplicate so only this one shows.
     205: (144, 238, 144),   # LS1 message-of-the-day — LS green
     217: (144, 238, 144),   # LS2 message-of-the-day — same green
+    # 213 — your own outgoing LS2 line. Same dark green the LS2 tab
+    # uses, so your messages don't stand out from the ones you're
+    # replying to.
+    213: (60,  150,  60),
+    # Own-echo modes for party and LS1. These share their channel's mode
+    # with everyone else's messages, so they route correctly — but with
+    # no colour entry your own line fell back to plain white while the
+    # replies around it were coloured. Match the tab colours.
+    5:   (180, 230, 220),   # own /party line — pale teal, as ch_party
+    6:   (144, 238, 144),   # own LS1 line — light green, as ch_ls1
 }
 
 # Synthetic-event colors for buff/debuff lines (from chat/buff_events.lua).
@@ -2999,6 +3009,12 @@ CHAT_SEGMENT_COLORS = {
     "verb_bad":      (255, 130, 180),   # pink
     "damage_number": (255, 240, 180),
     "default":       (220, 220, 220),
+    # Your own name, wherever it leads one of your own chat lines.
+    # A single colour across every channel so your messages are
+    # findable in a busy tab without reading them — the channel
+    # colour still carries the rest of the line.
+    "self_name":     (120, 180, 255),   # blue
+
     # Channel-themed colors for chat sender names. Used by
     # chat_packets.lua to color the sender according to which channel
     # the message came in on, instead of by actor_class. This makes
@@ -3125,7 +3141,19 @@ CHAT_TAB_PALETTE = [
 # World-range chat: say + shout + yell + emotes. One tab for every
 # spoken-aloud message regardless of range. Emote modes (13, 14) are
 # still guessed — verify with hex capture if emotes don't show up.
-CHAT_MODE_SET_WORLD    = {1, 3, 11, 13}
+CHAT_MODE_SET_WORLD    = {1, 2, 3, 11, 13}     # 2 = your OWN /shout echo.
+                                                #   Measured: a /shout comes
+                                                #   back as mode 2 with the
+                                                #   SAY layout ("Name : msg"),
+                                                #   not the shout layout — so
+                                                #   it can't be told from a say
+                                                #   by its text. Without 2 in
+                                                #   this set it never reached
+                                                #   the branch below and fell
+                                                #   through to System. Your own
+                                                #   /say arrives on mode 1 and
+                                                #   was never affected.
+
 # Confirmed via chatdebug capture:
 #   mode 1  → /say  (own + immediate)
 #   mode 3  → /shout (own — text-mode 3, not text-mode 10)
@@ -3139,7 +3167,17 @@ CHAT_MODE_SET_WORLD    = {1, 3, 11, 13}
 CHAT_MODE_SET_LS1      = {6, 205}              # LS1 chat (text mode 6),
                                                 #   LS message-of-the-day
                                                 #   on login (205, empirical)
-CHAT_MODE_SET_LS2      = {217}                 # LS2 message-of-the-day
+CHAT_MODE_SET_LS2      = {213, 217}            # 213 = your OWN outgoing
+                                                #   LS2 chat, which echoes
+                                                #   on the text path as
+                                                #   "[2]<Name> body" (the
+                                                #   0x017 packet path
+                                                #   doesn't carry your own
+                                                #   sends, so this is the
+                                                #   only copy of it).
+                                                #   Confirmed via
+                                                #   chatdebug.
+                                                # 217 = LS2 message-of-the-day
                                                 #   (mode 217, confirmed via
                                                 #   chatdebug: "[2]< <LS2>:
                                                 #   <setter> >" + body). Regular
@@ -3795,7 +3833,13 @@ def _chat_classify_event(ev):
     # Chat-mode based channels (real FFXI player chat).
     if mode in CHAT_MODE_SET_WORLD:
         # World captures say/shout/yell/emote.
-        if mode == 1 or mode == 2:    return (actor, "chat_say")
+        if mode == 1:                  return (actor, "chat_say")
+        # Mode 2 is the echo of your OWN /shout, confirmed from a
+        # chatdebug capture. It was previously lumped in with say on the
+        # assumption that "2 = say echo" (which is true of the 0x017
+        # PACKET modes — a different numbering) and never reached here
+        # anyway.
+        if mode == 2:                  return (actor, "chat_shout")
         if mode == 3:                  return (actor, "chat_shout")
         if mode == 11:                 return (actor, "chat_yell")
         return (actor, "chat_emote")
@@ -31207,6 +31251,12 @@ scanzone_track_info  = ""           # live tracked-entity readout
 scanzone_track_pos   = None         # (wx,wy) of tracked entity, for map
 scanzone_pin         = None         # coord-search pin ("world"/"grid",..)
 scanzone_tracks      = {}           # idx -> roster entry (multi-track)
+# How many tracked entries may be re-scanned in a single poll tick.
+# Caps the injected-packet rate: without it the rate grew with the roster
+# and the server eventually stopped replying (see the round-robin note in
+# the poll loop). Entries are chosen least-recently-scanned first, so
+# every one still gets its turn.
+_SZ_POLL_PER_TICK      = 2
 _sz_poll_last          = 0          # last re-scan of SPAWNED tracks
 _sz_poll_last_inactive = 0          # last re-scan of DESPAWNED tracks
 scanzone_poll_active   = 1000       # ms between re-scans of spawned tracks
@@ -31893,6 +31943,12 @@ def _scanzone_add_track(idx):
             "idx": idx, "name": _scanzone_name_for(idx), "pos": None,
             "z": None, "spawned": False, "last": 0, "prev": False,
             "flash": 0, "near": False, "perm": False, "tag": None,
+            # (T) auto-target: arm it and the mob gets targeted the moment
+            # it's both up and within range. tgt_fired stops it re-firing
+            # every tick while you stand next to it — it clears when the
+            # mob goes out of range or down, so walking away and coming
+            # back arms it again.
+            "target": False, "tgt_fired": False,
             "hpp": None, "hp_last": 0, "tod": None, "respawned": False}
     else:
         ent["name"] = _scanzone_name_for(idx)
@@ -31940,6 +31996,20 @@ def _scanzone_update_tracks(now):
         # Find feature (non-Nyzul) re-polls its tracks to follow them at range.
         if not (scanzone_lamp_mode
                 and zone_info.get("zone_id") == _NYZUL_ZONE):
+            # Round-robin, not a broadside.
+            #
+            # This used to fire one 0x16 per tracked entry EVERY tick, so
+            # a roster of ten was ten injected packets a second, forever.
+            # The server stops answering a client that asks that hard,
+            # which is what "the tracker craps out after a while" looks
+            # like from the outside: scans quietly stop coming back, HP
+            # goes stale, and spawn detection falls back to the passive
+            # radar — i.e. nothing is noticed until you walk into range.
+            #
+            # Same per-entry cadence, but only a couple go out per tick
+            # and always the ones waiting longest, so the packet rate is
+            # capped no matter how big the roster gets.
+            _due = []
             for idx, _pent in list(scanzone_tracks.items()):
                 if _pent.get("tag"):
                     continue
@@ -31948,6 +32018,12 @@ def _scanzone_update_tracks(now):
                 _sp = _pent.get("spawned")
                 if not ((_sp and _do_a) or ((not _sp) and _do_i)):
                     continue
+                _due.append((_pent.get("scan_sent", 0), idx))
+            _due.sort()
+            for _, idx in _due[:_SZ_POLL_PER_TICK]:
+                _pe2 = scanzone_tracks.get(idx)
+                if _pe2 is not None:
+                    _pe2["scan_sent"] = now
                 try:
                     sock_cmd_out.sendto(("SCANZONE|scan|%d" % idx).encode(
                         "utf-8"), _cmd_addr())
@@ -32006,7 +32082,16 @@ def _scanzone_update_tracks(now):
                 else:
                     sp = True                          # sticky: hold last spot
         else:
-            sp = (ent["idx"] in radar_idx) or (_alive and _fresh)
+            # Presence in the radar snapshot is NOT proof of life. The
+            # radar is built from the live mob array, and a mob you just
+            # killed stays in that array at HP 0 for a while — so a
+            # bare "is it in radar_idx" test kept a corpse flagged as
+            # spawned, flashing green, until the game finally dropped
+            # the entity. The scan path already checked HP; this one
+            # didn't. Require the radar's own HP reading to be above 0.
+            _rd = radar_d.get(ent["idx"])
+            _radar_up = _rd is not None and (_rd[2] or 0) > 0
+            sp = _radar_up or (_alive and _fresh)
         _was = ent.get("prev", False)
         if sp and not _was:
             ent["flash"] = now + 2500          # just spawned -> flash red
@@ -32029,11 +32114,29 @@ def _scanzone_update_tracks(now):
         ent["prev"] = sp
         ent["spawned"] = sp
         near = False
-        if ent.get("pos") and pxw is not None and pyw is not None:
+        # Prefer the RADAR offset when the entity is on it. Radar only
+        # carries things already close by, and its dx/dy are this frame's,
+        # whereas ent["pos"] is whatever the last scan REPLY reported --
+        # and a far-off mob may not have answered a scan in a long time,
+        # or ever. Deriving "near" from that stale position meant walking
+        # right up to a mob left it flagged far away: the spawn flag went
+        # true off radar and the alert fired, but anything gated on near
+        # (the (T) auto-target) never did.
+        _rdx, _rdy, _ = radar_d.get(ent["idx"], (None, None, None))
+        if _rdx is not None:
+            near = (_rdx * _rdx + _rdy * _rdy) <= 2500.0   # within 50 yalms
+        elif ent.get("pos") and pxw is not None and pyw is not None:
             ddx = ent["pos"][0] - float(pxw)
             ddy = ent["pos"][1] - float(pyw)
-            near = (ddx * ddx + ddy * ddy) <= 2500.0     # within 50 yalms
+            near = (ddx * ddx + ddy * ddy) <= 2500.0
         ent["near"] = near
+        if ent.get("target"):
+            if sp and near:
+                if not ent.get("tgt_fired"):
+                    ent["tgt_fired"] = True
+                    _send_target(ent["idx"])
+            else:
+                ent["tgt_fired"] = False
     # Perm gates cleanup: a non-perm entry is dropped when its mob goes from
     # up to dead/despawned, confirmed by the scan at ANY range -- so leaving
     # scan range never drops it (it stays on the map at its last spot). Perm
@@ -33138,6 +33241,10 @@ def draw_scanzone_window(surface):
             _ab = fnt_s.render("A", True, (120, 210, 240))
             _rx -= _ab.get_width() + 4
             surface.blit(_ab, (_rx, er.y + 1))
+        if _ent.get("target"):
+            _tb = fnt_s.render("T", True, (255, 205, 70))
+            _rx -= _tb.get_width() + 4
+            surface.blit(_tb, (_rx, er.y + 1))
         _rmw = max(8, (_rx - 6) - _x1)
         _rn = _scanzone_real_name(_tidx)
         while _rn and fnt_s.size(_rn)[0] > _rmw:
@@ -33622,10 +33729,13 @@ def _scanzone_handle_event(event):
                 _pl = "Perm \u2713" if (_pe and _pe.get("perm")) else "Perm"
                 _al = ("Alert (A) \u2713" if (_pe and _pe.get("alert"))
                        else "Alert (A)")
+                _tl = ("Target (T) \u2713" if (_pe and _pe.get("target"))
+                       else "Target (T)")
                 _sz_ctx = {"x": mx, "y": my, "idx": hidx,
                            "items": [("Make active", "track"),
                                      (_pl, "perm"),
                                      (_al, "alertoggle"),
+                                     (_tl, "targettoggle"),
                                      ("Alias\u2026", "alias"),
                                      ("Untrack", "untrack")]}
                 return True
@@ -33666,6 +33776,17 @@ def _scanzone_handle_event(event):
                             _pe["alert"] = not _pe.get("alert")
                             if _pe["alert"]:
                                 _pe["perm"] = True   # keep it so respawns fire
+                    elif act == "targettoggle":
+                        _pe = scanzone_tracks.get(idx)
+                        if _pe is not None:
+                            _pe["target"] = not _pe.get("target")
+                            _pe["tgt_fired"] = False
+                            if _pe["target"]:
+                                # Same reasoning as Alert: a non-perm entry
+                                # is dropped when its mob dies, and an
+                                # auto-target that forgets itself on the
+                                # first death is useless for a respawn.
+                                _pe["perm"] = True
                     elif act == "untrack":
                         _scanzone_untrack(idx)
                     elif act == "lampclr1":

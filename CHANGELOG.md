@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.11.2] — 2026-08-05
+
+### Fixed
+
+- **Your own linkshell 2 messages appear in the chat panel** — everyone else's LS2 chat showed, and your own showed in the game's own window, but never in the panel's LS2 tab. Linkshell chat normally comes from the packet the server sends to the whole linkshell, and that packet doesn't include your own messages — the game echoes those to you separately, on a channel the panel was discarding.
+- **Auto-translate in your own messages is no longer blank** — send `{Hello!}` to party, linkshell or linkshell 2 and the line arrived as just your name with nothing after it. The game mangles the auto-translate marker on the copy it echoes back to you, so the phrase has to be restored from what you typed — which was only happening for Unity chat. Every channel is repaired now.
+- **Your own party and linkshell 1 lines are coloured like the rest of the channel** — they were drawn in plain white while the messages around them carried their channel's colour.
+- **A killed mob is no longer shown as alive** — the tracker treated a mob's presence in the radar sweep as proof it was up, but the radar is built from what's loaded around you and something you just killed lingers there at zero health for a while. So an NM you'd just downed kept flashing green as though it were still standing. Its health is checked now, so a kill registers straight away, and the time of death is recorded when it should be.
+- **Only one tracked mob was really being watched** — with several entries on the tracker, the overlay asks the game about each in turn, a couple per tick. Every request overwrote the one before it, so only the last of each batch was ever matched to its reply; the rest were discarded. Those entries never got health or position back, so they never registered as spawned — no alert, no auto-target — until you walked close enough for the passive radar to notice them. All outstanding requests are now matched individually, so every mob on the tracker is watched properly no matter how many you have.
+
+### Added
+
+- **Auto-target a tracked mob when it comes into range** — right-click any entry on the Scan panel's tracked list and turn on **Target (T)**. From then on, the moment that mob is up and within range it becomes your target, so you can be facing the wrong way, or busy, and still have it selected the instant it's reachable. A **T** shows beside the entry while it's armed, alongside the existing P and A markers. It re-arms itself when the mob leaves range or dies, so walking away and coming back works, and it turns Perm on for you — an auto-target that forgot itself the first time the mob died would be no use for a respawn.
+
+### Fixed
+
+- **Targeting a mob that has just died** — the check that a target was valid still passed for something on the floor, so a corpse could be selected. It checks health as well now.
+
 ## [1.11.1] — 2026-08-03
 
 ### Changed
