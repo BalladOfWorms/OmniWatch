@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.11.2'
+_addon.version  = '1.11.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -20246,10 +20246,19 @@ function ow_compute_stats()
                         stats['magic attack bonus'] = (stats['magic attack bonus'] or 0)
                                                     + Gear_info['Magic Atk. Bonus']
                     end
-                    if type(Gear_info['Magic Evasion']) == 'number' then
-                        stats['magic evasion'] = (stats['magic evasion'] or 0)
-                                               + Gear_info['Magic Evasion']
-                    end
+                    -- Magic Evasion is NOT added here. GearInfo's
+                    -- compute_player_stats already returns the gear
+                    -- portion in stats['magic evasion'], so adding
+                    -- Gear_info['Magic Evasion'] on top counted every
+                    -- piece twice. Measured with //ow whystat: five
+                    -- pieces summing to 501 produced a baseline of
+                    -- 1002 before this loop even ran.
+                    --
+                    -- Same class of bug as Fast Cast (fixed 2026-06-30)
+                    -- and Subtle Blow (2026-08-03). The three stats
+                    -- still added below have NOT been verified the same
+                    -- way — run //ow whystat on each and check the
+                    -- baseline line before trusting them.
                     if type(Gear_info['Magic Def. Bonus']) == 'number' then
                         stats['magic def. bonus'] = (stats['magic def. bonus'] or 0)
                                                   + Gear_info['Magic Def. Bonus']
@@ -20518,6 +20527,24 @@ function ow_compute_stats()
                             ['double attack'] = true,
                             ['triple attack'] = true,
                             ['subtle blow']   = true,
+                            -- Magic Evasion Bonus. The data was already
+                            -- in data/Gifts.lua all along, per job and
+                            -- keyed by jp_spent — BRD reads 5 @45,
+                            -- 8 @320, 10 @845, 13 @1620, and the loop
+                            -- below sums every tier at or under your
+                            -- spend, which is exactly the 36 he
+                            -- reported. `_PW_GIFT_STAT_MAP` already
+                            -- mapped "Magic Evasion Bonus" to this key
+                            -- too, so this whitelist was the only thing
+                            -- standing between the two.
+                            --
+                            -- NOTE the JOB_TRAITS table has its own
+                            -- `mev_bonus` entry with pct={0,0,0}. Zeros
+                            -- add nothing, so there's no double count
+                            -- today — but fill those in and there will
+                            -- be. Delete that entry rather than
+                            -- populating it.
+                            ['magic evasion'] = true,
                         }
                         local jpd = p.job_points[mjob:lower()]
                         local jp_spent = (jpd and tonumber(jpd.jp_spent)) or 0

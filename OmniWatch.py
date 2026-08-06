@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.11.2 (2026-08-05)"
+OMNIWATCH_BUILD_STAMP = "v1.11.3 (2026-08-06)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.11.2"
+OMNIWATCH_VERSION = "1.11.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -36009,6 +36009,9 @@ def settings_menu_size():
             height += row_h * len(entries)
         else:
             height += placeholder_h
+    # Version footer under the last row (see draw_settings_menu). Sized
+    # here so the menu can't end up one line short of its own content.
+    height += round(16 * g)
     height += pad
     return width, height
 
@@ -43903,6 +43906,17 @@ def draw_settings_menu(surface):
                     "kind": "action", "key": schema["key"],
                 }))
             cy += row_h
+
+    # Version footer, under the EXIT button. Cheap to glance at when
+    # someone reports a bug — the alternative is asking them to find
+    # omniwatch_build_stamp.txt. Drawn inside the clip so it scrolls
+    # with the rows, and its height is included in settings_menu_size()
+    # so it can never be the thing that overflows.
+    _ver_font = pygame.font.SysFont("Consolas", max(1, round(11 * g)))
+    _ver_surf = _ver_font.render(f"v{OMNIWATCH_VERSION}", True, (130, 130, 150))
+    surface.blit(_ver_surf,
+                 (mx + w - _ver_surf.get_width() - pad - inset,
+                  cy + round(3 * g)))
 
     # Restore the clip rect we changed at the top of the function. If
     # we don't, subsequent draws (settings menu is one of many things

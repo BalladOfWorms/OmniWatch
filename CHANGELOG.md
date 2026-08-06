@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3] — 2026-08-06
+
+### Fixed
+
+- **Job point gifts now count toward magic evasion** — the Magic Evasion Bonus gifts each job earns as it spends job points were being ignored, so the figure was short by up to 36 on a fully-spent job. The values were already in the gift data; nothing was reading them for this stat.
+- **Magic evasion was being counted twice** — every piece of gear was added to the figure once by the stat engine and then again on top, so a set carrying 501 read as 1002. Fast Cast and Subtle Blow have both had the same double-add fixed before; this was the last one anybody had noticed. **Your magic evasion figure will roughly halve, and the lower number is the right one.**
+
 ## [1.11.2] — 2026-08-05
 
 ### Fixed
