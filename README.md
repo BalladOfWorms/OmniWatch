@@ -5,7 +5,7 @@ A Final Fantasy XI overlay that surfaces party state, the target you're fighting
 The Windower addon collects events from the game and sends them over local UDP to a Python overlay that draws everything. They run as a pair: the lua side has no UI, the python side has no game data. Both halves are required, but the python side ships as a self-contained `OmniWatch.exe` so you don't need to install Python yourself.
 
 - **GitHub:** https://github.com/BalladOfWorms/OmniWatch
-- **Discord:** https://discord.gg/PJjTk6qX
+- **Discord:** https://discord.gg/9ac5cjgGz7
 - **Issues / bug reports:** https://github.com/BalladOfWorms/OmniWatch/issues
 
 OmniWatch is in active development. The core feature set is stable and usable today, but rough edges remain — please report bugs and odd behavior on Discord or via GitHub Issues. Features and accuracy will continue to be expanded over time, with help from community feedback.
