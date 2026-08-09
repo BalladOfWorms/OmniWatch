@@ -6260,6 +6260,12 @@ hotbar_icon_picker_scroll = 0    # vertical scroll offset within the picker grid
 # copied yet. Cleared on overlay restart (intentional — copy/paste is
 # for batch-editing in one sitting).
 _hotbar_clipboard = None
+# Whole-page clipboard, separate from the single-slot one above so a
+# copied button and a copied page can't clobber each other. Holds
+# {"name": <source page name>, "buttons": [...]} — the name is kept only
+# to label the PASTE button, never pasted over the destination's own
+# name, since you paste INTO a page you've already named for its job.
+_hotbar_page_clipboard = None
 # Per-frame click-target collections, populated by draw_hotbar_editor:
 hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
 
@@ -8172,13 +8178,24 @@ _BUTTONS_DEFAULT = {
     ],
 }
 
+# The kinds a hotbar button can be. Defined HERE rather than beside the
+# editor because _normalize_button_entry (just below) validates against
+# it and runs at import time via `buttons_config = load_buttons_config()`.
+HOTBAR_KINDS = ["windower", "action", "page", "shell", "url", "file", "none"]
+
+
 def _normalize_button_entry(raw):
     """Coerce a single entry dict into the canonical shape, filling
     defaults for missing fields and clamping `kind` to valid values."""
     if not isinstance(raw, dict):
         return {"label": "", "icon": "", "kind": "none", "command": ""}
     kind = str(raw.get("kind", "none")).strip().lower()
-    if kind not in ("windower", "action", "shell", "url", "file", "none"):
+    # Validate against HOTBAR_KINDS rather than a second hardcoded copy.
+    # The duplicate list here is what silently reset every "page" button
+    # to none on save: the editor offered the kind, the normalizer didn't
+    # recognise it, and the entry came back neutered. Any future kind
+    # added to HOTBAR_KINDS is now accepted here automatically.
+    if kind not in HOTBAR_KINDS:
         kind = "none"
     color = str(raw.get("color", "") or "")
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
@@ -8349,6 +8366,26 @@ def load_buttons_config():
 
 buttons_config = load_buttons_config()
 
+def _backup_before_write(path):
+    """Keep one generation of a config file as <name>.bak before it is
+    overwritten.
+
+    Added after a whole hotbar's worth of buttons was lost: saves go
+    straight over the live file AND are mirrored into the active profile
+    in the same breath, so a destructive edit takes out both copies at
+    once with nothing left to fall back on. One generation is enough to
+    undo "I just cleared the wrong thing" — which is the only case that
+    has ever come up — and costs a single file copy per save.
+
+    Never raises: a failed backup must not stop the save it precedes.
+    """
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            shutil.copy2(path, path + ".bak")
+    except Exception as e:
+        print(f"[OmniWatch] backup of {path} failed (continuing): {e!r}")
+
+
 def save_buttons_config():
     """Persist hotbar_pages back to omniwatch_buttons.json in the new
     paged format. Errors are logged but don't raise.
@@ -8373,6 +8410,7 @@ def save_buttons_config():
             ],
             "pages": hotbar_pages,
         }
+        _backup_before_write(BUTTONS_FILE)
         with open(BUTTONS_FILE, "w") as f:
             json.dump(envelope, f, indent=2)
         _profile_mirror(BUTTONS_FILE)
@@ -8629,6 +8667,57 @@ def draw_party_target_hint(surface):
     surface.blit(ts, (x + pad, y + pad))
 
 
+def _hotbar_jump_page(spec):
+    """Flip a hotbar panel to another page. Command format: "<hotbar>:<page>".
+
+    Both halves are what the USER sees, not internal indices: hotbar 2 is
+    the second panel on screen, and the page can be given by name
+    ("2:Songs") or by its 1-based number ("2:4"). Names are matched
+    case-insensitively and win over numbers, so a page literally called
+    "3" still resolves to itself.
+
+    Naming the page rather than storing its index is the point: renaming
+    a page in the editor would otherwise silently re-aim every button
+    that pointed at it.
+
+    The panel keeps the new page the way the arrows do — the position is
+    part of the saved layout — so a button that sends hotbar 2 to Songs
+    leaves it there until something moves it again.
+    """
+    raw = (spec or "").strip()
+    if ":" not in raw:
+        print(f"[OmniWatch] page button: expected '<hotbar>:<page>', got {raw!r}")
+        return
+    p_txt, pg_txt = raw.split(":", 1)
+    p_txt, pg_txt = p_txt.strip(), pg_txt.strip()
+    try:
+        panel_idx = int(p_txt) - 1          # user counts hotbars from 1
+    except ValueError:
+        print(f"[OmniWatch] page button: {p_txt!r} isn't a hotbar number")
+        return
+    if panel_idx < 0:
+        print(f"[OmniWatch] page button: hotbar {p_txt} doesn't exist")
+        return
+    page_idx = None
+    for i, pg in enumerate(hotbar_pages):
+        if str(pg.get("name", "")).strip().lower() == pg_txt.lower():
+            page_idx = i
+            break
+    if page_idx is None:
+        try:
+            page_idx = int(pg_txt) - 1      # and pages from 1
+        except ValueError:
+            print(f"[OmniWatch] page button: no page named {pg_txt!r}")
+            return
+    if not (0 <= page_idx < len(hotbar_pages)):
+        print(f"[OmniWatch] page button: page {pg_txt!r} is out of range")
+        return
+    hotbar_panel_pages[panel_idx] = page_idx
+    save_layout()
+    print(f"[OmniWatch] hotbar {panel_idx + 1} -> page {page_idx + 1} "
+          f"({hotbar_pages[page_idx].get('name', '')})")
+
+
 def dispatch_button(idx):
     """Run the command associated with button index `idx`. Robust to a
     range of failure modes (missing config, bad URLs, shell errors): logs
@@ -8651,6 +8740,9 @@ def dispatch_button(idx):
         elif kind == "action":
             print(f"[OmniWatch] button '{label}' -> action {cmd}")
             _hotbar_run_action(cmd.strip().lower())
+        elif kind == "page":
+            print(f"[OmniWatch] button '{label}' -> page {cmd}")
+            _hotbar_jump_page(cmd)
         elif kind == "url":
             url = cmd if "://" in cmd else "https://" + cmd
             webbrowser.open(url, new=2)
@@ -20468,9 +20560,20 @@ def _profile_mirror(live_path):
 
 
 def save_profile_as(name):
-    """Save the live setup as a profile and start using it. Overwrites an
-    existing profile of the same name — that's how you update one."""
-    global active_profile_name
+    """Save the live setup as a profile. Overwrites an existing profile of
+    the same name — that's how you update one.
+
+    IT DOES NOT SWITCH TO THE NEW PROFILE. It used to, and that quietly
+    destroyed the thing it had just saved: live edits are mirrored into
+    whichever profile is active, so "save this as Bard, then clear the
+    pages for the next job" wrote every one of those clears straight
+    back into Bard. Two profiles saved in a session have to both survive
+    it — that is the entire point of saving one.
+
+    Staying on the profile you were already using means a save-as is now
+    what it reads as: a copy set aside. To keep working IN the new
+    profile, switch to it from the dropdown, which is an explicit act.
+    """
     ok, why = _profile_name_ok(name)
     if not ok:
         print(f"[OmniWatch] save_profile_as: {why}")
@@ -20496,10 +20599,10 @@ def save_profile_as(name):
             copied += 1
         except Exception as e:
             print(f"[OmniWatch] save_profile_as {name!r}: {e!r}")
-    active_profile_name = name
-    _persist_active_profile_name()
+    # Deliberately NOT setting active_profile_name — see the docstring.
     print(f"[OmniWatch] Saved profile {name!r} for "
-          f"{active_view_char or '?'} ({copied} files)")
+          f"{active_view_char or '?'} ({copied} files); "
+          f"still using {active_profile_name or '(none)'}")
     return True
 
 
@@ -20741,6 +20844,7 @@ def save_layout():
             # toggle itself. Old keys in existing layout files are
             # harmlessly ignored on load.
         }
+        _backup_before_write(LAYOUT_FILE)
         with open(LAYOUT_FILE, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[OmniWatch] Saved layout ({len(panel_anchors)} panel anchors, "
@@ -21504,6 +21608,23 @@ EV_X         = PANEL_X     # anchored to left edge, same as party panels
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+def _mp_fill(member):
+    """How full to draw an MP bar, 0.0-1.0.
+
+    Uses the member's real MP PERCENT when the lua sends one. It used to
+    divide MP by a flat 1500, which is only right for a full-time caster:
+    a COR sitting at its 99 MP maximum drew a bar 7% full, which reads as
+    "nearly out" when it's actually capped.
+
+    mpp of -1 means an older lua that doesn't send the field — fall back
+    to the old estimate rather than drawing every pool empty.
+    """
+    mpp = member.get("mpp", -1)
+    if isinstance(mpp, (int, float)) and mpp >= 0:
+        return max(0.0, min(mpp / 100.0, 1.0))
+    return min((member.get("mp", 0) or 0) / 1500, 1.0)
+
+
 def hp_color(hpp, flashing):
     """HP bar color by percentage.
     76-100 = green, 51-75 = yellow, 31-50 = orange, 0-30 = red (flashes)."""
@@ -21771,7 +21892,7 @@ def draw_ally_panel(surface, x, y, member, scale=1.0):
              d["bar_w"], d["bar_h"], hpp / 100.0, hc,
              f"HP {hp} ({hpp}%)", d["f_bar_label"])
     draw_bar(surface, bx, by + d["bar_gap"],
-             d["bar_w"], d["bar_h"], min(mp / 1500, 1.0), COL_MP,
+             d["bar_w"], d["bar_h"], _mp_fill(member), COL_MP,
              f"MP {mp}", d["f_bar_label"])
     draw_bar(surface, bx, by + d["bar_gap"] * 2,
              d["bar_w"], d["bar_h"], min(tp / 3000, 1.0), tp_color(tp),
@@ -36381,7 +36502,7 @@ def draw_char_view_dropdown(surface):
                     else (200, 205, 220))
         # Clip the name so a long one can't run under the two buttons.
         p_label = f"{p_prefix} {prof}"
-        while (f_profile.size(p_label)[0] > prow_rect.width - 50
+        while (f_profile.size(p_label)[0] > prow_rect.width - 68
                and len(p_label) > 4):
             p_label = p_label[:-1]
         if p_label != f"{p_prefix} {prof}":
@@ -36408,6 +36529,20 @@ def draw_char_view_dropdown(surface):
              ren_rect.y + (ren_rect.h - rx.get_height()) // 2 - 1))
         char_view_dropdown_rects.append(
             (ren_rect, {"kind": "rename_profile", "name": prof}))
+
+        # Save-over: write whatever is on screen now into THIS profile,
+        # without switching to it. The dropdown could rename and delete a
+        # profile but never update one — the only way to refresh a saved
+        # setup was "Save current setup as…" with the same name retyped
+        # exactly, and a typo made a second profile instead.
+        sav_rect = pygame.Rect(ren_rect.x - 18, cy + 3, 14, 12)
+        pygame.draw.rect(surface, (48, 72, 58), sav_rect, border_radius=2)
+        sx = f_profile.render("\u2193", True, (190, 230, 200))
+        surface.blit(sx,
+            (sav_rect.x + (sav_rect.w - sx.get_width()) // 2,
+             sav_rect.y + (sav_rect.h - sx.get_height()) // 2 - 1))
+        char_view_dropdown_rects.append(
+            (sav_rect, {"kind": "save_over_profile", "name": prof}))
 
         char_view_dropdown_rects.append((prow_rect, {
             "kind": "select_profile", "name": prof,
@@ -36473,6 +36608,17 @@ def dispatch_char_view_dropdown_click(mx, my):
                 profile_name_modal_target = ""
                 profile_name_modal_text = ""
                 return True
+            elif kind == "save_over_profile":
+                # Overwrites that profile with the current setup and
+                # leaves the active one alone — same rule as
+                # "Save current setup as…", so saving into Bard while
+                # you're working under Default doesn't drag you onto
+                # Bard and start writing your later edits into it.
+                _pn = action.get("name")
+                if _pn:
+                    save_profile_as(_pn)
+                    print(f"[OmniWatch] saved current setup over "
+                          f"profile {_pn!r}")
             elif kind == "rename_profile":
                 # Same modal, rename mode: prefilled with the current name
                 # so a small correction doesn't mean retyping it.
@@ -47637,6 +47783,94 @@ def draw_chat_panel(surface, x, y, locked=False):
     _chat_draw_name_context_menu(surface)
 
 
+# ── Hotbar label colour markup ───────────────────────────────────────────
+# A label can colour part of itself with {x}...{/} where x is one of the
+# codes below: "Cure {r}IV{/}" draws "Cure " in the normal label colour
+# and "IV" in red. Written into the label text rather than stored beside
+# it, so it survives editing, hand-edits of omniwatch_buttons.json, and
+# copying a button between pages without any index bookkeeping.
+#
+# Codes are single letters so a marker costs 3 characters — labels are
+# short and the field is narrow, and every character spent on markup is
+# one less of the actual name.
+_HB_LABEL_COLORS = {
+    "r": (255, 110, 110),   # red
+    "o": (255, 175,  90),   # orange
+    "y": (245, 225, 120),   # yellow
+    "g": (130, 225, 130),   # green
+    "c": (120, 220, 235),   # cyan
+    "b": (130, 175, 255),   # blue
+    "m": (225, 145, 235),   # magenta
+    "w": (245, 245, 245),   # white
+}
+_HB_LABEL_RE = re.compile(r"\{([a-z])\}(.*?)\{/\}", re.S)
+
+
+def _hb_label_segments(label, base_color):
+    """Split a label into [(text, color), ...] runs.
+
+    Unmatched or unknown markers are left as literal text rather than
+    swallowed — a half-typed "{r}" while editing should look like what
+    it is, not make the rest of the label vanish.
+    """
+    if not label:
+        return []
+    out, pos = [], 0
+    for m in _HB_LABEL_RE.finditer(label):
+        if m.start() > pos:
+            out.append((label[pos:m.start()], base_color))
+        col = _HB_LABEL_COLORS.get(m.group(1))
+        out.append((m.group(2), col or base_color))
+        pos = m.end()
+    if pos < len(label):
+        out.append((label[pos:], base_color))
+    return out or [(label, base_color)]
+
+
+def _hb_label_plain(label):
+    """The label with its markers stripped — for width measurement and
+    for anywhere a label is shown without colour."""
+    if not label:
+        return ""
+    return _HB_LABEL_RE.sub(lambda m: m.group(2), label)
+
+
+def _hb_render_label(font, label, base_color, avail_w):
+    """Render a (possibly coloured) label to one surface, truncated with
+    an ellipsis to avail_w. Truncation walks the PLAIN text so a marker
+    can never be cut in half and leak into the drawn output."""
+    plain = _hb_label_plain(label)
+    if font.size(plain)[0] > avail_w:
+        # Trim the plain text, then re-apply colours by walking the
+        # segments and taking only as many characters as survived.
+        short = plain
+        while short and font.size(short + "\u2026")[0] > avail_w:
+            short = short[:-1]
+        keep = len(short)
+        segs, used = [], 0
+        for txt, col in _hb_label_segments(label, base_color):
+            if used >= keep:
+                break
+            take = txt[:keep - used]
+            if take:
+                segs.append((take, col))
+                used += len(take)
+        segs.append(("\u2026", base_color))
+    else:
+        segs = _hb_label_segments(label, base_color)
+    surfs = [font.render(t, True, c) for t, c in segs if t]
+    if not surfs:
+        return font.render("", True, base_color)
+    w = sum(su.get_width() for su in surfs)
+    h = max(su.get_height() for su in surfs)
+    out = pygame.Surface((max(1, w), h), pygame.SRCALPHA)
+    cx = 0
+    for su in surfs:
+        out.blit(su, (cx, 0))
+        cx += su.get_width()
+    return out
+
+
 # ── Button panel ─────────────────────────────────────────────────────────
 # 14 wide × 2 tall grid of user-configurable buttons. Each button runs the
 # command in buttons_config[idx] when clicked. Layout: BTN_W per button,
@@ -47782,8 +48016,17 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     indicator = f"{eff_page_idx + 1}/{n_pages}"
     ind_surf  = label_font.render(indicator, True, (200, 200, 215))
     ind_w     = ind_surf.get_width() + 6
+    # "Bar N" ahead of the arrows so a panel can be identified on sight.
+    # Page-jump buttons address hotbars by this number (a `2:Songs`
+    # button means Bar 2), and with several panels up there was nothing
+    # on screen saying which was which.
+    bar_surf = label_font.render(f"Bar {panel_idx + 1}", True, (150, 152, 172))
+    bar_w    = bar_surf.get_width() + 6
     left_arrow = pygame.Rect(right_arrow.x - ind_w - arrow_w, nav_y,
                              arrow_w, hdr_h)
+    surface.blit(bar_surf,
+                 (left_arrow.x - bar_w,
+                  nav_y + (hdr_h - bar_surf.get_height()) // 2))
     ind_x = left_arrow.right
     # Hover styling for arrows.
     for arr_rect, label_text, action_name in (
@@ -47901,13 +48144,9 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                 ix = bx + 4
                 iy = by + (cell_h - icon_sz) // 2
                 surface.blit(icon_surf, (ix, iy))
-                lab_surf = label_font.render(label, True, text_color)
                 avail_w = cell_w - icon_sz - 10
-                if lab_surf.get_width() > avail_w:
-                    short = label
-                    while short and label_font.size(short + "…")[0] > avail_w:
-                        short = short[:-1]
-                    lab_surf = label_font.render(short + "…", True, text_color)
+                lab_surf = _hb_render_label(label_font, label,
+                                            text_color, avail_w)
                 lx = ix + icon_sz + 4
                 ly = by + (cell_h - lab_surf.get_height()) // 2
                 surface.blit(lab_surf, (lx, ly))
@@ -47916,13 +48155,9 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                 iy = by + (cell_h - icon_sz) // 2
                 surface.blit(icon_surf, (ix, iy))
             elif label:
-                lab_surf = label_font.render(label, True, text_color)
                 avail_w = cell_w - 6
-                if lab_surf.get_width() > avail_w:
-                    short = label
-                    while short and label_font.size(short + "…")[0] > avail_w:
-                        short = short[:-1]
-                    lab_surf = label_font.render(short + "…", True, text_color)
+                lab_surf = _hb_render_label(label_font, label,
+                                            text_color, avail_w)
                 lx = bx + (cell_w - lab_surf.get_width()) // 2
                 ly = by + (cell_h - lab_surf.get_height()) // 2
                 surface.blit(lab_surf, (lx, ly))
@@ -47949,9 +48184,11 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
 #   7. User clicks Save                      → buttons_config[slot] = draft, save_buttons_config()
 #   8. User clicks Cancel / "Done editing"   → exits edit mode without saving in-progress draft
 
-HOTBAR_EDIT_FORM_H   = 248   # height of the inline form panel
+HOTBAR_EDIT_FORM_H   = 267   # height of the inline form panel
+                             # (+19 for the label colour swatch row)
 HOTBAR_EDIT_FIELD_H  = 22
-HOTBAR_KINDS         = ["windower", "action", "shell", "url", "file", "none"]
+# HOTBAR_KINDS lives further up, above _normalize_button_entry — that
+# runs at import time and validates against it.
 
 
 def _hotbar_editor_get_focused_text():
@@ -48284,7 +48521,32 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
     # Row 1: Label (or Page Name when in name-edit mode).
     _draw_field_label("Page Name" if is_page_name_mode else "Label", cy)
     _draw_text_input("label", cy)
-    cy += HOTBAR_EDIT_FIELD_H + 6
+    cy += HOTBAR_EDIT_FIELD_H + 4
+
+    # Colour swatches, button-slot edits only. Clicking one drops a
+    # matched pair of markers at the cursor and parks the cursor between
+    # them, so the flow is: put the cursor where the coloured bit starts,
+    # click a colour, type. No text selection needed — the Label field
+    # has none, and building it was the expensive half of doing this
+    # properly.
+    if not is_page_name_mode:
+        _sw = 13
+        _sx = control_x
+        for _code, _col in _HB_LABEL_COLORS.items():
+            _sr = pygame.Rect(_sx, cy, _sw, _sw)
+            pygame.draw.rect(surface, _col, _sr, border_radius=2)
+            pygame.draw.rect(surface, (40, 40, 52), _sr, 1, border_radius=2)
+            hotbar_editor_rects.append(
+                (_sr, {"kind": "label_color", "code": _code}))
+            _sx += _sw + 4
+        # Clear: strips every marker from the label.
+        _cr = pygame.Rect(_sx + 4, cy, _sw + 10, _sw)
+        pygame.draw.rect(surface, (60, 60, 75), _cr, border_radius=2)
+        _cs = field_font.render("clr", True, (210, 210, 225))
+        surface.blit(_cs, (_cr.x + (_cr.w - _cs.get_width()) // 2,
+                           _cr.y + (_cr.h - _cs.get_height()) // 2))
+        hotbar_editor_rects.append((_cr, {"kind": "label_color_clear"}))
+        cy += _sw + 6
 
     # Rows 2-4 only apply to button-slot edits. Skip them entirely when
     # editing a page name — the only field there is the name itself.
@@ -48351,6 +48613,15 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
             _draw_field_label("Command", cy)
             _draw_text_input("command", cy)
         cy += HOTBAR_EDIT_FIELD_H + 6
+
+        # Format hint for the page kind — "2:Songs" isn't guessable, and
+        # the Command box is the only place it can be typed.
+        if kind_val == "page":
+            _ph = field_font.render(
+                "hotbar:page  e.g.  2:Songs  or  2:4",
+                True, (150, 152, 170))
+            surface.blit(_ph, (control_x, cy - 2))
+            cy += _ph.get_height() + 4
 
         # Row 4: Icon — small thumb preview + "Pick…" button + clear.
         _draw_field_label("Icon", cy)
@@ -48490,6 +48761,52 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
         surface.blit(dls, (del_rect.x + (cp_w - dls.get_width()) // 2,
                            del_rect.y + (save_h - dls.get_height()) // 2))
         hotbar_editor_rects.append((del_rect, {"kind": "delete_slot"}))
+    else:
+        # Page-scoped versions of the same three, in the same places:
+        # copy every button on this page, paste a copied page over it,
+        # or empty it. This is the "set up another job" workflow — most
+        # of a new job's page is the last job's page with a few swaps.
+        cp_w = 64
+        copy_rect = pygame.Rect(cancel_rect.right + 12,
+                                save_rect.y, cp_w, save_h)
+        paste_rect = pygame.Rect(copy_rect.right + 6,
+                                 save_rect.y, cp_w, save_h)
+        pygame.draw.rect(surface, (110, 130, 170), copy_rect, border_radius=8)
+        _cps = btn_font.render("COPY", True, (30, 30, 50))
+        surface.blit(_cps, (copy_rect.x + (cp_w - _cps.get_width()) // 2,
+                            copy_rect.y + (save_h - _cps.get_height()) // 2))
+        hotbar_editor_rects.append((copy_rect, {"kind": "copy_page"}))
+
+        _has_pclip = (_hotbar_page_clipboard is not None)
+        _pbg = (110, 170, 130) if _has_pclip else (60, 70, 65)
+        _pfg = (30, 50, 35)    if _has_pclip else (110, 120, 115)
+        pygame.draw.rect(surface, _pbg, paste_rect, border_radius=8)
+        _pst = btn_font.render("PASTE", True, _pfg)
+        surface.blit(_pst, (paste_rect.x + (cp_w - _pst.get_width()) // 2,
+                            paste_rect.y + (save_h - _pst.get_height()) // 2))
+        hotbar_editor_rects.append((paste_rect, {"kind": "paste_page"}))
+
+        # Which page is on the clipboard, spelled out next to the button.
+        # PASTE replaces every slot on this page at once — the most
+        # destructive thing in the editor — so it should never be a
+        # guess what is about to land.
+        if _has_pclip:
+            _src = str(_hotbar_page_clipboard.get("name", "") or "?")
+            _sl = field_font.render("from: " + _src, True, (150, 170, 150))
+            surface.blit(_sl, (paste_rect.x,
+                               paste_rect.bottom + 2))
+
+        # CLEAR: empties every slot on this page. Danger-styled and set
+        # apart, same as DELETE is for a single slot. COPY first if you
+        # want a way back.
+        clr_rect = pygame.Rect(max(paste_rect.right + 12,
+                                   form_rect.right - pad - cp_w),
+                               save_rect.y, cp_w, save_h)
+        pygame.draw.rect(surface, (190, 80, 80), clr_rect, border_radius=8)
+        _cls = btn_font.render("CLEAR", True, (50, 20, 20))
+        surface.blit(_cls, (clr_rect.x + (cp_w - _cls.get_width()) // 2,
+                            clr_rect.y + (save_h - _cls.get_height()) // 2))
+        hotbar_editor_rects.append((clr_rect, {"kind": "clear_page"}))
 
     total_h = form_h + 4
 
@@ -48623,6 +48940,73 @@ def dispatch_hotbar_editor_click(mx, my):
                     if hotbar_edit_draft else "")
             hotbar_text_cursor = len(text)
             hotbar_text_blink_t0 = time.time()
+        elif kind == "copy_page":
+            _pg = (hotbar_edit_page
+                   if (hotbar_edit_page is not None
+                       and 0 <= hotbar_edit_page < len(hotbar_pages))
+                   else hotbar_current_page)
+            if 0 <= _pg < len(hotbar_pages):
+                _src = hotbar_pages[_pg]
+                globals()["_hotbar_page_clipboard"] = {
+                    "name": _src.get("name", ""),
+                    # dict() each entry: a shallow list copy would alias
+                    # the button dicts, so editing the source afterwards
+                    # would silently change what pastes.
+                    "buttons": [dict(b) for b in _src.get("buttons", [])],
+                }
+                print(f"[OmniWatch] copied page {_pg + 1} "
+                      f"({_src.get('name', '')})")
+        elif kind == "paste_page":
+            if _hotbar_page_clipboard is not None:
+                _pg = (hotbar_edit_page
+                       if (hotbar_edit_page is not None
+                           and 0 <= hotbar_edit_page < len(hotbar_pages))
+                       else hotbar_current_page)
+                if 0 <= _pg < len(hotbar_pages):
+                    # Buttons only — the destination keeps its own name,
+                    # which is the whole point of pasting into a page you
+                    # already named for a job.
+                    hotbar_pages[_pg]["buttons"] = [
+                        dict(b) for b in
+                        _hotbar_page_clipboard.get("buttons", [])]
+                    _hotbar_ensure_slots()
+                    save_buttons_config()
+                    print(f"[OmniWatch] pasted "
+                          f"{_hotbar_page_clipboard.get('name', '')} "
+                          f"over page {_pg + 1}")
+        elif kind == "clear_page":
+            _pg = (hotbar_edit_page
+                   if (hotbar_edit_page is not None
+                       and 0 <= hotbar_edit_page < len(hotbar_pages))
+                   else hotbar_current_page)
+            if 0 <= _pg < len(hotbar_pages):
+                hotbar_pages[_pg]["buttons"] = []
+                _hotbar_ensure_slots()
+                save_buttons_config()
+                print(f"[OmniWatch] cleared page {_pg + 1}")
+        elif kind == "label_color":
+            # Insert a matched {x}...{/} pair at the cursor and park the
+            # cursor between them, so the next thing typed is coloured.
+            # Focus is forced to the label field first — clicking a
+            # swatch while the Command field had focus would otherwise
+            # drop markers into the command.
+            if hotbar_edit_draft is not None:
+                hotbar_focused_field = "label"
+                _txt = hotbar_edit_draft.get("label", "") or ""
+                _i = max(0, min(hotbar_text_cursor, len(_txt)))
+                _open = "{" + action["code"] + "}"
+                hotbar_edit_draft["label"] = (
+                    _txt[:_i] + _open + "{/}" + _txt[_i:])
+                hotbar_text_cursor = _i + len(_open)
+                hotbar_text_blink_t0 = time.time()
+        elif kind == "label_color_clear":
+            # Strip every marker, keeping the text inside them.
+            if hotbar_edit_draft is not None:
+                hotbar_focused_field = "label"
+                hotbar_edit_draft["label"] = _hb_label_plain(
+                    hotbar_edit_draft.get("label", "") or "")
+                hotbar_text_cursor = len(hotbar_edit_draft["label"])
+                hotbar_text_blink_t0 = time.time()
         elif kind == "kind_step":
             if hotbar_edit_draft is not None:
                 cur = hotbar_edit_draft.get("kind", "none")
@@ -54361,6 +54745,11 @@ while running:
             sjl = parts[9] if len(parts) > 9 else "0"
             # 11th field (optional): zone-local mob index for this party
             # member. Used to detect when a mob is targeting them.
+            # Field 17 (0-based 16) is MP%, appended after pet_tp.
+            # Missing on an older lua: fall back to -1, which the bar
+            # code reads as "unknown" and falls back to the old guess
+            # rather than drawing every pool empty.
+            mpp_raw = parts[16] if len(parts) > 16 else ""
             midx = parts[10] if len(parts) > 10 else "0"
             # 12th field (optional): entity ID of this party member.
             # Used to match against a mob's claim_id.
@@ -54402,6 +54791,7 @@ while running:
                 "player_id": _as_int(pid),
                 "group_id":  _as_int(grp),
                 "pet_name":  pet_name,
+                "mpp":       _as_int(mpp_raw, -1),
                 "pet_hpp":   _as_int(pet_hpp),
                 "pet_tp":    _as_int(pet_tp),
             }
@@ -57745,7 +58135,7 @@ while running:
 
         hc = hp_color(m["hpp"], flash)
         draw_bar(screen, bx, by,                          d["bar_w"], d["bar_h"], m["hpp"] / 100.0,         hc,     f"HP {m['hp']} ({m['hpp']}%)", d["f_bar_label"])
-        draw_bar(screen, bx, by + d["bar_gap"],           d["bar_w"], d["bar_h"], min(m["mp"] / 1500, 1.0), COL_MP, f"MP {m['mp']}",                d["f_bar_label"])
+        draw_bar(screen, bx, by + d["bar_gap"],           d["bar_w"], d["bar_h"], _mp_fill(m), COL_MP, f"MP {m['mp']}",                d["f_bar_label"])
         draw_bar(screen, bx, by + d["bar_gap"] * 2,       d["bar_w"], d["bar_h"], min(m["tp"] / 3000, 1.0), tp_color(m["tp"]), f"TP {m['tp']}",                d["f_bar_label"])
 
         # When 'specific_buff_names' is on AND this is the player's own
@@ -58783,19 +59173,27 @@ while running:
         globals()["_hotbar_tooltip"] = None
         _tt_f1 = get_font("Consolas", 13, bold=True)
         _tt_f2 = get_font("Consolas", 11)
+        # Each line is (font, [(text, colour), ...]) so the label can carry
+        # its {r}...{/} colouring through. The tooltip is where a long
+        # label is actually READABLE — the button cell truncates at a few
+        # characters, so a coloured word past the cut is invisible there.
+        # Showing the raw markers here (which is what it used to do)
+        # made the feature look broken.
         _tt_lines = []
         if _tt_label:
-            _tt_lines.append((_tt_f1, _tt_label, (225, 228, 238)))
+            _tt_lines.append((_tt_f1, _hb_label_segments(_tt_label,
+                                                         (225, 228, 238))))
         if _tt_cmd:
             _pfx = {"windower": "//", "shell": "$ "}.get(_tt_kind, "")
             _cmd_disp = _pfx + _tt_cmd
             if len(_cmd_disp) > 64:
                 _cmd_disp = _cmd_disp[:63] + "…"
-            _tt_lines.append((_tt_f2, _cmd_disp, (160, 168, 186)))
+            _tt_lines.append((_tt_f2, [(_cmd_disp, (160, 168, 186))]))
         if _tt_lines:
             _tt_pad = 7
-            _tt_w = max(f.size(t)[0] for f, t, _ in _tt_lines) + _tt_pad * 2
-            _tt_h = sum(f.get_height() + 2 for f, t, _ in _tt_lines) \
+            _tt_w = max(sum(f.size(t)[0] for t, _ in segs)
+                        for f, segs in _tt_lines) + _tt_pad * 2
+            _tt_h = sum(f.get_height() + 2 for f, _ in _tt_lines) \
                 + _tt_pad * 2 - 2
             _tmx, _tmy = pygame.mouse.get_pos()
             _tt_x = min(max(0, _tmx + 14), WIDTH - _tt_w)
@@ -58808,9 +59206,12 @@ while running:
             pygame.draw.rect(screen, (96, 104, 128), _tt_rect, 1,
                              border_radius=4)
             _ty = _tt_rect.y + _tt_pad
-            for _f, _t, _c in _tt_lines:
-                screen.blit(_f.render(_t, True, _c),
-                            (_tt_rect.x + _tt_pad, _ty))
+            for _f, _segs in _tt_lines:
+                _tx = _tt_rect.x + _tt_pad
+                for _t, _c in _segs:
+                    _ss = _f.render(_t, True, _c)
+                    screen.blit(_ss, (_tx, _ty))
+                    _tx += _ss.get_width()
                 _ty += _f.get_height() + 2
 
 

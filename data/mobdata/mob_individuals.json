@@ -143873,7 +143873,7 @@
       "display": "Mountain Peiste",
       "family": "Peiste",
       "type": "Lizard",
-      "aggro": false,
+      "aggro": true,
       "link": false,
       "detect_flags": {
         "sight": true, "sound": false, "blood": false, "magic": false, "ja": false,

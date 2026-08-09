@@ -23144,6 +23144,12 @@ ow_safe_register('prerender', function()
                 local hp  = member.hp  or 0
                 local hpp = member.hpp or 0
                 local mp  = member.mp  or 0
+                -- MP PERCENT. Without it the panel had no idea what a
+                -- member's max MP was and drew the bar against a flat
+                -- guess of 1500, so a COR with 99 max MP showed a full
+                -- pool as a 7%-filled bar. get_party() carries mpp the
+                -- same way it carries hpp — it was simply never sent.
+                local mpp = member.mpp or 0
                 local tp  = member.tp  or 0
 
                 local mj, mjl, sj, sjl = '', 0, '', 0
@@ -23212,7 +23218,10 @@ ow_safe_register('prerender', function()
                     tostring(group_id)    .. ',' ..
                     tostring(pet_name)    .. ',' ..
                     tostring(pet_hpp)     .. ',' ..
-                    tostring(pet_tp)      .. ';'
+                    tostring(pet_tp)      .. ',' ..
+                    -- APPENDED at the end so an older overlay reading
+                    -- this wire just ignores the extra field.
+                    tostring(mpp)         .. ';'
             end
 
             -- Main party: p0..p5 (group 0).
