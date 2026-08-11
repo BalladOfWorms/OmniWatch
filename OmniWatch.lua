@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.11.4'
+_addon.version  = '1.11.5'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -574,6 +574,8 @@ end
 -- 200-local ceiling.
 _ow_whystat = nil
 _ow_whystat_pending = nil
+-- //ow stprobe toggle. See the subtarget gate in the target poll.
+_ow_stprobe_on = false
 
 function _ow_ws(stage, before, after)
     -- Log one stage's contribution to the stat under investigation.
@@ -9877,6 +9879,24 @@ local function _ow_drain_inbound()
                     '[OW target] %s is not a valid target right now',
                     tostring(nm)))
             else
+                -- Is a SUBTARGET cursor open? If you fired a macro built
+                -- on <stpc>, the game is sitting waiting for you to pick
+                -- a player. Moving that cursor onto someone is exactly
+                -- what the inject below does — he tested it and the
+                -- cursor lands on the right person — but the client then
+                -- waits for a CONFIRM that never comes, so the spell
+                -- just sits there.
+                --
+                -- So: if the cursor is up, send the confirm ourselves
+                -- right after moving it. 'st' is Windower's name for the
+                -- subtarget slot and returns nil when no cursor is open,
+                -- which keeps this from firing an Enter into the game on
+                -- an ordinary click-to-target — that would open the chat
+                -- bar or advance an NPC dialog every time.
+                local st_open = false
+                pcall(function()
+                    st_open = windower.ffxi.get_mob_by_target('st') ~= nil
+                end)
                 local ok_t, err_t = pcall(function()
                     packets.inject(packets.new('incoming', 0x058, {
                         ['Player']       = me.id,
@@ -9884,6 +9904,19 @@ local function _ow_drain_inbound()
                         ['Player Index'] = me.index,
                     }))
                 end)
+                if ok_t and st_open then
+                    -- setkey drives the game's own key handling, which is
+                    -- what the cursor is listening to; a chat command
+                    -- can't confirm a subtarget. The small wait is for
+                    -- the cursor to settle on the new target before the
+                    -- keypress lands.
+                    windower.send_command(
+                        'wait 0.1; setkey enter down; '
+                        .. 'wait 0.05; setkey enter up')
+                    ow_chat(207, string.format(
+                        '[OW target] subtarget cursor was open -> '
+                        .. 'confirmed on %s', tostring(nm)))
+                end
                 ow_chat(207, string.format(
                     '[OW target] %s id=%d -> inject 0x058 ok=%s%s',
                     tostring(nm), tid, tostring(ok_t),
@@ -9902,7 +9935,28 @@ local function _ow_drain_inbound()
                     ow_chat(207,
                         '[OW] CMD recv: ' .. tostring(rest))
                 end
-                windower.send_command(rest)
+                -- `input …` goes STRAIGHT to the chat injector when
+                -- Windower offers one. send_command hands the string to
+                -- the console, which parses it, recognises `input`, and
+                -- then does this anyway — a round trip we can skip for
+                -- the one command hotbar buttons use most. Shaves the
+                -- console hop off every macro press; the rest of the
+                -- delay (overlay frame, UDP, the next prerender) is the
+                -- transport and can't go away.
+                -- ONLY when the whole command is a single `input …`.
+                -- Windower's console chains with ';' and understands
+                -- `wait`, so "input /ma X <t>; wait 2; input /ja Y <me>"
+                -- is one button firing a sequence — handing that string
+                -- straight to the chat injector would type the semicolons
+                -- into say. Anything with a ';' goes back through the
+                -- console, which is what knows how to split it.
+                local _inp = rest:match('^input%s+(.+)$')
+                if _inp and _inp:find(';', 1, true) then _inp = nil end
+                if _inp and windower.chat and windower.chat.input then
+                    windower.chat.input(_inp)
+                else
+                    windower.send_command(rest)
+                end
             end
         else
             -- Unrecognised header. Fall through to legacy bare-command
@@ -10300,6 +10354,9 @@ local PW_COMMANDS_HELP = {
     {'help',                  'Show this list of commands.'},
     {'petdump',               'Write every field of the current pet\'s mob '
                               .. 'entry to omniwatch.log.'},
+    {'stprobe',               'Toggle the sub-target diagnostic: logs what '
+                              .. 'the cursor-open gate sees on every '
+                              .. 'target poll.'},
     {'whystat <stat>',        'Break a stats-panel number down by source — '
                               .. 'every gear piece contributing to it, plus '
                               .. 'set bonuses. e.g. whystat subtle blow'},
@@ -10668,6 +10725,15 @@ ow_safe_register('addon command', function(command, ...)
                     k, tostring(v)))
             end
         end
+    elseif command == 'stprobe' then
+        -- Diagnostic for "the subtarget card never opens". Logs, on every
+        -- target poll, whether the target-arrow field exists at all, its
+        -- coordinates, how many polls they have been unchanged, and what
+        -- the 'st' and 't' selectors are returning. Open a <stpc> prompt
+        -- with this on and the log says which half is failing.
+        _ow_stprobe_on = not _ow_stprobe_on
+        ow_chat(207, '[OW st] subtarget probe '
+                  .. (_ow_stprobe_on and 'ON' or 'OFF'))
     elseif command == 'whystat' then
         -- //ow whystat <stat name> — break a stats-panel number down by
         -- source. Gear is per piece (plus set bonuses) from
@@ -23150,6 +23216,20 @@ ow_safe_register('prerender', function()
                 -- pool as a 7%-filled bar. get_party() carries mpp the
                 -- same way it carries hpp — it was simply never sent.
                 local mpp = member.mpp or 0
+                -- Status byte: 0 idle, 1 ENGAGED, 2 dead, 3 in-event, ...
+                -- Sent so the overlay can tell "in a fight" from "standing
+                -- around", which is the only thing click-to-target needs to
+                -- care about.
+                local mstat = (member.mob and member.mob.status) or 0
+                -- For YOURSELF prefer player.status. The party entry's
+                -- mob struct is not reliably populated for your own row
+                -- — it came through 0 while genuinely engaged, which made
+                -- the overlay think a fight wasn't happening and let a
+                -- click steal the target mid-combat. get_player() is
+                -- authoritative about your own state.
+                if m_id ~= 0 and m_id == player_id and player then
+                    mstat = player.status or mstat
+                end
                 local tp  = member.tp  or 0
 
                 local mj, mjl, sj, sjl = '', 0, '', 0
@@ -23221,7 +23301,8 @@ ow_safe_register('prerender', function()
                     tostring(pet_tp)      .. ',' ..
                     -- APPENDED at the end so an older overlay reading
                     -- this wire just ignores the extra field.
-                    tostring(mpp)         .. ';'
+                    tostring(mpp)         .. ',' ..
+                    tostring(mstat)       .. ';'
             end
 
             -- Main party: p0..p5 (group 0).
@@ -24072,60 +24153,24 @@ ow_safe_register('prerender', function()
 
             local main_mob = windower.ffxi.get_mob_by_target('t')
             local sub_mob  = windower.ffxi.get_mob_by_target('st')
-            -- Sub-target validity gate. The 'st' selector returns stale
-            -- data whenever the player ISN'T actively in <st>/<stpc>/
-            -- <stnpc> cursor mode — it just keeps returning whatever was
-            -- last selected. We layer two checks to detect "cursor open
-            -- right now":
-            --   (a) target_arrow non-zero coords  — the in-game cursor
-            --       position. {0,0,0} when no prompt up.
-            --   (b) target_arrow CHANGES across frames. The game leaves
-            --       stale non-zero coords after the cursor closes, so
-            --       check (a) alone isn't enough. When the cursor IS
-            --       active, the arrow updates continuously as the camera
-            --       moves; if coords have been static for several
-            --       polling ticks, the prompt was closed.
-            local cursor_active = false
-            if info and info.target_arrow then
-                local ta = info.target_arrow
-                if (ta.x and ta.x ~= 0) or (ta.y and ta.y ~= 0) or (ta.z and ta.z ~= 0) then
-                    -- Arrow has non-zero coords. Check freshness.
-                    local cx = tonumber(ta.x) or 0
-                    local cy = tonumber(ta.y) or 0
-                    local cz = tonumber(ta.z) or 0
-                    local lx = _ow_last_arrow_x or 0
-                    local ly = _ow_last_arrow_y or 0
-                    local lz = _ow_last_arrow_z or 0
-                    local stale_count = _ow_arrow_stale_count or 0
-                    if cx == lx and cy == ly and cz == lz then
-                        stale_count = stale_count + 1
-                    else
-                        stale_count = 0
-                    end
-                    _ow_last_arrow_x = cx
-                    _ow_last_arrow_y = cy
-                    _ow_last_arrow_z = cz
-                    _ow_arrow_stale_count = stale_count
-                    -- 30 polling ticks at the target poll rate (~5Hz) =
-                    -- ~6 seconds without any arrow movement. A real
-                    -- cursor session wiggles way more often than that
-                    -- as you point at things.
-                    if stale_count < 30 then
-                        cursor_active = true
-                    end
-                else
-                    -- Arrow truly zero — definitely no cursor. Reset the
-                    -- staleness counter so the next non-zero burst is
-                    -- treated as fresh.
-                    _ow_arrow_stale_count = 0
-                end
-            end
-            if not cursor_active then
-                sub_mob = nil
-            elseif sub_mob then
-                -- Cursor active: still apply the same-id and self filters
-                -- since 'st' can briefly mirror 't' or self when the cursor
-                -- first opens.
+            -- Sub-target validity. This USED to gate everything on an
+            -- inferred "is a cursor open right now", read from
+            -- windower.ffxi.get_info().target_arrow having non-zero
+            -- coordinates that CHANGE between polls.
+            --
+            -- //ow stprobe killed that: on his setup the field exists but
+            -- reads x=0 y=0 z=0 on EVERY poll, cursor open or not. So the
+            -- gate was false forever and the sub-target card could never
+            -- appear — which is exactly what he reported.
+            --
+            -- enemybar (Mike McKee, 2015) has shown sub-targets reliably
+            -- for a decade with no arrow check at all: it takes 'st'
+            -- whenever it is non-nil and differs from 't'. That is the
+            -- rule now. The id/self/valid filters below were always the
+            -- part doing the real work — 'st' mirrors 't' when no cursor
+            -- is open, so "differs from the main target" IS the
+            -- cursor-open test.
+            if sub_mob then
                 local me_id_now = (windower.ffxi.get_player() or {}).id or 0
                 if main_mob and main_mob.id == sub_mob.id then
                     sub_mob = nil

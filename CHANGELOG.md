@@ -1,10 +1,26 @@
 # Changelog
 
-## [1.11.4] — 2026-08-09
+## [1.11.5] — 2026-08-11
+
+### Fixed
+
+- **Bard sets take five songs without Clarion Call** — the editor capped a set at four unless Clarion Call was ticked, but Clarion Call is what lets you add a fifth song you don't already have; refreshing five that are already up needs nothing extra. The cap is a flat five now, and Clarion Call stays as an ability toggle on the set.
+- **Bard loadouts remember the set you picked** — the active set is stored with the sets themselves, per character, the way trust sets always have been. It was kept in the layout file before, which is shared across characters and only written on certain events, so the choice could quietly go missing and you'd have to open Loadouts and pick it again. Singing a set also makes it the active one.
+- **The sub-target card never appeared** — pick a spell and then a different target in game and the panel showed nothing. It was working out whether the game's pick-a-target cursor was open by watching an internal coordinate that reads as zero the whole time on some setups, so the answer was always "no cursor" and the card was thrown away every time. It now decides the way other addons have for years: if the game reports a sub-target and it isn't your main target, show it.
+
+### Added
+
+- **Clicking a party member no longer costs you your target** — while you're **engaged in a fight**, clicking a name just *selects* that person and leaves your target alone. Any other time — standing around, resting, between pulls — it targets them, exactly as it always did. The hint under the cursor says which it's about to do. Write a button's command with **`<pc>`** where you'd normally put `<t>` — `/ma "Cure IV" <pc>` — and it acts on whoever you last clicked, so you can heal a party member mid-fight without dropping the mob you're on. `<t>` buttons are unchanged.
+- **Hotbar buttons fire a little sooner** — a button's game command now goes straight to the chat injector instead of being handed to Windower's console to parse first. It's one hop off the round trip rather than a rewrite, so expect a shorter pause, not none: the rest is the overlay, the network hop and the game's next frame.
+- **Select several hotbar cells and copy them between profiles** — in the hotbar editor, **Ctrl+click** cells to pick them out (each gets a gold outline), **Ctrl+C** to copy, then hover the bar you want and **Ctrl+V**. They land in the same slots they came from, so an arrangement carries over intact rather than being relocated, and the bar you paste onto is whichever one the cursor is over — not the one you copied from. The outlines clear as soon as you copy; what you copied survives a profile switch, which is the point.
+
+## [1.11.4] — 2026-08-10
 
 ### Added
 
 - **A hotbar button can switch another hotbar's page** — set a button's kind to **page** and its command to `hotbar:page`, e.g. `2:Songs`. Pressing it flips that hotbar to that page and leaves the one holding the button where it is, so a permanent nav strip on hotbar 1 can drive hotbar 2. Pages are named rather than numbered, so renaming one doesn't quietly re-aim the buttons pointing at it (a number still works if you'd rather: `2:4`). The page sticks the way the arrows' does — it's remembered across sessions.
+- **Pasting a button into a cell takes effect straight away** — copy a button, open another cell, paste, and it's there and saved. It used to only load into the form and wait for **Save**, so a paste that looked done was lost if you clicked away. Delete has always worked this way.
+- **Saving a profile says so** — a small **Saved as _name_** note appears by the cursor and fades out after three seconds. Saving was silent before, and the dropdown looks identical either way, so there was nothing confirming it worked.
 - **Update a saved profile from the dropdown** — each profile row now has a **↓** button beside the pencil and the ✕: click it and whatever is on screen right now is saved into that profile. There was no way to update one before; refreshing a saved setup meant "Save current setup as…" and retyping the name exactly, and a typo quietly made a second profile instead. It doesn't switch you onto the profile you saved into, so you can keep working where you are.
 - **Saving a profile no longer starts using it** — and that means two profiles saved in one session both survive it, which is the whole point of saving one. Whatever you change is written into whichever profile is currently in use, so "save this setup as Bard, then clear the pages ready for the next job" wrote every one of those clears straight back into Bard and the saved copy was gone. **Save current setup as…** now does what it reads as: puts a copy aside and leaves you where you were. To carry on working inside the new profile, pick it from the dropdown — switching is its own deliberate step.
 - **Your hotbar and layout keep a backup** — every save now copies the previous file to `omniwatch_buttons.json.bak` / `omniwatch_layout.json.bak` first. Saves go straight over the live file and are mirrored into the active profile at the same moment, so before this a destructive edit took out both copies at once with nothing to fall back on. One generation is kept, which is enough to undo "I just cleared the wrong thing" — close OmniWatch, rename the `.bak` over the original, start it again.
@@ -14,7 +30,7 @@
 
 ### Fixed
 
-- **MP bars are drawn against your real maximum** — The game reports each member's MP percentage the same way it reports HP's; it just wasn't being sent to the panel. Bars for every party and alliance member now fill correctly whatever their pool.
+- **MP bars are drawn against your real maximum** — bars for every party and alliance member now fill correctly whatever the size of their MP pool.
 
 - **Job point gifts now count toward magic evasion** — the Magic Evasion Bonus gifts each job earns as it spends job points were being ignored, so the figure was short by up to 36 on a fully-spent job. The values were already in the gift data; nothing was reading them for this stat.
 - **Magic evasion was being counted twice** — every piece of gear was added to the figure once by the stat engine and then again on top, so a set carrying 501 read as 1002. Fast Cast and Subtle Blow have both had the same double-add fixed before; this was the last one anybody had noticed. **Your magic evasion figure will roughly halve, and the lower number is the right one.**

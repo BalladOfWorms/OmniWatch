@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.11.4 (2026-08-09)"
+OMNIWATCH_BUILD_STAMP = "v1.11.5 (2026-08-06)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.11.4"
+OMNIWATCH_VERSION = "1.11.5"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -5975,6 +5975,12 @@ last_target_time = 0.0
 # The last non-None target we had (sticks around during fade).
 target_sticky = None
 
+# The party member you last picked out of the panel — what <pc> resolves
+# to in a hotbar command. NOT a game target: nothing about your actual
+# target changes when this is set, which is the entire point. Lets a cure
+# go to a party member while you stay locked on the mob you're fighting.
+selected_player_name = ""
+
 # Sub-target mirrors the same state shape.
 target_info_st      = None
 last_target_time_st = 0.0
@@ -6266,6 +6272,16 @@ _hotbar_clipboard = None
 # to label the PASTE button, never pasted over the destination's own
 # name, since you paste INTO a page you've already named for its job.
 _hotbar_page_clipboard = None
+# Ctrl+click multi-selection: a set of (page_idx, slot_idx). Held across
+# a profile switch on purpose — copying a handful of buttons out of one
+# profile and into another is the whole reason it exists, and switching
+# reloads buttons_config underneath it.
+_hotbar_multi_sel = set()
+# {slot_idx: entry} from the last Ctrl+C. Keyed by SLOT so a paste lands
+# the buttons back in the same places they came from, which is what
+# "copy these into my other profile" means — same arrangement, different
+# profile. Anchoring to a click point would relocate them instead.
+_hotbar_multi_clipboard = None
 # Per-frame click-target collections, populated by draw_hotbar_editor:
 hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
 
@@ -8606,10 +8622,20 @@ def draw_hotbar_action_note(surface):
     y = _hb_action_note["y"] - h - 10
     if y < 0:
         y = _hb_action_note["y"] + 16
-    pygame.draw.rect(surface, (26, 26, 34), (x, y, w, h), border_radius=4)
-    pygame.draw.rect(surface, (120, 120, 145), (x, y, w, h), 1,
+    # Fade over the last second rather than blinking out. Drawn onto a
+    # per-pixel-alpha scratch surface and blitted once, so the box, its
+    # border and the text fade together — setting alpha on each piece
+    # separately would let the border show through the background as it
+    # goes.
+    _left = _hb_action_note["until"] - time.time()
+    _a = 255 if _left > 1.0 else max(0, int(255 * _left))
+    _n = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(_n, (26, 26, 34, _a), (0, 0, w, h), border_radius=4)
+    pygame.draw.rect(_n, (120, 120, 145, _a), (0, 0, w, h), 1,
                      border_radius=4)
-    surface.blit(ts, (x + pad, y + pad))
+    ts.set_alpha(_a)
+    _n.blit(ts, (pad, pad))
+    surface.blit(_n, (x, y))
 
 
 # Gold, so the hint reads as an affordance rather than as data — every
@@ -8651,7 +8677,15 @@ def draw_party_target_hint(surface):
     if not hover_name:
         return
     f = get_font("Consolas", 12)
-    ts = f.render(f"Click to target: {hover_name}", True, COL_TARGET_HINT)
+    # The hint has to say which of the two things a click will do, since
+    # that now depends on whether you already have a target. Getting this
+    # wrong either way is worse than no hint: "target" when it will only
+    # select reads as a bug, and "select" when it will retarget loses you
+    # a mob mid-fight.
+    # Matches the click rule below: only a MOB target is protected, so a
+    # PC target (or none) still means the click will retarget.
+    _verb = "select" if _player_engaged() else "target"
+    ts = f.render(f"Click to {_verb}: {hover_name}", True, COL_TARGET_HINT)
     pad = 6
     w, h = ts.get_width() + pad * 2, ts.get_height() + pad * 2
     # Below-right of the cursor, flipped back inside the window at the
@@ -8734,6 +8768,18 @@ def dispatch_button(idx):
         return
     try:
         if kind == "windower":
+            # <pc> -> the party member last clicked in the panel. FFXI
+            # takes a player NAME as a command target, so this reaches
+            # them without any targeting at all. Left alone when nothing
+            # is selected: sending a literal "<pc>" is a visible no-op in
+            # game, which beats silently curing whatever <t> happens to
+            # be.
+            if "<pc>" in cmd:
+                if not selected_player_name:
+                    print(f"[OmniWatch] button '{label}': <pc> used but no "
+                          f"party member selected — click a name first")
+                    return
+                cmd = cmd.replace("<pc>", selected_player_name)
             payload = cmd.lstrip("/").strip()
             sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
             print(f"[OmniWatch] button '{label}' -> windower //{payload}")
@@ -20599,6 +20645,20 @@ def save_profile_as(name):
             copied += 1
         except Exception as e:
             print(f"[OmniWatch] save_profile_as {name!r}: {e!r}")
+    # Little "Saved as X" confirmation by the cursor. Saving a profile is
+    # otherwise completely silent — the dropdown looks identical before
+    # and after, so there's nothing telling you it worked, which is
+    # uncomfortable for the one action whose whole job is not losing
+    # your setup.
+    try:
+        _mx, _my = pygame.mouse.get_pos()
+        globals()["_hb_action_note"] = {
+            "text": f"Saved as {name}",
+            "until": time.time() + 3.0,
+            "x": _mx, "y": _my,
+        }
+    except Exception:
+        pass
     # Deliberately NOT setting active_profile_name — see the docstring.
     print(f"[OmniWatch] Saved profile {name!r} for "
           f"{active_view_char or '?'} ({copied} files); "
@@ -21608,6 +21668,30 @@ EV_X         = PANEL_X     # anchored to left edge, same as party panels
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+def _player_engaged():
+    """Are you actually in a fight right now?
+
+    This replaces three increasingly fiddly attempts to describe what a
+    click must not disturb — "any target", then "a target that isn't a
+    player", then "…and isn't a trust". Every one of them was a proxy for
+    the real question, and each proxy caught something it shouldn't:
+    another player, then your own trusts.
+
+    His words: unless he is actively engaged to a mob, he wants to be
+    able to click to target. So that is the whole rule now. Engaged means
+    the game's own status byte reads 1; anything else — idle, resting,
+    in a cutscene, dead — is fair game for retargeting.
+
+    Falls back to NOT engaged when the status isn't on the wire (an older
+    lua sends -1), because "click retargets" is the behaviour he had
+    before any of this and the safer thing to degrade to.
+    """
+    for _m in (party_data or []):
+        if _m.get("name", "") == player_self_name:
+            return _m.get("status", -1) == 1
+    return False
+
+
 def _mp_fill(member):
     """How full to draw an MP bar, 0.0-1.0.
 
@@ -24449,7 +24533,7 @@ def _brdset_norm(v):
 
 def _brdset_ensure_loaded():
     global _brdset_sets, _brdset_loaded_char, _brdset_win_pos
-    global _brdset_view, _brdset_confirm_del
+    global _brdset_view, _brdset_confirm_del, _brdset_active
     ch = _brdset_char()
     if ch == _brdset_loaded_char:
         return
@@ -24466,6 +24550,14 @@ def _brdset_ensure_loaded():
             for k, v in sets.items():
                 if isinstance(v, dict):
                     _brdset_sets[str(k)] = _brdset_norm(v)
+        # Prefer the per-character copy; fall back to whatever the layout
+        # file carried, so an existing install keeps its active set on the
+        # first run after this change.
+        act = data.get("active")
+        if isinstance(act, str) and act in _brdset_sets:
+            _brdset_active = act
+        elif _brdset_active not in _brdset_sets:
+            _brdset_active = None
         wp = data.get("win_pos")
         if isinstance(wp, list) and len(wp) == 2:
             _brdset_win_pos = [int(wp[0]), int(wp[1])]
@@ -24477,7 +24569,15 @@ def _brdset_persist():
     try:
         with open(_brdset_file_for(_brdset_loaded_char), "w",
                   encoding="utf-8") as f:
-            json.dump({"sets": _brdset_sets, "win_pos": _brdset_win_pos},
+            # "active" lives HERE, beside the sets, rather than only in
+            # the layout file. The sets are per-character and the layout
+            # is not, so a name saved in the layout could point at a set
+            # that doesn't exist for whoever is logged in — and any
+            # layout write that didn't happen took the choice with it.
+            # Trust sets have always stored their active set this way.
+            json.dump({"sets": _brdset_sets,
+                       "active": _brdset_active,
+                       "win_pos": _brdset_win_pos},
                       f, indent=2)
     except Exception as e:
         print(f"[OmniWatch] brdset save failed: {e!r}")
@@ -24501,7 +24601,18 @@ def _brdset_mode_of(s):
 
 
 def _brdset_real_cap():
-    return 5 if _brdset_edit_ja.get("clarion") else 4
+    """How many real songs a set may hold.
+
+    Flat 5, not "4 unless Clarion Call". Clarion Call is what lets you
+    ADD a fifth song you don't already have — but a set is usually being
+    sung over songs that are already up, and refreshing five that are
+    already active needs nothing extra. Capping at 4 blocked writing the
+    rotation he actually uses.
+
+    Clarion Call remains a job-ability toggle on the set; it just no
+    longer gates how many songs you're allowed to list.
+    """
+    return 5
 
 
 def _brdset_real_count():
@@ -24516,7 +24627,12 @@ def _brdset_set_singing(on, name=None):
         _brdset_singing_name = None
     elif name is not None:
         _brdset_singing_name = name
-        _brdset_active = name
+        # Singing a set makes it the active one and REMEMBERS that, so
+        # the Sing button keeps working next session without reopening
+        # Loadouts to re-pick it.
+        if _brdset_active != name:
+            _brdset_active = name
+            _brdset_persist()
 
 
 def _brdset_set_active(name):
@@ -24524,6 +24640,7 @@ def _brdset_set_active(name):
     Active). Persisted so it survives a restart."""
     global _brdset_active
     _brdset_active = name
+    _brdset_persist()
     try:
         save_layout()
     except Exception:
@@ -48086,6 +48203,15 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                     entry.get("command") or "",
                     entry.get("kind") or "")
 
+            # Multi-selection marker. Drawn before the cell fill so the
+            # outline reads as a border rather than a box on top of the
+            # icon.
+            if (hotbar_edit_mode
+                    and (_hotbar_panel_page(panel_idx), idx)
+                    in _hotbar_multi_sel):
+                pygame.draw.rect(surface, (255, 205, 70),
+                                 rect.inflate(3, 3), 2, border_radius=5)
+
             # Cell background. Inert buttons are dimmer so users can see
             # which slots are unconfigured at a glance.
             if is_inert:
@@ -48458,6 +48584,12 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
         title_text = f"Editing slot {hotbar_edit_slot + 1}"
     else:
         title_text = "Hotbar editor — click a slot above to edit"
+        if _hotbar_multi_sel:
+            title_text = (f"Hotbar editor — {len(_hotbar_multi_sel)} cell(s) "
+                          f"selected · Ctrl+C copy, Ctrl+V paste")
+        elif _hotbar_multi_clipboard:
+            title_text = (f"Hotbar editor — {len(_hotbar_multi_clipboard)} "
+                          f"cell(s) copied · Ctrl+V to paste here")
     t_surf = title_font.render(title_text, True, (220, 200, 150))
     surface.blit(t_surf, (form_rect.x + pad, form_rect.y + pad))
 
@@ -49129,16 +49261,30 @@ def dispatch_hotbar_editor_click(mx, my):
                 print(f"[OmniWatch] hotbar copy: "
                       f"{_hotbar_clipboard.get('label') or '(no label)'!r}")
         elif kind == "paste_slot":
-            # Replace the draft with the clipboard contents. SAVE still
-            # has to be clicked to commit. No-op when the clipboard is
-            # empty or when in page-name mode.
+            # Paste COMMITS, the way DELETE does — the button is written
+            # into the slot and saved immediately, not just loaded into
+            # the form to be confirmed with SAVE. Copying a button and
+            # dropping it somewhere else is one intent, and needing a
+            # third click to make it stick meant a paste that looked done
+            # could be lost by clicking away. The draft is refreshed from
+            # what was written so the form matches the slot.
+            #
+            # No-op when the clipboard is empty, in page-name mode, or
+            # with no valid slot.
             if (_hotbar_clipboard is not None
                     and hotbar_edit_draft is not None
-                    and hotbar_edit_slot != "__page_name__"):
-                hotbar_edit_draft = dict(_hotbar_clipboard)
+                    and isinstance(hotbar_edit_slot, int)):
+                _bs = _hotbar_edit_buttons()
+                while len(_bs) <= hotbar_edit_slot:
+                    _bs.append(_empty_button())
+                _bs[hotbar_edit_slot] = _normalize_button_entry(
+                    dict(_hotbar_clipboard))
+                save_buttons_config()
+                hotbar_edit_draft = dict(_bs[hotbar_edit_slot])
                 hotbar_focused_field = None
                 hotbar_icon_picker_open = False
-                print(f"[OmniWatch] hotbar paste -> draft: "
+                print(f"[OmniWatch] hotbar paste -> slot "
+                      f"{hotbar_edit_slot + 1}: "
                       f"{_hotbar_clipboard.get('label') or '(no label)'!r}")
         elif kind == "delete_slot":
             # Empty the slot NOW: clears the saved entry and persists,
@@ -49218,6 +49364,28 @@ def hotbar_select_slot(slot_idx, page_idx=None):
         hotbar_icon_picker_open = False
         print(f"[OmniWatch] hotbar editor: now editing slot "
               f"{slot_idx + 1} on page {_page_for_name + 1}")
+
+
+def _hotbar_page_at_pos(mx, my):
+    """Which hotbar page the cursor is over, or None.
+
+    Ctrl+V used to paste into `hotbar_edit_page`, which is whatever slot
+    was last OPENED for editing — so after ctrl-clicking a few cells on
+    one bar and moving to another, the paste went back to the bar the
+    copy came from. Ctrl+click deliberately doesn't open the editor, so
+    nothing was updating that pin.
+
+    Pointing at the destination is unambiguous and needs no click: hover
+    the bar you want and press Ctrl+V.
+    """
+    for _pi, _rects in (buttons_panel_rects or {}).items():
+        for _r in (_rects or {}):
+            try:
+                if _r.collidepoint(mx, my):
+                    return _hotbar_panel_page(_pi)
+            except Exception:
+                continue
+    return None
 
 
 def _hotbar_slot_at_pos(mx, my):
@@ -54750,6 +54918,8 @@ while running:
             # code reads as "unknown" and falls back to the old guess
             # rather than drawing every pool empty.
             mpp_raw = parts[16] if len(parts) > 16 else ""
+            # Field 18 (0-based 17): status byte. -1 = older lua.
+            st_raw = parts[17] if len(parts) > 17 else ""
             midx = parts[10] if len(parts) > 10 else "0"
             # 12th field (optional): entity ID of this party member.
             # Used to match against a mob's claim_id.
@@ -54792,6 +54962,7 @@ while running:
                 "group_id":  _as_int(grp),
                 "pet_name":  pet_name,
                 "mpp":       _as_int(mpp_raw, -1),
+                "status":    _as_int(st_raw, -1),
                 "pet_hpp":   _as_int(pet_hpp),
                 "pet_tp":    _as_int(pet_tp),
             }
@@ -59995,6 +60166,49 @@ while running:
             # The handler returns False for keys it doesn't consume
             # (e.g. unrecognised non-printable keys), which fall
             # through to other handlers below.
+            # Ctrl+C / Ctrl+V on the multi-selection. Ahead of the text
+            # handler so they work whether or not a field has focus, and
+            # gated on a selection existing so Ctrl+V in the Label box
+            # still pastes text.
+            if hotbar_edit_mode and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                if event.key == pygame.K_c and _hotbar_multi_sel:
+                    _clip = {}
+                    for _pg, _sl in _hotbar_multi_sel:
+                        if 0 <= _pg < len(hotbar_pages):
+                            _bs = hotbar_pages[_pg].get("buttons", [])
+                            if 0 <= _sl < len(_bs):
+                                _clip[_sl] = dict(_bs[_sl])
+                    globals()["_hotbar_multi_clipboard"] = _clip
+                    # Drop the outlines once the copy is taken. They mark
+                    # "these are picked out", and after a copy the
+                    # clipboard is what matters — leaving them lit on the
+                    # source bar through the paste and beyond just looks
+                    # like something is stuck. The banner reports the
+                    # count instead.
+                    _hotbar_multi_sel.clear()
+                    print(f"[OmniWatch] copied {len(_clip)} hotbar cell(s)")
+                    continue
+                if event.key == pygame.K_v and _hotbar_multi_clipboard:
+                    _mx, _my = pygame.mouse.get_pos()
+                    _pg = _hotbar_page_at_pos(_mx, _my)
+                    if _pg is None:
+                        _pg = (hotbar_edit_page
+                               if (hotbar_edit_page is not None
+                                   and 0 <= hotbar_edit_page < len(hotbar_pages))
+                               else hotbar_current_page)
+                    if 0 <= _pg < len(hotbar_pages):
+                        _bs = hotbar_pages[_pg].setdefault("buttons", [])
+                        for _sl, _entry in _hotbar_multi_clipboard.items():
+                            while len(_bs) <= _sl:
+                                _bs.append(_empty_button())
+                            _bs[_sl] = dict(_entry)
+                        _hotbar_ensure_slots()
+                        save_buttons_config()
+                        print(f"[OmniWatch] pasted "
+                              f"{len(_hotbar_multi_clipboard)} cell(s) "
+                              f"into page {_pg + 1}")
+                    continue
+
             if (hotbar_edit_mode and hotbar_focused_field is not None):
                 if hotbar_editor_handle_keydown(event):
                     continue
@@ -60009,6 +60223,11 @@ while running:
                     hotbar_edit_slot = -1
                     hotbar_edit_draft = None
                     hotbar_focused_field = None
+                    # Selection is an editing-session thing; leaving the
+                    # editor with cells still outlined would be a puzzle
+                    # next time it opens. The CLIPBOARD survives, so a
+                    # copy can still be pasted after switching profile.
+                    _hotbar_multi_sel.clear()
                     print("[OmniWatch] hotbar editor closed (Esc)")
                     continue
                 if settings_menu_open:
@@ -60253,6 +60472,22 @@ while running:
                         _hit_target = (_midx, _nm, _pid)
                         break
                 if _hit_target is not None:
+                    # Always remember who was clicked — <pc> buttons use
+                    # this regardless of which branch runs below.
+                    selected_player_name = _hit_target[1]
+                    # Only a MOB target is protected. The point was
+                    # "don't lose the thing I'm fighting" — with a PLAYER
+                    # targeted there's nothing to lose, and refusing to
+                    # retarget meant that once you had a PC selected you
+                    # could never switch to another one.
+                    if _player_engaged():
+                        _hb_action_note = {
+                            "text": f"selected: {_hit_target[1]}",
+                            "until": time.time() + 1.5,
+                            "x": mx, "y": my}
+                        print(f"[OmniWatch] selected player "
+                              f"{_hit_target[1]!r} (target untouched)")
+                        continue
                     # No cursor note here any more — the hover tooltip
                     # (draw_party_target_hint) says what the click will do
                     # BEFORE it happens, which is the useful moment. The
@@ -60899,6 +61134,22 @@ while running:
                         # is a separate piece of work. Selecting a slot to
                         # EDIT now works on any panel — that's the part
                         # that was broken, and it needs no drag machinery.
+                        # Ctrl+click toggles this cell in the multi-
+                        # selection rather than opening it for editing.
+                        # Checked before the drag arms, so a ctrl-drag
+                        # can't half-start a move.
+                        if pygame.key.get_mods() & pygame.KMOD_CTRL:
+                            _msp = _hotbar_panel_page(target_panel)
+                            _key = (_msp, payload_kind)
+                            if _key in _hotbar_multi_sel:
+                                _hotbar_multi_sel.discard(_key)
+                            else:
+                                _hotbar_multi_sel.add(_key)
+                            print(f"[OmniWatch] hotbar selection: "
+                                  f"{len(_hotbar_multi_sel)} cell(s)")
+                            slot_hit = True
+                            break
+
                         # Drag arms on ANY panel, not just the primary.
                         # It was primary-only when the drop was too, and
                         # that left the cross-panel move one-directional:
