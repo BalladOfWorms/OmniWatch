@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.11.5 (2026-08-06)"
+OMNIWATCH_BUILD_STAMP = "v1.12.0 (2026-08-15)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.11.5"
+OMNIWATCH_VERSION = "1.12.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1151,6 +1151,9 @@ profile_name_modal_rects = []
 # "save"   — name the live setup and start using it as a profile
 # "rename" — rename an existing profile (profile_name_modal_target)
 profile_name_modal_mode   = "save"
+# Transient confirmation shown on the push-layout row after it runs.
+_profile_push_msg = ""
+_profile_push_at  = 0.0
 profile_name_modal_target = ""
 # Set when a name is refused (collision / reserved) so the modal can say
 # why instead of appearing to swallow the click. Cleared on the next
@@ -5439,6 +5442,12 @@ def _chat_wrap_cached(ev, body_font, cjk_font, max_width):
 
 inventory_state    = {}      # complete snapshot, swapped in on INV_END
 _inv_buffer        = {}      # accumulator while a snapshot is in progress
+# Per-bag capacity, from the lua's INV_CAP line: bag -> {"count", "max",
+# "enabled"}. Swapped in on INV_END alongside inventory_state so the two
+# always describe the same snapshot. Empty when the lua predates INV_CAP,
+# which is what makes the bag rows fall back to a bare item count.
+inventory_caps     = {}
+_inv_caps_buffer   = {}
 inventory_last_update_ts = 0.0
 inventory_dropdown_open  = False
 # UI scroll state per bag, and which bag is currently expanded.
@@ -6277,11 +6286,20 @@ _hotbar_page_clipboard = None
 # profile and into another is the whole reason it exists, and switching
 # reloads buttons_config underneath it.
 _hotbar_multi_sel = set()
-# {slot_idx: entry} from the last Ctrl+C. Keyed by SLOT so a paste lands
-# the buttons back in the same places they came from, which is what
-# "copy these into my other profile" means — same arrangement, different
-# profile. Anchoring to a click point would relocate them instead.
+# {slot_idx: entry} from the last Ctrl+C, keyed by SLOT.
+#
+# WHERE A PASTE LANDS depends on whether you have picked a destination:
+#   - nothing selected -> the same slots it came from, on whichever page
+#     you are pointing at. That is "copy these into my other bar" --
+#     same arrangement, different page.
+#   - ONE cell selected -> that cell is the anchor and the whole
+#     clipboard is laid out relative to it, keeping the spacing between
+#     the copied cells. Pasting only ever back into the same spot made
+#     copying a cell to somewhere else impossible.
+# `_hotbar_clip_origin` is the lowest slot in the copy, i.e. what the
+# offset is measured from.
 _hotbar_multi_clipboard = None
+_hotbar_clip_origin = 0
 # Per-frame click-target collections, populated by draw_hotbar_editor:
 hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
 
@@ -6306,6 +6324,14 @@ hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
 # large enough to absorb mouse jitter on click.
 hotbar_drag = None
 _hotbar_tooltip = None   # (label, command, kind) of the hovered hotbar
+# Where the editor form sits. None = docked under the primary bar, which
+# is where it always was -- and the problem: with several bars stacked,
+# the form lands ON TOP of bars 2 and 3, so their cells can't be clicked
+# (the form takes the press) and their hover tooltips draw through it.
+# Drag the form's title strip to put it somewhere clear.
+hotbar_editor_pos = None
+_hb_editor_rect = None      # the form's frame, for the tooltip guard
+_hb_editor_drag = None      # (dx, dy) while the title strip is held
                          # button — stashed by draw_buttons_panel, drawn
                          # at end-of-frame so it sits above everything
 HOTBAR_DRAG_THRESHOLD_PX = 6
@@ -6359,6 +6385,436 @@ def _overlay_blocks_point(pos):
                if globals().get("char_view_dropdown_open") else None)):
         try:
             if r is not None and r.collidepoint(pos):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+# Every window drawn AFTER the hotbar that records its own envelope under
+# a "panel" key. Read by name so a rename can't raise here.
+_LATER_PANEL_RECT_DICTS = (
+    "_alert_rects", "_pool_rects", "_ah_rects", "_craft_rects",
+    "_syn_rects", "_fisher_rects", "_skillup_rects", "_sz_rects",
+)
+
+# The same thing for windows that keep their frame in a plain global
+# rather than a rect dict -- the Loadouts family (BLU sets, Trust sets,
+# PUP attachments, BRD song sets). They are all drawn after the hotbar,
+# so without this the hover tooltip floats over them. The Loadouts shell
+# itself has no frame of its own -- it draws the active sub-window, and
+# `_loadouts_tab_rects` is a per-tab hit list, not an envelope.
+#
+# (The DPS panel is NOT here on purpose: it draws BEFORE the hotbar, so
+# the tooltip is legitimately above it.)
+_LATER_PANEL_RECT_GLOBALS = (
+    "_blusets_win_rect", "_trustsets_win_rect", "_pupatt_win_rect",
+    "_brdset_win_rect",
+    # The hotbar editor form. It covers whatever is under it -- with
+    # several bars stacked that is bars 2 and 3 -- and those covered
+    # cells were still answering the hover test, so their tooltips drew
+    # through the form.
+    "_hb_editor_rect",
+)
+
+# Settings menu, settings modals and Configure subdialogs. Each one
+# paints over the panels, so nothing underneath is hoverable while one
+# is up. (The party-panel click hint keeps its own shorter list on
+# purpose: it also asks _overlay_blocks_point, which tests the settings
+# menu POSITIONALLY, so suppressing on settings_menu_open as well would
+# hide the hint whenever the menu is open anywhere on screen.)
+_SCREEN_MODAL_FLAGS = (
+    "settings_menu_open", "currency_settings_modal_open",
+    "party_settings_modal_open", "alert_editor_open",
+    "display_settings_modal_open", "header_settings_modal_open",
+    "inventory_settings_modal_open", "statistics_settings_modal_open",
+    "profile_name_modal_open", "clock_modal_open",
+    "checklist_modal_open", "campaigns_modal_open", "sim_import_open",
+)
+
+
+def _screen_modal_open():
+    """True when any full-screen settings surface is on top."""
+    for _flag in _SCREEN_MODAL_FLAGS:
+        if globals().get(_flag):
+            return True
+    try:
+        for _sst in _subdialog_states.values():
+            if _sst.get("open"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_party_key(key):
+    """Is this a party or alliance ROW, as opposed to any other panel?
+
+    The two halves are keyed differently and this is the one place that
+    has to know both: party rows are keyed by the member's name in slot
+    0 and `p1`..`p5` otherwise, alliance rows by `a1_0`..`a2_5`.
+    """
+    if not key or key.startswith("__"):
+        return False
+    if key.startswith("a1_") or key.startswith("a2_"):
+        return True
+    if len(key) == 2 and key[0] == "p" and key[1].isdigit():
+        return True
+    return any(m.get("name") == key for m in (party_data or []))
+
+
+def _party_group_keys():
+    """Every party / alliance row key that currently has a scale.
+
+    Read from `panel_scales` rather than generated, so a row that is not
+    on screen is never resized behind your back.
+    """
+    return [k for k in list(panel_scales) if _is_party_key(k)]
+
+
+def _party_scale_apply(key, scale):
+    """Set a row's scale -- and its siblings' too, when they are linked.
+
+    Hotbar panels share one size, party rows never did, so making six
+    rows match meant dragging six grips to the same pixel. With the
+    setting on, one grip sizes the lot.
+
+    Both keys for a row are written (`p3` AND the member's name), or the
+    row snaps back to its old size the next time the party is rebuilt.
+    """
+    scale = max(MIN_SCALE, min(MAX_SCALE, scale))
+    panel_scales[key] = scale
+    if not setting("party_link_size") or not _is_party_key(key):
+        return
+    for k in _party_group_keys():
+        panel_scales[k] = scale
+
+
+# ── GearSwap display mirror ─────────────────────────────────────────
+# Selindrile's Sel-Display draws a state line inside GearSwap. Windower
+# addons run in separate Lua states, so nothing here can read it --
+# GearSwap has to push, which a small wrapper around its global
+# `update_job_states()` does, sending `//omniwatch disp <text>`.
+#
+# What arrives is Sel's own string: colour codes as \cs(r,g,b), runs of
+# spaces between segments, and (resolved by the wrapper) its ${State}
+# placeholders. We keep its colours rather than restyling, so the panel
+# reads the same as the in-game display it mirrors.
+gs_display = ""          # last line received, raw
+gs_display_who = ""      # character it came from
+gs_display_at = 0.0
+gs_display_pos = None    # None = default, set once dragged
+_gsd_rects = {}
+_gsd_drag = None
+_gsd_resize = None   # (start mouse x, start width) while the grip is held
+# Reassembly buffer. A Windower command line truncates well short of a
+# full state line (410 chars sent, a fraction arrived), so the hook
+# splits the push into `<i>/<n> <part>` pieces and they are joined here.
+_gsd_parts = {}
+_gsd_parts_n = 0
+_gsd_parts_at = 0.0
+GSD_MAX_CHARS = 900      # a runaway push can't grow the panel forever
+# A FIXED WIDTH, not one that follows the content: the state line
+# changes shape constantly, and a panel that resized itself every
+# time you cycled something would never sit still. Drag the corner.
+GSD_DEFAULT_W = 215
+GSD_MIN_W     = 130
+GSD_MAX_W     = 700
+gs_display_w  = None     # None = default width
+COL_GSD_TITLE = (232, 190, 90)     # gold, for the label
+COL_GSD_VALUE = (232, 236, 244)    # white, for everything ordinary
+COL_GSD_AUTO  = (140, 200, 255)    # light blue, for the Auto toggles
+# Element colours, taken from Sel-Display's own `clr` table rather than
+# invented, so a value reads the same here as it does in game. The
+# status names are the bar-spell targets and carry their spell's
+# element; the stats are the elemental attributes.
+_GSD_ELEM = {
+    "fire": (255, 80, 80), "ice": (140, 160, 255),
+    "wind": (110, 255, 110), "earth": (220, 214, 110),
+    "lightning": (190, 90, 190), "water": (110, 110, 255),
+    "light": (255, 255, 155), "dark": (90, 90, 90),
+    "petrify": (220, 214, 110), "silence": (110, 255, 110),
+    "blind": (90, 90, 90), "poison": (190, 90, 190),
+    "paralysis": (140, 160, 255), "sleep": (90, 90, 90),
+    "amnesia": (255, 80, 80), "virus": (255, 80, 80),
+    "str": (255, 80, 80), "dex": (255, 180, 100),
+    "vit": (100, 200, 100), "agi": (150, 255, 150),
+    "int": (140, 160, 255), "mnd": (255, 200, 255),
+    "chr": (255, 255, 155),
+}
+
+
+def _gsd_segments(raw):
+    """Sel's strip -> a list of entry strings.
+
+    COLOUR CODES ARE INLINE STYLING, NOT SEPARATORS. Sel writes some
+    entries as `Element: \\cs(255,80,80)Fire`, so treating every code as
+    a break split those in half -- the label landed on one row and its
+    value on the next. Strip the codes, then split on Sel's real
+    separator, which is a run of two or more spaces.
+
+    A trailing partial code (the payload was cut mid-marker) goes too,
+    rather than showing as punctuation.
+    """
+    if not raw:
+        return []
+    # `~`/`~~` are the old command-line encoding for a space and a space
+    # run. Harmless now that the push comes over a socket with real
+    # spaces, and still honoured so an older hook keeps working.
+    txt = (raw[:GSD_MAX_CHARS]
+           .replace("~~", "\x00").replace("~", " ").replace("\x00", "    "))
+    txt = re.sub(r"\\*c[sr]\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)", "", txt)
+    txt = re.sub(r"\\*c[sr]\([\d,\s]*$", "", txt)      # cut mid-marker
+    return [p.strip() for p in re.split(r"\s{2,}", txt) if p.strip()]
+
+
+def _gsd_entries(raw):
+    """Sel's strip -> [(title, value, title colour, value colour)].
+
+    Sel draws one long line because it lives across the top of the
+    game window. A panel has height instead, so each entry gets its
+    own row and the labels line up in a column.
+
+    Sel's own colours are dropped on purpose here: they encode
+    "changed from default", which is useful in a strip you scan
+    sideways and noise in a list you read down. Gold label, white
+    value, elements in their element colour, Auto toggles in blue.
+
+    The Auto toggles sort to the BOTTOM -- they are standing settings,
+    not the state of the moment, so they belong out of the way.
+    """
+    top, auto = [], []
+    for text in _gsd_segments(raw):
+        title, sep, value = text.partition(":")
+        title = title.strip()
+        value = value.strip() if sep else ""
+        if not title:
+            continue
+        is_auto = title.lower().replace(" ", "").startswith("auto")
+        if value:
+            vc = _GSD_ELEM.get(value.lower(), COL_GSD_VALUE)
+        else:
+            # A bare word is a boolean that Sel only prints when it is
+            # ON, so the label IS the value -- colour it as one.
+            vc = COL_GSD_VALUE
+        tc = COL_GSD_AUTO if is_auto else COL_GSD_TITLE
+        if is_auto:
+            vc = COL_GSD_AUTO
+        (auto if is_auto else top).append((title, value, tc, vc))
+    return top + auto
+
+
+def _gsd_layout(segs, font, max_w):
+    """Pack segments into lines. Returns (lines, width, height).
+
+    Sel draws one long strip across the game window; an overlay panel
+    is narrower, so it wraps instead of running off the edge.
+    """
+    gap = 12
+    lines, cur, cw = [], [], 0
+    for text, col in segs:
+        w = font.size(text)[0]
+        if cur and cw + gap + w > max_w:
+            lines.append((cur, cw))
+            cur, cw = [], 0
+        cur.append((text, col, cw + (gap if cur else 0)))
+        cw += w + (gap if len(cur) > 1 else 0)
+    if cur:
+        lines.append((cur, cw))
+    widest = max([w for _l, w in lines] or [0])
+    return lines, widest, len(lines) * (font.get_height() + 2)
+
+
+def draw_gs_display(surface):
+    """The GearSwap state line, mirrored — one entry per row."""
+    global _gsd_rects
+    _gsd_rects = {}
+    if not setting("show_gs_display"):
+        return
+    rows = _gsd_entries(gs_display) if _gsd_visible() else []
+    if not rows and not setup_mode:
+        # NOTHING HAS EVER ARRIVED: say so rather than drawing nothing.
+        # This panel needs a hook inside GearSwap to push to it, and the
+        # hook shipped with the addon is written against Selindrile's
+        # Sel-Display. Anyone on another framework switches the setting
+        # on and would otherwise get a blank screen and no idea whether
+        # the feature is broken or simply unfed.
+        if gs_display_at:
+            return          # it has worked before; a quiet gap is fine
+        _f = get_font("Consolas", 11)
+        _t = "GearSwap display: waiting for a push (see the Readme)"
+        _w = _f.size(_t)[0] + 16
+        _p = gs_display_pos or [8, max(0, HEIGHT // 3)]
+        _r = pygame.Rect(max(0, min(int(_p[0]), max(0, WIDTH - _w))),
+                         max(0, min(int(_p[1]), max(0, HEIGHT - 24))),
+                         _w, 22)
+        pygame.draw.rect(surface, (20, 22, 28), _r, border_radius=4)
+        pygame.draw.rect(surface, (70, 76, 92), _r, 1, border_radius=4)
+        draw_accent_stripe(surface, _r.x, _r.y, _r.h, ACCENT_GSD)
+        surface.blit(_f.render(_t, True, (150, 155, 168)),
+                     (_r.x + 10, _r.y + 4))
+        _gsd_rects["panel"] = _r
+        return
+    if not rows:
+        # Setup mode needs something to position; an empty panel would be
+        # invisible exactly when you are placing it.
+        rows = [("Weapons", "Sword", COL_GSD_TITLE, COL_GSD_VALUE),
+                ("Element", "Fire", COL_GSD_TITLE, _GSD_ELEM["fire"]),
+                ("AutoWS", "", COL_GSD_AUTO, COL_GSD_AUTO),
+                ("example data", "", (150, 150, 160), (150, 150, 160))]
+    f = get_font("Consolas", 12)
+    fh = get_font("Consolas", 11, bold=True)
+    pad, gap, lh = 7, 6, f.get_height() + 2
+    hh = fh.get_height() + 4          # header strip
+    pw = max(GSD_MIN_W, min(int(gs_display_w or GSD_DEFAULT_W), GSD_MAX_W))
+    ph = pad * 2 + hh + lh * len(rows)
+    dflt = [8, max(0, HEIGHT // 3)]
+    pos = gs_display_pos or dflt
+    x = max(0, min(int(pos[0]), max(0, WIDTH - pw)))
+    y = max(0, min(int(pos[1]), max(0, HEIGHT - ph)))
+    rect = pygame.Rect(x, y, pw, ph)
+    pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=4)
+    pygame.draw.rect(surface, (70, 76, 92), rect, 1, border_radius=4)
+    draw_accent_stripe(surface, rect.x, rect.y, rect.h, ACCENT_GSD)
+    # Header, so the box says what it is among a screen of panels --
+    # and so there is an obvious place to grab that is never a row.
+    surface.blit(fh.render("GearSwap", True, (170, 200, 230)),
+                 (rect.x + pad + 3, rect.y + 3))
+    pygame.draw.line(surface, (52, 58, 72),
+                     (rect.x + 4, rect.y + hh),
+                     (rect.right - 4, rect.y + hh))
+    # The label column is measured, then capped at half the panel so one
+    # long label can't squeeze every value off the edge.
+    lx = rect.x + pad + 3
+    avail = pw - pad * 2 - 3
+    tw = max(f.size(t + (":" if v else ""))[0] for t, v, _tc, _vc in rows)
+    tw = min(tw, max(40, avail // 2))
+    ry = rect.y + pad + hh
+    for title, value, tc, vc in rows:
+        label = title + (":" if value else "")
+        surface.blit(_gsd_fit(label, f, tw if value else avail, tc),
+                     (lx, ry))
+        if value:
+            surface.blit(_gsd_fit(value, f, avail - tw - gap, vc),
+                         (lx + tw + gap, ry))
+        ry += lh
+    # The whole panel drags; the bottom-right corner resizes it.
+    _gsd_rects["panel"] = rect
+    _gsd_rects["grip"] = pygame.Rect(rect.right - 12, rect.bottom - 12, 12, 12)
+    if setup_mode or _gsd_drag is not None or _gsd_resize is not None:
+        pygame.draw.lines(surface, (110, 118, 136), False,
+                          [(rect.right - 4, rect.bottom - 10),
+                           (rect.right - 4, rect.bottom - 4),
+                           (rect.right - 10, rect.bottom - 4)], 1)
+
+
+def _gsd_fit(text, font, width, colour):
+    """Render `text`, cut with an ellipsis if it will not fit `width`.
+
+    The panel has a fixed width by design, so something has to give on a
+    long value. Cutting it is honest; wrapping would make the rows stop
+    lining up, which is the thing that makes the box readable.
+    """
+    if width <= 0:
+        return font.render("", True, colour)
+    if font.size(text)[0] <= width:
+        return font.render(text, True, colour)
+    cut = text
+    while cut and font.size(cut + "\u2026")[0] > width:
+        cut = cut[:-1]
+    return font.render(cut + "\u2026", True, colour)
+
+
+def _gsd_handle_event(event):
+    """Drag or resize the panel. True when the event was consumed."""
+    global _gsd_drag, gs_display_pos, _gsd_resize, gs_display_w
+    if not setting("show_gs_display"):
+        return False
+    rect = _gsd_rects.get("panel")
+    grip = _gsd_rects.get("grip")
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        # The grip is asked FIRST: it sits inside the panel, so the drag
+        # would otherwise swallow every press on it.
+        if grip and grip.collidepoint(event.pos):
+            if _overlay_blocks_point(event.pos):
+                return False
+            _gsd_resize = (event.pos[0], rect.w if rect else GSD_DEFAULT_W)
+            return True
+        if rect and rect.collidepoint(event.pos):
+            if _overlay_blocks_point(event.pos):
+                return False
+            gs_display_pos = [rect.x, rect.y]
+            _gsd_drag = (event.pos[0] - rect.x, event.pos[1] - rect.y)
+            return True
+    elif event.type == pygame.MOUSEMOTION and _gsd_resize is not None:
+        _sx, _sw = _gsd_resize
+        gs_display_w = max(GSD_MIN_W,
+                           min(GSD_MAX_W, _sw + (event.pos[0] - _sx)))
+        return True
+    elif event.type == pygame.MOUSEMOTION and _gsd_drag is not None:
+        gs_display_pos = [event.pos[0] - _gsd_drag[0],
+                          event.pos[1] - _gsd_drag[1]]
+        return True
+    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _gsd_drag is not None or _gsd_resize is not None:
+            _gsd_drag = None
+            _gsd_resize = None
+            try:
+                save_layout()
+            except Exception:
+                pass
+            return True
+    return False
+
+
+def _gsd_visible():
+    """Show only what belongs to the character being viewed.
+
+    GearSwap pushes from whichever client sent it; with two boxes open
+    the panel would otherwise flip between them. An untagged push (an
+    older hook) is always accepted rather than silently hidden.
+    """
+    if not gs_display:
+        return False
+    if not gs_display_who:
+        return True
+    try:
+        want = _mb_lock_target()
+    except Exception:
+        want = ""
+    return (not want) or gs_display_who == want
+
+
+def _hotbar_tooltip_blocked(pos):
+    """True when the hotbar's hover tooltip must not appear.
+
+    The tooltip is stashed during the hotbar draw and rendered near the
+    END of the frame, deliberately: it has to sit above the hotbar
+    editor and the drag ghost, which are themselves drawn last. What
+    that was never meant to do is float above unrelated windows -- and
+    since the hotbar draws early, its hover test still answers "yes"
+    for a point the user can only see a modal or a later panel at.
+    Exactly the leak _overlay_blocks_point exists for, one layer up.
+
+    Drawing order can't fix this on its own, because the editor is
+    drawn above those windows too -- so the hover has to be refused at
+    the source instead.
+    """
+    if _screen_modal_open():
+        return True
+    if _overlay_blocks_point(pos):
+        return True
+    for _name in _LATER_PANEL_RECT_DICTS:
+        try:
+            _r = (globals().get(_name) or {}).get("panel")
+            if _r is not None and _r.collidepoint(pos):
+                return True
+        except Exception:
+            continue
+    for _name in _LATER_PANEL_RECT_GLOBALS:
+        try:
+            _r = globals().get(_name)
+            if _r is not None and _r.collidepoint(pos):
                 return True
         except Exception:
             continue
@@ -7067,7 +7523,7 @@ def _rebuild_path_constants():
     this point pick up the new paths automatically."""
     global LAYOUT_FILE, BUFF_CFG, MOBS_FILE, ZONES_FILE, BUTTONS_FILE
     global SETTINGS_FILE, GEARSWAP_PATH_FILE, BUFF_TIMER_CFG, RECAST_TIMER_CFG
-    global BUFF_STATE_SNAPSHOT, STATS_LAYOUT_FILE
+    global BUFF_STATE_SNAPSHOT, STATS_LAYOUT_FILE, ALERTS_FILE
     global CHEATSHEET_COMMON_FILE, CHEATSHEET_JOB_FILE
     cd = _chardir(active_view_char)
     LAYOUT_FILE        = os.path.join(cd, "omniwatch_layout.json")
@@ -7094,6 +7550,10 @@ def _rebuild_path_constants():
     BUFF_STATE_SNAPSHOT = os.path.join(cd, "omniwatch_buff_state.json")
     # Per-job + global customizable stats panel layouts.
     STATS_LAYOUT_FILE  = os.path.join(cd, "omniwatch_stats_layout.json")
+    # Alert box sections. Per character rather than per profile: they
+    # describe what you want to be told about, which follows the
+    # character, not a window arrangement.
+    ALERTS_FILE        = os.path.join(cd, "omniwatch_alerts.json")
 
     # Which saved profile this character is currently using, if any. The
     # files above are the LIVE setup and never move; a profile is a saved
@@ -7122,6 +7582,7 @@ BUFF_TIMER_CFG   = os.path.join(USER_DIR, "omniwatch_buff_timer.json")
 RECAST_TIMER_CFG = os.path.join(USER_DIR, "omniwatch_recast.json")
 BUFF_STATE_SNAPSHOT = os.path.join(USER_DIR, "omniwatch_buff_state.json")
 STATS_LAYOUT_FILE = os.path.join(USER_DIR, "omniwatch_stats_layout.json")
+ALERTS_FILE = os.path.join(USER_DIR, "omniwatch_alerts.json")
 # Cheat sheet sources (rebound per-char / per-profile once the PLAYER
 # packet fires). Common = shared top section; Job = per-profile bottom.
 CHEATSHEET_COMMON_FILE = os.path.join(USER_DIR, "omniwatch_cheatsheet_common.json")
@@ -8660,6 +9121,7 @@ def draw_party_target_hint(surface):
     # promising "click to target" over one is a lie. Read through
     # globals() so adding or renaming a modal can't raise here.
     for _flag in ("currency_settings_modal_open", "party_settings_modal_open",
+                  "alert_editor_open",
                   "display_settings_modal_open", "header_settings_modal_open",
                   "inventory_settings_modal_open", "clock_modal_open",
                   "statistics_settings_modal_open", "profile_name_modal_open",
@@ -8850,6 +9312,7 @@ SETTINGS_SECTIONS = [
     "Skillchain",
     "Target Card",
     "DPS Tracker",
+    "Support Helper",
     "HotBar",
     "_Bottom",         # unnamed: divider underline only, no label
 ]
@@ -9241,6 +9704,17 @@ SETTINGS_SCHEMA = [
                    "party only.",
     },
     {
+        "key":     "party_link_size",
+        "label":   "Resize party rows together",
+        "kind":    "bool",
+        "default": False,
+        "section": "Party Panel",
+        "applies": "python",
+        "help":    "Resizing any party or alliance row in setup mode "
+                   "resizes all of them, the way the hotbar panels share "
+                   "one size. Off = each row sizes on its own.",
+    },
+    {
         "key":     "party_show_pets",
         "label":   "(internal) show pets",
         "kind":    "bool",
@@ -9259,6 +9733,42 @@ SETTINGS_SCHEMA = [
         "section": "_Hidden",
         "applies": "python",
         "help":    "Show the buffs column on each party member panel.",
+    },
+    # ── Support Helper ──────────────────────────────────────────────
+    # Lives in its own section rather than inside the Party Panel
+    # dialog: it is its own panel with its own window, and burying it
+    # under another panel's Configure button made it hard to find.
+    # (The code still says "alert" throughout -- the feature was named
+    # after it was built, and renaming forty symbols would risk more
+    # than the tidiness is worth.)
+    {
+        "key":     "edit_alert_sections",
+        "label":   "Support Helper",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Support Helper",
+        "applies": "python",
+        "action":  "edit_alert_sections",
+        "help":    "Two tabs. Party Debuffs groups the party by what is "
+                   "wrong with them, each name with the cure beside it. "
+                   "Party Buffs lists what you have cast on them and "
+                   "roughly how long it has left. Click a spell to cast "
+                   "it on that member; click a name to select or target "
+                   "them. Configure names the sections, the statuses "
+                   "each one collects, the spell that cures it, and "
+                   "switches the panel on.",
+    },
+    {
+        "key":     "show_alert_box",
+        "label":   "(internal) show alert box",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Legacy. The Support Helper panel now keeps its own "
+                   "visibility beside its sections, so that it survives "
+                   "a profile switch; this value is only read once, to "
+                   "carry an existing install over.",
     },
     {
         "key":     "party_show_debuffs",
@@ -10494,6 +11004,38 @@ SETTINGS_SCHEMA = [
                    "open its FFXIAH price page; the $ button on a search result "
                    "pulls that item's recent sales from your world's search "
                    "server into the results pane.",
+    },
+    {
+        "key":     "show_gs_display",
+        "label":   "GearSwap display",
+        "kind":    "bool",
+        "default": False,
+        "section": "Misc",
+        "applies": "python",
+        "help":    "Mirror your GearSwap display (Selindrile's "
+                   "Sel-Display state line) in an overlay panel, so it "
+                   "reads at the same size as everything else and can "
+                   "sit outside the game window. Needs the one-line "
+                   "hook in your GearSwap globals that pushes the line "
+                   "-- without it this panel stays empty.",
+    },
+    {
+        "key":     "open_treasure",
+        "label":   "Treasure Pool",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_treasure",
+        "help":    "Open the treasure pool panel: everything currently in "
+                   "the party pool, how long each item has left before it "
+                   "drops out, the standing high lot, and LOT / PASS "
+                   "buttons. AL and AP set an automatic rule for that "
+                   "item by name, so every future drop of it is lotted or "
+                   "passed for you; auto-lot holds off while your "
+                   "inventory is full. The rules last until you press "
+                   "RESET AUTO or close OmniWatch -- they are never saved "
+                   "to disk.",
     },
     {
         "key":     "open_craftsyn",
@@ -12098,6 +12640,8 @@ _SETTINGS_ACTIONS = {
     "open_craftsyn":           lambda: _toggle_craftsyn_panel(),
     "open_skillup":            lambda: _toggle_skillup_panel(),
     "open_auction":            lambda: _toggle_ah_panel(),
+    "open_treasure":           lambda: _toggle_pool_panel(),
+    "edit_alert_sections":     lambda: _open_alert_editor(),
     "open_autora":             lambda: _open_autora(),
 }
 
@@ -20605,6 +21149,42 @@ def _profile_mirror(live_path):
               f"{active_profile_name!r}: {e!r}")
 
 
+def push_layout_to_all_profiles():
+    """Copy the live PANEL LAYOUT into every saved profile.
+
+    Layout only -- `omniwatch_layout.json`, which is panel positions
+    and scales. Hotbar pages, the stat-cell layout, the cheat sheet
+    and the settings are all left alone in every profile, because
+    those are the things that differ BETWEEN profiles; where the
+    panels sit is usually the thing you want shared.
+
+    Returns the number of profiles written, or -1 if the live layout
+    could not be read.
+    """
+    part = os.path.basename(LAYOUT_FILE)
+    # Flush what is on screen first: the live file may be a drag or
+    # two behind, and copying a stale layout into every profile at
+    # once is not something the user can undo.
+    try:
+        save_layout()
+    except Exception as e:
+        print(f"[OmniWatch] push layout: could not save live: {e!r}")
+    if not os.path.exists(LAYOUT_FILE):
+        return -1
+    n = 0
+    for name in list_profiles():
+        try:
+            dst = _profile_part_path(part, name)
+            if os.path.abspath(dst) == os.path.abspath(LAYOUT_FILE):
+                continue
+            shutil.copy2(LAYOUT_FILE, dst)
+            n += 1
+        except Exception as e:
+            print(f"[OmniWatch] push layout -> {name!r}: {e!r}")
+    print(f"[OmniWatch] pushed panel layout to {n} profile(s)")
+    return n
+
+
 def save_profile_as(name):
     """Save the live setup as a profile. Overwrites an existing profile of
     the same name — that's how you update one.
@@ -20815,7 +21395,25 @@ def delete_profile(name):
 
 
 def save_layout():
+    # NEVER LET A NOT-YET-OPENED PANEL ERASE A SAVED POSITION.
+    #
+    # Several panels keep their position as None until the first time
+    # they are drawn, and this writes the WHOLE layout from the globals
+    # as they stand. So a save triggered by dragging some OTHER panel --
+    # and most drag releases trigger one -- wrote `cheatsheet_pos: null`
+    # whenever the cheat sheet had not been opened yet that session,
+    # wiping where the user had put it. The more panels that save on
+    # release, the more often it bit.
+    #
+    # So: read what is already on disk and let the stored value stand
+    # wherever we have nothing to say.
     try:
+        _prev = {}
+        try:
+            with open(LAYOUT_FILE, "r") as _pf:
+                _prev = json.load(_pf) or {}
+        except Exception:
+            _prev = {}
         data = {
             "panel_anchors":   panel_anchors,
             "panel_scales":    panel_scales,
@@ -20835,6 +21433,20 @@ def save_layout():
             "cheatsheet_scroll": cheatsheet_scroll,
             "cheatsheet_button_pos": cheatsheet_button_pos,
             "cheatsheet_button_scale": cheatsheet_button_scale,
+            # The treasure pool panel. It belongs in the layout rather
+            # than beside the pool's own state: it is a window
+            # arrangement, which is exactly what a profile is for.
+            "pool_pos":        list(globals().get("pool_pos", [300, 240])),
+            "gs_display_pos":  (list(gs_display_pos)
+                                if gs_display_pos else None),
+            "gs_display_w":    (int(gs_display_w) if gs_display_w else None),
+            # None = docked under the primary bar, the default.
+            "hotbar_editor_pos": (list(hotbar_editor_pos)
+                                  if hotbar_editor_pos else None),
+            # The Craft / Synergy / Fisher window. Defined, dragged and
+            # clamped since it was built, but never written down, so it
+            # reopened at its default every launch.
+            "craftsyn_pos":    list(globals().get("craftsyn_pos", [260, 200])),
             "scanzone_pos":    globals().get("scanzone_panel_pos", [160, 140]),
             "scanzone_w":      globals().get("scanzone_panel_w", 400),
             "scanzone_h":      globals().get("scanzone_panel_h", 340),
@@ -20905,6 +21517,19 @@ def save_layout():
             # harmlessly ignored on load.
         }
         _backup_before_write(LAYOUT_FILE)
+        # An EMPTY dict/list counts as "nothing to say" too, not just
+        # None. `panel_anchors` is the dangerous one: if a save fires
+        # before the panels have registered themselves, writing {} would
+        # wipe every main panel's position at once -- the loudest
+        # possible version of this bug. The cost is that deliberately
+        # clearing every anchor no longer persists, which nothing in the
+        # app does; positions are replaced, never emptied.
+        for _k, _v in list(data.items()):
+            if _k not in _prev:
+                continue
+            if _v is None or (isinstance(_v, (dict, list, tuple))
+                              and len(_v) == 0):
+                data[_k] = _prev[_k]
         with open(LAYOUT_FILE, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[OmniWatch] Saved layout ({len(panel_anchors)} panel anchors, "
@@ -20918,6 +21543,7 @@ def save_layout():
 def load_layout():
     """Load saved anchors and scales."""
     global scanzone_panel_pos, scanzone_panel_w, scanzone_panel_h
+    global hotbar_editor_pos, gs_display_pos, gs_display_w
     global equip_anchor, equip_scale, target_anchor, target_scale
     global target_anchor_st, target_scale_st
     global stats_anchor, stats_scale
@@ -21011,6 +21637,41 @@ def load_layout():
         ch_ = data.get("cheatsheet_h")
         cheatsheet_w = int(cw_) if isinstance(cw_, (int, float)) else None
         cheatsheet_h = int(ch_) if isinstance(ch_, (int, float)) else None
+        # SEEDED THROUGH globals(), NOT ASSIGNED TO DIRECTLY.
+        #
+        # load_layout() runs near the top of the module; both of these
+        # panels are defined thousands of lines further down, so at this
+        # point the NAMES DO NOT EXIST YET. Touching them raised
+        # NameError, the enclosing try logged "Could not load layout",
+        # and EVERY setting after this point -- ScanZone, the AH window,
+        # all of it -- silently stopped loading. One panel's new line
+        # reset the lot.
+        #
+        # Both are declared later as `globals().get(<name>) or <default>`
+        # precisely so a value parked here survives.
+        gsw_ = data.get("gs_display_w")
+        if isinstance(gsw_, (int, float)):
+            gs_display_w = int(gsw_)
+        gsp_ = data.get("gs_display_pos")
+        if isinstance(gsp_, list) and len(gsp_) == 2:
+            try:
+                gs_display_pos = [int(gsp_[0]), int(gsp_[1])]
+            except (TypeError, ValueError):
+                pass
+        hep_ = data.get("hotbar_editor_pos")
+        if isinstance(hep_, list) and len(hep_) == 2:
+            try:
+                hotbar_editor_pos = [int(hep_[0]), int(hep_[1])]
+            except (TypeError, ValueError):
+                pass
+        for _key, _dflt in (("craftsyn_pos", [260, 200]),
+                            ("pool_pos", [300, 240])):
+            _v = data.get(_key)
+            if isinstance(_v, list) and len(_v) == 2:
+                try:
+                    globals()[_key] = [int(_v[0]), int(_v[1])]
+                except (TypeError, ValueError):
+                    pass
         szp = data.get("scanzone_pos")
         if isinstance(szp, list) and len(szp) == 2:
             try:
@@ -21206,15 +21867,22 @@ def load_layout():
             sw, sh = int(legacy_win[0]), int(legacy_win[1])
             print(f"[OmniWatch] Migrating legacy absolute positions "
                   f"(window was {sw}x{sh}) to anchored form.")
+            # These four constants are defined LOWER DOWN than this
+            # function is called, so they do not exist yet -- naming them
+            # directly would raise NameError and abort the whole load.
+            # Approximations are fine here: they only classify which
+            # corner a legacy absolute position was nearest.
+            _pw = globals().get("PANEL_W", 320)
+            _rh = globals().get("ROW_MIN_H", 96)
+            _ew = globals().get("EV_PANEL_W", 240)
+            _eh = globals().get("EV_PANEL_H", 240)
             for k, pos in data.get("panel_positions", {}).items():
-                # We don't know the panel's exact size, but ROW_MIN_H is a
-                # safe approximation for corner-classification purposes.
                 panel_anchors[k] = anchor_for_pos(int(pos[0]), int(pos[1]),
-                                                  PANEL_W, ROW_MIN_H, sw, sh)
+                                                  _pw, _rh, sw, sh)
             lep = data.get("equip_pos")
             if lep and equip_anchor is None:
                 equip_anchor = anchor_for_pos(int(lep[0]), int(lep[1]),
-                                              EV_PANEL_W, EV_PANEL_H, sw, sh)
+                                              _ew, _eh, sw, sh)
 
         print(f"[OmniWatch] Loaded layout from {LAYOUT_FILE}")
         print(f"  panel_anchors = {dict(panel_anchors)}")
@@ -22422,6 +23090,11 @@ ACCENT_CHAT     = (140, 220, 180)   # mint — chat (communication/signal)
 ACCENT_SC       = (220, 130, 210)   # magenta — skillchain (resonance / flash)
 ACCENT_CHEATSHEET = (150, 175, 235) # cornflower — cheat sheet (reference)
 ACCENT_WARP       = (130, 225, 200) # teal-green — warp (travel / go)
+# The alert box is the party panel's companion — same subject, other
+# axis — so it carries the party stripe. Matching colours are how the
+# two read as belonging together.
+ACCENT_ALERT      = ACCENT_PARTY
+ACCENT_POOL       = (215, 180, 105) # gold — treasure pool (loot)
 # Skillchain property → display color. Canonical FFXI element palette
 # via Ivaar's Skillchains addon (originally from Sammeh). Same colors
 # the player sees on element icons in the game UI, so muscle memory
@@ -25799,6 +26472,7 @@ def _dev_panel_input_blocked():
         or currency_settings_modal_open or party_settings_modal_open
         or display_settings_modal_open or header_settings_modal_open
         or inventory_settings_modal_open or statistics_settings_modal_open
+        or alert_editor_open
     )
 
 
@@ -26960,7 +27634,21 @@ def draw_calltrust_button(surface):
 
 def _brdset_resolve_active():
     """Which set the floating Sing button targets: the last-sung set if it
-    still exists, else the only set if there's exactly one, else None."""
+    still exists, else the only set if there's exactly one, else None.
+
+    Loads the per-character file first. It used to read `_brdset_sets`
+    straight out of memory, and NOTHING fills that in until the Loadouts
+    window is opened -- `_brdset_ensure_loaded` was only called from the
+    BRD window's draw and from opening Loadouts. So on a fresh session the
+    dictionary was empty, every name failed the `in` test, and the button
+    said to go and pick a set even though one was saved and would show up
+    highlighted the moment you opened the window. Opening that window was
+    doing the loading, which is why ticking a set "fixed" it.
+    """
+    try:
+        _brdset_ensure_loaded()
+    except Exception:
+        pass
     if _brdset_active and _brdset_active in _brdset_sets:
         return _brdset_active
     if len(_brdset_sets) == 1:
@@ -27888,6 +28576,12 @@ def _synergy_handle_event(event):
     if (event.type == pygame.MOUSEBUTTONUP and event.button == 1
             and _syn_drag_off is not None):
         _syn_drag_off = None
+        # Remember where it was left. save_layout also runs on quit,
+        # so a release that never arrives is covered.
+        try:
+            save_layout()
+        except Exception:
+            pass
         return True
     return False
 
@@ -31472,6 +32166,12 @@ def _craft_handle_event(event):
     if (event.type == pygame.MOUSEBUTTONUP and event.button == 1
             and _craft_drag_off is not None):
         _craft_drag_off = None
+        # Remember where it was left. save_layout also runs on quit,
+        # so a release that never arrives is covered.
+        try:
+            save_layout()
+        except Exception:
+            pass
         return True
     return False
 _sz_area_last_click = 0             # ticks of last view click (dbl=recenter)
@@ -31551,6 +32251,2021 @@ _NYZUL_LEADERS = {
 _NYZUL_HNM_FLOORS = {20, 40, 60, 80, 100}
 _NYZUL_ZONE = 77        # Nyzul Isle Uncharted Area -- the floor zone (the
                         # zone id stays the same across every floor of a run)
+
+# ── Treasure pool panel ──────────────────────────────────────────────────
+# Opened from Settings -> Misc -> Treasure Pool, next to the Auction House.
+#
+# The lua pushes a POOL| line about once a second whether or not this panel
+# is open, because the auto lot / pass rules below read the same snapshot:
+# closing the window must not quietly stop the rules from firing.
+POOL_SLOT_SECONDS = 300      # an untouched item leaves the pool after 5 min
+POOL_PANEL_W      = 560
+
+pool_state       = []        # newest snapshot: list of row dicts
+pool_panel_open  = False
+pool_pos         = globals().get("pool_pos") or [300, 240]
+# Where the panel was last actually DRAWN, after clamping to the
+# screen. Separate from pool_pos, which is where the user put it.
+#
+# The two have to stay apart because this panel's height grows with
+# the number of items in the pool: a box sitting low on screen gets
+# clamped upward the moment a drop lands, and writing that back would
+# throw away the position it was clamped FROM. It never came back down
+# when the pool emptied, so the panel climbed the screen a little at a
+# time. Same bug the Support Helper had; same fix.
+_pool_draw_pos   = [0, 0]
+_pool_rects      = {}
+_pool_drag_off   = None
+
+# Auto rules, keyed by LOWERCASED ITEM NAME so they cover every future drop
+# of the same thing rather than one pool slot.
+#
+# SESSION ONLY, DELIBERATELY: these are plain globals and nothing writes
+# them to disk. A standing "pass everything called X" that survived a
+# restart would eventually pass something you wanted, long after you'd
+# forgotten you set it. They die with the overlay, and the RESET button
+# clears them sooner.
+pool_auto_lot    = set()
+pool_auto_pass   = set()
+
+# Slot index -> item id we have already auto-acted on. Our own lot state
+# takes a moment to come back around through the party data, so without
+# this the next snapshot would fire the same rule again.
+_pool_auto_done  = {}
+
+
+def _send_cure(cure, target_name):
+    """Ask the lua to cast `cure` on `target_name`.
+
+    Always a spell: the things that cure a status without being one --
+    Holy Water, Remedy, an ability -- can't be used on another party
+    member anyway, so this panel is only ever firing magic.
+
+    FFXI takes a player NAME as a command target, which is why this
+    needs no targeting at all -- the same reason <pc> works on hotbar
+    buttons.
+    """
+    cure = (cure or "").strip()
+    target_name = (target_name or "").strip()
+    if not cure or not target_name:
+        return False
+    if "|" in cure or "|" in target_name:
+        return False               # would split the wire line
+    try:
+        payload = f"CUREACT|{cure}|{target_name}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+        print(f"[OmniWatch] cure helper: {cure} -> {target_name}")
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] send_cure failed: {e!r}")
+        return False
+
+
+def _pool_clear_rects():
+    _pool_rects.clear()
+
+
+def _send_pool_action(action, slot, item_id):
+    """Ask the lua side to lot or pass one pool slot.
+
+    The item id travels with the slot so the lua can refuse the action if
+    the slot has changed hands since this row was drawn -- slots get
+    reused, and lotting the wrong thing can't be taken back.
+    """
+    try:
+        payload = f"POOLACT|{action}|{int(slot)}|{int(item_id)}"
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] send_pool_action failed: {e!r}")
+
+
+def _pool_inventory_has_room():
+    """True when there is a free inventory slot, or when we can't tell.
+
+    Lotting something you have no room for wins it into nothing, so an
+    auto-lot rule holds off while the bag is full. Manual lotting is left
+    alone: that's a deliberate press, and the game will say no itself.
+    Unknown capacity returns True -- the rule the user set should not be
+    silently disabled because a bag count hasn't arrived yet.
+    """
+    cap = inventory_caps.get("inventory")
+    if not cap:
+        return True
+    try:
+        cnt = int(cap.get("count", -1))
+        mx = int(cap.get("max", -1))
+    except (TypeError, ValueError):
+        return True
+    if mx <= 0 or cnt < 0:
+        return True
+    return cnt < mx
+
+
+def _pool_auto_rule(name):
+    """'lot', 'pass' or None for an item name."""
+    key = (name or "").strip().lower()
+    if not key:
+        return None
+    if key in pool_auto_pass:
+        return "pass"
+    if key in pool_auto_lot:
+        return "lot"
+    return None
+
+
+def _pool_apply_auto():
+    """Fire auto rules against the current snapshot. Called on every POOL
+    line, so a rule added while an item is sitting in the pool acts on it
+    within the second rather than waiting for the next drop."""
+    live = {e["slot"] for e in pool_state}
+    for slot in [k for k in _pool_auto_done if k not in live]:
+        _pool_auto_done.pop(slot, None)
+    for e in pool_state:
+        if e["mine"] != "-":
+            continue                      # already lotted or passed by hand
+        if _pool_auto_done.get(e["slot"]) == e["item_id"]:
+            continue
+        rule = _pool_auto_rule(e["name"])
+        if rule is None:
+            continue
+        if rule == "lot" and not _pool_inventory_has_room():
+            # Say so once per item rather than every second.
+            if _pool_auto_done.get(e["slot"]) != -e["item_id"]:
+                _pool_auto_done[e["slot"]] = -e["item_id"]
+                print(f"[OmniWatch] auto-lot held: inventory full ({e['name']})")
+            continue
+        _pool_auto_done[e["slot"]] = e["item_id"]
+        _send_pool_action(rule, e["slot"], e["item_id"])
+
+
+def _pool_toggle_auto(name, which):
+    """Toggle one auto rule. The two lists are exclusive -- an item can't
+    be set to both lot and pass, and picking one clears the other."""
+    key = (name or "").strip().lower()
+    if not key:
+        return
+    target = pool_auto_lot if which == "lot" else pool_auto_pass
+    other = pool_auto_pass if which == "lot" else pool_auto_lot
+    if key in target:
+        target.discard(key)
+    else:
+        target.add(key)
+        other.discard(key)
+    # Let the rule re-evaluate this slot immediately: a rule cleared and
+    # re-set should act again rather than be blocked by the old record.
+    for slot, iid in list(_pool_auto_done.items()):
+        for e in pool_state:
+            if e["slot"] == slot and (e["name"] or "").strip().lower() == key:
+                _pool_auto_done.pop(slot, None)
+    _pool_apply_auto()
+
+
+def _pool_reset_auto():
+    pool_auto_lot.clear()
+    pool_auto_pass.clear()
+    _pool_auto_done.clear()
+
+
+def _toggle_pool_panel():
+    """Settings -> Misc -> Treasure Pool [OPEN]. Toggles the panel; when
+    opening, closes the settings dropdown (mirrors the other launchers)."""
+    global pool_panel_open
+    pool_panel_open = not pool_panel_open
+    if pool_panel_open:
+        try:
+            globals()["settings_menu_open"] = False
+        except Exception:
+            pass
+
+
+def _pool_time_text(entry):
+    """Countdown to the item leaving the pool, and the colour for it.
+
+    An age we inferred rather than timed from the drop packet is prefixed
+    with ~ -- it's a floor on how long the item has been there, so the
+    time shown is the most that can be left, never more.
+    """
+    left = POOL_SLOT_SECONDS - int(entry.get("age", 0) or 0)
+    if left < 0:
+        left = 0
+    txt = f"{left // 60}:{left % 60:02d}"
+    if entry.get("approx"):
+        txt = "~" + txt
+    if left <= 30:
+        col = (230, 110, 110)
+    elif left <= 60:
+        col = (230, 170, 70)
+    else:
+        col = (200, 206, 216)
+    return txt, col
+
+
+def _pool_preview_rows():
+    """Example rows for setup mode. The pool is empty except in the few
+    seconds after a kill, so there is otherwise no way to look at this
+    panel at all without going and fighting something.
+
+    Ages are real numbers fed through the real countdown, so the colour
+    banding and the ~ marker are the ones that will actually show.
+    """
+    base = {"count": 1, "hi_lot": 0, "hi_name": "", "mine": "-",
+            "approx": False, "preview": True}
+    rows = []
+    for slot, extra in enumerate((
+            {"name": "Fire Crystal", "count": 12, "age": 14},
+            {"name": "Ancient Longcaster Cape", "age": 251},
+            {"name": "Beitetsu", "age": 96, "hi_lot": 655,
+             "hi_name": "Charlie"},
+            {"name": "Riftborn Boulder", "age": 40, "mine": "812"},
+            {"name": "Plovid Flesh", "age": 180, "mine": "p"},
+            {"name": "Beryllium Ore", "age": 288, "approx": True},
+    )):
+        r = dict(base)
+        r.update(extra)
+        r["slot"] = slot
+        r["item_id"] = 0
+        rows.append(r)
+    return rows
+
+
+def draw_pool_window(surface):
+    # pool_pos is mutated in place, never rebound, so it needs no
+    # global declaration -- adding one is a pyflakes warning.
+    _pool_clear_rects()
+    if not pool_panel_open:
+        return
+    pad, title_h, row_h = 8, 22, 20
+    w = POOL_PANEL_W
+    fnt = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    rows = list(pool_state)
+    # Same reasoning as the alert box: nothing to look at in setup mode
+    # unless something has just died. A real pool always wins.
+    preview = False
+    if setup_mode and not rows:
+        rows = _pool_preview_rows()
+        preview = True
+    h = title_h + pad + max(len(rows), 1) * row_h + pad + 24 + pad
+    # Clamp for DRAWING ONLY -- pool_pos is never written back to from
+    # here. See the note on _pool_draw_pos.
+    x = max(0, min(int(pool_pos[0]), surface.get_width() - w))
+    y = max(0, min(int(pool_pos[1]), surface.get_height() - h))
+    _pool_draw_pos[0], _pool_draw_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _pool_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_POOL)
+    except Exception:
+        pass
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 3, y + 1, w - 4, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Treasure Pool", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 10, y + (title_h - ts.get_height()) // 2))
+    if preview:
+        _px = fnt_s.render("example data", True, (150, 140, 110))
+        surface.blit(_px, (x + w - 26 - _px.get_width(),
+                           y + (title_h - _px.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (15 - xs.get_height()) // 2))
+    _pool_rects["close"] = close_r
+    _pool_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+
+    cy = y + title_h + pad
+    if not rows:
+        surface.blit(fnt.render("(nothing in the pool)", True, COL_LABEL_DIM),
+                     (x + pad, cy + 3))
+        cy += row_h
+    for e in rows:
+        name = e["name"] or f"#{e['item_id']}"
+        if e["count"] > 1:
+            name = f"{name} x{e['count']}"
+        nm = name
+        while nm and fnt.render(nm, True, (0, 0, 0)).get_width() > 186:
+            nm = nm[:-1]
+        if nm != name:
+            nm = nm[:-1] + "…"
+        surface.blit(fnt.render(nm, True, (225, 225, 230)), (x + pad, cy + 3))
+
+        t_txt, t_col = _pool_time_text(e)
+        surface.blit(fnt.render(t_txt, True, t_col), (x + 202, cy + 3))
+
+        # Standing high lot, and our own state, in one column.
+        if e["mine"] == "p":
+            st, st_col = "passed", (180, 150, 150)
+        elif e["mine"] != "-":
+            st, st_col = f"you {e['mine']}", (150, 210, 150)
+        elif e["hi_lot"] > 0:
+            st, st_col = f"{e['hi_lot']} {e['hi_name']}", (185, 195, 210)
+        else:
+            st, st_col = "no lots", COL_LABEL_DIM
+        while st and fnt_s.render(st, True, (0, 0, 0)).get_width() > 138:
+            st = st[:-1]
+        surface.blit(fnt_s.render(st, True, st_col), (x + 262, cy + 4))
+
+        bx = x + w - pad - 140
+        acted = e["mine"] != "-"
+        lot_r = pygame.Rect(bx, cy, 36, row_h - 3)
+        pass_r = pygame.Rect(bx + 40, cy, 40, row_h - 3)
+        _craft_btn(surface, lot_r, "LOT", fnt_s,
+                   (38, 44, 38) if acted else (52, 80, 52),
+                   (120, 140, 120) if acted else (200, 235, 200))
+        _craft_btn(surface, pass_r, "PASS", fnt_s,
+                   (44, 38, 38) if acted else (74, 52, 52),
+                   (140, 120, 120) if acted else (235, 200, 200))
+        # Example rows are drawn but never wired: there is no item behind
+        # them, and a LOT that goes nowhere is worse than one you can't
+        # press.
+        if not acted and not e.get("preview"):
+            _pool_rects[f"lot:{e['slot']}:{e['item_id']}"] = lot_r
+            _pool_rects[f"pass:{e['slot']}:{e['item_id']}"] = pass_r
+
+        rule = _pool_auto_rule(e["name"])
+        al_r = pygame.Rect(bx + 84, cy, 26, row_h - 3)
+        ap_r = pygame.Rect(bx + 114, cy, 26, row_h - 3)
+        _craft_btn(surface, al_r, "AL", fnt_s,
+                   (52, 80, 52) if rule == "lot" else (34, 36, 44),
+                   (200, 235, 200) if rule == "lot" else (140, 146, 160))
+        _craft_btn(surface, ap_r, "AP", fnt_s,
+                   (74, 52, 52) if rule == "pass" else (34, 36, 44),
+                   (235, 200, 200) if rule == "pass" else (140, 146, 160))
+        if not e.get("preview"):
+            _pool_rects[f"autolot:{e['slot']}"] = al_r
+            _pool_rects[f"autopass:{e['slot']}"] = ap_r
+        cy += row_h
+
+    cy += pad
+    reset_r = pygame.Rect(x + w - pad - 104, cy, 104, 19)
+    # The note has to stop before the RESET button, not run underneath it.
+    # Blitting the full sentence put its tail out the far side of the
+    # button as garbled text -- the same thing that happened to the stats
+    # panel's setup hint. Longest phrasing that fits the real gap wins.
+    _counts = f"auto: {len(pool_auto_lot)} lot / {len(pool_auto_pass)} pass"
+    _gap = reset_r.x - (x + pad) - 8
+    for _note in (
+            _counts + "  \u00b7  by item name, cleared when OmniWatch closes",
+            _counts + "  \u00b7  by item name, cleared on exit",
+            _counts + "  \u00b7  by item name",
+            _counts):
+        if fnt_s.size(_note)[0] <= _gap:
+            note = _note
+            break
+    else:
+        note = _counts
+    surface.blit(fnt_s.render(note, True, COL_LABEL_DIM), (x + pad, cy + 5))
+    _craft_btn(surface, reset_r, "RESET AUTO", fnt_s, (58, 44, 44),
+               (222, 180, 180))
+    _pool_rects["reset"] = reset_r
+
+
+def _pool_handle_event(event):
+    global pool_panel_open, _pool_drag_off
+    if not pool_panel_open:
+        return False
+    r = _pool_rects
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            pool_panel_open = False
+            return True
+        if r.get("reset") and r["reset"].collidepoint(mx, my):
+            _pool_reset_auto()
+            return True
+        for key, rect in list(r.items()):
+            if not rect.collidepoint(mx, my):
+                continue
+            bits = key.split(":")
+            if bits[0] in ("lot", "pass") and len(bits) == 3:
+                _send_pool_action(bits[0], int(bits[1]), int(bits[2]))
+                return True
+            if bits[0] in ("autolot", "autopass") and len(bits) == 2:
+                slot = int(bits[1])
+                for e in pool_state:
+                    if e["slot"] == slot:
+                        _pool_toggle_auto(
+                            e["name"],
+                            "lot" if bits[0] == "autolot" else "pass")
+                        break
+                return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            # Adopt the DRAWN position first: while the panel is
+            # clamped, pool_pos is somewhere off screen and an offset
+            # measured from it would teleport the panel by the clamp
+            # distance on the first pixel of the drag.
+            pool_pos[0], pool_pos[1] = _pool_draw_pos
+            _pool_drag_off = (mx - pool_pos[0], my - pool_pos[1])
+            return True
+        if r.get("panel") and r["panel"].collidepoint(mx, my):
+            return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _pool_drag_off is not None:
+            _pool_drag_off = None
+            # Persist where it was put. save_layout also runs on quit,
+            # so a release that never arrives is covered too.
+            try:
+                save_layout()
+            except Exception:
+                pass
+    if event.type == pygame.MOUSEMOTION and _pool_drag_off is not None:
+        pool_pos[0] = event.pos[0] - _pool_drag_off[0]
+        pool_pos[1] = event.pos[1] - _pool_drag_off[1]
+        return True
+    return False
+
+
+# ── Party alert box ──────────────────────────────────────────────────────
+# A status-first view of the party: you define the sections, and anyone
+# carrying a matching status drops into one.
+#
+# The party panel already shows every member's buffs and debuffs, but it
+# organises them by PERSON, which answers "what is on Kupo". The question
+# you actually ask as a healer is "does anyone have Silence", and that
+# means scanning six rows of icons for one shape. This inverts the axis so
+# the answer is read rather than searched for.
+#
+# Nothing new comes over the wire for this. `encode_member` on the lua side
+# already sends each main-party member's statuses (their own from
+# player.buffs, everyone else's from the 0x076 cache) alongside name, HP%,
+# mob index and entity id. Two limits fall straight out of that and are
+# worth knowing rather than debugging later:
+#   - ALLIANCE MEMBERS CARRY NO STATUSES. The lua computes them for the
+#     main party only, deliberately -- windower doesn't expose them
+#     reliably for members outside your zone. Alliance rows are skipped
+#     here rather than shown permanently clear, which would be a lie.
+#   - TRUSTS CARRY NONE EITHER. 0x076 never arrives for them, so a
+#     trust-only party leaves this box empty however sick they are.
+# Thirty. Ten ran out on the common debuffs alone, twenty was filled in
+# one sitting, and the editor scrolls -- so the ceiling is only about the
+# file staying sane, not about what fits on screen. Raise it again if it
+# ever binds; nothing here is quadratic in the section count.
+ALERT_MAX_SECTIONS = 30
+ALERT_EDITOR_W     = 760
+_ALERT_EDITOR_HELP = (
+    "A section collects anyone carrying one of its statuses. Click a "
+    "name to select or target them; click the cure beside it to use it "
+    "on them. Match: comma separated, found anywhere in the name (Blind "
+    "finds Blindness). Cure: the spell cast when you click it -- list "
+    "several, weakest first, and the mouse wheel picks between them on "
+    "the row. HP: flag at or under this %, 0 = off.")
+_ALERT_EDITOR_HELP_BUFFS = (
+    "Buffs you want to keep an eye on. A section lists anyone in the "
+    "party carrying it, whoever cast it -- so it disappears when the "
+    "buff wears off, and you can cover for someone who is busy. Match: "
+    "comma separated, found anywhere in the status name. Cure: the "
+    "spell cast when you click it; list several (single target and its "
+    "-ra, say) and the mouse wheel picks between them. Only buffs you "
+    "have cast yourself can be timed; the rest show n/a.")
+ALERT_SHORT_FIELD_MAX = 24     # section name
+# The cure list has to hold a whole family in one section: the six bar-
+# element spells, or the eight bar-status ones. Six was enough while a
+# section meant one spell and its tiers.
+ALERT_CURE_FIELD_MAX  = 240    # the cure list, comma separated
+ALERT_MAX_CURES       = 12     # spells you can park in one section
+ALERT_BOX_W        = 292
+ALERT_NAME_W       = 116
+ALERT_CURE_W       = 104
+# When the list outgrows the height budget the box adds a column
+# rather than getting taller: screens have width to spare, and a
+# HUD you have to scroll mid-fight is no use.
+ALERT_COL_GAP      = 6
+ALERT_MAX_COLS     = 4
+ALERT_COL_MAX_FRAC = 0.42   # of screen height, per column
+# A completed Sortie objective. Same red the Support Helper puts on an
+# affliction heading, so 'this row has changed state' reads the same
+# way in both panels.
+COL_SORTIE_DONE    = (235, 120, 110)
+# The GearSwap mirror. Green, because it belongs to GearSwap rather
+# than to any OmniWatch subsystem, and nothing else here is green.
+ACCENT_GSD         = (120, 190, 130)
+# Red is the AFFLICTION -- the section heading, the thing that is
+# wrong. The cure is the answer to it and reads amber, the colour this
+# app already uses for something you act on. Swapped round from the
+# first cut, where the alarm colour sat on the answer.
+COL_ALERT_SECTION  = (235, 120, 110)
+COL_ALERT_CURE     = (215, 185, 115)
+
+# Shipped starting point. Sections are plain text so they can be edited
+# by hand as well as through the editor, and matching is a case-insensitive
+# SUBSTRING test -- "Blind" catches Blindness, "Sleep" catches Sleep II.
+# Where a section carries several spells they are ordered weakest first:
+# the wheel steps UP through them, which is the direction you reach for
+# when the first one was not enough.
+_ALERT_DEFAULT_SECTIONS = [
+    # Shipped from a real WHM setup. The order IS the display order, so
+    # the emergencies sit above the things that can wait a global.
+    #
+    # Low HP ships with NO cure on purpose: which tier you reach for
+    # depends on your own healing numbers, so it is the one line the
+    # player has to fill in themselves. Every other section names the
+    # spell that removes it.
+    {"name": "Low HP",            "cure": "",                      "match": "",
+     "hp": 50},
+    {"name": "Doomed",            "cure": "Cursna",                "match": "Doom",
+     "hp": 0},
+    {"name": "Petrified",         "cure": "Stona",                 "match": "Petrification",
+     "hp": 0},
+    {"name": "Cursed",            "cure": "Cursna",                "match": "Curse, Bane",
+     "hp": 0},
+    {"name": "Silenced",          "cure": "Silena",                "match": "Silence",
+     "hp": 0},
+    {"name": "Asleep",            "cure": "Cure, Curaga",          "match": "Sleep, Lullaby, Nightmare",
+     "hp": 0},
+    {"name": "Disease",           "cure": "Viruna",                "match": "Disease, Plague",
+     "hp": 0},
+    {"name": "Blind",             "cure": "Blindna",               "match": "Blind",
+     "hp": 0},
+    {"name": "Paralyzed",         "cure": "Paralyna",              "match": "Paralysis",
+     "hp": 0},
+    {"name": "Poison",            "cure": "Poisona",               "match": "Poison",
+     "hp": 0},
+    {"name": "Addle",             "cure": "Erase",                 "match": "Addle",
+     "hp": 0},
+    {"name": "Slow",              "cure": "Erase",                 "match": "Slow",
+     "hp": 0},
+    {"name": "Acc. Down",         "cure": "Erase",                 "match": "Accuracy Down",
+     "hp": 0},
+    {"name": "Att. Down",         "cure": "Erase",                 "match": "Attack Down",
+     "hp": 0},
+    {"name": "Defense Down",      "cure": "Erase",                 "match": "Defense Down",
+     "hp": 0},
+    {"name": "Evasion Down",      "cure": "Erase",                 "match": "Evasion Down",
+     "hp": 0},
+    {"name": "Magic Attack Down", "cure": "Erase",                 "match": "Magic Attack Down",
+     "hp": 0},
+    {"name": "Magic Defense Down", "cure": "Erase",                 "match": "Magic Defense Down",
+     "hp": 0},
+    {"name": "Flash",             "cure": "Erase",                 "match": "Flash",
+     "hp": 0},
+    {"name": "Weighted",          "cure": "Erase",                 "match": "Weight",
+     "hp": 0},
+    {"name": "Bio",               "cure": "Erase",                 "match": "Bio",
+     "hp": 0},
+    {"name": "Dia",               "cure": "Erase",                 "match": "Dia",
+     "hp": 0},
+    {"name": "Max HP Down",       "cure": "Erase",                 "match": "Max HP Down",
+     "hp": 0},
+    {"name": "Max MP Down",       "cure": "Erase",                 "match": "Max MP Down",
+     "hp": 0},
+]
+
+alert_sections     = []
+# The buffs tab has its OWN sections, built exactly like the debuff
+# ones: nothing appears unless you put it there. Without that the tab
+# is a dump of every status in the party -- food, Signet, sneak,
+# somebody's roll -- and none of it is yours to cast.
+alert_buff_sections = []
+alert_box_pos      = [420, 140]
+alert_editor_open  = False
+# Which tab the panel is showing. Saved with the sections: it is part
+# of how you left the panel, like its position.
+alert_tab          = "debuffs"
+# Whether the panel is on screen.
+#
+# This lives in the panel's OWN file rather than in the settings, and
+# that is the whole point: `omniwatch_settings.json` is one of the
+# files a profile swaps, so with the flag in there, switching to a
+# profile saved before this panel existed turned it off, and every
+# profile needed teaching about it separately. The sections, the tab
+# and the position were already profile-independent -- visibility was
+# the one piece that was not, which made the whole panel feel like it
+# forgot itself.
+#
+# The old `show_alert_box` setting is still read ONCE, on the first
+# load of a file that has no "shown" key, so nobody who already had
+# the panel on loses it.
+alert_shown        = False
+ALERT_TABS         = (("debuffs", "Party Debuffs"),
+                      ("buffs",   "Party Buffs"))
+ALERT_TAB_H        = 17
+_alert_loaded_from = None
+_alert_rects       = {}
+_alert_drag_off    = None
+_alert_field       = _TextField(max_length=160)
+_alert_focus        = None      # (section index, field key)
+_alert_editor_scroll = 0        # first section row shown in the editor
+# The editor edits one of the two section lists. It follows the panel
+# tab when you open it, so Configure while looking at Party Buffs
+# edits the buff list rather than silently editing the other one.
+_alert_edit_tab = "debuffs"
+ALERT_EDIT_TAB_H = 18
+
+
+def _alert_edit_list():
+    """The section list the editor is currently working on.
+
+    Everything in the editor mutates this IN PLACE (append, pop, swap),
+    so handing back the list object is enough -- no copying back.
+    """
+    return (alert_buff_sections if _alert_edit_tab == "buffs"
+            else alert_sections)
+# The click handler needs the same geometry the draw used, and events
+# arrive without a surface. Stashed by the draw rather than recomputed
+# from a guess -- the two must agree about rows_fit or a reorder near
+# the fold scrolls to the wrong place.
+_alert_last_surface = None
+# Set whenever the box moves, cleared by a successful write. The
+# position used to be saved ONLY on mouse-up, which is one event that
+# can go missing in half a dozen ordinary ways -- releasing outside the
+# overlay, alt-tabbing mid-drag, closing the app with the button still
+# down. Any of those and the move was lost. Now the release is just the
+# fast path; the flush below and the save on quit are the backstops.
+_alert_pos_dirty = False
+_alert_pos_flush_at = 0.0
+# Where the box was last actually drawn, after clamping to the screen.
+# Separate from alert_box_pos, which is where the user asked for it.
+_alert_draw_pos = [0, 0]
+
+# (player id, lowercased status) -> [first seen, was already there]. This is
+# the stopclock. No packet carries how long a status has been on someone
+# else -- 0x076 is a bare list with no timers, which is why party buff
+# TIMERS were never built -- so the clock runs from when WE first saw it.
+# Anything already present the first time we see a member is flagged, and
+# renders with a ~ : the elapsed time is a floor, so what's shown is the
+# LEAST it can have been there, never more.
+_alert_seen  = {}
+_alert_known = set()
+
+
+def _alert_save():
+    """Write sections + box position. Small enough to rewrite whole.
+
+    Refuses to write a file it has not read. ALERTS_FILE repoints when
+    a character logs in, and between that and the next draw the
+    in-memory sections still belong to the previous character --
+    writing then would copy one character's setup over another's. The
+    caller's change is not lost: the dirty flag survives and the flush
+    retries once the load has caught up.
+    """
+    global _alert_pos_dirty
+    if _alert_loaded_from != ALERTS_FILE:
+        return False
+    try:
+        os.makedirs(os.path.dirname(ALERTS_FILE), exist_ok=True)
+        with open(ALERTS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"sections": alert_sections,
+                       "buff_sections": alert_buff_sections,
+                       "defaults_version": _ALERT_DEFAULTS_VERSION,
+                       "tab": alert_tab,
+                       "shown": bool(alert_shown),
+                       "pos": [int(alert_box_pos[0]), int(alert_box_pos[1])]},
+                      f, indent=2)
+        _alert_pos_dirty = False
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] alert config save failed: {e!r}")
+        return False
+
+
+def _alert_mark_moved():
+    """Note that the box has moved; the flush writes it shortly after."""
+    global _alert_pos_dirty, _alert_pos_flush_at
+    _alert_pos_dirty = True
+    # Debounced rather than written per pixel: a drag is hundreds of
+    # motion events and the file would be rewritten on every one.
+    _alert_pos_flush_at = time.time() + 1.0
+
+
+def _alert_flush_pos(force=False):
+    """Write a pending move. Called from the draw and again on quit."""
+    if not _alert_pos_dirty:
+        return False
+    if not force and time.time() < _alert_pos_flush_at:
+        return False
+    return _alert_save()
+
+
+def _alert_clean_section(raw):
+    """One section, sanitised. Junk in the file is dropped field by field
+    rather than failing the whole load."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        hp = int(raw.get("hp", 0) or 0)
+    except (TypeError, ValueError):
+        hp = 0
+    return {
+        "name":  str(raw.get("name", "") or "")[:ALERT_SHORT_FIELD_MAX],
+        "cure":  str(raw.get("cure", "") or "")[:ALERT_CURE_FIELD_MAX],
+        "match": str(raw.get("match", "") or "")[:160],
+        "hp":    max(0, min(100, hp)),
+    }
+
+
+def _alert_load():
+    """Load on demand, keyed by path.
+
+    Character switching repoints ALERTS_FILE, so comparing against the
+    path we last read from picks the new character's sections up without
+    anything having to remember to call us.
+    """
+    global alert_sections, alert_box_pos, _alert_loaded_from
+    global _alert_pos_dirty, alert_tab, alert_buff_sections, alert_shown
+    if _alert_loaded_from == ALERTS_FILE:
+        return
+    data = {}
+    try:
+        with open(ALERTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    raw = data.get("sections")
+    if not isinstance(raw, list):
+        raw = [dict(x) for x in _ALERT_DEFAULT_SECTIONS]
+    out = []
+    for r in raw[:ALERT_MAX_SECTIONS]:
+        c = _alert_clean_section(r)
+        if c is not None:
+            out.append(c)
+    alert_sections = out
+    braw = data.get("buff_sections")
+    if not isinstance(braw, list):
+        braw = [dict(x) for x in _ALERT_DEFAULT_BUFF_SECTIONS]
+    bout = []
+    for r in braw[:ALERT_MAX_SECTIONS]:
+        c = _alert_clean_section(r)
+        if c is not None:
+            bout.append(c)
+    alert_buff_sections = bout
+    _sh = data.get("shown")
+    if isinstance(_sh, bool):
+        alert_shown = _sh
+    else:
+        # Pre-"shown" file (or none at all): inherit the old setting so
+        # an existing install keeps the panel it already had.
+        try:
+            alert_shown = bool(setting("show_alert_box"))
+        except Exception:
+            alert_shown = False
+    _tab = data.get("tab")
+    if _tab in dict(ALERT_TABS):
+        alert_tab = _tab
+    pos = data.get("pos")
+    if isinstance(pos, list) and len(pos) == 2:
+        try:
+            alert_box_pos = [int(pos[0]), int(pos[1])]
+        except (TypeError, ValueError):
+            pass
+    # A file we have never seen gets the shipped defaults whole, so it
+    # is already current; anything else is stamped with what it was
+    # written against (absent = 1, the first shipped set).
+    if data:
+        try:
+            _dv = int(data.get("defaults_version", 1))
+        except (TypeError, ValueError):
+            _dv = 1
+    else:
+        _dv = _ALERT_DEFAULTS_VERSION
+    _alert_loaded_from = ALERTS_FILE
+    if _dv < _ALERT_DEFAULTS_VERSION:
+        _added = _alert_apply_new_defaults(_dv)
+        # Written back straight away -- _alert_loaded_from is set above,
+        # so the save is allowed, and the stamp has to land or the
+        # append repeats every session.
+        _alert_save()
+        if _added:
+            print("[OmniWatch] Support Helper: added new default "
+                  "sections from this version")
+    # Whatever was pending belonged to the file we just stopped looking at.
+    # It either reached that file already (release, or the one-second
+    # flush) or it is gone -- and gone is the right answer, because the
+    # only place left to write it is another character's file.
+    _alert_pos_dirty = False
+
+
+def _alert_cure_list(section):
+    """The spells a section offers, in order.
+
+    Same comma-separated shape as the match list, so the file stays
+    hand-editable and a section written when a cure was a single spell
+    still reads as a one-item list.
+    """
+    return [c.strip()
+            for c in str(section.get("cure", "") or "").split(",")
+            if c.strip()][:ALERT_MAX_CURES]
+
+
+# Buffs a support job puts on other people. Same shape as the debuff
+# sections; the cure column is what to cast, and the wheel picks
+# between a single-target spell and its -ra when both are listed.
+_ALERT_DEFAULT_BUFF_SECTIONS = [
+    # A real WHM/RDM support list. Order is display order.
+    #
+    # The two Bar sections each hold a whole family: one section watches
+    # for any of the six elements (or eight statuses) and the mouse wheel
+    # picks which one to cast. That is a departure from the weakest-first
+    # convention the tiered spells use -- here the list is a choice of
+    # element, not a choice of strength.
+    #
+    # The -ra versions are listed because a party is what they are for;
+    # add the single-target ones to a section if you want both.
+    {"name": 'Protect',
+     "cure": 'Protect V, Protectra V',
+     "match": 'Protect', "hp": 0},
+    {"name": 'Shell',
+     "cure": 'Shell V, Shellra V',
+     "match": 'Shell', "hp": 0},
+    {"name": 'Haste',
+     "cure": 'Haste, Haste II',
+     "match": 'Haste', "hp": 0},
+    {"name": 'Refresh',
+     "cure": 'Refresh, Refresh II, Refresh III',
+     "match": 'Refresh', "hp": 0},
+    {"name": 'Regen',
+     "cure": 'Regen, Regen II, Regen III, Regen IV',
+     "match": 'Regen', "hp": 0},
+    {"name": 'Bar Element',
+     "cure": 'Barfira, Barblizzara, Baraera, Barstonra, Barthundra, Barwatera',
+     "match": 'Barfire, Barblizzard, Baraero, Barstone, Barthunder, Barwater', "hp": 0},
+    {"name": 'Bar Status',
+     "cure": 'Barparalyzra, Barsilencera, Barpetra, Barvira, Barpoisonra, Barblindra, Barsleepra, Baramnesra',
+     "match": 'Barparalyze, Barsilence, Barpetrify, Barvirus, Barpoison, Barblind, Barsleep, Baramnesia', "hp": 0},
+]
+
+
+# Shipped-defaults version, and what each bump ADDED.
+#
+# The defaults only ever applied to a file that did not exist yet, so
+# adding a section to the shipped list reached nobody who had already
+# used the panel -- which is everybody, by the time a section is worth
+# adding. This carries new ones across to an existing file, once.
+#
+# The rules that keep it from being presumptuous:
+#   - APPEND ONLY. Nothing existing is edited, reordered or removed.
+#   - Only sections listed against a version NEWER than the file's
+#     stamp. Delete one afterwards and it stays deleted, because the
+#     stamp has already moved past it.
+#   - Skipped if a section of that name is already there, so an
+#     equivalent you wrote yourself is never duplicated.
+#
+# Bumping it: add the sections to the default list AND name them here
+# under the new version number.
+_ALERT_DEFAULTS_VERSION = 2
+_ALERT_NEW_IN_VERSION = {
+    2: {"buffs": ("Bar Element", "Bar Status")},
+}
+
+
+def _alert_apply_new_defaults(from_version):
+    """Append shipped sections added since `from_version`. Returns True
+    if anything was added, so the caller can write the file back."""
+    added = False
+    for ver in sorted(_ALERT_NEW_IN_VERSION):
+        if ver <= from_version:
+            continue
+        for which, names in _ALERT_NEW_IN_VERSION[ver].items():
+            target = (alert_buff_sections if which == "buffs"
+                      else alert_sections)
+            shipped = (_ALERT_DEFAULT_BUFF_SECTIONS if which == "buffs"
+                       else _ALERT_DEFAULT_SECTIONS)
+            have = {(x.get("name") or "").strip().lower() for x in target}
+            for nm in names:
+                if nm.strip().lower() in have:
+                    continue
+                src = next((x for x in shipped
+                            if x.get("name") == nm), None)
+                if src is None or len(target) >= ALERT_MAX_SECTIONS:
+                    continue
+                c = _alert_clean_section(dict(src))
+                if c is not None:
+                    target.append(c)
+                    added = True
+    return added
+
+
+def _alert_terms(section):
+    return [t.strip().lower()
+            for t in str(section.get("match", "") or "").split(",")
+            if t.strip()]
+
+
+def _alert_track():
+    """Start a clock for every status that wasn't there last snapshot, and
+    stop the ones that have gone. Driven from the draw, so it keeps time
+    whether or not the box is on screen."""
+    now = time.time()
+    live = set()
+    for m in (party_data or []):
+        pid = m.get("player_id", 0) or 0
+        if not pid:
+            continue
+        fresh = pid not in _alert_known
+        for label in (m.get("buffs") or []):
+            key = (pid, str(label).lower())
+            live.add(key)
+            if key not in _alert_seen:
+                # A member we've only just met may have been sitting there
+                # silenced for a minute already; that clock is a floor.
+                _alert_seen[key] = [now, fresh]
+        _alert_known.add(pid)
+    for key in [k for k in _alert_seen if k not in live]:
+        _alert_seen.pop(key, None)
+
+
+def _alert_elapsed_text(pid, label):
+    """(text, is_a_floor) for how long a status has been up."""
+    rec = _alert_seen.get((pid, str(label).lower()))
+    if not rec:
+        return "", False
+    secs = max(0, int(time.time() - rec[0]))
+    if secs >= 3600:
+        txt = f"{secs // 3600}:{(secs % 3600) // 60:02d}:{secs % 60:02d}"
+    else:
+        txt = f"{secs // 60}:{secs % 60:02d}"
+    return (("~" + txt) if rec[1] else txt), bool(rec[1])
+
+
+# (player id, section name) -> index into that section's cure list.
+# Per MEMBER, not per section: two people can be down by different
+# amounts in the same section and each needs its own answer.
+#
+# Session-only and pruned to what is on screen, so a member who gets
+# slept again starts back at the first spell rather than inheriting a
+# Curaga you picked for a different situation ten minutes ago.
+_alert_cure_pick = {}
+
+
+def _alert_cure_index(pid, sec_name, count):
+    if count <= 0:
+        return 0
+    return max(0, min(_alert_cure_pick.get((pid, sec_name), 0), count - 1))
+
+
+def _alert_cycle_cure(row, delta):
+    """Step a row's chosen spell. Clamped, not wrapped: the list is
+    ordered weakest to strongest, so running off the end and silently
+    landing back on Cure I is the one outcome worth preventing."""
+    cures = row.get("cures") or []
+    if len(cures) < 2:
+        return False
+    key = (row.get("pid"), row.get("sec"))
+    now = _alert_cure_index(key[0], key[1], len(cures))
+    new = max(0, min(now + delta, len(cures) - 1))
+    if new == now:
+        return False
+    _alert_cure_pick[key] = new
+    return True
+
+
+# (player id, buff id) -> {"spell", "at", "dur"} for buffs WE landed on
+# a party member.
+#
+# The game tells us nothing about how long someone else's buff has
+# left -- 0x076 is a bare list of ids with no timers, the same wall the
+# debuff stopclock ran into. What we DO know exactly is the moment our
+# own cast landed, so the clock starts there and runs against the
+# spell's base duration from the resources.
+#
+# That makes the countdown an ESTIMATE -- duration gear, merits and
+# Composure all stretch it and none of that is on the wire. Two things
+# keep it honest: a row only appears while the member ACTUALLY has the
+# buff (so a resisted or overwritten cast never shows), and a buff
+# still up past our estimate shows 0:00 dim rather than vanishing.
+#
+# Session-only. A buff cast before OmniWatch started has no landing
+# time to count from, and inventing one would be worse than saying
+# nothing.
+support_buffs = {}
+
+# (player id, section name) -> the label we last saw up. A buff we have
+# SEEN on a member stays listed after it wears off, showing "worn",
+# because that is the moment it becomes a job: the row is the reminder
+# to put it back on when there is a spare global.
+#
+# Only buffs actually seen up are remembered. Listing every section
+# against every member from the start would be nine sections times six
+# people of things nobody has asked for.
+_support_seen = {}
+
+
+def _support_buff_rows():
+    """The buffs you watch for, and who in the party has them.
+
+    Driven by `alert_buff_sections` exactly as the debuff tab is driven by
+    `alert_sections`: if you did not put it in the list it does not show.
+    That is the whole filter. Read straight off the party's status list
+    instead, and the tab fills with food, Signet, sneak and other people's
+    rolls -- none of which a support casts on anybody.
+
+    A buff shows whoever cast it. When it was OUR cast the row counts
+    down from the moment it landed; otherwise the time is "n/a", because
+    nothing reports how long somebody else's buff has left. The row is
+    still worth having: it disappears when the buff wears off, and the
+    spell beside it is castable, which is the point -- covering for
+    someone who is busy or dead.
+    """
+    now = time.time()
+    live = {}
+    for m in (party_data or []):
+        if (m.get("group_id") or 0) != 0:
+            continue
+        pid = m.get("player_id", 0) or 0
+        if pid:
+            live[pid] = m
+    # Anything we recorded that is no longer on its member is finished.
+    for key in list(support_buffs):
+        pid, bid = key
+        m = live.get(pid)
+        if not m or bid not in (m.get("buff_ids") or []):
+            support_buffs.pop(key, None)
+
+    out = []
+    live_keys = set()
+    for sec in alert_buff_sections:
+        terms = _alert_terms(sec)
+        cures = _alert_cure_list(sec)
+        if not terms:
+            continue
+        sec_name = sec.get("name") or ""
+        rows = []
+        for m in live.values():
+            pid = m.get("player_id", 0)
+            labels = m.get("buffs") or []
+            ids = m.get("buff_ids") or []
+            hit, hit_bid = None, None
+            for i, label in enumerate(labels):
+                low = str(label).lower()
+                if not any(t in low for t in terms):
+                    continue
+                hit = label
+                hit_bid = ids[i] if i < len(ids) else None
+                break
+            seen_key = (pid, sec_name)
+            live_keys.add(seen_key)
+            if hit is None:
+                if seen_key not in _support_seen:
+                    continue            # never been up: nothing to report
+                # It was up and now it is not. Sorted to the top of its
+                # section: a member with none of it needs the cast more
+                # than one whose copy is merely running low.
+                rows.append({
+                    "name": m.get("name", ""),
+                    "status": _support_seen[seen_key] or sec_name,
+                    "hpp": 100, "pid": pid, "midx": m.get("mob_index", 0),
+                    "cures": cures, "sec": sec_name,
+                    "elapsed": "worn", "elapsed_col": (235, 120, 110),
+                    "_left": -1,
+                })
+                continue
+            _support_seen[seen_key] = hit
+            rec = support_buffs.get((pid, hit_bid))
+            if rec:
+                dur = rec.get("dur") or 0
+                left = (dur - (now - rec["at"])) if dur else None
+                if left is not None and left < 0:
+                    left = 0
+                txt = _support_left_text(left, now - rec["at"])
+                col = _support_left_colour(left)
+                sort_key = left if left is not None else 1e8
+            else:
+                # Somebody else's, or ours from before OmniWatch started.
+                # "n/a" rather than a guess, and dim so it never reads as
+                # a timer that has stopped working.
+                txt, col, sort_key = "n/a", (120, 120, 135), 1e9
+            rows.append({
+                "name": m.get("name", ""), "status": hit,
+                "hpp": 100, "pid": pid,
+                "midx": m.get("mob_index", 0),
+                "cures": cures, "sec": sec_name,
+                "elapsed": txt, "elapsed_col": col, "_left": sort_key,
+            })
+        if rows:
+            # Worn first, then soonest to run out; the ones we can't time
+            # sit at the bottom where they can't crowd out a real
+            # countdown.
+            rows.sort(key=lambda r: r["_left"])
+            out.append((sec, rows))
+    # Forget members who have left the party or sections that have been
+    # deleted -- otherwise the panel nags about a buff it can no longer
+    # even name.
+    for key in [k for k in _support_seen if k not in live_keys]:
+        _support_seen.pop(key, None)
+    return out
+
+
+def _support_left_text(left, up_for):
+    """Countdown when we know the duration, time-up when we don't."""
+    if left is None:
+        secs = max(0, int(up_for))
+        return f"{secs // 60}:{secs % 60:02d} up"
+    secs = int(left)
+    if secs >= 3600:
+        return f"{secs // 3600}:{(secs % 3600) // 60:02d}:{secs % 60:02d}"
+    return f"{secs // 60}:{secs % 60:02d}"
+
+
+def _support_left_colour(left):
+    if left is None:
+        return (150, 150, 165)      # duration unknown: no urgency claim
+    if left <= 0:
+        # Still on them, past our estimate. Dim rather than alarming:
+        # the number is what is unreliable here, not the buff.
+        return (120, 120, 135)
+    if left <= 30:
+        return (230, 110, 110)
+    if left <= 60:
+        return (230, 170, 70)
+    return (170, 176, 190)
+
+
+def _alert_hits():
+    """[(section, [row, ...]), ...] for the sections that have anyone in
+    them. A member can appear in several sections; within one they appear
+    once, under the longest-running status that matched."""
+    out = []
+    for sec in alert_sections:
+        terms = _alert_terms(sec)
+        hp_th = sec.get("hp") or 0
+        if not terms and not hp_th:
+            continue
+        cures = _alert_cure_list(sec)
+        sec_name = sec.get("name") or ""
+        rows = []
+        for m in (party_data or []):
+            # Main party only -- see the note at the top of this section.
+            if (m.get("group_id") or 0) != 0:
+                continue
+            pid = m.get("player_id", 0) or 0
+            hit, hit_at = None, None
+            if terms:
+                for label in (m.get("buffs") or []):
+                    low = str(label).lower()
+                    if not any(t in low for t in terms):
+                        continue
+                    rec = _alert_seen.get((pid, low))
+                    at = rec[0] if rec else time.time()
+                    if hit is None or at < hit_at:
+                        hit, hit_at = label, at
+            hpp = m.get("hpp", 100)
+            if hit is not None:
+                rows.append({"name": m.get("name", ""), "status": hit,
+                             "hpp": hpp, "pid": pid,
+                             "midx": m.get("mob_index", 0),
+                             "cures": cures, "sec": sec_name})
+            elif hp_th and 0 < hpp <= hp_th:
+                rows.append({"name": m.get("name", ""), "status": None,
+                             "hpp": hpp, "pid": pid,
+                             "midx": m.get("mob_index", 0),
+                             "cures": cures, "sec": sec_name})
+        if rows:
+            out.append((sec, rows))
+    # Forget picks for anyone no longer listed. Bounded, and a status
+    # that comes back is a new situation that starts from the top.
+    _live = {(r["pid"], r["sec"]) for _s, rr in out for r in rr}
+    for _k in [k for k in _alert_cure_pick if k not in _live]:
+        _alert_cure_pick.pop(_k, None)
+    return out
+
+
+def _select_or_target_player(name, mob_index, player_id, mx=None, my=None):
+    """Click a party member's name: select them, and target them too if
+    you aren't in a fight.
+
+    Factored out of the party panel's click handler so the alert box gets
+    exactly the same rule rather than a copy that drifts from it. Only a
+    MOB target is protected -- with a player targeted there is nothing to
+    lose by retargeting.
+    """
+    global selected_player_name, _hb_action_note
+    selected_player_name = name
+    if _player_engaged():
+        if mx is not None and my is not None:
+            _hb_action_note = {"text": f"selected: {name}",
+                               "until": time.time() + 1.5, "x": mx, "y": my}
+        print(f"[OmniWatch] selected player {name!r} (target untouched)")
+        return
+    print(f"[OmniWatch] click-to-target: {name} (mob index {mob_index})")
+    _send_target(mob_index, name, player_id)
+
+
+def _alert_clear_rects():
+    _alert_rects.clear()
+
+
+# Stand-in names for the setup-mode preview. Deliberately not FFXI-ish:
+# a real-looking name in a panel that lists who is in trouble is exactly
+# the wrong thing to leave ambiguous. The fourth is long on purpose --
+# it shows where the name column truncates.
+_ALERT_PREVIEW_NAMES = ("Alpha", "Bravo", "Charlie",
+                        "Longcharactername", "Delta")
+# Varied on purpose: a fresh clock, one carrying the ~ floor marker, a
+# long one, and one past the hour so the third field shows up.
+_ALERT_PREVIEW_CLOCKS = ("0:12", "~1:47", "4:03", "0:38", "1:02:15")
+_ALERT_PREVIEW_HPP    = (22, 41, 58, 74)
+
+
+def _support_preview_rows():
+    """Example rows for the buffs tab in setup mode.
+
+    Built from YOUR buff sections, like the debuff preview, so what you
+    see is the panel you have configured. The times walk the states that
+    matter: comfortable, running out, past our estimate, and one we did
+    not cast and therefore cannot time at all.
+    """
+    shape = ((812, None), (46, None), (0, None), (None, None),
+             ("worn", None))
+    out, n = [], 0
+    for sec in alert_buff_sections:
+        if not _alert_terms(sec):
+            continue
+        cures = _alert_cure_list(sec)
+        rows = []
+        for _i in range(2 if (len(out) % 2 == 0) else 1):
+            nm = _ALERT_PREVIEW_NAMES[n % len(_ALERT_PREVIEW_NAMES)]
+            left, _ = shape[n % len(shape)]
+            n += 1
+            rows.append({
+                "name": nm, "status": sec.get("name") or "",
+                "hpp": 100, "pid": 0, "midx": 0, "preview": True,
+                "cures": cures, "sec": sec.get("name"),
+                "elapsed": ("n/a" if left is None else
+                            "worn" if left == "worn" else
+                            _support_left_text(left, 0)),
+                "elapsed_col": ((120, 120, 135) if left is None else
+                                (235, 120, 110) if left == "worn" else
+                                _support_left_colour(left)),
+            })
+        out.append((sec, rows))
+    return out
+
+
+def _alert_preview_hits():
+    """Example rows for setup mode, built from YOUR OWN sections.
+
+    The box is empty whenever nothing is wrong, which is most of the
+    time and all of the time solo -- so there is nothing to look at
+    while positioning it or while editing sections. This fills it with
+    stand-ins so the layout can be judged.
+
+    It walks the real sections rather than inventing its own, so what
+    you see is the panel you have configured: rename a section or add
+    one and it appears here immediately. A section flags on HP shows
+    percentages, one that matches statuses shows its own first term
+    with a clock beside it.
+    """
+    out = []
+    n = 0          # names, so no two example rows share one
+    clocks = 0     # clocks, counted separately: they only apply to status
+                   # rows, and counting them off the name index would skip
+                   # entries in the list and lose the ~ floor example
+    hps = 0
+    for si, sec in enumerate(alert_sections):
+        terms = _alert_terms(sec)
+        hp_th = sec.get("hp") or 0
+        if not terms and not hp_th:
+            continue                       # inert section, as in life
+        rows = []
+        # Alternate two rows and one so the spacing of a busy section and a
+        # quiet one can both be judged.
+        for _i in range(2 if (si % 2 == 0) else 1):
+            nm = _ALERT_PREVIEW_NAMES[n % len(_ALERT_PREVIEW_NAMES)]
+            n += 1
+            if terms:
+                # Show the section's own first term, titled, so the row
+                # reads like the real thing rather than a placeholder.
+                rows.append({
+                    "name": nm, "status": terms[0].title(),
+                    "hpp": 100, "pid": 0, "midx": 0, "preview": True,
+                    "cures": _alert_cure_list(sec), "sec": sec.get("name"),
+                    "elapsed": _ALERT_PREVIEW_CLOCKS[
+                        clocks % len(_ALERT_PREVIEW_CLOCKS)],
+                })
+                clocks += 1
+            else:
+                rows.append({
+                    "name": nm, "status": None,
+                    "hpp": _ALERT_PREVIEW_HPP[hps % len(_ALERT_PREVIEW_HPP)],
+                    "pid": 0, "midx": 0, "preview": True,
+                    "cures": _alert_cure_list(sec), "sec": sec.get("name"),
+                })
+                hps += 1
+        out.append((sec, rows))
+    return out
+
+
+def _alert_pack_columns(blocks, budget, max_cols, hdr_h, row_h):
+    """Lay section blocks out into columns.
+
+    Every row has to stay on screen and stay separate -- one member with
+    four Erasable debuffs is four casts unless you own Yagrush, so
+    collapsing them into "Erase x4" would hide work that still has to be
+    done one spell at a time. The box therefore grows SIDEWAYS when it
+    runs out of vertical room: a screen has width to spare and a HUD you
+    have to scroll during a fight is no use.
+
+    Sections are kept whole where they can be. A section taller than the
+    budget on its own takes a column and overflows it rather than being
+    split down the middle, which reads worse than a slightly tall column.
+
+    Returns (columns, dropped_rows). Nothing is dropped until every
+    column is full, and then it comes off the BOTTOM of his priority
+    order -- which is what the reorder arrows are for.
+    """
+    cols, heights, dropped = [[]], [0], 0
+    full = False
+    for sec, rows in blocks:
+        bh = hdr_h + len(rows) * row_h
+        if full:
+            dropped += len(rows)
+            continue
+        if heights[-1] and heights[-1] + bh > budget:
+            if len(cols) >= max_cols:
+                full = True
+                dropped += len(rows)
+                continue
+            cols.append([])
+            heights.append(0)
+        cols[-1].append((sec, rows))
+        heights[-1] += bh
+    return cols, dropped
+
+
+def draw_alert_box(surface):
+    _alert_clear_rects()
+    _alert_load()
+    _alert_track()
+    if not alert_shown:
+        # Still flush: the box can be switched off from the editor
+        # straight after being moved, and a pending write must not sit
+        # there until it is switched on again.
+        _alert_flush_pos()
+        return
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    pad, title_h, row_h, hdr_h = 6, 20, 16, 15
+    buffs_tab = (alert_tab == "buffs")
+    # Both tabs produce the same (section, rows) shape, so everything
+    # below -- the column packer, the row renderer, the click rects --
+    # is shared rather than written twice.
+    hits = _support_buff_rows() if buffs_tab else _alert_hits()
+    # Setup mode with nothing wrong shows examples instead of an empty
+    # box -- there would otherwise be nothing to position or judge. A
+    # real alert always wins: if anyone genuinely has something, that is
+    # what you see, in setup mode too.
+    preview = False
+    if setup_mode and not hits:
+        hits = (_support_preview_rows() if buffs_tab
+                else _alert_preview_hits())
+        preview = bool(hits)
+
+    sw, sh = surface.get_size()
+    col_w = ALERT_BOX_W
+    # Column count is measured from the whole screen rather than from the
+    # box's own left edge: the panel simply gets wider, and the clamp
+    # below slides it left when it meets the edge -- the same thing that
+    # already happens when it gets taller.
+    max_cols = max(1, min(ALERT_MAX_COLS,
+                          (sw + ALERT_COL_GAP) // (col_w + ALERT_COL_GAP)))
+    budget = max(row_h * 6, int(sh * ALERT_COL_MAX_FRAC))
+    cols, dropped = _alert_pack_columns(hits, budget, max_cols, hdr_h, row_h)
+    heights = [sum(hdr_h + len(r) * row_h for _s, r in c) for c in cols]
+    if dropped:
+        heights[-1] += row_h
+    ncols = len(cols)
+    w = ncols * col_w + (ncols - 1) * ALERT_COL_GAP
+    h = (title_h + ALERT_TAB_H + pad
+         + (max(heights) if any(heights) else row_h) + pad)
+
+    # Clamp for DRAWING ONLY. alert_box_pos holds where the user put the
+    # box and is never written back to from here.
+    #
+    # It used to be: the clamp result was stored and saved. But the box's
+    # size grows with its contents, so a box sitting low on the screen
+    # gets clamped upward the moment it fills -- and saving that threw
+    # away the position it was clamped FROM. It never came back when the
+    # rows cleared, so the box climbed the screen a little at a time and
+    # every session started higher than the last. Remembering the request
+    # and clamping the drawing keeps both: it renders on screen now, and
+    # it returns to where it was put as soon as there is room again.
+    x = max(0, min(int(alert_box_pos[0]), sw - w))
+    y = max(0, min(int(alert_box_pos[1]), sh - h))
+    _alert_draw_pos[0], _alert_draw_pos[1] = x, y
+    _alert_flush_pos()
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _alert_rects["panel"] = panel_r
+    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    try:
+        draw_accent_stripe(surface, x, y, h, ACCENT_ALERT)
+    except Exception:
+        pass
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 3, y + 1, w - 4, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Support Helper", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    if preview:
+        # Say so in the title bar. Names in this panel mean "this person
+        # needs something"; leaving invented ones unlabelled would be
+        # the one genuinely misleading thing it could do.
+        _px = fnt_s.render("example data", True, (150, 140, 110))
+        surface.blit(_px, (x + w - pad - _px.get_width(),
+                           y + (title_h - _px.get_height()) // 2))
+    _alert_rects["title"] = pygame.Rect(x, y, w, title_h)
+
+    # Tabs. Sized to their labels rather than split evenly, so a two-
+    # tab strip does not become two half-width slabs on a four-column
+    # panel.
+    _tx = x + 4
+    for _key, _label in ALERT_TABS:
+        _tw = fnt_s.size(_label)[0] + 16
+        _tr = pygame.Rect(_tx, y + title_h, _tw, ALERT_TAB_H)
+        _on = (_key == alert_tab)
+        pygame.draw.rect(surface, (38, 40, 50) if _on else (24, 25, 32),
+                         _tr)
+        if _on:
+            # Underline the live tab in the panel accent rather than
+            # relying on the fill alone -- at this size the two greys
+            # are hard to tell apart at a glance mid-fight.
+            pygame.draw.line(surface, ACCENT_ALERT,
+                             (_tr.x + 2, _tr.bottom - 1),
+                             (_tr.right - 2, _tr.bottom - 1), 2)
+        _lb = fnt_s.render(_label, True,
+                           (228, 228, 235) if _on else (140, 146, 160))
+        surface.blit(_lb, (_tr.x + 8,
+                           _tr.y + (ALERT_TAB_H - _lb.get_height()) // 2))
+        if not preview:
+            _alert_rects[f"tab:{_key}"] = _tr
+        _tx += _tw + 2
+    pygame.draw.line(surface, (48, 48, 60), (x + 1, y + title_h + ALERT_TAB_H),
+                     (x + w - 2, y + title_h + ALERT_TAB_H))
+
+    top = y + title_h + ALERT_TAB_H + pad
+    if not hits:
+        # "all clear" is right for debuffs and wrong for buffs, where an
+        # empty list means nothing has been cast rather than nothing
+        # being wrong.
+        _empty = ("nothing cast yet" if buffs_tab else "all clear")
+        surface.blit(fnt_s.render(_empty, True, COL_LABEL_DIM),
+                     (x + pad, top))
+        return
+
+    mpos = pygame.mouse.get_pos()
+    for ci, col in enumerate(cols):
+        cx0 = x + ci * (col_w + ALERT_COL_GAP)
+        if ci:
+            # A hairline between columns. Without it two columns of names
+            # read as one wide list with a gap in the middle.
+            pygame.draw.line(surface, (48, 48, 60),
+                             (cx0 - ALERT_COL_GAP // 2, top),
+                             (cx0 - ALERT_COL_GAP // 2, y + h - pad))
+        cy = top
+        for sec, rows in col:
+            label = sec.get("name") or "(unnamed)"
+            surface.blit(fnt_s.render(label.upper(), True, COL_ALERT_SECTION),
+                         (cx0 + pad, cy + 2))
+            pygame.draw.line(surface, (60, 56, 48),
+                             (cx0 + pad, cy + hdr_h - 2),
+                             (cx0 + col_w - pad, cy + hdr_h - 2))
+            cy += hdr_h
+            for r in rows:
+                nm = r["name"]
+                while nm and (fnt.render(nm, True, (0, 0, 0)).get_width()
+                              > ALERT_NAME_W):
+                    nm = nm[:-1]
+                if nm != r["name"] and nm:
+                    # Say it was cut, rather than showing a name that
+                    # reads as somebody else's.
+                    nm = nm[:-1] + "\u2026"
+                # The clickable name area stops short of the cure button,
+                # so the two never fight over a press.
+                row_rect = pygame.Rect(cx0 + pad, cy, ALERT_NAME_W + 4,
+                                       row_h - 1)
+                if row_rect.collidepoint(mpos):
+                    pygame.draw.rect(surface, (40, 40, 52), row_rect)
+                surface.blit(fnt.render(nm, True, (228, 228, 235)),
+                             (cx0 + pad + 2, cy))
+                # What fixes it, in amber, between the name and the clock
+                # -- the panel says who needs something AND what to cast,
+                # so the answer is not remembered per status.
+                _cures = r.get("cures") or []
+                if _cures:
+                    _ci = _alert_cure_index(r.get("pid"), r.get("sec"),
+                                            len(_cures))
+                    _cure = _cures[_ci]
+                    # A section with more than one spell gets a chevron,
+                    # so you can see there is something to wheel through
+                    # without hovering every row to find out.
+                    _more = "\u25be" if len(_cures) > 1 else ""
+                    _lbl = _cure + _more
+                    while (_lbl and fnt_s.render(_lbl, True, (0, 0, 0))
+                           .get_width() > ALERT_CURE_W):
+                        _cure = _cure[:-1]
+                        _lbl = _cure + _more
+                    _cx = cx0 + pad + 2 + ALERT_NAME_W + 6
+                    _cs = fnt_s.render(_lbl, True, COL_ALERT_CURE)
+                    _cr = pygame.Rect(_cx - 3, cy, _cs.get_width() + 6,
+                                      row_h - 1)
+                    # Pressable: it casts at the member on that row. Only
+                    # hinted on hover -- a permanent button frame on every
+                    # row would turn a status list into a wall of chrome.
+                    if (not r.get("preview") and not setup_mode
+                            and _cr.collidepoint(mpos)):
+                        pygame.draw.rect(surface, (58, 50, 34), _cr,
+                                         border_radius=3)
+                        pygame.draw.rect(surface, COL_ALERT_CURE, _cr, 1,
+                                         border_radius=3)
+                        _cs = fnt_s.render(_lbl, True, (250, 228, 170))
+                    surface.blit(_cs, (_cx, cy + 1))
+                    if not r.get("preview"):
+                        _alert_rects[f"cure:{r['pid']}:{ci}:{cy}"] = (_cr, r)
+                if r["status"] is None:
+                    # An HP row: the number IS the news, and no clock
+                    # applies -- the stopclock times statuses, not a bar.
+                    rt = fnt.render(f"{r['hpp']}%", True,
+                                    hp_color(r["hpp"], False))
+                else:
+                    el = r.get("elapsed")
+                    if el is None:
+                        el, _floor = _alert_elapsed_text(r["pid"],
+                                                         r["status"])
+                    rt = fnt_s.render(
+                        el, True, r.get("elapsed_col") or (170, 176, 190))
+                surface.blit(rt, (cx0 + col_w - pad - rt.get_width(), cy + 1))
+                # Example rows get no click target: there is nobody behind
+                # them to select. (Rows are unclickable in setup mode
+                # anyway -- a press there drags the box -- but a rect that
+                # resolves to a name that does not exist has no business
+                # existing.) The column index is in the key because two
+                # columns can put different people at the same y.
+                if not r.get("preview"):
+                    _alert_rects[f"row:{r['pid']}:{ci}:{cy}"] = (row_rect, r)
+                cy += row_h
+        if dropped and ci == ncols - 1:
+            # Only reachable with every column full. Cut from the bottom
+            # of the section order, which is what the reorder arrows are
+            # for -- and say so rather than silently showing less.
+            surface.blit(fnt_s.render(f"+{dropped} more", True,
+                                      (150, 140, 110)), (cx0 + pad, cy + 1))
+
+
+def _alert_handle_event(event):
+    """Drag the box, and click a name to select / target them.
+
+    The whole box is a drag handle, not just its title strip: the only
+    thing inside it that does anything else is a name row, so there is
+    nothing to protect by making you aim at a 20px bar.
+
+    It drags in SETUP MODE as well. Every other panel is positioned
+    there, so refusing the press in setup mode -- while the generic
+    setup-mode drag knows nothing about this box either -- left it
+    unmovable from the place you would naturally try first. Rows are
+    not clickable in setup mode, so there is no conflict: in setup mode
+    every part of the box drags.
+    """
+    global _alert_drag_off
+    if not alert_shown:
+        return False
+    if event.type == pygame.MOUSEWHEEL and not setup_mode:
+        # Wheel over a cure steps through that section's spells. Only
+        # consumed when the pointer is actually on one, so the wheel
+        # still belongs to whatever is underneath everywhere else.
+        _mp = pygame.mouse.get_pos()
+        for _k, _v in list(_alert_rects.items()):
+            if not _k.startswith("cure:"):
+                continue
+            _rect, _row = _v
+            if _rect.collidepoint(_mp):
+                return _alert_cycle_cure(_row, -event.y)
+        return False
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if _overlay_blocks_point((mx, my)):
+            return False
+        for _k, _label in ALERT_TABS:
+            _tr = _alert_rects.get(f"tab:{_k}")
+            if _tr and _tr.collidepoint(mx, my):
+                if alert_tab != _k:
+                    globals()["alert_tab"] = _k
+                    _alert_save()
+                return True
+        if not setup_mode:
+            for key, val in list(_alert_rects.items()):
+                if not key.startswith(("row:", "cure:")):
+                    continue
+                rect, r = val
+                if not rect.collidepoint(mx, my):
+                    continue
+                if key.startswith("cure:"):
+                    _cl = r.get("cures") or []
+                    _send_cure(
+                        _cl[_alert_cure_index(r.get("pid"), r.get("sec"),
+                                              len(_cl))] if _cl else "",
+                        r.get("name"))
+                else:
+                    _select_or_target_player(r["name"], r["midx"],
+                                             r["pid"], mx, my)
+                return True
+        p = _alert_rects.get("panel")
+        if p and p.collidepoint(mx, my):
+            # Grabbing it adopts wherever it is being DRAWN. While the box
+            # is clamped, the stored position is somewhere off screen; an
+            # offset measured from that would teleport the box by the
+            # clamp distance the moment the mouse moved.
+            alert_box_pos[0], alert_box_pos[1] = _alert_draw_pos
+            _alert_drag_off = (mx - alert_box_pos[0],
+                               my - alert_box_pos[1])
+            return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _alert_drag_off is not None:
+            _alert_drag_off = None
+            _alert_save()          # remember where it was put
+    if event.type == pygame.MOUSEMOTION and _alert_drag_off is not None:
+        alert_box_pos[0] = event.pos[0] - _alert_drag_off[0]
+        alert_box_pos[1] = event.pos[1] - _alert_drag_off[1]
+        _alert_mark_moved()
+        return True
+    return False
+
+
+# ── Alert section editor ─────────────────────────────────────────────────
+# Settings -> Party Panel -> Alert sections. A GUI, not the JSON file:
+# everything else here is configured on screen, and an Edit button that
+# opens a text editor is the thing that got replaced on the stats panel.
+def _open_alert_editor():
+    global alert_editor_open, party_settings_modal_open, settings_menu_open
+    global _alert_edit_tab, _alert_editor_scroll
+    _alert_load()
+    _alert_edit_tab = alert_tab
+    _alert_editor_scroll = 0
+    alert_editor_open = True
+    party_settings_modal_open = False
+    settings_menu_open = False
+
+
+def _alert_editor_blur():
+    global _alert_focus
+    _alert_field.blur()
+    _alert_focus = None
+
+
+def _alert_field_text(idx, key):
+    _list = _alert_edit_list()
+    if not (0 <= idx < len(_list)):
+        return ""
+    v = _list[idx].get(key, "")
+    return str(v) if key != "hp" else ("" if not v else str(v))
+
+
+def _alert_editor_geometry(surface):
+    """Panel box, column widths and how many rows fit.
+
+    Worked out in one place because the draw and the click handler have to
+    agree about it exactly -- including which rows are scrolled off, which
+    is the thing that silently breaks if the two ever compute it apart.
+    """
+    sw, sh = surface.get_size()
+    pad, row_h = 12, 26
+    mw = min(ALERT_EDITOR_W, sw - 40)
+    # Measured, not a fixed 96: the help text wraps to a different number
+    # of lines depending on how wide the panel ended up, and a guess that
+    # was right at one width drew the column headers straight through the
+    # last line of it at another.
+    help_lines = _alert_wrap(
+        (_ALERT_EDITOR_HELP_BUFFS if _alert_edit_tab == "buffs"
+         else _ALERT_EDITOR_HELP), get_font("Consolas", 11), mw - pad * 2)
+    head_h = pad + ALERT_EDIT_TAB_H + 20 + len(help_lines) * 13 + 4 + 14
+    foot_h = 40          # add / done
+    want = head_h + len(_alert_edit_list()) * row_h + foot_h
+    mh = min(want, sh - 40)
+    rows_fit = max(1, (mh - head_h - foot_h) // row_h)
+    mx, my = (sw - mw) // 2, (sh - mh) // 2
+    # Column widths, left to right: name, cure, match, hp, then the two
+    # move buttons and delete. Match takes whatever is left so the panel
+    # can widen on a big screen.
+    name_w, cure_w, hp_w, del_w, mv_w = 110, 168, 42, 20, 18
+    # HP only means something for a debuff section (flag anyone at or
+    # under this health). On the buffs list it would be a column of
+    # zeroes you can type into and nothing would happen, so it goes
+    # and MATCH takes the width.
+    _has_hp = (_alert_edit_tab != "buffs")
+    if not _has_hp:
+        hp_w = 0
+    gaps = 6 * (6 if _has_hp else 5)
+    match_w = max(120, mw - pad * 2 - name_w - cure_w - hp_w
+                  - del_w - mv_w * 2 - gaps)
+    return {
+        "pad": pad, "row_h": row_h, "mw": mw, "mh": mh, "mx": mx, "my": my,
+        "head_h": head_h, "foot_h": foot_h, "rows_fit": rows_fit,
+        "cols": ((("name", name_w), ("cure", cure_w), ("match", match_w),
+                  ("hp", hp_w)) if _has_hp else
+                 (("name", name_w), ("cure", cure_w), ("match", match_w))),
+        "del_w": del_w, "mv_w": mv_w, "help_lines": help_lines,
+    }
+
+
+def _alert_editor_max_scroll(g):
+    return max(0, len(_alert_edit_list()) - g["rows_fit"])
+
+
+def _alert_move_section(idx, delta, rows_fit=None):
+    """Swap a section with its neighbour, so the panel can be ordered by
+    what actually matters first.
+
+    The panel draws sections in list order, so this IS the display
+    order -- nothing else has to know. Refuses to run off either end
+    rather than wrapping: a Doom row silently reappearing at the bottom
+    because you pressed up once too often would be its own small bug.
+    """
+    global _alert_editor_scroll, _alert_focus
+    _list = _alert_edit_list()
+    j = idx + delta
+    if not (0 <= idx < len(_list)) or not (0 <= j < len(_list)):
+        return False
+    _list[idx], _list[j] = _list[j], _list[idx]
+    # Focus is held as (row index, field). The row it pointed at has
+    # just moved, so leaving it alone would type into whichever section
+    # slid into that slot.
+    _alert_focus = None
+    # Follow the row: pushing something to the top from below the fold
+    # should show it arriving, not scroll away from it.
+    if rows_fit:
+        if j < _alert_editor_scroll:
+            _alert_editor_scroll = j
+        elif j >= _alert_editor_scroll + rows_fit:
+            _alert_editor_scroll = j - rows_fit + 1
+    _alert_save()
+    return True
+
+
+def _alert_wrap(text, font, width):
+    """Break `text` into lines that fit `width`. The help text was written
+    for a 600px panel and ran off the edge of it; measuring beats guessing
+    a character count, since the panel width now varies with the screen."""
+    words, lines, cur = text.split(), [], ""
+    for wd in words:
+        trial = (cur + " " + wd).strip()
+        if cur and font.size(trial)[0] > width:
+            lines.append(cur)
+            cur = wd
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def draw_alert_editor(surface):
+    global _alert_last_surface
+    _alert_last_surface = surface
+    # Clear our OWN rects rather than leaning on draw_alert_box having
+    # run first: a section deleted this frame, or the add button going
+    # away at the ceiling, must stop being clickable immediately.
+    for _k in [k for k in _alert_rects if k.startswith("ed:")]:
+        _alert_rects.pop(_k, None)
+    if not alert_editor_open:
+        return
+    _alert_load()
+    global _alert_editor_scroll
+    sw, sh = surface.get_size()
+    fnt   = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 13, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    g = _alert_editor_geometry(surface)
+    pad, row_h = g["pad"], g["row_h"]
+    mw, mh, mx, my = g["mw"], g["mh"], g["mx"], g["my"]
+    _alert_editor_scroll = max(0, min(_alert_editor_scroll,
+                                      _alert_editor_max_scroll(g)))
+
+    if not setting("transparent_background"):
+        backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        backdrop.fill((0, 0, 0, 150))
+        surface.blit(backdrop, (0, 0))
+    _alert_rects["ed:backdrop"] = pygame.Rect(0, 0, sw, sh)
+    panel = pygame.Rect(mx, my, mw, mh)
+    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
+    _alert_rects["ed:panel"] = panel
+
+    cy = my + pad
+    surface.blit(fnt_b.render("Support Helper", True, (220, 200, 150)),
+                 (mx + pad, cy))
+    cy += 20
+    # One strip per section list, mirroring the panel's own tabs so it
+    # is obvious which of the two you are editing.
+    _etx = mx + pad
+    for _key, _label in ALERT_TABS:
+        _etw = fnt_s.size(_label)[0] + 18
+        _etr = pygame.Rect(_etx, cy, _etw, ALERT_EDIT_TAB_H - 3)
+        _eon = (_key == _alert_edit_tab)
+        _craft_btn(surface, _etr, _label, fnt_s,
+                   (44, 52, 66) if _eon else (26, 28, 36),
+                   (225, 232, 245) if _eon else (140, 146, 160))
+        _alert_rects[f"ed:tab:{_key}"] = _etr
+        _etx += _etw + 4
+    cy += ALERT_EDIT_TAB_H
+    # Wrapped to the panel rather than written as one long line: at 600px
+    # the tail of this ran outside the box.
+    for _line in _alert_wrap(
+            (_ALERT_EDITOR_HELP_BUFFS if _alert_edit_tab == "buffs"
+             else _ALERT_EDITOR_HELP), fnt_s, mw - pad * 2):
+        surface.blit(fnt_s.render(_line, True, (160, 160, 175)), (mx + pad, cy))
+        cy += 13
+    cy += 4
+
+    fx = mx + pad
+    for _key, _w in g["cols"]:
+        surface.blit(fnt_s.render(_key.upper(), True, (140, 146, 160)),
+                     (fx, cy))
+        fx += _w + 6
+    surface.blit(fnt_s.render("ORDER", True, (140, 146, 160)), (fx, cy))
+    cy += 14
+
+    _list = _alert_edit_list()
+    first = _alert_editor_scroll
+    last = min(len(_list), first + g["rows_fit"])
+    for i in range(first, last):
+        fx = mx + pad
+        for key, fw in g["cols"]:
+            r = pygame.Rect(fx, cy, fw, row_h - 6)
+            if _alert_focus == (i, key):
+                _alert_field.draw(surface, r, _alert_field_text(i, key), fnt)
+            else:
+                pygame.draw.rect(surface, (16, 18, 22), r, border_radius=3)
+                pygame.draw.rect(surface, (90, 100, 120), r, 1, border_radius=3)
+                txt = _alert_field_text(i, key)
+                if not txt and key == "hp":
+                    txt = "0"
+                # The cure reads in the same red it will wear in the box,
+                # so the editor shows what you are actually setting up.
+                col = COL_ALERT_CURE if key == "cure" else (228, 228, 233)
+                ts = fnt.render(txt, True, col)
+                _clip = r.inflate(-8, 0)
+                surface.set_clip(_clip)
+                surface.blit(ts, (r.x + 4, r.centery - ts.get_height() // 2))
+                surface.set_clip(None)
+            _alert_rects[f"ed:f:{i}:{key}"] = r
+            fx += fw + 6
+        # Move up / down, then delete. A row at either end shows its
+        # arrow greyed and unregistered rather than hidden, so the
+        # buttons stay in the same place down the whole column.
+        for _dir, _lbl in ((-1, "\u25b2"), (1, "\u25bc")):
+            _mr = pygame.Rect(fx, cy, g["mv_w"], row_h - 6)
+            _live = 0 <= i + _dir < len(_list)
+            _craft_btn(surface, _mr, _lbl, fnt_s,
+                       (38, 44, 56) if _live else (26, 28, 34),
+                       (200, 215, 240) if _live else (70, 74, 86))
+            if _live:
+                _alert_rects[
+                    f"ed:{'up' if _dir < 0 else 'down'}:{i}"] = _mr
+            fx += g["mv_w"] + 6
+        dr = pygame.Rect(fx, cy, g["del_w"], row_h - 6)
+        _craft_btn(surface, dr, "x", fnt_s, (58, 44, 44), (222, 180, 180))
+        _alert_rects[f"ed:del:{i}"] = dr
+        cy += row_h
+
+    # One footer line: add on the left, the scroll note in the middle, done
+    # on the right. Stacking the note under the button put it through the
+    # panel border.
+    fy = my + mh - g["foot_h"] + 6
+    # The panel switch lives here now that the settings row is a single
+    # CONFIGURE button -- one place that owns the feature.
+    _shown = bool(alert_shown)
+    show_r = pygame.Rect(mx + pad, fy, 118, 20)
+    _craft_btn(surface, show_r,
+               "PANEL: SHOWN" if _shown else "PANEL: HIDDEN", fnt_s,
+               (40, 52, 40) if _shown else (44, 44, 52),
+               (190, 225, 190) if _shown else (150, 150, 165))
+    _alert_rects["ed:show"] = show_r
+    add_r = pygame.Rect(mx + pad + 124, fy, 110, 20)
+    if len(_list) < ALERT_MAX_SECTIONS:
+        _craft_btn(surface, add_r, "+ ADD SECTION", fnt_s, (40, 52, 40),
+                   (190, 225, 190))
+        _alert_rects["ed:add"] = add_r
+    else:
+        surface.blit(fnt_s.render(f"{ALERT_MAX_SECTIONS} sections max", True,
+                                  (150, 140, 110)), (mx + pad + 124, fy + 4))
+    if _alert_editor_max_scroll(g) > 0:
+        # Say what is off screen; a list that silently stops at the panel
+        # edge reads as a lower ceiling than there really is.
+        _more = (f"showing {first + 1}-{last} of {len(_list)}"
+                 "  \u00b7  scroll for more")
+        _ms = fnt_s.render(_more, True, (150, 150, 165))
+        surface.blit(_ms, (mx + pad + 244, fy + 4))
+    close_r = pygame.Rect(mx + mw - pad - 90, fy, 90, 20)
+    _craft_btn(surface, close_r, "DONE", fnt_s, (44, 52, 66), (215, 225, 240))
+    _alert_rects["ed:close"] = close_r
+
+
+def _alert_editor_handle_event(event):
+    """Everything while the editor is open -- it's modal, so it consumes
+    the event either way and the caller stops looking."""
+    global alert_editor_open, _alert_focus, _alert_editor_scroll
+    if not alert_editor_open:
+        return False
+    if event.type == pygame.MOUSEWHEEL:
+        _alert_editor_scroll = max(0, _alert_editor_scroll - event.y)
+        return True
+    if event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+        if _alert_focus is None:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                alert_editor_open = False
+                _alert_save()
+            return True
+        idx, key = _alert_focus
+        text, action = _alert_field.handle_event(
+            event, _alert_field_text(idx, key))
+        _list = _alert_edit_list()
+        if 0 <= idx < len(_list):
+            if key == "hp":
+                digits = "".join(c for c in text if c.isdigit())[:3]
+                try:
+                    _list[idx]["hp"] = max(0, min(100, int(digits or 0)))
+                except ValueError:
+                    _list[idx]["hp"] = 0
+            elif key == "match":
+                _list[idx][key] = text[:160]
+            elif key == "cure":
+                _list[idx][key] = text[:ALERT_CURE_FIELD_MAX]
+            else:
+                _list[idx][key] = text[:ALERT_SHORT_FIELD_MAX]
+        if action in ("submit", "cancel"):
+            _alert_editor_blur()
+            _alert_save()
+        return True
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        r = _alert_rects
+        if r.get("ed:close") and r["ed:close"].collidepoint(mx, my):
+            _alert_editor_blur()
+            alert_editor_open = False
+            _alert_save()
+            return True
+        for _k, _lbl in ALERT_TABS:
+            _etr = r.get(f"ed:tab:{_k}")
+            if _etr and _etr.collidepoint(mx, my):
+                if _alert_edit_tab != _k:
+                    _alert_editor_blur()
+                    globals()["_alert_edit_tab"] = _k
+                    # A scroll position from a list of 24 means nothing
+                    # in a list of 9.
+                    _alert_editor_scroll = 0
+                return True
+        if r.get("ed:show") and r["ed:show"].collidepoint(mx, my):
+            _alert_editor_blur()
+            globals()["alert_shown"] = not bool(alert_shown)
+            _alert_save()
+            return True
+        _list = _alert_edit_list()
+        if r.get("ed:add") and r["ed:add"].collidepoint(mx, my):
+            _alert_editor_blur()
+            if len(_list) < ALERT_MAX_SECTIONS:
+                _list.append({"name": "New section", "match": "",
+                              "cure": "", "hp": 0})
+                _alert_save()
+                # Follow the new row down rather than adding it out of
+                # sight below the fold.
+                _alert_editor_scroll = max(0, len(_list) - 1)
+            return True
+        # Measure with the surface the DRAW used, not whatever the display
+        # happens to be: the two have to agree about rows_fit or a reorder
+        # near the fold scrolls to the wrong place.
+        _surf = _alert_last_surface or pygame.display.get_surface()
+        _geo = _alert_editor_geometry(_surf) if _surf else None
+        _rf = _geo["rows_fit"] if _geo else None
+        _g_cols = _geo["cols"] if _geo else ()
+        for i in range(len(_alert_edit_list())):
+            for _key, _delta in (("up", -1), ("down", 1)):
+                _mr = r.get(f"ed:{_key}:{i}")
+                if _mr and _mr.collidepoint(mx, my):
+                    _alert_editor_blur()
+                    _alert_move_section(i, _delta, _rf)
+                    return True
+            dr = r.get(f"ed:del:{i}")
+            if dr and dr.collidepoint(mx, my):
+                _alert_editor_blur()
+                _list.pop(i)
+                _alert_save()
+                return True
+            # The field keys come from the same geometry the draw used, so
+            # a list without an HP column has no HP hit-test either.
+            for key, _cw in (_g_cols or ()):
+                fr = r.get(f"ed:f:{i}:{key}")
+                if fr and fr.collidepoint(mx, my):
+                    _alert_focus = (i, key)
+                    _alert_field.max_length = (
+                        3 if key == "hp"
+                        else 160 if key == "match"
+                        else ALERT_CURE_FIELD_MAX if key == "cure"
+                        else ALERT_SHORT_FIELD_MAX)
+                    _alert_field.focus(_alert_field_text(i, key), mx, fr)
+                    return True
+        if r.get("ed:panel") and r["ed:panel"].collidepoint(mx, my):
+            _alert_editor_blur()
+            return True
+        # Anything outside the panel closes, like the other subdialogs.
+        _alert_editor_blur()
+        alert_editor_open = False
+        _alert_save()
+        return True
+    return True
+
 
 # ── Fisher: third tab of the Crafting / Synergy panel ─────────────────────
 # Full port of the old Fisher settings box into an in-overlay tab. Values are
@@ -31730,7 +34445,14 @@ def _fisher_handle_event(event):
             _fisher_commit_focus()
             return True
     if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-        _fisher_drag_off = None
+        if _fisher_drag_off is not None:
+            _fisher_drag_off = None
+            # Remember where it was left. save_layout also runs on quit,
+            # so a release that never arrives is covered.
+            try:
+                save_layout()
+            except Exception:
+                pass
     if event.type == pygame.MOUSEMOTION and _fisher_drag_off is not None:
         craftsyn_pos[0] = event.pos[0] - _fisher_drag_off[0]
         craftsyn_pos[1] = event.pos[1] - _fisher_drag_off[1]
@@ -31771,6 +34493,35 @@ _SORTIE_FLOOR_BY_MI = {}
 # nav state (dict so it mutates without `global` in draw/handler)
 scanzone_sortie = {"floor": "ground", "sector": "A", "mi": -1,
                    "gil": 0, "zone": None}
+
+# Which objectives you have done this run.
+#
+# TICKED BY HAND, not detected. The automatic version watched treasure
+# spawn packets and mapped each entity id to an objective, which meant
+# the panel could only ever know the handful of ids someone had already
+# identified -- and no one player can complete every objective in every
+# wing to finish the table. A checkbox knows all of them on day one.
+#
+# Keyed (sector, label) and held in `scanzone_sortie`, so it clears with
+# the rest of the run state when you zone in. Deliberately NOT written
+# to disk: a tick means "done this run", and a run does not outlive the
+# zone.
+
+
+def _sortie_checked(sec, label):
+    return (sec, label) in scanzone_sortie.setdefault("checked", set())
+
+
+def _sortie_toggle(sec, label):
+    """Tick or untick an objective. Returns the new state."""
+    done = scanzone_sortie.setdefault("checked", set())
+    key = (sec, label)
+    if key in done:
+        done.discard(key)
+        return False
+    done.add(key)
+    return True
+
 
 _SORTIE_OBJECTIVES = {
     "A": {"family": "Abject", "nm": "Abject Obdella", "items": [
@@ -32171,6 +34922,33 @@ def _sz_alert_beep():
             sys.stdout.flush()
     except Exception:
         pass
+
+
+def _sz_hp_text(ent, now_ms):
+    """The roster's HP readout, and whether it can still be trusted.
+
+    HP only ever arrives from a live reading, so an entry that has not
+    been seen for a while is showing a MEMORY, not a state. The spawn
+    logic already knows this -- it treats a reading older than 8 s as
+    stale -- but the row printed the number in confident green forever,
+    so a mob glimpsed once at full health went on claiming "HP 100%"
+    long after it was gone or never up where you are.
+
+    A stale reading is still worth showing: last-known health is real
+    information when you are waiting on a respawn. It just has to look
+    like history. Marked with `~` and dimmed, the same way the treasure
+    pool marks a time it had to estimate.
+    """
+    hpp = ent.get("hpp")
+    if hpp is None:
+        return None, None
+    fresh = (now_ms - ent.get("hp_last", 0)) < 8000 or ent.get("spawned")
+    if not fresh:
+        return "HP ~%.0f%%" % hpp, (128, 132, 140)
+    col = ((150, 140, 140) if hpp <= 0 else
+           (224, 130, 120) if hpp <= 20 else
+           (224, 200, 120) if hpp <= 50 else (150, 210, 150))
+    return "HP %.0f%%" % hpp, col
 
 
 def _scanzone_add_track(idx):
@@ -32788,7 +35566,7 @@ def draw_scanzone_window(surface):
     rs_w   = 345 if _nyzul else 0
     w = min(w0 + (rs_w + rs_gap if _nyzul else 0), surface.get_width())
     bw = w - (rs_w + rs_gap if _nyzul else 0)
-    x = max(0, min(int(scanzone_panel_pos[0]), surface.get_width()  - w))
+    x = max(0, min(int(scanzone_panel_pos[0]), surface.get_width() - w))
     y = max(0, min(int(scanzone_panel_pos[1]), surface.get_height() - h))
     scanzone_panel_pos[0], scanzone_panel_pos[1] = x, y
     maxc = max(20, (bw - 2 * pad) // 6)
@@ -32799,6 +35577,10 @@ def draw_scanzone_window(surface):
     fnt_dot = get_font("Consolas", 13, bold=True)     # radar/map dot labels
     fnt_hover = get_font("Consolas", 16, bold=True)   # bigger on hover
 
+    # The window's envelope, under the same "panel" key every other
+    # later-drawn window uses -- that convention is what lets the hotbar
+    # tooltip know it is covered. Cheap to keep, easy to forget.
+    _sz_rects["panel"] = pygame.Rect(x, y, w, h)
     pygame.draw.rect(surface, COL_PANEL,    (x, y, w, h), border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, w, h), 1, border_radius=4)
     try:
@@ -33508,13 +36290,9 @@ def draw_scanzone_window(surface):
         surface.blit(fnt_s.render(_coord, True, _cc), (er.x + 4, _ly))
         _ly += 13
         # HP% (left) + TOD (right)
-        _hpp = _ent.get("hpp")
-        if _hpp is not None:
-            _hpc = ((150, 140, 140) if _hpp <= 0 else
-                    (224, 130, 120) if _hpp <= 20 else
-                    (224, 200, 120) if _hpp <= 50 else (150, 210, 150))
-            surface.blit(fnt_s.render("HP %.0f%%" % _hpp, True, _hpc),
-                         (er.x + 4, _ly))
+        _hptxt, _hpc = _sz_hp_text(_ent, pygame.time.get_ticks())
+        if _hptxt:
+            surface.blit(fnt_s.render(_hptxt, True, _hpc), (er.x + 4, _ly))
         _tod = _ent.get("tod")
         if _ent.get("spawned") and _ent.get("respawned"):
             _todtxt, _todcol = "Alive", (130, 220, 150)
@@ -33782,6 +36560,8 @@ def draw_scanzone_window(surface):
             if _zid != scanzone_sortie.get("zone"):
                 scanzone_sortie["zone"] = _zid
                 scanzone_sortie["gil"] = 0
+                # A new run: clear the objectives you had ticked.
+                scanzone_sortie["checked"] = set()
             _af = _SORTIE_FLOOR_BY_MI.get(_mi)
             if _af and _mi != scanzone_sortie.get("mi"):
                 scanzone_sortie["floor"] = _af
@@ -33836,7 +36616,35 @@ def draw_scanzone_window(surface):
                     _lc = ((235, 205, 120) if _lbl.startswith("Coffer")
                            else (180, 215, 235) if _lbl.startswith("Casket")
                            else (205, 215, 228))
-                    surface.blit(fnt_s.render(_lbl, True, _lc), (_nx, _ny))
+                    _got = _sortie_checked(_sec, _lbl)
+                    # The box, then the label. Done turns the label RED
+                    # (his call) -- the box says what is clickable, the
+                    # colour says what is finished, and both can be read
+                    # at a glance without counting rows.
+                    _bx = pygame.Rect(_nx, _ny + 2,
+                                      fnt_s.get_height() - 4,
+                                      fnt_s.get_height() - 4)
+                    pygame.draw.rect(surface, (24, 27, 34), _bx,
+                                     border_radius=2)
+                    pygame.draw.rect(surface,
+                                     COL_SORTIE_DONE if _got
+                                     else (96, 104, 118), _bx, 1,
+                                     border_radius=2)
+                    if _got:
+                        pygame.draw.line(surface, COL_SORTIE_DONE,
+                                         (_bx.x + 2, _bx.centery),
+                                         (_bx.centerx - 1, _bx.bottom - 3), 2)
+                        pygame.draw.line(surface, COL_SORTIE_DONE,
+                                         (_bx.centerx - 1, _bx.bottom - 3),
+                                         (_bx.right - 2, _bx.y + 2), 2)
+                    surface.blit(fnt_s.render(_lbl, True,
+                                 COL_SORTIE_DONE if _got else _lc),
+                                 (_bx.right + 5, _ny))
+                    # The WHOLE ROW toggles, not just the box: a box this
+                    # size is a poor click target, and nothing else on
+                    # the row does anything.
+                    _sz_rects["sortie_chk:%s:%s" % (_sec, _lbl)] = (
+                        pygame.Rect(_nx, _ny, _pxw, fnt_s.get_height()))
                     _ny += fnt_s.get_height()
                     for _wl in _wrapfit(_txt, fnt_s, _pxw):
                         surface.blit(fnt_s.render(_wl, True, (178, 184, 196)),
@@ -34095,6 +36903,16 @@ def _scanzone_handle_event(event):
             scanzone_sortie["sector"] = _secs[(_i + (1 if _sn else -1))
                                               % len(_secs)]
             return True
+        # Ticking an objective. Checked before the gil reset below so a
+        # row that overlaps nothing else wins its own click.
+        for _k, _rr in list(r.items()):
+            if not _k.startswith("sortie_chk:"):
+                continue
+            if _rr and _rr.collidepoint(mx, my):
+                _p = _k.split(":", 2)
+                if len(_p) == 3:
+                    _sortie_toggle(_p[1], _p[2])
+                return True
         if r.get("sortie_gil") and r["sortie_gil"].collidepoint(mx, my):
             scanzone_sortie["gil"] = 0
             return True
@@ -34359,8 +37177,8 @@ def draw_cheatsheet_window(surface):
 
     if cheatsheet_pos is None:
         cheatsheet_pos = [max(0, (sw - win_w) // 2), max(0, (shh - win_h) // 2)]
-    x = max(0, min(int(cheatsheet_pos[0]), max(0, sw - win_w)))
-    y = max(0, min(int(cheatsheet_pos[1]), max(0, shh - win_h)))
+    x = max(0, min(int(cheatsheet_pos[0]), sw - win_w))
+    y = max(0, min(int(cheatsheet_pos[1]), shh - win_h))
     cheatsheet_pos[0], cheatsheet_pos[1] = x, y
 
     pygame.draw.rect(surface, COL_PANEL,  (x, y, win_w, win_h), border_radius=5)
@@ -36260,6 +39078,48 @@ def settings_menu_size():
 # page. A small ✓ appears next to items that match anything in the
 # gearswap_referenced_items index.
 #
+# Bag fullness colours. Deliberately lighter than COL_HP_HI/COL_HP_LOW,
+# which are tuned for filled bars rather than small text on a dark row.
+COL_INV_SPACE = (140, 200, 140)
+COL_INV_FULL  = (230, 110, 110)
+
+
+def inventory_bag_fill(bag_key, listed_count):
+    """Return (text, colour) for a bag row's count column.
+
+    "58/80" in green while there is room, red once the bag is full, so a
+    glance at the list answers "where can this go" and "am I about to
+    lose a drop". The count is the game's own total for the bag rather
+    than the length of the item list we were sent, so a bag we can't
+    reach from here still reports what is in it.
+
+    Falls back to the plain dim count whenever capacity is unknown: an
+    older lua sends no INV_CAP at all, and a bag can report a capacity
+    of zero while it is out of reach. Never invents a number -- 80 is
+    the ceiling for every bag, but inventory and satchel start well
+    below it and grow with quests and rings, so a hardcoded 80 would be
+    wrong for exactly the people this matters most to.
+    """
+    plain = (f"{listed_count:>3}", COL_LABEL_DIM)
+    cap = inventory_caps.get(bag_key)
+    if not cap:
+        return plain
+    try:
+        cnt = int(cap.get("count", -1))
+        mx  = int(cap.get("max", -1))
+    except (TypeError, ValueError):
+        return plain
+    if mx <= 0 or cnt < 0:
+        return plain
+    text = f"{cnt}/{mx}"
+    if not cap.get("enabled", True):
+        # Out of reach (safe, storage and locker need a Mog House). The
+        # numbers are still true, but green would read as "room here"
+        # for somewhere you can't put anything right now.
+        return (text, COL_LABEL_DIM)
+    return (text, COL_INV_FULL if cnt >= mx else COL_INV_SPACE)
+
+
 # Bag display order matches FFXI menus (most-used first).
 INVENTORY_BAG_ORDER = [
     ("inventory", "Inventory"),
@@ -36510,7 +39370,11 @@ def draw_char_view_dropdown(surface):
     # Save-as row, all at 18px each. An empty list still reserves one row
     # for the "(none saved yet)" note — no saved profiles is a normal state
     # now that the live setup isn't listed as one.
-    profile_rows_h = 20 + (max(1, len(profiles)) + 1) * 18
+    # +1 row for Save-as, +1 more for the push-layout row when there
+    # are profiles to push to. A row drawn outside the measured panel
+    # is still clickable, which is worse than not drawing it.
+    profile_rows_h = (20 + (max(1, len(profiles)) + 1) * 18
+                      + (18 if profiles else 0))
 
     pad   = 6
     row_h = 20
@@ -36680,6 +39544,25 @@ def draw_char_view_dropdown(surface):
     char_view_dropdown_rects.append((new_rect, {"kind": "new_profile"}))
     cy += 18
 
+    # "Save layout to all profiles" — the panel arrangement is usually
+    # the part you want shared, while hotbars and stat cells are what
+    # make the profiles different in the first place. Only offered
+    # when there is more than nothing to write to.
+    if profiles:
+        all_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
+        ah = all_rect.collidepoint(pygame.mouse.get_pos())
+        if ah:
+            pygame.draw.rect(surface, (45, 55, 80), all_rect)
+        _fresh = (_profile_push_msg
+                  and time.time() - _profile_push_at < 4.0)
+        _lbl = _profile_push_msg if _fresh else "\u2193 Save layout to all profiles"
+        _lc = (150, 220, 150) if _fresh else (180, 200, 255)
+        asf = f_profile.render(_lbl, True, _lc)
+        surface.blit(asf, (panel_x + 20, cy + (18 - asf.get_height()) // 2))
+        char_view_dropdown_rects.append((all_rect,
+                                         {"kind": "push_layout"}))
+        cy += 18
+
 
 def dispatch_char_view_dropdown_click(mx, my):
     """Handle clicks against the character-view dropdown. Returns True
@@ -36713,6 +39596,16 @@ def dispatch_char_view_dropdown_click(mx, my):
                     switch_to_profile(target)
                 # Keep the dropdown open so the user can immediately
                 # confirm the switch / pick another profile.
+                return True
+            elif kind == "push_layout":
+                # Confirmation is the row itself changing to a count
+                # for a few seconds -- a modal for something this
+                # small would be worse than the operation.
+                _n = push_layout_to_all_profiles()
+                globals()["_profile_push_msg"] = (
+                    "layout saved to %d profile(s)" % _n if _n >= 0
+                    else "no live layout to copy")
+                globals()["_profile_push_at"] = time.time()
                 return True
             elif kind == "new_profile":
                 # Open the small naming modal. Dropdown stays open so
@@ -37376,9 +40269,10 @@ def draw_inventory_dropdown(surface):
             if row_rect.collidepoint(pygame.mouse.get_pos()):
                 pygame.draw.rect(surface, (40, 40, 52), row_rect)
             items_here = inventory_state.get(bag_key, [])
-            count_str  = f"{len(items_here):>3}"
+            count_str, count_col = inventory_bag_fill(bag_key,
+                                                      len(items_here))
             label_surf = label_font.render(bag_label, True, (220, 220, 230))
-            count_surf = label_font.render(count_str, True, COL_LABEL_DIM)
+            count_surf = label_font.render(count_str, True, count_col)
             surface.blit(label_surf,
                 (panel_x + pad,
                  cy + (row_h - label_surf.get_height()) // 2))
@@ -37469,11 +40363,19 @@ def draw_inventory_dropdown(surface):
 
     _sf = "Cat" if inventory_bag_sort_field == "category" else "Name"
     _sd = "\u2193" if inventory_bag_sort_rev else "\u2191"
-    title_surf = title_font.render(
-        f"{bag_label}  ({len(items)})  \u00b7  {_sf} {_sd}",
-        True, (220, 200, 150))
-    surface.blit(title_surf,
-        (panel_x + back_w + 6, cy + (row_h - title_surf.get_height()) // 2))
+    # Title is drawn in three pieces so the count can carry the same
+    # fullness colour it has in the bag list -- one surface would force
+    # the whole heading to change colour with it.
+    _cnt_txt, _cnt_col = inventory_bag_fill(bag_key, len(items))
+    _t_head = title_font.render(f"{bag_label}  (", True, (220, 200, 150))
+    _t_cnt  = title_font.render(_cnt_txt.strip(), True, _cnt_col)
+    _t_tail = title_font.render(f")  \u00b7  {_sf} {_sd}",
+                                True, (220, 200, 150))
+    _tx = panel_x + back_w + 6
+    for _piece in (_t_head, _t_cnt, _t_tail):
+        surface.blit(_piece,
+            (_tx, cy + (row_h - _piece.get_height()) // 2))
+        _tx += _piece.get_width()
     cy += row_h + 4
 
     # Scrollable item list.
@@ -39513,6 +42415,7 @@ _PARTY_MODAL_ROWS = [
     ("show_party",            "Show party panel",        "bool"),
     ("show_alliance",         "Show alliance",           "bool"),
     ("party_show_pets",       "Show pets",               "bool"),
+    ("party_link_size",       "Resize rows together",    "bool"),
     ("party_show_buffs",      "Show buffs",              "bool"),
     ("party_show_debuffs",    "Show debuffs",            "bool"),
     ("party_buff_font_size",  "Buff/debuff font size",   "enum"),
@@ -48197,7 +51100,8 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
             # button clicks), and that gate made the tooltip never show
             # outside setup mode. Stash on any hover; suppress only
             # while a drag is in flight (the ghost is the feedback).
-            if hovered and hotbar_drag is None and entry is not None:
+            if (hovered and hotbar_drag is None and entry is not None
+                    and not _hotbar_tooltip_blocked((mx, my))):
                 globals()["_hotbar_tooltip"] = (
                     entry.get("label") or "",
                     entry.get("command") or "",
@@ -48545,6 +51449,35 @@ def _import_icon_into_ui_dir(src_path):
         return ""
 
 
+def _hb_edit_where():
+    """"bar 3 · page 5 · slot 12" for the editor title.
+
+    The editor is one window that can be pointed at any bar, so it has
+    to say which one -- otherwise, with three bars up, there is nothing
+    on screen telling you what a Save will overwrite.
+
+    The page is what the editor actually holds; the BAR is looked up by
+    asking which visible panel is showing that page, and is left out
+    when none is (the page was reached by paging away since).
+    """
+    _pg = (hotbar_edit_page if (hotbar_edit_page is not None
+                                and 0 <= hotbar_edit_page < len(hotbar_pages))
+           else hotbar_current_page)
+    try:
+        _n = max(1, min(HOTBAR_PAGE_COUNT,
+                        int(setting("hotbar_visible_count") or 1)))
+    except (TypeError, ValueError):
+        _n = 1
+    _bar = next((i + 1 for i in range(_n)
+                 if _hotbar_panel_page(i) == _pg), None)
+    _name = ""
+    if 0 <= _pg < len(hotbar_pages):
+        _name = (hotbar_pages[_pg].get("name") or "").strip()
+    _out = (f"bar {_bar} \u00b7 page {_pg + 1}" if _bar
+            else f"page {_pg + 1}")
+    return _out + (f" ({_name})" if _name else "")
+
+
 def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
     """Render the inline editor form below the hotbar. Populates
     hotbar_editor_rects with click targets. Returns the total
@@ -48558,7 +51491,15 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
     fy    = hotbar_y + hotbar_h + 4
     form_w = hotbar_w
     form_h = HOTBAR_EDIT_FORM_H
-    form_rect = pygame.Rect(hotbar_x, fy, form_w, form_h)
+    _fx = hotbar_x
+    if hotbar_editor_pos is not None:
+        # Clamped for drawing only, and every click target below is built
+        # from this same rect, so the form is hit exactly where it is
+        # drawn even when the clamp moves it.
+        _fx = max(0, min(int(hotbar_editor_pos[0]), WIDTH - form_w))
+        fy = max(0, min(int(hotbar_editor_pos[1]), HEIGHT - form_h))
+    form_rect = pygame.Rect(_fx, fy, form_w, form_h)
+    globals()["_hb_editor_rect"] = form_rect
 
     # Background panel matching the dropdown style.
     pygame.draw.rect(surface, (28, 28, 36), form_rect, border_radius=4)
@@ -48579,17 +51520,22 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
 
     # Title strip + Done button on the right.
     if is_page_name_mode:
-        title_text = f"Editing page {hotbar_current_page + 1} name"
+        title_text = f"Editing name of {_hb_edit_where()}"
     elif is_slot_mode:
-        title_text = f"Editing slot {hotbar_edit_slot + 1}"
+        title_text = (f"Editing {_hb_edit_where()} \u00b7 "
+                      f"slot {hotbar_edit_slot + 1}")
     else:
-        title_text = "Hotbar editor — click a slot above to edit"
+        title_text = ("Hotbar editor — click a slot above to edit "
+                      "· ctrl-click to pick, ctrl-shift-click a line")
         if _hotbar_multi_sel:
             title_text = (f"Hotbar editor — {len(_hotbar_multi_sel)} cell(s) "
-                          f"selected · Ctrl+C copy, Ctrl+V paste")
+                          f"selected · Ctrl+C copy"
+                          + (", Ctrl+V pastes here"
+                             if len(_hotbar_multi_sel) == 1 else ""))
         elif _hotbar_multi_clipboard:
             title_text = (f"Hotbar editor — {len(_hotbar_multi_clipboard)} "
-                          f"cell(s) copied · Ctrl+V to paste here")
+                          f"cell(s) copied · ctrl-click a destination, "
+                          f"then Ctrl+V")
     t_surf = title_font.render(title_text, True, (220, 200, 150))
     surface.blit(t_surf, (form_rect.x + pad, form_rect.y + pad))
 
@@ -48603,6 +51549,13 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
                  (done_rect.x + (done_w - done_surf.get_width()) // 2,
                   done_rect.y + (done_h - done_surf.get_height()) // 2))
     hotbar_editor_rects.append((done_rect, {"kind": "done"}))
+    # The title strip drags the form. Registered AFTER the Done button so
+    # that button still wins its own press, and stopping short of it so
+    # the two can never overlap.
+    _grip = pygame.Rect(form_rect.x, form_rect.y,
+                        max(0, done_rect.x - form_rect.x - 4), 20)
+    if _grip.w > 0:
+        hotbar_editor_rects.append((_grip, {"kind": "move"}))
 
     if not has_draft:
         # No slot picked yet — just show the title bar and Done button.
@@ -49052,11 +52005,14 @@ def dispatch_hotbar_editor_click(mx, my):
     global hotbar_edit_mode, hotbar_edit_slot, hotbar_edit_draft
     global hotbar_focused_field, hotbar_text_cursor, hotbar_text_blink_t0
     global hotbar_icon_picker_open, hotbar_icon_picker_scroll
-    global _hotbar_clipboard
+    global _hotbar_clipboard, _hb_editor_drag
     for rect, action in hotbar_editor_rects:
         if not rect.collidepoint(mx, my):
             continue
         kind = action["kind"]
+        if kind == "move":
+            _hb_editor_drag = (mx - rect.x, my - rect.y)
+            return True
         if kind == "done":
             # Exit edit mode entirely. Doesn't auto-save the draft —
             # user has to hit Save first if they want to persist.
@@ -54948,6 +57904,10 @@ while running:
                 "hp": _as_int(hp), "hpp": _as_int(hpp),
                 "mp": _as_int(mp), "tp":  _as_int(tp),
                 "buffs": buff_names,
+                # The ids as well as the labels: the Support Helper
+                # confirms a buff we cast is still up by id, which is
+                # stable where a label can be localised or renamed.
+                "buff_ids": buff_ids,
                 # Parallel list of buff IDs (or None for legacy entries
                 # without an id prefix). Indexes line up with `buffs`.
                 # Used by the icon-grid renderer to look up status icons;
@@ -55448,7 +58408,7 @@ while running:
             # that can run several hundred chars; truncating them
             # silently drops fields, which manifested as "the wizard
             # only remembers all_songs."
-            if tag not in ("CFGWIZ", "SZSCAN", "SZWIDE", "SZTRACK", "SZRADAR", "SZLAMP", "NYZUL", "OMEN", "SORTIEGIL", "SYNERGY", "CRAFT", "AH", "SKILLUP") and len(value) > 64:
+            if tag not in ("CFGWIZ", "SZSCAN", "SZWIDE", "SZTRACK", "SZRADAR", "SZLAMP", "NYZUL", "OMEN", "SORTIEGIL", "SYNERGY", "CRAFT", "AH", "SKILLUP", "GSDISP") and len(value) > 64:
                 value = value[:64]
             if tag == "CRAFT":
                 cf = value.split("|")
@@ -55902,6 +58862,52 @@ while running:
                 # set was equipped. Wins over STATE in the renderer.
                 gearswap_set = value
                 gearswap_label = value
+            elif tag == "GSDISP":
+                # "<char>|<text>" from the GearSwap display wrapper.
+                _who, _sep, _txt = value.partition("|")
+                if not _sep:            # older hook, untagged
+                    _who, _txt = "", value
+                # Optional "<i>/<n> " chunk header. A single-piece push
+                # (or a hand-typed one) has none and lands whole.
+                _cm = re.match(r"(\d+)/(\d+)\s(.*)$", _txt, re.S)
+                if _cm:
+                    _i, _n, _part = (int(_cm.group(1)), int(_cm.group(2)),
+                                     _cm.group(3))
+                    # Start fresh when the piece count changes (a new,
+                    # differently-sized line) or when the part before it
+                    # is stale. Deliberately NOT "restart on piece 1":
+                    # that would break a set whose pieces arrive out of
+                    # order, and a dropped tail is covered by the age.
+                    if (_n != _gsd_parts_n
+                            or time.time() - _gsd_parts_at > 3.0):
+                        _gsd_parts.clear()
+                    _gsd_parts_n = _n
+                    _gsd_parts_at = time.time()
+                    _gsd_parts[_i] = _part
+                    if len(_gsd_parts) < _n:
+                        # Logged, because an incomplete set is otherwise
+                        # SILENT: one dropped piece and the panel simply
+                        # never updates, with nothing to say why. Seeing
+                        # "3 of 11" stall is the whole diagnosis.
+                        print("[OmniWatch] gs display chunk %d/%d (%d held)"
+                              % (_i, _n, len(_gsd_parts)))
+                        continue        # wait for the rest
+                    _txt = "".join(_gsd_parts[k]
+                                   for k in sorted(_gsd_parts))
+                    _gsd_parts.clear()
+                gs_display_who = _who.strip()
+                # Printed on change: with three links in the chain
+                # (GearSwap wrapper -> lua command -> here) a silent
+                # panel says nothing about WHERE it stopped. Seeing this
+                # line means everything up to the draw is working.
+                if _txt != gs_display:
+                    # The LENGTH is the useful half: compare it with the
+                    # "sending N chars" the GearSwap hook echoes and a
+                    # truncated command line shows up immediately.
+                    print("[OmniWatch] gs display <- %s: %d chars: %s"
+                          % (gs_display_who or "?", len(_txt), _txt[:300]))
+                gs_display = _txt
+                gs_display_at = time.time()
             elif tag == "STATE":
                 # Fallback: gearswap re-evaluated state but didn't change
                 # gear (or didn't call //ow set). Don't overwrite SET.
@@ -56459,6 +59465,74 @@ while running:
                             "bazaar": baz, "category": cat,
                         })
                 _inv_buffer[bag_name] = items_in_bag
+            elif raw.startswith("SUPCAST|"):
+                # We landed a buff on a party member:
+                #   SUPCAST|<target id>|<buff id>|<duration>|<spell>
+                # Recorded on trust; the panel only shows it once the
+                # member is actually carrying that buff id, so a
+                # resisted cast quietly never appears.
+                _sf = raw.split("|")
+                if len(_sf) >= 5:
+                    try:
+                        support_buffs[(int(_sf[1]), int(_sf[2]))] = {
+                            "spell": _sf[4],
+                            "dur":   float(_sf[3] or 0),
+                            "at":    time.time(),
+                        }
+                    except ValueError:
+                        pass
+            elif raw.startswith("POOL|"):
+                # Treasure pool snapshot, rebuilt by the lua from the
+                # live pool every second. Format per entry:
+                #   <slot>~<id>~<count>~<age>~<hi lot>~<hi name>~
+                #   <mine>~<name>~<approx>
+                # Replaces the previous snapshot outright rather than
+                # merging: an item that left the pool has to disappear
+                # from the panel, and absence is how the lua says so.
+                _pool_new = []
+                for _ent in raw.split("|", 1)[1].split(";"):
+                    if not _ent:
+                        continue
+                    _pf = _ent.split("~")
+                    if len(_pf) < 8:
+                        continue
+                    try:
+                        _pool_new.append({
+                            "slot":    int(_pf[0]),
+                            "item_id": int(_pf[1]),
+                            "count":   int(_pf[2]),
+                            "age":     int(_pf[3]),
+                            "hi_lot":  int(_pf[4]),
+                            "hi_name": _pf[5],
+                            "mine":    _pf[6] or "-",
+                            "name":    _pf[7],
+                            "approx":  (len(_pf) > 8 and _pf[8] == "1"),
+                        })
+                    except ValueError:
+                        continue
+                pool_state = _pool_new
+                _pool_apply_auto()
+            elif raw.startswith("INV_CAP|"):
+                # Format: INV_CAP|<bag>:<count>:<max>:<enabled>;...
+                # Staged like the bag lines and swapped in on INV_END.
+                # A malformed entry is skipped rather than failing the
+                # line: a bag with no capacity simply shows its count.
+                _capbody = raw.split("|", 1)[1]
+                for _ent in _capbody.split(";"):
+                    if not _ent:
+                        continue
+                    _cf = _ent.split(":")
+                    if len(_cf) < 3:
+                        continue
+                    try:
+                        _inv_caps_buffer[_cf[0]] = {
+                            "count":   int(_cf[1]),
+                            "max":     int(_cf[2]),
+                            "enabled": (_cf[3] != "0") if len(_cf) > 3
+                                       else True,
+                        }
+                    except ValueError:
+                        continue
             elif raw.startswith("INV_SLIP|"):
                 # Format: INV_SLIP|<slip_item_id>|<slip_name>|<count>|<id1>,<name1>;<id2>,<name2>;...
                 # Emitted by the lua side once per porter slip the
@@ -57031,6 +60105,12 @@ while running:
                 # round. Update the timestamp so we know freshness.
                 inventory_state = dict(_inv_buffer)
                 _inv_buffer = {}
+                # Capacities ride the same swap. An empty buffer here
+                # means the lua sent no INV_CAP, and clearing rather
+                # than keeping the old dict is deliberate: a stale
+                # capacity beside a fresh item list is worse than none.
+                inventory_caps = dict(_inv_caps_buffer)
+                _inv_caps_buffer = {}
                 # Slip snapshot mirrors the bag snapshot: same atomic
                 # replacement so the dropdown UI sees a coherent set
                 # of bags + slips together. A slip the player sold
@@ -59242,11 +62322,25 @@ while running:
     else:
         _syn_clear_rects()
 
-    # ── Auction House (general feature; ungated for all users) ──
+    # ── Alert box (general feature; ungated) ──
+    # Drawn before the floating windows so a dev panel dropped on top
+    # of it still wins, and its event branch is asked after theirs to
+    # match. draw_alert_box also keeps the status clocks running, so
+    # it is called even when the box itself is switched off.
+    if not display_hidden:
+        draw_alert_box(screen)
+    else:
+        _alert_clear_rects()
+
+    # ── Treasure pool (general feature; ungated) ──
+    # Drawn after the Auction House so it sits above it, and its event
+    # branch is asked first for the same reason.
     if not display_hidden:
         draw_ah_window(screen)
+        draw_pool_window(screen)
     else:
         _ah_clear_rects()
+        _pool_clear_rects()
     # ── DEV · SkillUp (hidden; sentinel-gated) ──
     if not display_hidden:
         draw_skillup_window(screen)
@@ -59288,6 +62382,7 @@ while running:
 
     # ── Party Panel subdialog (subsection of settings, drawn above all) ─────
     draw_party_settings_modal(screen)
+    draw_alert_editor(screen)
 
     # ── Display subdialog (subsection of settings, drawn above all) ─────────
     draw_display_settings_modal(screen)
@@ -59319,6 +62414,13 @@ while running:
 
     # ── Campaigns modal (PlayOnline events feed, opened from button) ────────
     draw_campaigns_modal(screen)
+    # ── GearSwap display mirror. Above the panels, below the hotbar
+    # editor and the drag ghost, which have to stay on top of everything.
+    try:
+        draw_gs_display(screen)
+    except Exception as _gsd_e:
+        print(f"[OmniWatch] gs display draw failed: {_gsd_e!r}")
+
     # ── Hotbar editor (drawn after the settings menu and every modal so
     # the form is ALWAYS on top — previously panels/modals drawn later in
     # the frame covered it). The editor anchor was stashed when the
@@ -59420,6 +62522,7 @@ while running:
             or inventory_settings_modal_open
             or statistics_settings_modal_open
             or profile_name_modal_open
+            or alert_editor_open
             or clock_modal_open):
         _suppress_tooltip = True
     # Any generic Configure subdialog (equipment / cheatsheet / warp / etc.)
@@ -59622,12 +62725,21 @@ while running:
     # cancel the capture).
     _focus_now = bool((chat_composer_focused or chat_composer_tell_to_focused
                        or _blusets_name_focus or inventory_search_focused
+                       # The other three Loadouts name fields. They take
+                       # printable keys exactly as BLU Spellsets does, but
+                       # were never added here, so renaming a Trust set, a
+                       # song set or an attachment set typed into the game
+                       # as well. Same omission PR #42 fixed for the AH
+                       # and Scan Zone fields.
+                       or _trustsets_name_focus or _brdset_name_focus
+                       or _pupatt_name_focus
                        or (ah_panel_open and
                            (_ah_search_field.focused
                             or _ah_edit_field.focused))
                        or (scanzone_panel_open
                            and _scanzone_field.focused)
-                       or (sim_import_open and sim_import_field))
+                       or (sim_import_open and sim_import_field)
+                       or (alert_editor_open and _alert_field.focused))
                       and not _gt_capturing_active)
     if setting("no_focus_steal"):
         if _focus_now and not _composer_focus_prev:
@@ -59639,6 +62751,10 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        # Alert section editor: a modal, so it takes the event whole
+        # -- clicks and keys both -- while it is open.
+        elif alert_editor_open and _alert_editor_handle_event(event):
+            continue
 
         elif event.type == pygame.VIDEORESIZE:
             WIDTH, HEIGHT = event.w, event.h
@@ -59674,6 +62790,15 @@ while running:
             # Loadouts window (BLU / Trusts / PUP tabs) consumed the event.
             pass
 
+        elif (not _dev_panel_input_blocked()
+                and _alert_handle_event(event)):
+            # Alert box: drag, and click a name to select / target.
+            pass
+        elif (not _dev_panel_input_blocked()
+                and _pool_handle_event(event)):
+            # Treasure pool panel. Asked before the Auction House
+            # because it draws on top of it.
+            pass
         elif (not _dev_panel_input_blocked()
                 and _ah_handle_event(event)):
             pass
@@ -60179,6 +63304,8 @@ while running:
                             if 0 <= _sl < len(_bs):
                                 _clip[_sl] = dict(_bs[_sl])
                     globals()["_hotbar_multi_clipboard"] = _clip
+                    globals()["_hotbar_clip_origin"] = (min(_clip)
+                                                        if _clip else 0)
                     # Drop the outlines once the copy is taken. They mark
                     # "these are picked out", and after a copy the
                     # clipboard is what matters — leaving them lit on the
@@ -60189,24 +63316,49 @@ while running:
                     print(f"[OmniWatch] copied {len(_clip)} hotbar cell(s)")
                     continue
                 if event.key == pygame.K_v and _hotbar_multi_clipboard:
-                    _mx, _my = pygame.mouse.get_pos()
-                    _pg = _hotbar_page_at_pos(_mx, _my)
-                    if _pg is None:
-                        _pg = (hotbar_edit_page
-                               if (hotbar_edit_page is not None
-                                   and 0 <= hotbar_edit_page < len(hotbar_pages))
-                               else hotbar_current_page)
+                    # A single selected cell is the destination: ctrl-click
+                    # where you want it, then paste. With nothing picked,
+                    # fall back to the old same-slots behaviour on the page
+                    # under the cursor.
+                    _dest = (list(_hotbar_multi_sel)[0]
+                             if len(_hotbar_multi_sel) == 1 else None)
+                    if _dest is not None:
+                        _pg, _anchor = _dest
+                        _off = _anchor - _hotbar_clip_origin
+                    else:
+                        _off = 0
+                        _mx, _my = pygame.mouse.get_pos()
+                        _pg = _hotbar_page_at_pos(_mx, _my)
+                        if _pg is None:
+                            _pg = (hotbar_edit_page
+                                   if (hotbar_edit_page is not None
+                                       and 0 <= hotbar_edit_page
+                                       < len(hotbar_pages))
+                                   else hotbar_current_page)
                     if 0 <= _pg < len(hotbar_pages):
                         _bs = hotbar_pages[_pg].setdefault("buttons", [])
-                        for _sl, _entry in _hotbar_multi_clipboard.items():
-                            while len(_bs) <= _sl:
+                        _cap = max(1, _btn_cols() * BTN_ROWS)
+                        _n = 0
+                        for _sl, _entry in sorted(
+                                _hotbar_multi_clipboard.items()):
+                            _tgt = _sl + _off
+                            # Anything that would land off the end of the
+                            # bar is dropped rather than silently wrapping
+                            # onto the row above.
+                            if not (0 <= _tgt < _cap):
+                                continue
+                            while len(_bs) <= _tgt:
                                 _bs.append(_empty_button())
-                            _bs[_sl] = dict(_entry)
+                            _bs[_tgt] = dict(_entry)
+                            _n += 1
                         _hotbar_ensure_slots()
                         save_buttons_config()
-                        print(f"[OmniWatch] pasted "
-                              f"{len(_hotbar_multi_clipboard)} cell(s) "
-                              f"into page {_pg + 1}")
+                        _hotbar_multi_sel.clear()
+                        _skip = len(_hotbar_multi_clipboard) - _n
+                        print(f"[OmniWatch] pasted {_n} cell(s) into page "
+                              f"{_pg + 1}"
+                              + (f" ({_skip} off the end, dropped)"
+                                 if _skip else ""))
                     continue
 
             if (hotbar_edit_mode and hotbar_focused_field is not None):
@@ -60472,32 +63624,15 @@ while running:
                         _hit_target = (_midx, _nm, _pid)
                         break
                 if _hit_target is not None:
-                    # Always remember who was clicked — <pc> buttons use
-                    # this regardless of which branch runs below.
-                    selected_player_name = _hit_target[1]
-                    # Only a MOB target is protected. The point was
-                    # "don't lose the thing I'm fighting" — with a PLAYER
-                    # targeted there's nothing to lose, and refusing to
-                    # retarget meant that once you had a PC selected you
-                    # could never switch to another one.
-                    if _player_engaged():
-                        _hb_action_note = {
-                            "text": f"selected: {_hit_target[1]}",
-                            "until": time.time() + 1.5,
-                            "x": mx, "y": my}
-                        print(f"[OmniWatch] selected player "
-                              f"{_hit_target[1]!r} (target untouched)")
-                        continue
-                    # No cursor note here any more — the hover tooltip
-                    # (draw_party_target_hint) says what the click will do
-                    # BEFORE it happens, which is the useful moment. The
-                    # log line stays: it's what separates "the click never
-                    # arrived" from "the game refused the target" when
-                    # something goes wrong.
-                    print(f"[OmniWatch] click-to-target: {_hit_target[1]} "
-                          f"(mob index {_hit_target[0]})")
-                    _send_target(_hit_target[0], _hit_target[1],
-                                 _hit_target[2])
+                    # One rule, shared with the alert box rather than
+                    # copied into it: select always, and target too when
+                    # you aren't engaged. Only a MOB target is protected —
+                    # with a player targeted there is nothing to lose, and
+                    # refusing to retarget meant that once you had a PC
+                    # selected you could never switch to another one. The
+                    # hover hint says which it will be before the click.
+                    _select_or_target_player(_hit_target[1], _hit_target[0],
+                                             _hit_target[2], mx, my)
                     continue
 
             # Stats-panel setup-mode interactions. Only active while in
@@ -61051,6 +64186,8 @@ while running:
             # (e.g. the equipment panel underneath). Without this the
             # editor form is "transparent" to clicks anywhere except
             # the buttons.
+            if _gsd_handle_event(event):
+                continue
             if hotbar_edit_mode:
                 if dispatch_hotbar_editor_click(mx, my):
                     continue
@@ -61058,17 +64195,28 @@ while running:
                 # set during the buttons panel render this frame. If
                 # the anchor isn't set (panel hidden), the envelope
                 # is empty and we fall through normally.
-                _ed_anchor = globals().get("_hotbar_editor_anchor")
-                if _ed_anchor is not None:
-                    _ax, _ay, _aw, _ah = _ed_anchor
-                    _form_rect = pygame.Rect(_ax, _ay + _ah + 4,
-                                             _aw, HOTBAR_EDIT_FORM_H)
+                # USE THE RECT THE FORM WAS ACTUALLY DRAWN AT.
+                #
+                # This used to recompute the envelope from the hotbar
+                # anchor, i.e. "docked under bar 1" -- which is where
+                # bars 2 and 3 sit. So every click on those bars landed
+                # inside a phantom envelope and was eaten, and clicking
+                # their cells did nothing at all. Now that the form can
+                # be moved, a computed envelope is wrong twice over.
+                _form_rect = globals().get("_hb_editor_rect")
+                if _form_rect is None:
+                    _ed_anchor = globals().get("_hotbar_editor_anchor")
+                    if _ed_anchor is not None:
+                        _ax, _ay, _aw, _ah = _ed_anchor
+                        _form_rect = pygame.Rect(_ax, _ay + _ah + 4,
+                                                 _aw, HOTBAR_EDIT_FORM_H)
+                if _form_rect is not None:
                     if _form_rect.collidepoint(mx, my):
                         continue   # click landed in form chrome → eat it
                     if hotbar_icon_picker_open:
-                        _picker_rect = pygame.Rect(_ax,
+                        _picker_rect = pygame.Rect(_form_rect.x,
                                                    _form_rect.bottom + 4,
-                                                   _aw, 220)
+                                                   _form_rect.w, 220)
                         if _picker_rect.collidepoint(mx, my):
                             continue   # click in picker chrome → eat it
                 # Click on a hotbar slot while in edit mode → select
@@ -61141,7 +64289,24 @@ while running:
                         if pygame.key.get_mods() & pygame.KMOD_CTRL:
                             _msp = _hotbar_panel_page(target_panel)
                             _key = (_msp, payload_kind)
-                            if _key in _hotbar_multi_sel:
+                            # Ctrl+SHIFT takes the whole LINE the cell sits
+                            # on -- a bar is two rows, and picking a row a
+                            # cell at a time is the tedious part of copying
+                            # one to another page.
+                            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                                _cols = max(1, _btn_cols())
+                                _row0 = (payload_kind // _cols) * _cols
+                                _line = [(_msp, _s) for _s
+                                         in range(_row0, _row0 + _cols)]
+                                # Toggle as a unit: if the whole line is
+                                # already picked, this clears it.
+                                if all(k in _hotbar_multi_sel for k in _line):
+                                    for k in _line:
+                                        _hotbar_multi_sel.discard(k)
+                                else:
+                                    for k in _line:
+                                        _hotbar_multi_sel.add(k)
+                            elif _key in _hotbar_multi_sel:
                                 _hotbar_multi_sel.discard(_key)
                             else:
                                 _hotbar_multi_sel.add(_key)
@@ -61937,13 +65102,18 @@ while running:
                     else:
                         payload_kind = payload
                         target_panel = 0
-                    # Only numeric slot indices on the PRIMARY panel open
-                    # the editor. Page-name/arrows on either panel and
-                    # numeric slots on multi-mode panels just consume.
-                    if isinstance(payload_kind, int) and target_panel == 0:
+                    # A numeric slot on ANY bar opens the editor, on the
+                    # page that bar is showing. This was primary-only, so
+                    # bars 2 and 3 could not be opened for editing at all
+                    # -- their content had to be paged onto bar 1 first.
+                    # The editor is one window; what it edits follows the
+                    # bar you clicked, exactly as the page-name click
+                    # already did.
+                    if isinstance(payload_kind, int):
                         if not hotbar_edit_mode:
                             _open_hotbar_editor()
-                        hotbar_select_slot(payload_kind)
+                        hotbar_select_slot(payload_kind,
+                                           _hotbar_panel_page(target_panel))
                     hot_hit = True
                     break
                 if hot_hit:
@@ -61965,6 +65135,15 @@ while running:
                     continue
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if _gsd_handle_event(event):
+                continue
+
+            # ── Hotbar editor form: end move ───────────────────────
+            if _hb_editor_drag is not None:
+                _hb_editor_drag = None
+                save_layout()
+                continue
+
             # ── Windowed-box resize: end + persist size ────────────
             if _ow_window_resize is not None:
                 _ow_window_resize = None
@@ -62995,9 +66174,19 @@ while running:
                     start_w, _ = drag_start_size
                     target_w   = max(40, mx - px)
                     new_scale  = drag_start_scale * (target_w / max(1, start_w))
-                    panel_scales[dragging_key] = max(MIN_SCALE, min(MAX_SCALE, new_scale))
+                    # Party and alliance rows can share one size, the way
+                    # the hotbar panels do. Every other panel is its own.
+                    _party_scale_apply(dragging_key, new_scale)
 
         elif event.type == pygame.MOUSEMOTION:
+            # GearSwap mirror being dragged.
+            if globals().get("_gsd_drag") is not None:
+                _gsd_handle_event(event)
+            # Hotbar editor form being dragged by its title strip.
+            if _hb_editor_drag is not None:
+                _emx, _emy = event.pos
+                hotbar_editor_pos = [_emx - _hb_editor_drag[0],
+                                     _emy - _hb_editor_drag[1]]
             # Generic mouse-move handler — fires whenever no drag/resize
             # operation is in progress (those have specific elif guards
             # above and take priority). We use this slot to refresh
@@ -63012,6 +66201,12 @@ while running:
 
 # Save on quit too, in case the window was closed mid-drag.
 save_layout()
+# Same reasoning for the Support Helper box, which keeps its position in
+# its own per-character file rather than the layout.
+try:
+    _alert_flush_pos(force=True)
+except Exception:
+    pass
 # Force a final buff snapshot write so we capture the most recent state
 # regardless of the 5s throttle (skipped only if buff_state is empty).
 try:

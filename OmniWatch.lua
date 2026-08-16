@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.11.5'
+_addon.version  = '1.12.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2611,9 +2611,306 @@ function _ow_sanitize_item_name(name)
     return (tostring(name):gsub('[|;,]', ' '))
 end
 
+-- ── Support Helper: buffs we put on the party ─────────────────────
+-- Records the moment one of OUR spells lands a status on a party member,
+-- so the overlay can count it down.
+--
+-- Why the moment of casting rather than reading it off the game: nothing
+-- reports how long someone else's buff has left. 0x076 carries a bare
+-- list of status ids with no timers -- the same wall the debuff stopclock
+-- ran into. The one thing we can know exactly is when our own cast
+-- finished, so that is what gets sent, along with the spell's base
+-- duration from the resources.
+--
+-- The duration is therefore a floor-of-sorts in reverse: duration gear,
+-- merits and Composure all stretch it and none of that is visible here.
+-- The overlay owns the honesty about that; it also refuses to show a row
+-- at all unless the member is really carrying the status, which is what
+-- makes a resisted or overwritten cast disappear on its own.
+--
+-- Sent for every landed status, buff or debuff -- the overlay has the
+-- classifier that splits those and there is no point owning a second one.
+do
+    local function sup_clean(v)
+        return (tostring(v or ''):gsub('[|]', ' '))
+    end
+
+    windower.register_event('action', function(act)
+        -- Category 4 is a finished spell cast. Only ours, and only when
+        -- the spell actually confers a status.
+        if not act or act.category ~= 4 then return end
+        local me = windower.ffxi.get_player()
+        if not me or act.actor_id ~= me.id then return end
+        local spell = res and res.spells and res.spells[act.param]
+        if not spell then return end
+        local bid = tonumber(spell.status)
+        if not bid or bid == 0 then return end
+
+        -- Party ids, self included: you are a member and your own buffs
+        -- belong in the list with everyone else's.
+        local party = windower.ffxi.get_party and windower.ffxi.get_party()
+        if not party then return end
+        local mine = {}
+        for k, v in pairs(party) do
+            if type(v) == 'table' and v.mob and v.mob.id
+                    and tostring(k):sub(1, 1) == 'p' then
+                mine[v.mob.id] = true
+            end
+        end
+
+        local dur = tonumber(spell.duration) or 0
+        local nm  = sup_clean(spell.english or spell.en or ('#' .. tostring(act.param)))
+        for _, t in pairs(act.targets or {}) do
+            if t.id and mine[t.id] then
+                pcall(function()
+                    udp_inv:send(_OW_MB_TAG(string.format(
+                        'SUPCAST|%d|%d|%d|%s', t.id, bid, dur, nm)))
+                end)
+            end
+        end
+    end)
+end
+
+-- ── Treasure pool ─────────────────────────────────────────
+-- Slots 0..9 of the party's treasure pool, pushed to the overlay panel.
+--
+-- The pool itself is read from windower.ffxi.get_items().treasure on a
+-- 1 Hz tick rather than being reconstructed from packets. A rebuild from
+-- the live table cannot drift: an item that leaves the pool for any
+-- reason -- won, floored, passed by everyone, or a packet we simply
+-- missed -- is gone from the next read. The two packets below only
+-- supply what the table doesn't carry.
+--
+--   0x0D2  an item enters the pool. Gives us the exact moment it landed,
+--          which is the only way to show a truthful countdown, and the
+--          'Old' flag for something that was already there before we
+--          joined the party.
+--   0x0D3  a lot or a pass. Carries the highest lot and who holds it,
+--          and a Drop field that is non-zero when the item leaves.
+--
+-- Our own lot state comes from get_party().p0.lots, keyed by the same
+-- slot index: nil = not acted on, a number = our lot, anything else =
+-- we passed. That is the same reading Windower's own Treasury addon
+-- uses, and it is the reason the panel can show "passed" at all -- no
+-- packet tells us about our own pass after the fact.
+--
+-- Lotting and passing go through windower.ffxi.lot_item / pass_item.
+-- These are managed API calls that work directly -- unlike targeting,
+-- which needed a packet injection -- so there is no 0x041/0x042 to
+-- build here.
+--
+-- Wrapped in do...end: the main chunk is at Lua 5.1's 200-local ceiling,
+-- so everything shared lives on _G and nothing new is added up top.
+do
+    -- The pool is ten slots, indexed from zero.
+    local POOL_LAST_SLOT = 9
+    local POOL_EMIT_INTERVAL = 1.0
+    local POOL_HEARTBEAT = 5.0
+    local _pool_last_emit = 0
+    local _pool_last_payload = nil
+
+    -- Per-slot extras that get_items() doesn't carry: when the item
+    -- landed, whether that time is exact, and the standing high lot.
+    -- Keyed by slot index; the occupant's item id is stored so a slot
+    -- that changes hands resets rather than inheriting the last item's
+    -- clock. On _G so the packet handlers and the tick share it.
+    _G._ow_pool_meta = {}
+
+    local function pool_clean(v)
+        -- Wire delimiters only. Item names legitimately contain spaces,
+        -- apostrophes and hyphens.
+        return (tostring(v or ''):gsub('[|;~]', ' '))
+    end
+
+    local function pool_item_name(id)
+        if res and res.items and res.items[id] then
+            local r = res.items[id]
+            return r.english or r.en or ('#' .. tostring(id))
+        end
+        return '#' .. tostring(id)
+    end
+
+    local function pool_slot_item(pool, idx)
+        local e = pool and pool[idx]
+        if type(e) ~= 'table' then return 0, 1 end
+        return (tonumber(e.item_id or e.id) or 0), (tonumber(e.count) or 1)
+    end
+
+    -- Build and send one snapshot line:
+    --   POOL|<idx>~<id>~<count>~<age>~<hi lot>~<hi name>~<mine>~<name>~<approx>;...
+    -- <mine> is '-' (not acted on), 'p' (passed), or our lot as digits.
+    -- <approx> marks an age we inferred rather than timed from 0x0D2.
+    _G._ow_pool_emit = function()
+        local items = windower.ffxi.get_items and windower.ffxi.get_items()
+        if not items then return end
+        local pool = items.treasure
+        if type(pool) ~= 'table' then return end
+
+        local lots
+        local party = windower.ffxi.get_party and windower.ffxi.get_party()
+        if party and party.p0 then lots = party.p0.lots end
+
+        local now = os.time()
+        local parts = {}
+        for idx = 0, POOL_LAST_SLOT do
+            local iid, cnt = pool_slot_item(pool, idx)
+            local meta = _G._ow_pool_meta[idx]
+            if iid > 0 then
+                if not meta or meta.id ~= iid then
+                    -- First sighting, and no 0x0D2 recorded it: either the
+                    -- pool predates our load or we missed the packet. Age
+                    -- runs from now and is flagged approximate rather than
+                    -- pretending to a drop time we never saw.
+                    meta = { id = iid, seen = now, approx = true,
+                             hi = 0, hiname = '' }
+                    _G._ow_pool_meta[idx] = meta
+                end
+                local mine = '-'
+                if lots then
+                    local l = lots[idx]
+                    if type(l) == 'number' then
+                        mine = tostring(l)
+                    elseif l ~= nil then
+                        mine = 'p'
+                    end
+                end
+                parts[#parts + 1] = string.format(
+                    '%d~%d~%d~%d~%d~%s~%s~%s~%d',
+                    idx, iid, cnt, now - (meta.seen or now),
+                    meta.hi or 0, pool_clean(meta.hiname), mine,
+                    pool_clean(pool_item_name(iid)),
+                    meta.approx and 1 or 0)
+            elseif meta then
+                _G._ow_pool_meta[idx] = nil
+            end
+        end
+
+        local payload = 'POOL|' .. table.concat(parts, ';')
+        -- An occupied pool changes every second anyway (the ages move),
+        -- so this only really throttles an empty one, which would
+        -- otherwise send the same empty line forever.
+        if payload ~= _pool_last_payload
+                or (os.clock() - _pool_last_emit) >= POOL_HEARTBEAT then
+            pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+            _pool_last_payload = payload
+        end
+        _pool_last_emit = os.clock()
+    end
+
+    _G._ow_pool_tick = function()
+        if (os.clock() - _pool_last_emit) >= POOL_EMIT_INTERVAL then
+            _G._ow_pool_emit()
+        end
+    end
+
+    -- Lot or pass one slot, on behalf of the overlay panel.
+    --
+    -- The item id the panel was showing is passed back and checked here.
+    -- Slots are reused: an item can be won and replaced in the time
+    -- between the panel drawing a row and the click reaching us, and
+    -- lotting the wrong thing is not recoverable. A mismatch is refused.
+    _G._ow_pool_act = function(action, idx, item_id)
+        if type(idx) ~= 'number' or idx < 0 or idx > POOL_LAST_SLOT then
+            return
+        end
+        local items = windower.ffxi.get_items and windower.ffxi.get_items()
+        local iid = pool_slot_item(items and items.treasure, idx)
+        if iid <= 0 then
+            ow_chat(207, '[OW pool] slot ' .. tostring(idx)
+                .. ' is empty -- nothing to ' .. tostring(action))
+            return
+        end
+        if item_id and item_id > 0 and item_id ~= iid then
+            ow_chat(207, '[OW pool] slot ' .. tostring(idx)
+                .. ' holds a different item now -- ignored')
+            return
+        end
+        if action == 'lot' and windower.ffxi.lot_item then
+            windower.ffxi.lot_item(idx)
+        elseif action == 'pass' and windower.ffxi.pass_item then
+            windower.ffxi.pass_item(idx)
+        else
+            return
+        end
+        -- Push a fresh snapshot on the next tick so the panel reflects
+        -- the action without waiting out the interval.
+        _pool_last_emit = 0
+    end
+
+    windower.register_event('incoming chunk', function(id, data)
+        if id ~= 0x0D2 and id ~= 0x0D3 then return end
+        local ok, p = pcall(packets.parse, 'incoming', data)
+        if not ok or type(p) ~= 'table' then return end
+        local idx = tonumber(p['Index'])
+        if not idx or idx < 0 or idx > POOL_LAST_SLOT then return end
+
+        if id == 0x0D2 then
+            local iid = tonumber(p['Item']) or 0
+            if iid > 0 then
+                -- 'Old' is set for an item that was in the pool before we
+                -- joined; its real drop time is behind us, so the age is
+                -- flagged approximate exactly as an unseen slot would be.
+                _G._ow_pool_meta[idx] = {
+                    id = iid, seen = os.time(),
+                    approx = (p['Old'] == true) or false,
+                    hi = 0, hiname = '',
+                }
+            end
+        else
+            local meta = _G._ow_pool_meta[idx]
+            if meta then
+                local hi = tonumber(p['Highest Lot'])
+                -- 0xFFFF is the pass marker, not a lot of 65535.
+                if hi and hi > 0 and hi < 0xFFFF then
+                    meta.hi = hi
+                    meta.hiname = p['Highest Lotter Name'] or meta.hiname
+                end
+            end
+            if (tonumber(p['Drop']) or 0) ~= 0 then
+                _G._ow_pool_meta[idx] = nil
+            end
+        end
+        -- Emit on the next prerender rather than from inside the handler:
+        -- get_items() has not necessarily caught up with the packet yet.
+        _pool_last_emit = 0
+    end)
+end
+
 local function _ow_emit_inventory_snapshot()
     local items = windower.ffxi.get_items and windower.ffxi.get_items()
     if not items then return end
+
+    -- ── Bag capacities ────────────────────────────────────────────
+    -- One line for every bag, sent BEFORE the INV_BAG lines so the
+    -- overlay stages it with the same snapshot and swaps it in on
+    -- INV_END. Capacity is per-character -- every bag tops out at 80,
+    -- but inventory and satchel start well below it and grow with
+    -- quests and rings -- so it has to come from the game rather than
+    -- a table on our side.
+    --
+    --   INV_CAP|<bag>:<count>:<max>:<enabled>;<bag>:...
+    --
+    -- Its own tag rather than an extra INV_BAG field: the INV_BAG body
+    -- is the last field and holds the item list, so anything appended
+    -- after it would be read as part of that list by an older overlay.
+    -- An unknown tag is simply ignored, so the two sides can differ in
+    -- version without the bag lists breaking.
+    --
+    -- count/max come from windower's own totals rather than from the
+    -- entries we enumerate below: those are what the game menu shows,
+    -- and they stay right even for a bag we can't reach from here.
+    local _caps = {}
+    for _, bag_name in ipairs(_OW_BAG_INV_BAGS) do
+        local _cnt = tonumber(items['count_' .. bag_name]) or -1
+        local _max = tonumber(items['max_' .. bag_name]) or -1
+        local _en  = (items['enabled_' .. bag_name] ~= false) and 1 or 0
+        _caps[#_caps + 1] = string.format('%s:%d:%d:%d',
+            bag_name, _cnt, _max, _en)
+    end
+    pcall(function()
+        udp_inv:send(_OW_MB_TAG('INV_CAP|' .. table.concat(_caps, ';')))
+    end)
+
     for _, bag_name in ipairs(_OW_BAG_INV_BAGS) do
         local bag_data = items[bag_name]
         local entries = {}
@@ -9808,6 +10105,38 @@ local function _ow_drain_inbound()
             if not ok then
                 ow_chat(123, '[OmniWatch] brdset error: ' .. tostring(berr))
             end
+        elseif head == 'CUREACT' then
+            -- Cure Helper: cast <cure> on <party member>, sent when a cure
+            -- is clicked in the panel. Payload: "<cure name>|<target>".
+            --
+            -- ALWAYS /ma. Cures that are items or abilities are not usable
+            -- on another party member anyway, so resolving a verb per cure
+            -- bought nothing but ways to be wrong.
+            --
+            -- FFXI takes a player NAME as a command target, so nothing is
+            -- targeted or retargeted -- the same trick the <pc> hotbar
+            -- substitution uses. A name we can't cast on (or a typo in the
+            -- Cure column) is reported by the game itself.
+            local c_sep = rest:find('|', 1, true)
+            local c_name = c_sep and rest:sub(1, c_sep - 1) or ''
+            local c_targ = c_sep and rest:sub(c_sep + 1) or ''
+            if c_name ~= '' and c_targ ~= '' then
+                windower.chat.input(string.format('/ma "%s" %s',
+                    c_name, c_targ))
+            end
+        elseif head == 'POOLACT' then
+            -- Lot or pass a treasure pool slot from the overlay panel.
+            -- Payload: "<lot|pass>|<slot>|<item id>". The item id is
+            -- what the panel was showing; _ow_pool_act refuses the
+            -- action if the slot has changed hands since.
+            local p_act, p_idx, p_iid = rest:match('^(%a+)|(%d+)|(%d+)$')
+            if p_act then
+                local ok_p, err_p = pcall(_G._ow_pool_act, p_act,
+                    tonumber(p_idx), tonumber(p_iid))
+                if not ok_p then
+                    ow_chat(123, '[OW pool] ' .. tostring(err_p))
+                end
+            end
         elseif head == 'TARGET' then
             -- Click-to-target from the party panel.
             --
@@ -10472,6 +10801,23 @@ ow_safe_register('addon command', function(command, ...)
     elseif command == 'state' and #args > 0 then
         local s = table.concat(args, ' ')
         udp_gs:send('STATE|' .. s)
+    elseif command == 'disp' and #args > 0 then
+        -- The GearSwap display mirror. Tagged with the sending
+        -- character because GearSwap runs per client and, unlike our
+        -- own streams, its commands carry no sender -- two boxes would
+        -- otherwise fight over one panel.
+        local who = ''
+        local ok, pl = pcall(windower.ffxi.get_player)
+        if ok and pl and pl.name then who = pl.name end
+        local body = table.concat(args, ' ')
+        -- Echoed under //omniwatch debug. This is the ONE probe that
+        -- needs no exe rebuild: if GearSwap's push reaches the addon
+        -- it prints here, which separates 'the command never
+        -- arrived' from 'the overlay never drew it'.
+        if _ow_gs_debug then
+            ow_chat(207, '[OW] disp <- ' .. #body .. ': ' .. body)
+        end
+        udp_gs:send('GSDISP|' .. who .. '|' .. body)
     elseif command == 'su' or command == 'skillup' then
         _ow_su_command(table.concat(args, '|'))
     elseif command == 'ah' or command == 'auction' then
@@ -23089,6 +23435,14 @@ ow_safe_register('prerender', function()
     -- counts per bag in the header.
     if (now - _ow_bag_inv_last_emit) >= 5.0 then
         pcall(_ow_emit_inventory_snapshot)
+    end
+
+    -- Treasure pool snapshot. Its own 1 Hz throttle lives inside the
+    -- tick, so this is cheap to call every prerender. Runs whether or
+    -- not the panel is open -- the overlay's auto lot/pass rules read
+    -- the same snapshot.
+    if _G._ow_pool_tick then
+        pcall(_G._ow_pool_tick)
     end
 
     -- Currency request injection (tier-1 + tier-2). Internal throttle is

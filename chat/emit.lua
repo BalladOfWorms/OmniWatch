@@ -723,7 +723,17 @@ local DROPPED_CHAT_MODES = {
                     --   no damage"). Dup synth; other-party leak.
     [26] = true,    -- /yell (zone-broadcast variant)
     [27] = true,    -- /linkshell 2 (LS2 actual)
-    [36] = true,    -- defeat text — duplicates synth ("X defeats Y")
+    -- [36] NOT dropped. It carried "X defeats Y" and was listed here as
+    -- a duplicate of the 0x028 synth — but THE SYNTH HAS NO DEFEAT
+    -- EVENT. battle_events.lua emits melee / ranged / weaponskills /
+    -- abilities / uses / damage / healing / casting / readies / misses
+    -- and nothing for a kill, so this dropped the one line that says
+    -- the fight ended and nothing replaced it. Every other entry in
+    -- this table really is a duplicate; this one never was.
+    -- BEFORE ADDING A MODE HERE, CHECK THE SYNTH ACTUALLY EMITS IT.
+    -- Other parties' kills are gated out on the OmniWatch.lua side
+    -- (_battle_text_modes) so un-dropping this doesn't fill a busy
+    -- zone with strangers' kills.
     [101] = true,   -- AoE ability target-list ("X uses → {6}: A, B, C")
                     --   — dup of 0x028 synth.
     [104] = true,   -- mob TP-move MISS ("The Apex Raptor uses Ripper

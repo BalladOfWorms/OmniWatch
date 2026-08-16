@@ -8,7 +8,7 @@ The Windower addon collects events from the game and sends them over local UDP t
 - **Discord:** https://discord.gg/9ac5cjgGz7
 - **Issues / bug reports:** https://github.com/BalladOfWorms/OmniWatch/issues
 
-OmniWatch is in active development. The core feature set is stable and usable today, but rough edges remain — please report bugs and odd behavior on Discord or via GitHub Issues. Features and accuracy will continue to be expanded over time, with help from community feedback.
+**OmniWatch is feature-complete and in maintenance mode.** The feature set below is what it does; work from here is fixes, accuracy and data updates rather than new panels. It is used daily on retail and is stable, but rough edges will still turn up — please report bugs and odd behaviour on Discord or via GitHub Issues. Community pull requests are welcome.
 
 ## What it does
 
@@ -21,11 +21,14 @@ OmniWatch puts the live state of your character and party in one place:
 - **Buff timer panel** — duration bars for active buffs that color-shift as they're about to wear off
 - **DPS tracker** — rolling-window damage tracking with sparklines, per-encounter logging to CSV/JSONL, optional party-member damage tracking
 - **Chat panel** — floating, resizable chat log with tabs (World, LS1/LS2, Party, Battle, Buffs, Debuffs, Mob, two user-customizable tabs, System, Gearswap), unread badges per tab, scrollback, and a built-in composer for sending say/tell/reply/shout/yell/linkshell messages without opening the game's chat field. Per-job routing rules let you decide which combat events land in which tab.
+- **Support Helper** — a panel for whoever is keeping the party alive: your own list of statuses to watch for, who is currently carrying each one and for how long, with the cure beside every name as a button that casts it. A second tab does the same for the buffs you maintain, and keeps a row up after one wears off so you know to put it back on
+- **GearSwap display** — your GearSwap state display mirrored into an overlay panel, one state per row (needs a few lines in your GearSwap to feed it)
+- **Treasure pool** — what is in the pool, who holds the high lot, and **how long each item has left** before it drops out, with LOT and PASS on every row and optional auto-lot / auto-pass rules by item name
 - **Stats panel** — full /checkparam-style stat grid (Acc/Att/RAcc/RAtt/Def/Eva, MAcc/MAB/MDB, elemental affinity, fast cast, store TP, enmity, subtle blow, crit rate, spell interruption, cure potency, rapid shot, etc.) computed from skill + base stats + gear + food + buffs + traits, including BLU spell-trait math and per-spell stat bonuses. Which cells appear, and in what order, is yours to arrange — globally or per job
 - **Hotbar** — customizable button panel for slash commands, items, gearswap calls, macros, and OmniWatch's own actions (Sing, Call Trust, Warp menu, Cheat Sheet, Auto ranged attack)
 - **Cheat sheet** — your own keybind / macro reference as an overlay window, with a shared section and a per-job section, editable in place
 - **Profiles** — save a whole setup (panel layout, settings, hotbar, cheat sheet, stat cells) under a name and switch between them; one for the second monitor, one per job, whatever suits
-- **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection
+- **Inventory dropdown** — searchable inventory across all bags (mog wardrobes, satchel, sack, case) with GearSwap-reference detection and a **how-full** count on every bag
 - **Auction House panel** — Buy and Sell tabs in one window. Buy: live item search (singles and stacks listed separately, in-game style), a multi-item bid queue with per-item start / max / increment prices and a throttle, and a results log. Sell: your inventory with a single/stack + price form and your seven active listings. **Click an item's `$`** to pull its current listing counts and last ~10 real sales (date · seller → buyer · price) straight from your world's search server — the same data FFXIAH shows, in-game with no website. Right-click any item to open its FFXIAH price page.
 - **Header strip** — Vana'diel game clock with element/moon phase, current zone + region, character switcher, settings gear
 - **Sim mode** — what-if calculator: change job, level, JP, ML, gear, food, BRD songs (marches/minuets/madrigals), and COR rolls (Chaos/Samurai/Tactician's with optional Crooked Cards + optimal job toggles) and see the resulting stats live without applying anything in-game. While open it takes over the equipment panel to preview your picked gear, with hover tooltips on sim items.
@@ -95,7 +98,8 @@ OmniWatch settings live in two places, depending on what you want to change:
 Click the gear icon at the top of the overlay. The dropdown groups settings by panel. Most sections expose just a single **CONFIGURE** button (light blue) that opens a focused subdialog for that panel's options — this keeps the dropdown short and scannable.
 
 - **General** — Full screen, Always on top, **Display** [CONFIGURE] (window opacity, global UI scale 0.5×–3.0×, transparent background, toggle nub visibility), Setup mode
-- **Misc** — **Auction House** [OPEN], **Crafting / Synergy / Fishing** [OPEN], **Tracker** [OPEN], **AutoRA** [OPEN], Checklist, Simulation mode
+- **Misc** — **Auction House** [OPEN], **Treasure Pool** [OPEN], GearSwap display, **Crafting / Synergy / Fishing** [OPEN], **Tracker** [OPEN], **AutoRA** [OPEN], Checklist, Simulation mode
+- **Support Helper** — show the panel, **CONFIGURE** (edit the debuff and buff sections: name, cure, what to match, HP threshold, order)
 - **Header** — **Header** [CONFIGURE] (show time / weather / events / location, **Show OS clock**, **Show clock seconds**, **Clock time zone**, server choice, points tracker focus), **Currency cycler** [CONFIGURE] (per-currency toggles + cycle interval), **Inventory** [CONFIGURE] (inventory button + gearswap folder), Reset zone timer
 - **Party Panel** — **Party Panel** [CONFIGURE] (show alliance, show pets, show buffs, show debuffs, compact icon grid, edit buff/debuff blacklists, edit buff aliases)
 - **Equipment** — **Equipment** [CONFIGURE] (show panel, show tooltips, show ring cooldown, ring cycle interval 2–15s, per-ring inclusion toggles for Warp / Dem / Holla / Mea / Echad / Trizek / Reraise / Endorsement / Emporox)
@@ -143,6 +147,7 @@ Inside you'll find:
     ├── omniwatch_buff_timer.json # buff-duration overrides
     ├── omniwatch_recast.json     # recast tracker config
     ├── omniwatch_buttons.json    # hotbar button bindings
+    ├── omniwatch_alerts.json     # Support Helper sections, position, on/off
     ├── omniwatch_mobs.json       # learned mob abilities
     ├── omniwatch_zones.json      # zone → region mapping
     ├── brd_songgear.lua          # BRD song-gear config (only if you use it)
@@ -174,6 +179,22 @@ Shows your main party (slots p0-p5) with optional alliance party 1 and 2. Per me
 - "Edit buff aliases" — shorten long buff names (e.g. "Tactician's Roll" → "TAC")
 
 **Alliance**: toggle "Show alliance" to display alliance parties 1 and 2 as compact strips along the right side of the screen. Slots can be repositioned individually.
+
+### Support Helper
+
+A panel for whoever is keeping the party standing. Switch it on in **Settings ▸ Support Helper**; **CONFIGURE** opens the editor. Drag it anywhere — it remembers where you put it, and unlike most things it is kept beside its own settings rather than in your profile, so switching profiles doesn't move or hide it.
+
+**Party Debuffs.** You define the sections, and anyone in your party carrying a matching status drops into one — so *has anyone got Silence* is read rather than hunted for across six rows of icons. Matching is by text found anywhere in the status name (**Blind** finds Blindness, **Sleep** finds Sleep II), and a section can watch **low health** instead by giving it an HP percentage.
+
+Each section names **what cures it**, and **clicking that cure casts it on the member beside it**. A section can hold several spells, weakest first — hover a cure and **scroll the wheel** to pick between them, per member, so the same row is a Cure or a Cure IV depending on how far down someone is, and a section that usually wants a single-target spell can reach for the -aga when more than one person needs it. A cure with alternatives shows a small chevron. Clicking the **name** selects that member instead, and targets them too when you're not in a fight, so a `<pc>` macro fires at whoever you just clicked.
+
+Every name carries a **stopclock** showing how long the status has been on them — the game tells you nothing about how long someone else has been silenced or slept. A time starting with **~** means the status was already up when OmniWatch first saw that person, so it is the *least* it can have been there.
+
+**Party Buffs.** The second tab works the same way with its own list: name the buffs you maintain and it lists who is carrying them, whoever cast them. Buffs **you** cast are timed against the spell's base duration, so duration gear, merits and Composure all make it read short; anyone else's shows **n/a**, because nothing in the game reports how long another player's buff has left. A row **stays after the buff wears off**, marked **worn** in red and sorted to the top of its section — that is the moment it becomes a job, and the row is the reminder. Click the spell to recast it.
+
+Sections are ordered with the arrows beside each row and drawn in that order, so what matters most sits at the top. **When the list outgrows the space the panel adds a column rather than getting taller** — every member and every ailment keeps its own row, since without Yagrush each one is its own cast. Up to 30 sections per tab, saved per character. Both tabs ship with a full starting list; Low HP is left blank for you to fill in your own cure tiers.
+
+Two things it cannot do, both because the game never sends the data: **alliance members and trusts carry no statuses**, so neither will ever appear.
 
 ### Target & sub-target cards
 
@@ -537,6 +558,8 @@ Click the inventory button in the header for a searchable view of every bag:
 - Mog wardrobes 1-8 (5-8 require active subscription)
 - Mog safe / safe 2 / locker / storage
 
+Every bag reads **58/80** — how full it is against its real size, read from the game per character rather than assumed, so a character part-way through the quests and rings that expand a bag sees its true capacity. Green while there is room, red once the bag is full, and the same figure heads the bag you open. Bags you can't reach from where you are — safe, storage and locker away from a Mog House — still report their contents, but in grey: the room is real, it just isn't somewhere you can put anything right now.
+
 Items are grouped by bag and searchable by name. **GearSwap reference detection**: if you've pointed OmniWatch at your GearSwap folder (settings → Inventory → Gearswap folder → PICK), items referenced in any of your gearswap `.lua` files get a ✓ icon — so you can tell at a glance which items in your inventory are actually being equipped by your sets.
 
 **Right-click actions** (requires the [Treasury](https://github.com/from20020516/Treasury) addon for auto-drop): right-click any item row for a context menu —
@@ -561,6 +584,117 @@ A Buy/Sell tool in one window. Drag the title bar to move it; drag the **bottom-
 
 **Right-click** any item (search result, queued row, or sell-inventory item) to open its **FFXIAH** page in your browser; set your server once on ffxiah.com and every link lands on your world's prices.
 
+### Treasure pool
+
+Open it from **Settings ▸ Misc ▸ Treasure Pool**, beside the Auction House. Every item in the party pool is listed with who holds the standing high lot, what you've done about it, and **how long it has left** — the part the game never shows you. An item nobody touches is gone five minutes after it lands; a row turns amber under a minute and red under thirty seconds. **LOT** and **PASS** sit on each row.
+
+An item that was already in the pool when you joined the party, or when you started OmniWatch, has its time marked with **~**: the clock starts when OmniWatch first sees it, so the figure is the most that can be left, never more.
+
+**AL** and **AP** set a rule for that item name, and every later drop of it is lotted or passed for you, in any slot, with the panel closed. An item can be on one list or the other, never both. Auto-lot waits while your inventory is full rather than winning something into nowhere, and pressing LOT yourself is left alone. **The rules last for the session only** — **RESET AUTO** clears them, and so does closing OmniWatch. Nothing is written to disk on purpose: a standing *pass everything called this* that survived a restart would eventually pass something you wanted, long after you'd forgotten setting it.
+
+### GearSwap display
+
+Mirrors your GearSwap state display into an overlay panel, so it reads at the overlay's size and can sit outside the game window. Switch it on at **Settings ▸ Misc ▸ GearSwap display**. Each state gets its own row — gold label, white value, elements and bar targets in their element colour, and the **Auto** toggles in blue at the bottom, since those are standing settings rather than the state of the moment. Drag it anywhere; drag the bottom-right corner to set its width. Both are remembered.
+
+**It needs a few lines inside GearSwap to feed it.** Windower addons run in separate Lua states, so nothing here can read GearSwap's variables — GearSwap has to push. Until something does, the panel says it is waiting rather than sitting blank.
+
+The snippet below is written for **Selindrile's** framework, which is what it was built against: it wraps Sel's `update_job_states()` and reads its `stateBox`. **On any other framework you need your own equivalent** — Mote's is `display_current_state()` with its own text object, and a hand-rolled setup may have nothing to wrap at all. What the panel needs is only the wire format:
+
+- **A UDP datagram to `127.0.0.1`**, on the port listed as `gs` in `%APPDATA%\OmniWatch\ow_ports_py.txt`. That port is assigned at launch and changes each time, so re-read the file rather than caching it.
+- **Payload:** `GSDISP|<character>|<text>`. The character name lets the overlay show only the one you are viewing when you run more than one client.
+- **Entries in `<text>` are separated by two or more spaces**; `Label: value` splits on the first colon, and a bare word (no colon) draws as an on/off state. Windower colour codes are stripped, so leaving them in is harmless.
+
+Put this at the bottom of your own globals file (for Selindrile, `<Character>-Globals.lua`):
+
+```lua
+-- OmniWatch: mirror the Sel-Display state line into the overlay.
+if not _wf_ow_display_hooked then
+    _wf_ow_display_hooked = true
+    _wf_ow_disp_debug = false         -- true to echo what it sends
+    local _ow_sock, _ow_port, _ow_last = nil, nil, nil
+
+    local function _ow_dbg(msg)
+        if _wf_ow_disp_debug then
+            windower.add_to_chat(122, '[OW-disp] ' .. tostring(msg))
+        end
+    end
+
+    local function _ow_find_port()
+        local appdata = os.getenv and os.getenv('APPDATA')
+        if not appdata then return nil, 'no APPDATA' end
+        local f = io.open(appdata .. '\\OmniWatch\\ow_ports_py.txt', 'r')
+        if not f then return nil, 'no port file' end
+        local body = f:read('*a') or ''
+        f:close()
+        local p = body:match('gs%s+(%d+)')
+        if not p then return nil, 'no gs line' end
+        return tonumber(p)
+    end
+
+    -- `socket` is nil in a GearSwap user file: the addon requires it
+    -- into ITS globals and user files get a sandbox. require() reaches
+    -- the same library.
+    local function _ow_socket()
+        if _ow_sock then return _ow_sock end
+        local sk = rawget(_G, 'socket')
+        if not sk then
+            local got, lib = pcall(require, 'socket')
+            sk = got and lib or nil
+        end
+        if not sk then return nil, 'no socket library' end
+        local ok, s = pcall(function() return sk.udp() end)
+        if not ok or not s then return nil, 'udp() failed' end
+        _ow_sock = s
+        return _ow_sock
+    end
+
+    local function _ow_line()
+        if not stateBox then return nil end
+        local ok, txt = pcall(function() return stateBox:text() end)
+        if not ok or not txt or txt == '' then return nil end
+        -- Sel resolves ${Name} at update() time; text() hands back the
+        -- raw template, so resolve it here from state[Name].current.
+        txt = txt:gsub('%${([%w_]+)}', function(n)
+            local st = state and rawget(state, n)
+            if not st then return '' end
+            return tostring(st.current or st.value or '')
+        end)
+        txt = txt:gsub('|', '/'):gsub('^%s+', ''):gsub('%s+$', '')
+        if txt == '' then return nil end
+        return txt
+    end
+
+    local function _ow_tick()
+        local ok, err = pcall(function()
+            -- Re-read the port every tick: the overlay binds a new one
+            -- each launch, and UDP will not tell you it is dead.
+            local p = _ow_find_port()
+            if p and p ~= _ow_port then
+                _ow_port = p
+                _ow_last = nil        -- repopulate the fresh panel
+                _ow_dbg('overlay gs port ' .. p)
+            end
+            if not _ow_port then return end
+            local txt = _ow_line()
+            if not txt or txt == _ow_last then return end
+            local sock, serr = _ow_socket()
+            if not sock then _ow_dbg(serr) return end
+            local who = (player and player.name) or ''
+            local payload = 'GSDISP|' .. who .. '|' .. txt
+            if sock:sendto(payload, '127.0.0.1', _ow_port) then
+                _ow_last = txt
+                _ow_dbg('sent ' .. #payload .. ' bytes')
+            end
+        end)
+        if not ok then _ow_dbg('error: ' .. tostring(err)) end
+        coroutine.schedule(_ow_tick, 1)
+    end
+    coroutine.schedule(_ow_tick, 3)
+end
+```
+
+It polls once a second and only sends when the line has changed, so the panel shows current state after a reload without you cycling anything. Set `_wf_ow_disp_debug = true` if it stays empty — it will say whether it found the port, the socket and a line to send.
+
 ### Tracker
 
 A live widescan and radar for the current zone. Open it from **Settings → Misc → Tracker [OPEN]** or toggle it any time with **Ctrl+Shift+G**. Drag the title bar to move it and the bottom-right grip to resize; position and size persist.
@@ -572,6 +706,14 @@ A live widescan and radar for the current zone. Open it from **Settings → Misc
 **Track spawns.** Click an entity to **track** it: OmniWatch follows its live position and shows **X / Y / Z**, distance, and **HP%** in its roster row. Each tracked entry carries a spawn state (it flashes when it pops), a **near** flag when it's within ~50 yalms, and a recorded **time of death** so you can watch a respawn window. Mark an entry **permanent** to keep it on the roster across deaths and re-detect its respawn by index. Filter the list by **All / Spawned / Unspawned**.
 
 **Right-click** a roster row or a radar/map dot for its context menu (per-entity actions such as tracking, aliasing, marking it permanent, toggling an **audio alert**, or removing it). With **Alert (A)** on, a tracked mob plays a two-tone beep the moment it spawns (its row shows a cyan **A**), so you can camp a pop without watching the screen.
+
+**Content sections.** The buttons at the top right — **Nyzul**, **Sortie**, **Omen** — fill the right-hand pane for the content you're in.
+
+- **Nyzul Isle** reads the game's own messages: current floor, time remaining (red under a minute), the floor objective (green once met), any restriction (red when you've broken it), floors completed, reward rate and potential tokens. It also interprets — on a free floor it says to move on, and on a leader floor it hunts the leader in the live radar and names it once it appears. The lamp tracker rides along with this mode.
+- **Sortie** lists the objectives for the sector you pick, floor by floor, with the wing's lesser NM at the top. **Every objective has a checkbox**: click the row and it turns red, click again to clear it. Ticks clear when you zone in, so each run starts fresh. Gallimaufry earned in the run is counted beside it; click the figure to reset it.
+- **Omen** tracks the floor objective and every bonus objective as *name [current/required]*, green once met and red if the timer ran out while you were short, with the countdown on the bonus window.
+
+Nyzul and Omen fill themselves in because those two announce progress in chat. Sortie never reports its chest conditions to the client, which is why that one is a checklist you tick.
 
 **Poll rate.** The **Poll** button opens a small editor to set how often spawned (**Active**) and despawned (**Inactive**) tracks are re-scanned — dial the inactive rate up to cut packet traffic when watching a large roster, or keep it low (≈1s) for the fastest respawn detection.
 
@@ -878,7 +1020,7 @@ The lua addon hooks Windower events (`prerender`, `incoming chunk`, `incoming te
 
 - **Lanun roll-proc accuracy** — when COR's Lanun gear set procs a bonus on a Phantom Roll's accuracy effect, OmniWatch may not always reflect the boosted value. The server doesn't reliably push the relevant stat packet for this case, and there's no clean way to detect the proc client-side.
 - **BLU spell-trait coverage** handles the major categories (DW, Fast Cast, MAB, Acc Bonus, Atk Bonus, Def Bonus, MDB, Store TP, Conserve MP, Counter, Auto Refresh, Auto Regen, MAcc Bonus, MEv Bonus, Magic Burst Bonus, Skillchain Bonus, Crit Atk Bonus, Inquartata, Tenacity, Max HP, Max MP, Zanshin, Resist Silence/Gravity/Sleep/Slow, Killer traits, DA/TA, Gilfinder/TH, Rapid Shot) sourced from the canonical bluguide tables. JP-category linear bonuses for MAB/MAcc are not yet wired separately.
-- **Running multiple FFXI clients with OmniWatch on the same machine is not supported** — the two halves rendezvous through a single per-machine port-discovery file in `%APPDATA%\OmniWatch\`, so a second overlay/addon pair would overwrite the first's port handoff. Single-client multi-character config support via the character dropdown in the header works normally — you can pre-tweak layout, settings, and blacklists for any of your characters while logged in on a different one.
+- **One overlay per machine, however many game clients** — the port collision this note used to be about is gone: both sides bind OS-assigned ports now. **Several game clients can feed a single overlay** — each addon tags its stream with the character it came from and the overlay follows whichever character you have selected in the header, so the panels show that character rather than a mixture. What remains comes from the two halves rendezvousing through one pair of files in `%APPDATA%\OmniWatch\`: a **second overlay** on the same machine would overwrite the first's published ports, and **commands the overlay sends back** — hotbar buttons, Support Helper cures, lot / pass — reach whichever addon most recently published its command port, not necessarily the character you are viewing. Multi-character *config* through the dropdown works regardless: pre-tweak layout, settings and blacklists for any character while logged in on another.
 - **Mog Wardrobes 5-8** requires an active FFXI wardrobe subscription to populate.
 
 ## Development
