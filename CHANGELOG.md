@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.12.1] — 2026-08-15
+
+### Added
+
+- **A 24-slot pad, separate from the hotbars** — switch it on in **Settings ▸ HotBar ▸ Show pad**, and pick its shape beside it: **6 wide x 4 tall** to tuck under a hotbar, or **4 wide x 6 tall** to stand beside one. No page header, because it never pages: it is the bar that holds still while the others change under it. Point `page` buttons at your hotbars from it and it becomes a launcher; put the Sing, Call Trust, Warp, Cheat Sheet and AutoRA actions on it and they stop competing for space on a bar that scrolls away. It drags and resizes on its own rather than with the long bars, and its slots are edited exactly the way theirs are — right-click a cell. Its page is private, so the `< >` arrows on your bars still cycle the same twelve pages as before. Switching shape re-flows the slots — a button's place is its position in the row, so the same twenty-four buttons rearrange rather than move panel.
+
+- **GearSwap state can live on the pad** — turn on **Settings ▸ HotBar ▸ GearSwap on pad** and the state rows dock under the pad's buttons, inside its frame, instead of floating in their own panel. One box to place instead of two, and the pair can no longer drift apart when you move things. **This is now the only switch for those rows** — the old **Misc ▸ GearSwap display** setting is gone, and with this off you get no GearSwap rows anywhere. If you hide the pad while it is on, the rows fall back to a small floating panel rather than disappearing on you. The section is as tall as the rows GearSwap is currently sending, so the pad grows and shrinks a little as your state line changes.
+- **Clear a block of hotbar cells** — pick cells the way you already do for a copy (ctrl-click, or ctrl-shift-click for a whole line) and press **Delete** to empty them. Nothing is lost by accident: what you cleared goes onto the clipboard on its way out, so **Ctrl+V** over the same bar puts it straight back. Delete still edits text normally while a Label or Command box has focus.
+
+### Fixed
+
+- **Buttons on the overlay respond to the first click** — with **Keep game focus** on, the overlay deliberately never takes the keyboard from the game, and a click on it was being spent on reaching the window rather than on the thing you clicked. Hotbar cells, tabs and every other control now fire on the first press. Most noticeable with the overlay on a second monitor, where the game always has focus.
+- **Equipment tooltips no longer show through the hotbar editor** — once the editor was dragged clear of its docked spot under the first bar, an item card from the equipment panel behind it painted over the form. The check follows the editor to wherever you have moved it, and covers the icon picker with it.
+
 ## [1.12.0] — 2026-08-15
 
 **OmniWatch is feature-complete with this release and moves into maintenance mode.** What ships here is the feature set; work from now on is fixes, accuracy and data updates rather than new panels. Bug reports and pull requests are still very welcome.

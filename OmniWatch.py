@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.12.0 (2026-08-15)"
+OMNIWATCH_BUILD_STAMP = "v1.12.1 (2026-08-15)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.12.0"
+OMNIWATCH_VERSION = "1.12.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -779,6 +779,16 @@ if sys.platform == "win32":
                 ctypes.windll.user32.SetProcessDPIAware()
     except Exception as _e:
         print(f"[OmniWatch] DPI awareness setup failed (non-fatal): {_e!r}")
+
+# SDL normally swallows the mouse press that focuses an unfocused window:
+# the click activates the window and never reaches the app. That pairs
+# badly with keep-game-focus (WS_EX_NOACTIVATE, set in _apply_no_activate
+# below), which means the overlay NEVER holds keyboard focus -- so every
+# press looks to SDL like a focus click and buttons take two clicks to
+# fire. This hint tells SDL to deliver the click as well. Set as an
+# environment variable because SDL reads hints from identically-named env
+# vars, and it has to be in place before the window exists.
+os.environ.setdefault("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1")
 
 
 pygame.init()
@@ -6198,6 +6208,7 @@ buttons_panel_visible = True
 buttons_anchor        = None
 buttons_pos           = None
 buttons_scale         = 1.0
+hotbar_pad_scale      = 1.0     # the pad sizes on its own, not with the bars
 buttons_config        = []      # list of 12 entries; populated by load_buttons_config
 buttons_rects         = []      # per-frame: list of (pygame.Rect, button_idx)
 
@@ -6625,11 +6636,89 @@ def _gsd_layout(segs, font, max_w):
     return lines, widest, len(lines) * (font.get_height() + 2)
 
 
+def _gsd_docked_on_pad():
+    """True when the GearSwap rows live in the pad instead of their own
+    panel. Both have to be on: the section is part of the pad, so with the
+    pad hidden the rows would have nowhere to go."""
+    return bool(setting("show_hotbar_pad") and setting("hotbar_pad_gs"))
+
+
+def _gsd_pad_rows():
+    """Rows for the pad's GearSwap section, or [] to draw no section.
+
+    Deliberately NOT the standalone panel's placeholder behaviour: that
+    panel invents example rows in setup mode so there is something to
+    position, but the pad already has a frame you can grab, and inventing
+    rows would change the pad's height while you were placing it.
+    """
+    if not _gsd_docked_on_pad():
+        return []
+    return _gsd_entries(gs_display) if _gsd_visible() else []
+
+
+def _gsd_block_h(rows):
+    """Pixel height of `rows` drawn as a GearSwap block, header included.
+
+    Kept beside _gsd_draw_rows and using the same constants: the pad asks
+    this to size itself and then asks that to draw, so the two must agree
+    exactly or the section overruns its own frame.
+    """
+    if not rows:
+        return 0
+    f  = get_font("Consolas", 12)
+    fh = get_font("Consolas", 11, bold=True)
+    return 7 * 2 + (fh.get_height() + 4) + (f.get_height() + 2) * len(rows)
+
+
+def _gsd_draw_rows(surface, x, y, w, rows):
+    """Draw the GearSwap header strip and `rows` into (x, y, w).
+
+    Shared by the standalone panel and the pad's section. Returns the
+    height used, which always matches _gsd_block_h(rows).
+    """
+    if not rows:
+        return 0
+    f  = get_font("Consolas", 12)
+    fh = get_font("Consolas", 11, bold=True)
+    pad, gap, lh = 7, 6, f.get_height() + 2
+    hh = fh.get_height() + 4          # header strip
+    # Header, so the box says what it is among a screen of panels --
+    # and so there is an obvious place to grab that is never a row.
+    surface.blit(fh.render("GearSwap", True, (170, 200, 230)),
+                 (x + pad + 3, y + 3))
+    pygame.draw.line(surface, (52, 58, 72),
+                     (x + 4, y + hh), (x + w - 4, y + hh))
+    # The label column is measured, then capped at half the width so one
+    # long label can't squeeze every value off the edge.
+    lx = x + pad + 3
+    avail = w - pad * 2 - 3
+    tw = max(f.size(t + (":" if v else ""))[0] for t, v, _tc, _vc in rows)
+    tw = min(tw, max(40, avail // 2))
+    ry = y + pad + hh
+    for title, value, tc, vc in rows:
+        label = title + (":" if value else "")
+        surface.blit(_gsd_fit(label, f, tw if value else avail, tc), (lx, ry))
+        if value:
+            surface.blit(_gsd_fit(value, f, avail - tw - gap, vc),
+                         (lx + tw + gap, ry))
+        ry += lh
+    return pad * 2 + hh + lh * len(rows)
+
+
 def draw_gs_display(surface):
     """The GearSwap state line, mirrored — one entry per row."""
     global _gsd_rects
     _gsd_rects = {}
-    if not setting("show_gs_display"):
+    # ONE SWITCH GOVERNS THE ROWS: hotbar_pad_gs. Off means no GearSwap
+    # rows anywhere -- not docked, and not floating here either. On means
+    # the pad draws them, and this panel is only the fallback for the pad
+    # being hidden, so the rows still have somewhere to go rather than
+    # silently disappearing while the setting says they are on.
+    if not setting("hotbar_pad_gs"):
+        return
+    if _gsd_docked_on_pad():
+        return
+    if not gs_display_at and not setup_mode:
         return
     rows = _gsd_entries(gs_display) if _gsd_visible() else []
     if not rows and not setup_mode:
@@ -6662,12 +6751,8 @@ def draw_gs_display(surface):
                 ("Element", "Fire", COL_GSD_TITLE, _GSD_ELEM["fire"]),
                 ("AutoWS", "", COL_GSD_AUTO, COL_GSD_AUTO),
                 ("example data", "", (150, 150, 160), (150, 150, 160))]
-    f = get_font("Consolas", 12)
-    fh = get_font("Consolas", 11, bold=True)
-    pad, gap, lh = 7, 6, f.get_height() + 2
-    hh = fh.get_height() + 4          # header strip
     pw = max(GSD_MIN_W, min(int(gs_display_w or GSD_DEFAULT_W), GSD_MAX_W))
-    ph = pad * 2 + hh + lh * len(rows)
+    ph = _gsd_block_h(rows)
     dflt = [8, max(0, HEIGHT // 3)]
     pos = gs_display_pos or dflt
     x = max(0, min(int(pos[0]), max(0, WIDTH - pw)))
@@ -6676,28 +6761,7 @@ def draw_gs_display(surface):
     pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=4)
     pygame.draw.rect(surface, (70, 76, 92), rect, 1, border_radius=4)
     draw_accent_stripe(surface, rect.x, rect.y, rect.h, ACCENT_GSD)
-    # Header, so the box says what it is among a screen of panels --
-    # and so there is an obvious place to grab that is never a row.
-    surface.blit(fh.render("GearSwap", True, (170, 200, 230)),
-                 (rect.x + pad + 3, rect.y + 3))
-    pygame.draw.line(surface, (52, 58, 72),
-                     (rect.x + 4, rect.y + hh),
-                     (rect.right - 4, rect.y + hh))
-    # The label column is measured, then capped at half the panel so one
-    # long label can't squeeze every value off the edge.
-    lx = rect.x + pad + 3
-    avail = pw - pad * 2 - 3
-    tw = max(f.size(t + (":" if v else ""))[0] for t, v, _tc, _vc in rows)
-    tw = min(tw, max(40, avail // 2))
-    ry = rect.y + pad + hh
-    for title, value, tc, vc in rows:
-        label = title + (":" if value else "")
-        surface.blit(_gsd_fit(label, f, tw if value else avail, tc),
-                     (lx, ry))
-        if value:
-            surface.blit(_gsd_fit(value, f, avail - tw - gap, vc),
-                         (lx + tw + gap, ry))
-        ry += lh
+    _gsd_draw_rows(surface, rect.x, rect.y, pw, rows)
     # The whole panel drags; the bottom-right corner resizes it.
     _gsd_rects["panel"] = rect
     _gsd_rects["grip"] = pygame.Rect(rect.right - 12, rect.bottom - 12, 12, 12)
@@ -6728,8 +6792,8 @@ def _gsd_fit(text, font, width, colour):
 def _gsd_handle_event(event):
     """Drag or resize the panel. True when the event was consumed."""
     global _gsd_drag, gs_display_pos, _gsd_resize, gs_display_w
-    if not setting("show_gs_display"):
-        return False
+    if not setting("hotbar_pad_gs") or _gsd_docked_on_pad():
+        return False    # nothing of ours on screen to drag
     rect = _gsd_rects.get("panel")
     grip = _gsd_rects.get("grip")
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -8720,12 +8784,53 @@ def _empty_page(name="Page"):
 # show as empty slots until they're populated. Set conservatively; can
 # be increased later without breaking existing configs.
 HOTBAR_PAGE_COUNT = 12
+
+# ── The pad ────────────────────────────────────────────────────────
+# A single compact hotbar, separate from the 1-3 long bars. It exists to be
+# the thing that never moves: page-jump buttons into the bars, plus the
+# built-in actions that should always be reachable.
+#
+# It is modelled as a RESERVED PAGE (index 12, one past the 12 the user can
+# cycle) shown by a RESERVED PANEL INDEX. That buys the slot editor, the
+# icon picker, every button kind, copy/paste and drag-swap for nothing --
+# the pad genuinely is a page on a panel, it just isn't one you can reach
+# with the < > arrows. `_n_user_pages()` is what keeps it private: every
+# path that CYCLES or COUNTS pages asks that, while every path that INDEXES
+# a page still uses len(hotbar_pages) and so can address the pad.
+HOTBAR_PAD_PANEL = 90    # well clear of 0..9 (hotbar_visible_count maxes at 10)
+HOTBAR_PAD_COLS  = 6     # fallback only -- see _pad_shape()
+HOTBAR_PAD_ROWS  = 4     # fallback only -- see _pad_shape()
+HOTBAR_PAD_NAME  = "Pad"
+
+# Both shapes hold 24 slots; they differ only in how the same page is laid
+# out. Keep every entry at or under HOTBAR_SLOTS_PER_PAGE (30) -- the pad
+# stores its buttons in an ordinary page and must fit one.
+HOTBAR_PAD_SHAPES = {
+    "6x4": (6, 4),      # wide: sits under a bar without adding much height
+    "4x6": (4, 6),      # tall: sits beside the bars in a column
+}
+
+
+def _pad_shape():
+    """(cols, rows) for the pad, from the user's shape setting."""
+    try:
+        return HOTBAR_PAD_SHAPES[str(setting("hotbar_pad_shape"))]
+    except Exception:
+        return (HOTBAR_PAD_COLS, HOTBAR_PAD_ROWS)
+
+
+def _n_user_pages():
+    """How many pages the bars can cycle through -- the pad page excluded."""
+    return max(1, min(HOTBAR_PAGE_COUNT, len(hotbar_pages)))
 HOTBAR_SLOTS_PER_PAGE = 30   # the CEILING (15 cols x 2 rows), not the
                              # live page size — see _hotbar_page_slots().
                              # Kept as a constant because it's the width
                              # every page is padded to on disk, so the
                              # stored shape doesn't churn every time the
                              # user drags the cells-per-row setting.
+
+
+HOTBAR_PAD_PAGE = HOTBAR_PAGE_COUNT   # the reserved 13th page
 
 
 def _btn_cols():
@@ -8740,6 +8845,17 @@ def _btn_cols():
     except (TypeError, ValueError):
         n = BTN_COLS
     return max(5, min(15, n))
+
+
+def _cols_for_page(page_idx):
+    """Columns for a page. The pad is fixed at 4; everything else follows
+    the user's cells-per-row setting."""
+    return _pad_shape()[0] if page_idx == HOTBAR_PAD_PAGE else _btn_cols()
+
+
+def _rows_for_page(page_idx):
+    """Rows for a page. The pad is 4 tall; the bars are always 2."""
+    return _pad_shape()[1] if page_idx == HOTBAR_PAD_PAGE else BTN_ROWS
 
 
 def _hotbar_page_slots():
@@ -8830,11 +8946,15 @@ def load_buttons_config():
         print("[OmniWatch] Migrated legacy single-page buttons config "
               "to paged format")
 
-    # Pad up to HOTBAR_PAGE_COUNT.
-    while len(pages) < HOTBAR_PAGE_COUNT:
+    # Pad up to HOTBAR_PAGE_COUNT + 1: the 12 the user cycles, plus the
+    # reserved pad page on the end.
+    while len(pages) < HOTBAR_PAGE_COUNT + 1:
         pages.append(_empty_page(f"Page {len(pages) + 1}"))
     # Truncate if user somehow has more (shouldn't happen normally).
-    pages = pages[:HOTBAR_PAGE_COUNT]
+    pages = pages[:HOTBAR_PAGE_COUNT + 1]
+    # The pad page's name is not user-editable -- it is never displayed,
+    # and a config written by an older build will have called it "Page 13".
+    pages[HOTBAR_PAD_PAGE]["name"] = HOTBAR_PAD_NAME
 
     hotbar_pages = pages
     if hotbar_current_page < 0 or hotbar_current_page >= len(hotbar_pages):
@@ -8915,7 +9035,7 @@ def _hotbar_set_page(idx):
     global hotbar_current_page, buttons_config
     if not hotbar_pages:
         return
-    n = len(hotbar_pages)
+    n = _n_user_pages()
     # Wrap so left from page 0 goes to last page, right from last → 0.
     hotbar_current_page = idx % n
     buttons_config = hotbar_pages[hotbar_current_page]["buttons"]
@@ -8926,7 +9046,7 @@ def _hotbar_panel_set_page(panel_idx, page_idx):
     primary panel and the (hidden) global state stay in sync."""
     if not hotbar_pages:
         return
-    n = len(hotbar_pages)
+    n = _n_user_pages()
     new_page = page_idx % n
     if panel_idx == 0:
         _hotbar_set_page(new_page)
@@ -8942,6 +9062,8 @@ def _hotbar_panel_page(panel_idx):
     handler all need the same answer and had been deriving it separately
     (which is how the editor ended up hard-wired to panel 0).
     """
+    if panel_idx == HOTBAR_PAD_PANEL:
+        return HOTBAR_PAD_PAGE       # the pad never pages
     if panel_idx == 0:
         return hotbar_panel_pages.get(0, hotbar_current_page)
     return hotbar_panel_pages.get(panel_idx, panel_idx)
@@ -9205,7 +9327,7 @@ def _hotbar_jump_page(spec):
         except ValueError:
             print(f"[OmniWatch] page button: no page named {pg_txt!r}")
             return
-    if not (0 <= page_idx < len(hotbar_pages)):
+    if not (0 <= page_idx < _n_user_pages()):
         print(f"[OmniWatch] page button: page {pg_txt!r} is out of range")
         return
     hotbar_panel_pages[panel_idx] = page_idx
@@ -10526,6 +10648,45 @@ SETTINGS_SCHEMA = [
                    "widen again.",
     },
     {
+        "key":     "show_hotbar_pad",
+        "label":   "(internal) show hotbar pad",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "A separate 24-slot hotbar with no page header, for the "
+                   "things that should never page away -- jumps into the "
+                   "long bars and the built-in actions. Drag and size it "
+                   "on its own; edit its slots the same way as any bar.",
+    },
+    {
+        "key":     "hotbar_pad_gs",
+        "label":   "(internal) show gearswap state rows",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show your GearSwap state rows, docked in the pad under "
+                   "the buttons. This is the only switch for them: off "
+                   "means no GearSwap rows anywhere. With the pad itself "
+                   "hidden they fall back to a small floating panel, so "
+                   "they never vanish while this says they are on.",
+    },
+    {
+        "key":     "hotbar_pad_shape",
+        "label":   "(internal) hotbar pad shape",
+        "kind":    "enum",
+        "options": ["6x4", "4x6"],
+        "option_labels": ["6 wide x 4 tall", "4 wide x 6 tall"],
+        "default": "6x4",
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Which way round the pad sits. Both hold 24 slots; wide "
+                   "tucks under a hotbar, tall sits beside one. Buttons "
+                   "re-flow when you switch, since a slot's place is its "
+                   "position in the row.",
+    },
+    {
         "key":     "hotbar_visible_count",
         "label":   "(internal) hotbars shown",
         "kind":    "int",
@@ -11004,20 +11165,6 @@ SETTINGS_SCHEMA = [
                    "open its FFXIAH price page; the $ button on a search result "
                    "pulls that item's recent sales from your world's search "
                    "server into the results pane.",
-    },
-    {
-        "key":     "show_gs_display",
-        "label":   "GearSwap display",
-        "kind":    "bool",
-        "default": False,
-        "section": "Misc",
-        "applies": "python",
-        "help":    "Mirror your GearSwap display (Selindrile's "
-                   "Sel-Display state line) in an overlay panel, so it "
-                   "reads at the same size as everything else and can "
-                   "sit outside the game window. Needs the one-line "
-                   "hook in your GearSwap globals that pushes the line "
-                   "-- without it this panel stays empty.",
     },
     {
         "key":     "open_treasure",
@@ -21474,6 +21621,7 @@ def save_layout():
             "dps_panel_visible": dps_panel_visible,
             "buttons_anchor":   buttons_anchor,
             "buttons_scale":    buttons_scale,
+            "hotbar_pad_scale": hotbar_pad_scale,
             "buttons_panel_visible": buttons_panel_visible,
             # Multi-hotbar (visible_count > 1) panel positions and the
             # current content page each panel is showing. Saved so the
@@ -21559,6 +21707,7 @@ def load_layout():
     global dps_anchor, dps_scale, dps_panel_visible
     global skillchain_anchor, skillchain_scale, skillchain_panel_visible
     global buttons_anchor, buttons_scale, buttons_panel_visible
+    global hotbar_pad_scale
     global chat_anchor, chat_scale, chat_panel_visible, chat_active_tab
     global chat_composer_visible, chat_composer_channel, chat_composer_tell_to
     global chat_composer_tell_to_cursor
@@ -21840,6 +21989,7 @@ def load_layout():
         if bta and len(bta) == 3:
             buttons_anchor = [str(bta[0]), int(bta[1]), int(bta[2])]
         buttons_scale = float(data.get("buttons_scale", 1.0))
+        hotbar_pad_scale = float(data.get("hotbar_pad_scale", 1.0))
         if "buttons_panel_visible" in data:
             buttons_panel_visible = bool(data["buttons_panel_visible"])
 
@@ -44468,11 +44618,15 @@ _SUBDIALOG_CONFIGS = {
     },
     "hotbar": {
         "title":    "HotBar",
-        "subtitle": "Hotbar panel, hotbar count, row width, and slot editor.",
+        "subtitle": "Hotbar panel, hotbar count, row width, the pad, "
+                    "and the slot editor.",
         "rows": [
             ("show_hotbar",          "Show hotbar",     "bool"),
             ("hotbar_visible_count", "Hotbars shown",   "int"),
             ("hotbar_cols",          "Cells per row",   "int"),
+            ("show_hotbar_pad",      "Show pad",        "bool"),
+            ("hotbar_pad_shape",     "Pad shape",       "enum"),
+            ("hotbar_pad_gs",        "GearSwap on pad", "bool"),
             ("edit_hotbar",          "Edit hotbar",     "action"),
         ],
         "helpers": {},
@@ -50904,17 +51058,34 @@ BTN_PAD     = 6
 BTN_ICON_SZ = 22
 BTN_HDR_H   = 18      # header row above the button grid (page name + arrows)
 
-def buttons_panel_size(scale=1.0):
-    """Total panel size at `scale`. Returns (w, h)."""
+def buttons_panel_size(scale=1.0, panel_idx=0):
+    """Total panel size at `scale`. Returns (w, h).
+
+    The pad has NO header: it never pages, so a page name and
+    < > arrows would spend a quarter of its height saying nothing. Cell
+    dimensions are deliberately the same as the bars' -- draw_buttons_panel
+    computes them independently, and the two must not drift.
+    """
     s = max(0.5, min(2.5, float(_eff(scale))))
     cell_w = max(28, int(BTN_W * s))
     cell_h = max(20, int(BTN_H * s))
     gap    = max(2, int(BTN_GAP * s))
     pad    = max(3, int(BTN_PAD * s))
-    hdr_h  = max(14, int(BTN_HDR_H * s))
-    _cols = _btn_cols()
+    _is_pad = (panel_idx == HOTBAR_PAD_PANEL)
+    hdr_h  = 0 if _is_pad else max(14, int(BTN_HDR_H * s))
+    # Via the page helpers rather than the constants: one source of truth
+    # for the pad's shape, the lesson from the pad rendering a bar's grid.
+    _cols  = _cols_for_page(HOTBAR_PAD_PAGE) if _is_pad else _btn_cols()
+    _rows  = _rows_for_page(HOTBAR_PAD_PAGE) if _is_pad else BTN_ROWS
     pw = pad * 2 + cell_w * _cols + gap * (_cols - 1)
-    ph = pad * 2 + hdr_h + cell_h * BTN_ROWS + gap * BTN_ROWS
+    ph = pad * 2 + hdr_h + cell_h * _rows + gap * _rows
+    if _is_pad:
+        # The GearSwap section is part of the pad's frame, so its height
+        # belongs here -- the resize grip and the drag hit-test both size
+        # themselves from this function and would otherwise sit inside the
+        # panel. It follows the live row count, so the pad grows and
+        # shrinks when GearSwap starts sending more or fewer lines.
+        ph += _gsd_block_h(_gsd_pad_rows())
     return pw, ph
 
 def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
@@ -50937,13 +51108,24 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     gap    = max(2, int(BTN_GAP * s))
     pad    = max(3, int(BTN_PAD * s))
     icon_sz= max(14, int(BTN_ICON_SZ * s))
-    hdr_h  = max(14, int(BTN_HDR_H * s))
-    pw, ph = buttons_panel_size(scale)
+    _is_pad = (panel_idx == HOTBAR_PAD_PANEL)
+    hdr_h  = 0 if _is_pad else max(14, int(BTN_HDR_H * s))
+    pw, ph = buttons_panel_size(scale, panel_idx)
 
     # Resolve which content page this panel is currently showing. Panel 0
     # defaults to hotbar_current_page (legacy single-mode behaviour); all
     # other panels track their own current page in hotbar_panel_pages.
-    if panel_idx == 0:
+    if panel_idx == HOTBAR_PAD_PANEL:
+        # Go through the SAME helper the click, editor and paste paths
+        # use. Resolving the page a second way here is what made the pad
+        # render page 1 at 14 columns inside a 4-wide frame: the inline
+        # `hotbar_panel_pages.get(panel_idx, panel_idx)` below answers 90
+        # for the pad, the clamp then rewrote it to 0, and the grid was
+        # drawn from a bar's geometry. Nothing about the pad's page is
+        # stored, so drop any entry an older build wrote.
+        hotbar_panel_pages.pop(HOTBAR_PAD_PANEL, None)
+        eff_page_idx = _hotbar_panel_page(panel_idx)
+    elif panel_idx == 0:
         eff_page_idx = hotbar_panel_pages.get(0, hotbar_current_page)
     else:
         eff_page_idx = hotbar_panel_pages.get(panel_idx, panel_idx)
@@ -50952,7 +51134,8 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     n_pages_local = max(1, len(hotbar_pages))
     if eff_page_idx < 0 or eff_page_idx >= n_pages_local:
         eff_page_idx = 0
-        hotbar_panel_pages[panel_idx] = 0
+        if panel_idx != HOTBAR_PAD_PANEL:
+            hotbar_panel_pages[panel_idx] = 0
     # Self-healing page sync (panel 0 only): the page this panel
     # DISPLAYS is the single source of truth, so keep the legacy
     # globals (hotbar_current_page + buttons_config) pointed at it.
@@ -50995,85 +51178,86 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     # font_moon is ~12px which fits BTN_H=36 nicely with single-line labels.
     label_font = font_moon
 
-    # ── Header row: page name (left) + page arrows + page indicator (right) ──
-    # The page name is editable via the hotbar editor (treated as a 21st
-    # field after the button slots — see hotbar_edit_slot conventions).
-    # Arrows wrap (left from page 0 → last page).
-    #
-    # Per-panel scoping: in multi-hotbar mode each panel has its own current
-    # page. The action tuples we emit into local_rects encode which panel
-    # owns the click, e.g. ("__page_prev__", panel_idx). Panel 0 still emits
-    # the legacy bare-string action so existing handlers keep working
-    # (single-mode is the most common case; we don't churn its hot path).
-    hdr_y = y + pad
-    page_name = (page_dict and page_dict.get("name")) or f"Page {eff_page_idx + 1}"
-    # Page name on the LEFT. Truncate so it doesn't overflow the arrows.
-    name_max_w = pw - pad * 2 - 80   # reserve right edge for nav (≈80px)
-    name_surf  = label_font.render(page_name, True, (220, 220, 230))
-    if name_surf.get_width() > name_max_w:
-        cut = page_name
-        while cut and label_font.render(cut + "…", True, (220, 220, 230)).get_width() > name_max_w:
-            cut = cut[:-1]
-        name_surf = label_font.render((cut + "…") if cut else page_name[:1],
-                                       True, (220, 220, 230))
-    name_x = x + pad
-    surface.blit(name_surf, (name_x,
-                             hdr_y + (hdr_h - name_surf.get_height()) // 2))
-    # Whole left half of header is a click-target for editing the name.
-    name_rect = pygame.Rect(x + pad, hdr_y, name_max_w, hdr_h)
-    if panel_idx == 0:
-        local_rects.append((name_rect, "__page_name__"))
-    else:
-        local_rects.append((name_rect, ("__page_name__", panel_idx)))
-
-    # Right side: < N/T >. Always shown so each panel cycles independently.
-    arrow_w = max(14, int(14 * s))
-    nav_y   = hdr_y
-    right_arrow = pygame.Rect(x + pw - pad - arrow_w, nav_y,
-                              arrow_w, hdr_h)
-    # Indicator string between arrows.
-    n_pages = max(1, len(hotbar_pages))
-    indicator = f"{eff_page_idx + 1}/{n_pages}"
-    ind_surf  = label_font.render(indicator, True, (200, 200, 215))
-    ind_w     = ind_surf.get_width() + 6
-    # "Bar N" ahead of the arrows so a panel can be identified on sight.
-    # Page-jump buttons address hotbars by this number (a `2:Songs`
-    # button means Bar 2), and with several panels up there was nothing
-    # on screen saying which was which.
-    bar_surf = label_font.render(f"Bar {panel_idx + 1}", True, (150, 152, 172))
-    bar_w    = bar_surf.get_width() + 6
-    left_arrow = pygame.Rect(right_arrow.x - ind_w - arrow_w, nav_y,
-                             arrow_w, hdr_h)
-    surface.blit(bar_surf,
-                 (left_arrow.x - bar_w,
-                  nav_y + (hdr_h - bar_surf.get_height()) // 2))
-    ind_x = left_arrow.right
-    # Hover styling for arrows.
-    for arr_rect, label_text, action_name in (
-        (left_arrow,  "<", "__page_prev__"),
-        (right_arrow, ">", "__page_next__"),
-    ):
-        is_hov = arr_rect.collidepoint(mx, my) and not locked
-        pygame.draw.rect(surface,
-            (62, 62, 78) if is_hov else (40, 40, 50),
-            arr_rect, border_radius=2)
-        pygame.draw.rect(surface,
-            (180, 180, 200) if is_hov else (90, 90, 105),
-            arr_rect, 1, border_radius=2)
-        a_surf = label_font.render(label_text, True, (220, 220, 230))
-        surface.blit(a_surf,
-            (arr_rect.x + (arr_rect.width  - a_surf.get_width())  // 2,
-             arr_rect.y + (arr_rect.height - a_surf.get_height()) // 2))
+    if not _is_pad:
+        # ── Header row: page name (left) + page arrows + page indicator (right) ──
+        # The page name is editable via the hotbar editor (treated as a 21st
+        # field after the button slots — see hotbar_edit_slot conventions).
+        # Arrows wrap (left from page 0 → last page).
+        #
+        # Per-panel scoping: in multi-hotbar mode each panel has its own current
+        # page. The action tuples we emit into local_rects encode which panel
+        # owns the click, e.g. ("__page_prev__", panel_idx). Panel 0 still emits
+        # the legacy bare-string action so existing handlers keep working
+        # (single-mode is the most common case; we don't churn its hot path).
+        hdr_y = y + pad
+        page_name = (page_dict and page_dict.get("name")) or f"Page {eff_page_idx + 1}"
+        # Page name on the LEFT. Truncate so it doesn't overflow the arrows.
+        name_max_w = pw - pad * 2 - 80   # reserve right edge for nav (≈80px)
+        name_surf  = label_font.render(page_name, True, (220, 220, 230))
+        if name_surf.get_width() > name_max_w:
+            cut = page_name
+            while cut and label_font.render(cut + "…", True, (220, 220, 230)).get_width() > name_max_w:
+                cut = cut[:-1]
+            name_surf = label_font.render((cut + "…") if cut else page_name[:1],
+                                           True, (220, 220, 230))
+        name_x = x + pad
+        surface.blit(name_surf, (name_x,
+                                 hdr_y + (hdr_h - name_surf.get_height()) // 2))
+        # Whole left half of header is a click-target for editing the name.
+        name_rect = pygame.Rect(x + pad, hdr_y, name_max_w, hdr_h)
         if panel_idx == 0:
-            local_rects.append((arr_rect, action_name))
+            local_rects.append((name_rect, "__page_name__"))
         else:
-            local_rects.append((arr_rect, (action_name, panel_idx)))
-    # Indicator text between arrows.
-    surface.blit(ind_surf, (ind_x + 3,
-                            nav_y + (hdr_h - ind_surf.get_height()) // 2))
+            local_rects.append((name_rect, ("__page_name__", panel_idx)))
 
-    _ncols = _btn_cols()
-    for row in range(BTN_ROWS):
+        # Right side: < N/T >. Always shown so each panel cycles independently.
+        arrow_w = max(14, int(14 * s))
+        nav_y   = hdr_y
+        right_arrow = pygame.Rect(x + pw - pad - arrow_w, nav_y,
+                                  arrow_w, hdr_h)
+        # Indicator string between arrows.
+        n_pages = _n_user_pages()
+        indicator = f"{eff_page_idx + 1}/{n_pages}"
+        ind_surf  = label_font.render(indicator, True, (200, 200, 215))
+        ind_w     = ind_surf.get_width() + 6
+        # "Bar N" ahead of the arrows so a panel can be identified on sight.
+        # Page-jump buttons address hotbars by this number (a `2:Songs`
+        # button means Bar 2), and with several panels up there was nothing
+        # on screen saying which was which.
+        bar_surf = label_font.render(f"Bar {panel_idx + 1}", True, (150, 152, 172))
+        bar_w    = bar_surf.get_width() + 6
+        left_arrow = pygame.Rect(right_arrow.x - ind_w - arrow_w, nav_y,
+                                 arrow_w, hdr_h)
+        surface.blit(bar_surf,
+                     (left_arrow.x - bar_w,
+                      nav_y + (hdr_h - bar_surf.get_height()) // 2))
+        ind_x = left_arrow.right
+        # Hover styling for arrows.
+        for arr_rect, label_text, action_name in (
+            (left_arrow,  "<", "__page_prev__"),
+            (right_arrow, ">", "__page_next__"),
+        ):
+            is_hov = arr_rect.collidepoint(mx, my) and not locked
+            pygame.draw.rect(surface,
+                (62, 62, 78) if is_hov else (40, 40, 50),
+                arr_rect, border_radius=2)
+            pygame.draw.rect(surface,
+                (180, 180, 200) if is_hov else (90, 90, 105),
+                arr_rect, 1, border_radius=2)
+            a_surf = label_font.render(label_text, True, (220, 220, 230))
+            surface.blit(a_surf,
+                (arr_rect.x + (arr_rect.width  - a_surf.get_width())  // 2,
+                 arr_rect.y + (arr_rect.height - a_surf.get_height()) // 2))
+            if panel_idx == 0:
+                local_rects.append((arr_rect, action_name))
+            else:
+                local_rects.append((arr_rect, (action_name, panel_idx)))
+        # Indicator text between arrows.
+        surface.blit(ind_surf, (ind_x + 3,
+                                nav_y + (hdr_h - ind_surf.get_height()) // 2))
+
+    _ncols = _cols_for_page(eff_page_idx)
+    for row in range(_rows_for_page(eff_page_idx)):
         for col in range(_ncols):
             idx = row * _ncols + col
             entry = page_buttons[idx] if idx < len(page_buttons) else None
@@ -51192,6 +51376,19 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                 ly = by + (cell_h - lab_surf.get_height()) // 2
                 surface.blit(lab_surf, (lx, ly))
             # else: empty slot, just the dim cell.
+
+    # ── GearSwap section ────────────────────────────────────────────
+    # Docked under the grid inside the pad's own frame, rather than as a
+    # second panel butted against it. Anchored to the BOTTOM of ph, which
+    # buttons_panel_size computed from the same rows, so the two agree.
+    if _is_pad:
+        _gs_rows = _gsd_pad_rows()
+        _gs_h = _gsd_block_h(_gs_rows)
+        if _gs_h:
+            _gs_y = y + ph - _gs_h
+            pygame.draw.line(surface, (52, 58, 72),
+                             (x + 4, _gs_y), (x + pw - 4, _gs_y))
+            _gsd_draw_rows(surface, x, _gs_y, pw, _gs_rows)
 
     return pw, ph
 
@@ -51463,6 +51660,11 @@ def _hb_edit_where():
     _pg = (hotbar_edit_page if (hotbar_edit_page is not None
                                 and 0 <= hotbar_edit_page < len(hotbar_pages))
            else hotbar_current_page)
+    # The pad has no bar number and no page number worth showing -- there
+    # is exactly one of it, and "page 13" would name something the user
+    # cannot reach with the arrows.
+    if _pg == HOTBAR_PAD_PAGE:
+        return "the pad"
     try:
         _n = max(1, min(HOTBAR_PAGE_COUNT,
                         int(setting("hotbar_visible_count") or 1)))
@@ -51529,13 +51731,13 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
                       "· ctrl-click to pick, ctrl-shift-click a line")
         if _hotbar_multi_sel:
             title_text = (f"Hotbar editor — {len(_hotbar_multi_sel)} cell(s) "
-                          f"selected · Ctrl+C copy"
+                          f"selected · Ctrl+C copy, Del clear"
                           + (", Ctrl+V pastes here"
                              if len(_hotbar_multi_sel) == 1 else ""))
         elif _hotbar_multi_clipboard:
             title_text = (f"Hotbar editor — {len(_hotbar_multi_clipboard)} "
-                          f"cell(s) copied · ctrl-click a destination, "
-                          f"then Ctrl+V")
+                          f"cell(s) on the clipboard · ctrl-click a "
+                          f"destination, then Ctrl+V")
     t_surf = title_font.render(title_text, True, (220, 200, 150))
     surface.blit(t_surf, (form_rect.x + pad, form_rect.y + pad))
 
@@ -52598,7 +52800,7 @@ def draw_hotbar_drag_overlay(surface):
               ) >= HOTBAR_DRAG_DWELL_SEC:
             # Dwell met — flip the page. Pages wrap (mirroring the
             # behavior of the actual < > arrows when clicked).
-            n_pages = max(1, len(hotbar_pages))
+            n_pages = _n_user_pages()
             delta = -1 if arrow == "prev" else 1
             new_page = (hotbar_current_page + delta) % n_pages
             # Use the existing page-set helper so all the side-effects
@@ -62148,6 +62350,51 @@ while running:
                                    panel_idx=panel_i)
                 draw_resize_grip(screen, pp[0] + bt_w, pp[1] + bt_h)
 
+    # ── The pad ─────────────────────────────────────────────────────
+    # Independent of the bars: its own visibility, anchor and scale, and
+    # drawn outside the `buttons_panel_visible` block so hiding the bars
+    # doesn't take it with them. It reuses panel index HOTBAR_PAD_PANEL, so
+    # clicks, the slot editor and the __buttons_<n>__ drag machinery all
+    # reach it with no second implementation. When hidden it is REMOVED
+    # from the position and rect dicts -- leaving it there would let the
+    # drag hit-test keep finding it wherever it last drew.
+    if setting("show_hotbar_pad"):
+        _pad_w, _pad_h = buttons_panel_size(hotbar_pad_scale,
+                                            HOTBAR_PAD_PANEL)
+        if HOTBAR_PAD_PANEL not in buttons_panel_anchors:
+            # First run: sit below whatever hotbars are up rather than on
+            # top of one. Falls back to a fixed spot if the bars are off.
+            _below = None
+            for _p in list(buttons_panel_positions.values()) + [buttons_pos]:
+                if _p and (_below is None or _p[1] > _below[1]):
+                    _below = _p
+            if _below is not None:
+                _bx, _by = int(_below[0]), int(_below[1])
+                _, _bar_h = buttons_panel_size(buttons_scale)
+                buttons_panel_anchors[HOTBAR_PAD_PANEL] = [
+                    "tl", _bx, max(0, _by + _bar_h + 8)]
+            else:
+                buttons_panel_anchors[HOTBAR_PAD_PANEL] = [
+                    "tl", PANEL_X, max(0, int(HEIGHT * 0.5))]
+        _pad_key = f"__buttons_{HOTBAR_PAD_PANEL}__"
+        if dragging_key != _pad_key:
+            _padx, _pady = resolve_anchor(
+                buttons_panel_anchors[HOTBAR_PAD_PANEL],
+                _pad_w, _pad_h, WIDTH, HEIGHT)
+            buttons_panel_positions[HOTBAR_PAD_PANEL] = [_padx, _pady]
+        elif HOTBAR_PAD_PANEL not in buttons_panel_positions:
+            buttons_panel_positions[HOTBAR_PAD_PANEL] = list(resolve_anchor(
+                buttons_panel_anchors[HOTBAR_PAD_PANEL],
+                _pad_w, _pad_h, WIDTH, HEIGHT))
+        _pp = buttons_panel_positions[HOTBAR_PAD_PANEL]
+        draw_buttons_panel(screen, _pp[0], _pp[1],
+                           hotbar_pad_scale, panels_locked,
+                           panel_idx=HOTBAR_PAD_PANEL)
+        draw_resize_grip(screen, _pp[0] + _pad_w, _pp[1] + _pad_h)
+    else:
+        buttons_panel_positions.pop(HOTBAR_PAD_PANEL, None)
+        buttons_panel_rects.pop(HOTBAR_PAD_PANEL, None)
+
     # ── Stats panel (draggable + resizable) ──────────────────────────────────
     if setting("show_statistics"):
         draw_stats_panel(screen, stats_pos[0], stats_pos[1],
@@ -62540,17 +62787,28 @@ while running:
     if not _suppress_tooltip and _overlay_blocks_point(mpos):
         _suppress_tooltip = True
     if hotbar_edit_mode:
-        _ed_anchor = globals().get("_hotbar_editor_anchor")
-        if _ed_anchor is not None:
-            _ax, _ay, _aw, _ah = _ed_anchor
-            _form_rect = pygame.Rect(_ax, _ay + _ah + 4,
-                                     _aw, HOTBAR_EDIT_FORM_H)
+        # USE THE RECT THE FORM WAS ACTUALLY DRAWN AT.
+        #
+        # This used to recompute the envelope from the hotbar anchor,
+        # i.e. "docked under bar 1". Once the editor could be dragged,
+        # that tested a phantom rect back at the docked spot: the form's
+        # real position was never covered, so an item card from the
+        # equipment panel underneath painted straight through it. The
+        # click path already carries this same fix.
+        _form_rect = globals().get("_hb_editor_rect")
+        if _form_rect is None:
+            _ed_anchor = globals().get("_hotbar_editor_anchor")
+            if _ed_anchor is not None:
+                _ax, _ay, _aw, _ah = _ed_anchor
+                _form_rect = pygame.Rect(_ax, _ay + _ah + 4,
+                                         _aw, HOTBAR_EDIT_FORM_H)
+        if _form_rect is not None:
             if _form_rect.collidepoint(mpos):
                 _suppress_tooltip = True
             elif hotbar_icon_picker_open:
-                _picker_rect = pygame.Rect(_ax,
+                _picker_rect = pygame.Rect(_form_rect.x,
                                            _form_rect.bottom + 4,
-                                           _aw, 220)
+                                           _form_rect.w, 220)
                 if _picker_rect.collidepoint(mpos):
                     _suppress_tooltip = True
     # Sim window item tooltips. The sim window draws above the panels, so
@@ -63337,7 +63595,8 @@ while running:
                                    else hotbar_current_page)
                     if 0 <= _pg < len(hotbar_pages):
                         _bs = hotbar_pages[_pg].setdefault("buttons", [])
-                        _cap = max(1, _btn_cols() * BTN_ROWS)
+                        _cap = max(1, _cols_for_page(_pg)
+                                   * _rows_for_page(_pg))
                         _n = 0
                         for _sl, _entry in sorted(
                                 _hotbar_multi_clipboard.items()):
@@ -63360,6 +63619,41 @@ while running:
                               + (f" ({_skip} off the end, dropped)"
                                  if _skip else ""))
                     continue
+
+            # Delete / Backspace on the multi-selection: blank those
+            # cells. Sits ABOVE the text handler but is gated on no field
+            # having focus, so Delete still edits text in the Label and
+            # Command boxes.
+            if (hotbar_edit_mode and _hotbar_multi_sel
+                    and hotbar_focused_field is None
+                    and event.key in (pygame.K_DELETE, pygame.K_BACKSPACE)):
+                _clip = {}
+                _gone = set()
+                for _pg, _sl in sorted(_hotbar_multi_sel):
+                    if 0 <= _pg < len(hotbar_pages):
+                        _bs = hotbar_pages[_pg].get("buttons", [])
+                        if 0 <= _sl < len(_bs):
+                            _clip[_sl] = dict(_bs[_sl])
+                            _bs[_sl] = _empty_button()
+                            _gone.add((_pg, _sl))
+                if _gone:
+                    # Clearing a dozen configured cells on one keypress
+                    # with no undo is too sharp. What was cleared goes to
+                    # the clipboard on the way out, so Ctrl+V over the
+                    # same bar puts it straight back.
+                    globals()["_hotbar_multi_clipboard"] = _clip
+                    globals()["_hotbar_clip_origin"] = min(_clip)
+                    # If the open editor was pointed at one of these, its
+                    # draft still holds the old content and a Save would
+                    # write it back. Blank the draft to match.
+                    if (hotbar_edit_draft is not None
+                            and (hotbar_edit_page, hotbar_edit_slot) in _gone):
+                        hotbar_edit_draft = _empty_button()
+                    save_buttons_config()
+                _hotbar_multi_sel.clear()
+                print(f"[OmniWatch] cleared {len(_gone)} hotbar cell(s) "
+                      f"(Ctrl+V puts them back)")
+                continue
 
             if (hotbar_edit_mode and hotbar_focused_field is not None):
                 if hotbar_editor_handle_keydown(event):
@@ -64294,7 +64588,7 @@ while running:
                             # cell at a time is the tedious part of copying
                             # one to another page.
                             if pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                                _cols = max(1, _btn_cols())
+                                _cols = max(1, _cols_for_page(_msp))
                                 _row0 = (payload_kind // _cols) * _cols
                                 _line = [(_msp, _s) for _s
                                          in range(_row0, _row0 + _cols)]
@@ -64766,11 +65060,19 @@ while running:
             # shape as the primary one, keyed by __buttons_<n>__ so the
             # drag handler can route the position update to the right
             # panel-anchor dict entry.
-            if hit is None and buttons_panel_visible:
-                _btw, _bth = buttons_panel_size(buttons_scale)
+            if hit is None:
                 for _pi, _ppos in list(buttons_panel_positions.items()):
                     if not _ppos:
                         continue
+                    # Per-panel size: the pad is a different shape AND has
+                    # its own scale, so one size for the whole dict would
+                    # put its grip in the wrong place.
+                    if _pi == HOTBAR_PAD_PANEL:
+                        _btw, _bth = buttons_panel_size(hotbar_pad_scale, _pi)
+                    elif not buttons_panel_visible:
+                        continue
+                    else:
+                        _btw, _bth = buttons_panel_size(buttons_scale)
                     pxp, pyp = _ppos
                     if (pxp + _btw - RESIZE_GRIP) <= mx < (pxp + _btw) and \
                        (pyp + _bth - RESIZE_GRIP) <= my < (pyp + _bth):
@@ -66157,8 +66459,9 @@ while running:
                         new_scale      = drag_start_scale * (target_w / max(1, start_w))
                         buttons_scale  = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key.startswith("__buttons_") and dragging_key.endswith("__"):
-                    # Multi-mode hotbar resize. All panels share buttons_scale
-                    # (so sizes stay aligned between the primary and extras).
+                    # Multi-mode hotbar resize. The bars share buttons_scale
+                    # (so sizes stay aligned between the primary and extras);
+                    # the pad is the exception and carries its own.
                     try:
                         _pi = int(dragging_key[len("__buttons_"):-2])
                     except ValueError:
@@ -66168,7 +66471,11 @@ while running:
                         start_w, _     = drag_start_size
                         target_w       = max(60, mx - bxp)
                         new_scale      = drag_start_scale * (target_w / max(1, start_w))
-                        buttons_scale  = max(MIN_SCALE, min(MAX_SCALE, new_scale))
+                        new_scale      = max(MIN_SCALE, min(MAX_SCALE, new_scale))
+                        if _pi == HOTBAR_PAD_PANEL:
+                            hotbar_pad_scale = new_scale
+                        else:
+                            buttons_scale = new_scale
                 else:
                     px, py     = panel_positions[dragging_key]
                     start_w, _ = drag_start_size
