@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.12.1 (2026-08-15)"
+OMNIWATCH_BUILD_STAMP = "v1.12.2 (2026-08-24)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.12.1"
+OMNIWATCH_VERSION = "1.12.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -993,13 +993,24 @@ def _publish_py_ports():
 # ephemeral port) is picked up automatically.
 _cmd_port_cache = {"port": None, "raw": None}
 def _get_cmd_port():
+    # Every outbound command to the lua goes to whatever this returns, and
+    # UDP reports nothing when it lands on a dead port. So the one line that
+    # matters -- did we ever actually discover the addon's port, or are we
+    # firing into the legacy fallback -- is logged whenever it changes.
     try:
         with open(_PORTS_LUA_FILE, "r", encoding="utf-8") as f:
             raw = f.read()
     except OSError:
+        if not _cmd_port_cache.get("warned_missing"):
+            _cmd_port_cache["warned_missing"] = True
+            print(f"[OmniWatch] lua command port: {_PORTS_LUA_FILE} not "
+                  f"readable — using fallback "
+                  f"{_cmd_port_cache['port'] or _LEGACY_CMD_PORT}")
         return _cmd_port_cache["port"] or _LEGACY_CMD_PORT
     if raw != _cmd_port_cache["raw"]:
         _cmd_port_cache["raw"] = raw
+        _cmd_port_cache["warned_missing"] = False
+        before = _cmd_port_cache["port"]
         for line in raw.splitlines():
             parts = line.split()
             if len(parts) == 2 and parts[0] == "cmd":
@@ -1007,6 +1018,10 @@ def _get_cmd_port():
                     _cmd_port_cache["port"] = int(parts[1])
                 except ValueError:
                     pass
+        if _cmd_port_cache["port"] != before:
+            print(f"[OmniWatch] lua command port -> "
+                  f"{_cmd_port_cache['port'] or _LEGACY_CMD_PORT} "
+                  f"(from ow_ports_lua.txt)")
     return _cmd_port_cache["port"] or _LEGACY_CMD_PORT
 
 sock            = _open_channel("party")
@@ -1614,6 +1629,38 @@ _SIM_FOOD_NAME_BY_ID = {fid: fname for fid, fname, _ in SIM_FOOD_LIST}
 # data source is _inv_for_sim (mirrors latest snapshot from lua) plus
 # the running player's job. Empty list when sim hasn't received an
 # inventory snapshot yet.
+# slot key -> equipment panel index, for falling back to the live stream.
+_SIM_SLOT_INDEX = {k: i for i, (k, _l) in enumerate(SIM_GEAR_SLOTS)}
+
+
+def _sim_live_name_for(slot_key, target_id):
+    """Item name from the LIVE equipment stream.
+
+    The sim window resolved names only out of the inventory snapshot, so
+    with no snapshot every slot fell back to printing "id:26229" -- even
+    for the gear the player is wearing, whose name the overlay already
+    knows. Prefer the slot's own live entry, then any slot, in case the
+    piece has been moved since.
+    """
+    if not target_id:
+        return None
+    idx = _SIM_SLOT_INDEX.get(slot_key)
+    entry = equip_rich.get(idx) if idx is not None else None
+    if entry and entry.get("item_id") == target_id and entry.get("name"):
+        return entry["name"]
+    for entry in equip_rich.values():
+        if entry and entry.get("item_id") == target_id and entry.get("name"):
+            return entry["name"]
+    return None
+
+
+def _sim_have_inventory_snapshot():
+    """True once a SIM_INV stream has completed. When this is false the
+    slot dropdowns have nothing to offer and every name has to come from
+    the live stream instead."""
+    return bool(_inv_for_sim.get("by_slot"))
+
+
 def _sim_get_slot_options(slot):
     """Return a list of entry dicts valid for `slot` given the current
     player's main job and inventory contents. Each dict has:
@@ -2206,6 +2253,14 @@ def _send_target(mob_index, name="", player_id=0):
 
 def _sim_send_mode(on):
     """Tell lua to enter or leave sim mode."""
+    if not on:
+        # Drop the icon-miss set. Sim can preview gear the player has never
+        # worn, and a miss recorded for a previewed piece was never cleared
+        # once the panel stopped drawing it -- so the "ICONS MISSING" badge
+        # stayed up for the rest of the session. Genuine misses re-register
+        # on the next paint, because load_icon_surface deliberately does not
+        # cache a failure.
+        _icon_missing_ids.clear()
     try:
         msg = ("SIM_MODE|on" if on else "SIM_MODE|off").encode("utf-8")
         sock_cmd_out.sendto(msg, _cmd_addr())
@@ -2285,6 +2340,13 @@ def _inv_send_bazaar(item_id, price):
         target = _mb_lock_target() or ""
         payload = f"INVACT|bazaar|{target}|{int(item_id)}|{int(price)}"
         sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+        # The lock target matters: lua ignores the message outright when it
+        # names a character other than the one running that client, and it
+        # says so only under its cast-debug flag. Record what we addressed
+        # it to, so a mismatch is visible from the log alone.
+        print(f"[OmniWatch] inv bazaar sent: item {int(item_id)} @ "
+              f"{int(price)} gil, target={target or '(none)'} -> "
+              f"port {_cmd_addr()[1]}")
     except Exception as e:
         print(f"[OmniWatch] inv bazaar send failed: {e!r}")
 
@@ -6283,8 +6345,9 @@ hotbar_icon_picker_open   = False
 hotbar_icon_picker_scroll = 0    # vertical scroll offset within the picker grid
 # Module-level clipboard for the COPY/PASTE buttons in the slot editor.
 # Holds a normalized button-entry dict, or None when nothing has been
-# copied yet. Cleared on overlay restart (intentional — copy/paste is
-# for batch-editing in one sitting).
+# copied yet. PERSISTED to the file named by _hotbar_clip_path() and
+# startup, so a copy survives both a profile switch and a restart --
+# copying out of one profile and into another is the main use.
 _hotbar_clipboard = None
 # Whole-page clipboard, separate from the single-slot one above so a
 # copied button and a copied page can't clobber each other. Holds
@@ -6311,6 +6374,77 @@ _hotbar_multi_sel = set()
 # offset is measured from.
 _hotbar_multi_clipboard = None
 _hotbar_clip_origin = 0
+# The three clipboards above are stored in USER_DIR, NOT in a character folder and
+# NOT among _PROFILE_PARTS. Copying a button out of one profile and pasting
+# it into another is the whole point, and a profile switch rewrites every
+# file that IS a profile part -- so a clipboard stored as one would be
+# replaced by the destination's own copy at the moment it was needed.
+# Sharing it across characters is deliberate for the same reason.
+# Resolved lazily, NOT as a module constant: USER_DIR is defined about a
+# thousand lines below this point, so evaluating it here raises NameError at
+# import. Both callers run at runtime, long after it exists.
+def _hotbar_clip_path():
+    return os.path.join(USER_DIR, "omniwatch_hotbar_clipboard.json")
+
+
+def _hotbar_clip_save():
+    """Write the clipboards after any copy. Cheap: three small dicts."""
+    try:
+        payload = {
+            "button": _hotbar_clipboard,
+            "page":   _hotbar_page_clipboard,
+            "multi":  ({str(k): v for k, v in _hotbar_multi_clipboard.items()}
+                       if _hotbar_multi_clipboard else None),
+            "origin": _hotbar_clip_origin,
+        }
+        with open(_hotbar_clip_path(), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] hotbar clipboard save failed: {e!r}")
+
+
+def _hotbar_clip_load():
+    """Restore the clipboards at startup.
+
+    Every entry is put back through _normalize_button_entry, because this
+    file can be older than the current button schema and a paste writes
+    straight into a page.
+    """
+    global _hotbar_clipboard, _hotbar_page_clipboard
+    global _hotbar_multi_clipboard, _hotbar_clip_origin
+    path = _hotbar_clip_path()
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return
+        btn = data.get("button")
+        if isinstance(btn, dict):
+            _hotbar_clipboard = _normalize_button_entry(btn)
+        page = data.get("page")
+        if isinstance(page, dict) and isinstance(page.get("buttons"), list):
+            _hotbar_page_clipboard = {
+                "name": str(page.get("name", "") or ""),
+                "buttons": [_normalize_button_entry(b)
+                            for b in page["buttons"]],
+            }
+        multi = data.get("multi")
+        if isinstance(multi, dict) and multi:
+            rebuilt = {}
+            for k, v in multi.items():
+                try:
+                    rebuilt[int(k)] = _normalize_button_entry(v)
+                except (TypeError, ValueError):
+                    continue
+            if rebuilt:
+                _hotbar_multi_clipboard = rebuilt
+                _hotbar_clip_origin = min(rebuilt)
+    except Exception as e:
+        print(f"[OmniWatch] hotbar clipboard load failed: {e!r}")
+
+
 # Per-frame click-target collections, populated by draw_hotbar_editor:
 hotbar_editor_rects   = []       # list of (pygame.Rect, action_dict)
 
@@ -6407,6 +6541,10 @@ def _overlay_blocks_point(pos):
 _LATER_PANEL_RECT_DICTS = (
     "_alert_rects", "_pool_rects", "_ah_rects", "_craft_rects",
     "_syn_rects", "_fisher_rects", "_skillup_rects", "_sz_rects",
+    # The GearSwap rows. This one already published its envelope and was
+    # simply never listed -- and the pad is designed to sit directly above
+    # it, so the overlap is guaranteed rather than incidental.
+    "_gsd_rects",
 )
 
 # The same thing for windows that keep their frame in a plain global
@@ -6426,6 +6564,32 @@ _LATER_PANEL_RECT_GLOBALS = (
     # cells were still answering the hover test, so their tooltips drew
     # through the form.
     "_hb_editor_rect",
+    # Windows and popovers that draw after the hotbar and keep their frame
+    # in a plain global. Anything added to the draw order after
+    # draw_buttons_panel belongs here (or in one of the two lists below),
+    # or its tooltips leak -- t_tooltips.py fails the build if one is
+    # missing.
+    "_target_card_rect", "_stats_panel_rect", "_header_rect",
+    "sim_window_bounds_rect", "_cs_ctx_rect", "_inv_ctx_rect",
+    "calltrust_button_rect", "sing_button_rect", "_hide_nub_rect",
+)
+
+# Per-frame lists of (rect, ...) tuples -- the small popups that never had a
+# frame rect of their own, only their click targets. Their union is a good
+# enough envelope because they ARE almost entirely clickable rows.
+_LATER_PANEL_RECT_LISTS = (
+    "inventory_item_ctx_rects", "inventory_bazaar_popup_rects",
+    "inventory_move_popup_rects", "cfgwiz_hit_rects",
+    "inventory_dropdown_rects",
+)
+
+# Windows whose envelope is COMPUTED rather than stored: (open flag,
+# geometry function returning (x, y, w, h) or None). The inventory dropdown
+# is the reason this exists -- it already had a single source of truth for
+# its geometry, shared by the renderer and the outside-click test, but
+# nothing published a rect for anyone else to test against.
+_LATER_PANEL_GEOM_CALLS = (
+    ("inventory_dropdown_open", "_inventory_panel_geometry"),
 )
 
 # Settings menu, settings modals and Configure subdialogs. Each one
@@ -6471,7 +6635,10 @@ def _is_party_key(key):
         return True
     if len(key) == 2 and key[0] == "p" and key[1].isdigit():
         return True
-    return any(m.get("name") == key for m in (party_data or []))
+    # Deliberately NOT matching member names any more: sizes are keyed by
+    # slot, so a name in panel_scales is a leftover from an older layout and
+    # linked resizing must not write to it.
+    return False
 
 
 def _party_group_keys():
@@ -6481,6 +6648,48 @@ def _party_group_keys():
     on screen is never resized behind your back.
     """
     return [k for k in list(panel_scales) if _is_party_key(k)]
+
+
+def _party_scale_key(key):
+    """The canonical SIZE key for a party or alliance row: the SLOT.
+
+    A ROW'S SIZE BELONGS TO THE POSITION ON SCREEN, NEVER TO WHOEVER IS
+    STANDING IN IT. Names change with every party, trusts get swapped, and
+    setup mode has no real names at all -- so a size filed under a name is
+    remembered only until that person leaves. Alliance rows were always
+    slot-keyed (`a1_0`..`a2_5`); party rows normalise to `p0`..`p5` here,
+    including slot 0. POSITION still uses the name for slot 0; this is only
+    about size.
+    """
+    if not key:
+        return key
+    if key.startswith("a1_") or key.startswith("a2_"):
+        return key
+    if len(key) == 2 and key[0] == "p" and key[1].isdigit():
+        return key
+    for i, m in enumerate(party_data or []):
+        if m.get("name") == key:
+            return "p%d" % i
+    return key
+
+
+def _party_scale_get(key, default=1.0):
+    """A row's size, by slot, migrating an older name-keyed layout once.
+
+    Old layouts filed sizes under member names and under setup mode's
+    `PartyMember<N>` stand-ins, and nothing under `p<N>` at all. Both are
+    read here as a fallback and copied to the slot key the first time the
+    row is drawn, so an existing layout keeps the size it already had.
+    """
+    k = _party_scale_key(key)
+    v = panel_scales.get(k)
+    if v is None:
+        v = panel_scales.get(key)
+        if v is None and len(k) == 2 and k[0] == "p" and k[1].isdigit():
+            v = panel_scales.get("PartyMember" + k[1])
+        if v is not None:
+            panel_scales[k] = float(v)
+    return float(v) if v is not None else default
 
 
 def _party_scale_apply(key, scale):
@@ -6494,6 +6703,10 @@ def _party_scale_apply(key, scale):
     row snaps back to its old size the next time the party is rebuilt.
     """
     scale = max(MIN_SCALE, min(MAX_SCALE, scale))
+    # By SLOT, whatever we were handed. The drag hit-test identifies a party
+    # row by the member's name, so without this the size lands under a name
+    # again and is forgotten the moment that member is replaced.
+    key = _party_scale_key(key)
     panel_scales[key] = scale
     if not setting("party_link_size") or not _is_party_key(key):
         return
@@ -6882,6 +7095,24 @@ def _hotbar_tooltip_blocked(pos):
                 return True
         except Exception:
             continue
+    for _name in _LATER_PANEL_RECT_LISTS:
+        try:
+            for _entry in (globals().get(_name) or ()):
+                _r = _entry[0] if isinstance(_entry, tuple) else _entry
+                if _r is not None and _r.collidepoint(pos):
+                    return True
+        except Exception:
+            continue
+    for _flag, _fn in _LATER_PANEL_GEOM_CALLS:
+        try:
+            if not globals().get(_flag):
+                continue
+            _geom = globals().get(_fn)
+            _g = _geom() if callable(_geom) else None
+            if _g and pygame.Rect(*_g).collidepoint(pos):
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -7119,6 +7350,7 @@ def load_icon_surface(item_id):
     path = os.path.join(ICON_DIR, f"{item_id}.bmp")
     if not os.path.isfile(path):
         _icon_missing_ids.add(item_id)
+        request_icon_extract(item_id)
         return None
     try:
         surf = pygame.image.load(path).convert_alpha()
@@ -7135,6 +7367,30 @@ def load_icon_surface(item_id):
     # accurately reflects current state.
     _icon_missing_ids.discard(item_id)
     return surf
+
+# Ids we have already asked lua to extract this session. The request is
+# cheap but the DAT read is not, so ask once per id and let the existing
+# "don't cache misses" rule pick the file up on a later frame.
+_icon_requested_ids = set()
+
+
+def request_icon_extract(item_id):
+    """Ask the addon to pull this icon out of the client DATs.
+
+    icon_extractor works from an item id and does NOT need the item to be
+    equipped, so gear the player has only ever previewed in sim mode -- or
+    seen in the auction house, or a treasure pool -- can have an icon too.
+    Before this, icons only ever appeared for gear as it was worn.
+    """
+    if not item_id or item_id in _icon_requested_ids:
+        return
+    _icon_requested_ids.add(item_id)
+    try:
+        sock_cmd_out.sendto(f"ICONREQ|{int(item_id)}".encode("utf-8"),
+                            _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] icon request failed for {item_id}: {e!r}")
+
 
 def get_icon_scaled(item_id, size):
     """Return icon resized to `size` x `size`, cached."""
@@ -8802,12 +9058,21 @@ HOTBAR_PAD_COLS  = 6     # fallback only -- see _pad_shape()
 HOTBAR_PAD_ROWS  = 4     # fallback only -- see _pad_shape()
 HOTBAR_PAD_NAME  = "Pad"
 
-# Both shapes hold 24 slots; they differ only in how the same page is laid
-# out. Keep every entry at or under HOTBAR_SLOTS_PER_PAGE (30) -- the pad
-# stores its buttons in an ordinary page and must fit one.
+# The pad stores its buttons in an ordinary page, so cols * rows must stay
+# at or under HOTBAR_SLOTS_PER_PAGE. The 40-slot shapes are why that
+# ceiling is 40 rather than the 30 the bars themselves need.
+#
+# Switching shape RE-FLOWS the buttons: a slot's identity is its position
+# in the row (idx = row * cols + col), so the same page laid out at a
+# different width puts different buttons in different cells. That is
+# existing behaviour for 6x4 <-> 4x6 and applies to the new shapes too.
 HOTBAR_PAD_SHAPES = {
     "6x4": (6, 4),      # wide: sits under a bar without adding much height
     "4x6": (4, 6),      # tall: sits beside the bars in a column
+    "8x3": (8, 3),      # wider and shallower -- a long strip under the bars
+    "3x8": (3, 8),      # a narrow column
+    "8x5": (8, 5),      # the big one: 40 slots
+    "5x8": (5, 8),      # 40 slots as a tall block
 }
 
 
@@ -8822,8 +9087,13 @@ def _pad_shape():
 def _n_user_pages():
     """How many pages the bars can cycle through -- the pad page excluded."""
     return max(1, min(HOTBAR_PAGE_COUNT, len(hotbar_pages)))
-HOTBAR_SLOTS_PER_PAGE = 30   # the CEILING (15 cols x 2 rows), not the
-                             # live page size — see _hotbar_page_slots().
+HOTBAR_SLOTS_PER_PAGE = 40   # the CEILING, not the live page size — see
+                             # _hotbar_page_slots(). The bars themselves
+                             # need 30 (15 cols x 2 rows); the pad's 8x5
+                             # and 5x8 shapes need 40, and every page is
+                             # allocated to the same ceiling. Raising it is
+                             # non-destructive: a page simply carries spare
+                             # buttons that nothing draws.
                              # Kept as a constant because it's the width
                              # every page is padded to on disk, so the
                              # stored shape doesn't churn every time the
@@ -10676,15 +10946,18 @@ SETTINGS_SCHEMA = [
         "key":     "hotbar_pad_shape",
         "label":   "(internal) hotbar pad shape",
         "kind":    "enum",
-        "options": ["6x4", "4x6"],
-        "option_labels": ["6 wide x 4 tall", "4 wide x 6 tall"],
+        "options": ["6x4", "4x6", "8x3", "3x8", "8x5", "5x8"],
+        "option_labels": ["6 wide x 4 tall (24)", "4 wide x 6 tall (24)",
+                          "8 wide x 3 tall (24)", "3 wide x 8 tall (24)",
+                          "8 wide x 5 tall (40)", "5 wide x 8 tall (40)"],
         "default": "6x4",
         "section": "_Hidden",
         "applies": "python",
-        "help":    "Which way round the pad sits. Both hold 24 slots; wide "
-                   "tucks under a hotbar, tall sits beside one. Buttons "
-                   "re-flow when you switch, since a slot's place is its "
-                   "position in the row.",
+        "help":    "How the pad is laid out. Wide shapes tuck under a "
+                   "hotbar, tall ones sit beside it; the 8x5 and 5x8 "
+                   "shapes hold 40 slots instead of 24. Buttons re-flow "
+                   "when you switch, since a slot's place is its position "
+                   "in the row.",
     },
     {
         "key":     "hotbar_visible_count",
@@ -12047,7 +12320,7 @@ def _stats_layout_edit_begin():
     except Exception as e:
         print(f"[OmniWatch] stats layout reload failed: {e!r}")
     stats_layout_edit = True
-    print("[OmniWatch] stats layout editing ON (Esc when done)")
+    print("[OmniWatch] stats layout editing ON (click Done when finished)")
 
 
 def _stats_layout_edit_end():
@@ -22149,6 +22422,12 @@ load_chat_routing()
 # saved icons/labels don't appear after a restart.
 buttons_config = load_buttons_config()
 
+# Restore the hotbar clipboards. Copy is no longer a one-sitting thing:
+# the copy that matters is usually the one you take before switching
+# profile or characters, and losing it on restart made "copy this bar
+# into my other profile" a job you had to finish in one go.
+_hotbar_clip_load()
+
 # Restore checklist state from the per-character JSON. Without this,
 # weapon/quest/mission manual toggles saved in a previous session
 # wouldn't be reflected in checklist_known until either Lua sent its
@@ -27703,6 +27982,13 @@ def _calltrust_invoke():
     clean = [n.replace("|", "").replace(";", "").strip() for n in names]
     clean = [n for n in clean if n]
     if not active or not clean:
+        # Logged, not just noted: the on-screen note goes to the floating
+        # Call Trust button when that button is up, so pressing a hotbar
+        # cell can look like nothing happened at all. The session log is
+        # then the only place the reason survives.
+        print("[OmniWatch] calltrust declined: "
+              + ("no active trust set" if not active
+                 else f"set {active!r} has no trusts"))
         _ct_msg = ("No active set — Equip one in TrustSets.",
                    time.time() + 4.0)
         return
@@ -27710,6 +27996,8 @@ def _calltrust_invoke():
         payload = (f"CALLTRUST|{_blusets_char()}|{active.replace('|', '')}|"
                    f"{';'.join(clean)}")
         sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+        print(f"[OmniWatch] calltrust sent: set {active!r}, "
+              f"{len(clean)} trust(s) -> {_cmd_addr()[1]}")
         _ct_msg = (f'Calling "{active}" — watch game chat.', time.time() + 5.0)
     except Exception as e:
         print(f"[OmniWatch] calltrust send failed: {e!r}")
@@ -37453,6 +37741,7 @@ def draw_cheatsheet_ctx_menu(surface):
     sw, shh = surface.get_size()
     mx0 = max(0, min(int(m["x"]), sw - w))
     my0 = max(0, min(int(m["y"]), shh - h))
+    globals()["_cs_ctx_rect"] = pygame.Rect(mx0, my0, w, h)
     pygame.draw.rect(surface, (28, 28, 36), (mx0, my0, w, h), border_radius=4)
     pygame.draw.rect(surface, COL_BORDER, (mx0, my0, w, h), 1, border_radius=4)
     # Header (dim, non-clickable).
@@ -38458,6 +38747,7 @@ def draw_header(surface, w):
     font_moon  = pygame.font.SysFont("Consolas", _hs(12))
 
     # Background
+    globals()["_header_rect"] = pygame.Rect(0, hy0, w, hh)
     pygame.draw.rect(surface, COL_HEADER, (0, hy0, w, hh))
     # Separator line on the edge that faces the panels: the bottom edge
     # for a top-anchored header, the top edge for a bottom-anchored one.
@@ -40876,13 +41166,22 @@ def draw_inventory_slip_nickname_editor(surface):
 def _inv_bazaar_confirm():
     global inventory_bazaar_popup
     p = inventory_bazaar_popup
-    if p and p.get("buf"):
-        try:
-            price = int(p["buf"])
-        except ValueError:
-            price = 0
-        if price > 0:
-            _inv_send_bazaar(p["item_id"], price)
+    # Every path out of here is logged. Confirming used to be able to do
+    # nothing at all -- an empty box, or a price that parsed to 0 -- and
+    # close the popup exactly as if it had worked.
+    if not p:
+        print("[OmniWatch] bazaar confirm: no popup open")
+        return
+    raw = p.get("buf") or ""
+    try:
+        price = int(raw) if raw else 0
+    except ValueError:
+        price = 0
+    if price > 0:
+        _inv_send_bazaar(p["item_id"], price)
+    else:
+        print(f"[OmniWatch] bazaar confirm declined: item {p.get('item_id')}, "
+              f"price box {raw!r} -> {price}")
     inventory_bazaar_popup = None
 
 
@@ -41150,6 +41449,7 @@ def draw_inventory_item_ctx_menu(surface):
     mx0 = max(0, min(int(m["x"]), sw - w))
     my0 = max(0, min(int(m["y"]), shh - h))
 
+    globals()["_inv_ctx_rect"] = pygame.Rect(mx0, my0, w, h)
     pygame.draw.rect(surface, (28, 28, 36), (mx0, my0, w, h), border_radius=4)
     pygame.draw.rect(surface, COL_BORDER, (mx0, my0, w, h), 1, border_radius=4)
 
@@ -41449,6 +41749,15 @@ def draw_sim_window(surface):
     h_surf = title_font.render("Equipment", True, SIM_WIN_TITLE)
     surface.blit(h_surf, (wx + SIM_WIN_PAD,
                           cy + (SIM_WIN_ROW_H - h_surf.get_height()) // 2))
+    # Say so when the inventory stream has not landed. Without it the
+    # dropdowns are simply empty and every slot leans on the live-stream
+    # name fallback, which looks like the window half-working for no
+    # stated reason.
+    if not _sim_have_inventory_snapshot():
+        _warn = label_font.render("no inventory yet - press REFRESH", True,
+                                  (232, 168, 96))
+        surface.blit(_warn, (wx + ww - SIM_WIN_PAD - _warn.get_width(),
+                             cy + (SIM_WIN_ROW_H - _warn.get_height()) // 2))
     cy += SIM_WIN_ROW_H
 
     sim_eq = sim_state.get("equipment", {}) or {}
@@ -41495,6 +41804,12 @@ def draw_sim_window(surface):
                     display = _display_name_for_item(entry)
                     matched_entry = entry
                     break
+            if matched_entry is None:
+                # No snapshot entry -- the overlay may still know this
+                # piece from the live equipment stream.
+                _fb = _sim_live_name_for(slot_key, target_id)
+                if _fb:
+                    display = _fb
             dim = False
         else:
             display, dim = "(real)", True
@@ -52244,6 +52559,7 @@ def dispatch_hotbar_editor_click(mx, my):
                     # would silently change what pastes.
                     "buttons": [dict(b) for b in _src.get("buttons", [])],
                 }
+                _hotbar_clip_save()
                 print(f"[OmniWatch] copied page {_pg + 1} "
                       f"({_src.get('name', '')})")
         elif kind == "paste_page":
@@ -52416,6 +52732,7 @@ def dispatch_hotbar_editor_click(mx, my):
             if (hotbar_edit_draft is not None
                     and hotbar_edit_slot != "__page_name__"):
                 _hotbar_clipboard = _normalize_button_entry(hotbar_edit_draft)
+                _hotbar_clip_save()
                 print(f"[OmniWatch] hotbar copy: "
                       f"{_hotbar_clipboard.get('label') or '(no label)'!r}")
         elif kind == "paste_slot":
@@ -55064,6 +55381,11 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     if alpha < 255:
         card.set_alpha(alpha)
     surface.blit(card, (x, y))
+    # Published for the tooltip guard: the card draws AFTER the hotbar, so a
+    # bar underneath still answers the hover test unless something records
+    # that the card is on top here.
+    globals()["_target_card_rect"] = pygame.Rect(x, y, card.get_width(),
+                                                 card.get_height())
 
 
 def equip_panel_size(scale):
@@ -56071,10 +56393,12 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
     # don't fire when the panel size/layout changes.
     global _stats_cell_click_rects, _stats_tray_click_rects
     global _stats_save_as_button_rect, _stats_save_as_dropdown_rects
+    global _stats_done_button_rect
     if setup_mode:
         _stats_cell_click_rects = []
         _stats_tray_click_rects = []
         _stats_save_as_button_rect = None
+        _stats_done_button_rect = None
         # Dropdown rects are only reset when the dropdown is CLOSED;
         # while open we need them to persist for click handling.
         if not _stats_save_as_open:
@@ -56108,6 +56432,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
             _setup_flip = True
     bg_y = (y - _setup_extra) if _setup_flip else y
 
+    globals()["_stats_panel_rect"] = pygame.Rect(x, bg_y, panel_w, panel_h)
     pygame.draw.rect(surface, COL_PANEL,    (x, bg_y, panel_w, panel_h), border_radius=4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, bg_y, panel_w, panel_h), 1, border_radius=4)
 
@@ -56489,16 +56814,39 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                       btn_y + (btn_h - btn_label.get_height()) // 2))
         _stats_save_as_button_rect = (btn_x, btn_y, btn_w, btn_h)
 
+        # Panel-only editing needs a visible way OUT. Setup mode has its
+        # own toggle; this mode had nothing clickable, and the "press Esc"
+        # hint it used to show is not reachable — the overlay window is
+        # NOACTIVATE, so it never holds keyboard focus while the game does,
+        # and the pygame Esc handler simply never fires. The only exit was
+        # to turn setup mode on and off again.
+        _stats_done_button_rect = None
+        _leftmost_btn_x = btn_x
+        if stats_layout_edit and not setup_mode:
+            done_w = max(52, int(64 * scale))
+            done_x = btn_x - int(6 * scale) - done_w
+            _leftmost_btn_x = done_x
+            pygame.draw.rect(surface, (60, 110, 70),
+                             (done_x, btn_y, done_w, btn_h), border_radius=3)
+            pygame.draw.rect(surface, (120, 190, 130),
+                             (done_x, btn_y, done_w, btn_h), 1,
+                             border_radius=3)
+            done_label = bf.render("Done", True, (235, 250, 235))
+            surface.blit(done_label,
+                         (done_x + (done_w - done_label.get_width()) // 2,
+                          btn_y + (btn_h - done_label.get_height()) // 2))
+            _stats_done_button_rect = (done_x, btn_y, done_w, btn_h)
+
         # Brief hint text to the left of the button. The full sentence is
         # wider than the panel at most scales, and it used to be blitted
         # at full length underneath the button — the tail of it came out
         # the far side and read as garbled text around "Save as". Fit it
         # to the gap instead, dropping clauses from the end until it does.
         hint_font = get_font("Consolas", 8 * scale)
-        hint_avail = max(0, btn_x - (x + pad) - int(8 * scale))
+        hint_avail = max(0, _leftmost_btn_x - (x + pad) - int(8 * scale))
         # How you LEAVE differs by mode, and getting that wrong strands
         # the user: panel-only editing has no setup-mode toggle to flip.
-        _leave = ("press Esc" if (stats_layout_edit and not setup_mode)
+        _leave = ("click Done" if (stats_layout_edit and not setup_mode)
                   else "exit setup")
         hint_options = [
             (f"Click cells to hide \u2022 drag to reorder \u2022 "
@@ -56818,10 +57166,32 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
                 iy = sy + (cell_px - icon_px) // 2
                 surface.blit(icon, (ix, iy))
             else:
-                # Icon file missing — fall back to showing the item id in the cell
-                # so you can see something's equipped even before extraction catches up.
-                txt = label_font.render(str(item_id), True, COL_SLOT_TEXT)
-                surface.blit(txt, (sx + 3, sy + 3))
+                # Icon file missing. icon_extractor.lua only writes a .bmp
+                # for gear as it is EQUIPPED, so anything previewed in sim
+                # mode that the player has never worn has no icon and never
+                # will until they wear it. Show the item's NAME rather than
+                # its id -- "Holla Ring" is useful, "26229" is not.
+                _nm = (equip_rich_view.get(i) or {}).get("name") or ""
+                if _nm:
+                    _wf = get_font("Consolas", max(8, int(cell_px * 0.20)))
+                    _line, _ly = "", sy + 3
+                    for _word in _nm.split():
+                        _try = (_line + " " + _word).strip()
+                        if _wf.size(_try)[0] <= cell_px - 6 or not _line:
+                            _line = _try
+                        else:
+                            surface.blit(_wf.render(_line, True, COL_SLOT_TEXT),
+                                         (sx + 3, _ly))
+                            _ly += _wf.get_height()
+                            _line = _word
+                        if _ly > sy + cell_px - _wf.get_height():
+                            break
+                    if _line and _ly <= sy + cell_px - _wf.get_height():
+                        surface.blit(_wf.render(_line, True, COL_SLOT_TEXT),
+                                     (sx + 3, _ly))
+                else:
+                    txt = label_font.render(str(item_id), True, COL_SLOT_TEXT)
+                    surface.blit(txt, (sx + 3, sy + 3))
 
             # Stack count overlay (currently only the ammo slot sends this).
             # Matches EquipViewer addon's convention: small white number in
@@ -61281,10 +61651,12 @@ while running:
                 print(f"[OmniWatch][party]   slot {slot_idx}: {nm!r} "
                       f"-> akey={akey!r} "
                       f"anchor={panel_anchors.get(akey)}")
-        if nm not in panel_scales:
-            panel_scales[nm] = panel_scales.get(akey, 1.0)
-        sc = max(MIN_SCALE, min(MAX_SCALE, panel_scales[nm]))
-        panel_scales[nm] = sc
+        # SIZE IS KEYED BY SLOT, not by who is standing in it.
+        # _party_scale_get migrates an older name-keyed or PartyMember<N>
+        # value across the first time the row draws.
+        _skey = "p%d" % slot_idx
+        sc = max(MIN_SCALE, min(MAX_SCALE, _party_scale_get(_skey)))
+        panel_scales[_skey] = sc
         rh = row_height(m, sc)
         pw = scaled_panel_dims(sc)["panel_w"]
 
@@ -61439,7 +61811,7 @@ while running:
     # harmless to apply.
     GRIP_VISIBLE = 40
     for nm, pos in panel_positions.items():
-        sc = panel_scales.get(nm, 1.0)
+        sc = _party_scale_get(nm)
         pw = scaled_panel_dims(sc)["panel_w"]
         pos[0] = max(GRIP_VISIBLE - pw, min(pos[0], WIDTH  - GRIP_VISIBLE))
         pos[1] = max(layout_top(), min(pos[1], layout_bottom() - GRIP_VISIBLE))
@@ -61478,7 +61850,7 @@ while running:
     for name in _party_draw_order:
         m      = members_by_name[name]
         px, py = panel_positions[name]
-        scale  = panel_scales.get(name, 1.0)
+        scale  = _party_scale_get(name)
         escale = _eff(scale)   # effective scale for raw positioning offsets
         d      = scaled_panel_dims(scale)
         rh     = row_height(m, scale)
@@ -62786,6 +63158,14 @@ while running:
     # Cheat Sheet button + window.
     if not _suppress_tooltip and _overlay_blocks_point(mpos):
         _suppress_tooltip = True
+    # And every window that draws after the panels and registers an
+    # envelope -- the inventory dropdown, the GearSwap rows, the sim
+    # window, the context menus. This block used to name its blockers by
+    # hand, which is why the equipment card leaked through exactly the
+    # windows the hotbar tooltip had already been taught about. One
+    # registry, both tooltips.
+    if not _suppress_tooltip and _hotbar_tooltip_blocked(mpos):
+        _suppress_tooltip = True
     if hotbar_edit_mode:
         # USE THE RECT THE FORM WAS ACTUALLY DRAWN AT.
         #
@@ -63240,7 +63620,7 @@ while running:
                     # (Issue #30)
                     continue
                 px, py = ppos
-                scale  = panel_scales.get(name, 1.0)
+                scale  = _party_scale_get(name)
                 d      = scaled_panel_dims(scale)
                 rh     = row_height(m, scale)
                 pw     = d["panel_w"]
@@ -63564,6 +63944,7 @@ while running:
                     globals()["_hotbar_multi_clipboard"] = _clip
                     globals()["_hotbar_clip_origin"] = (min(_clip)
                                                         if _clip else 0)
+                    _hotbar_clip_save()
                     # Drop the outlines once the copy is taken. They mark
                     # "these are picked out", and after a copy the
                     # clipboard is what matters — leaving them lit on the
@@ -63643,6 +64024,7 @@ while running:
                     # same bar puts it straight back.
                     globals()["_hotbar_multi_clipboard"] = _clip
                     globals()["_hotbar_clip_origin"] = min(_clip)
+                    _hotbar_clip_save()
                     # If the open editor was pointed at one of these, its
                     # draft still holds the old content and a Save would
                     # write it back. Blank the draft to match.
@@ -63958,11 +64340,25 @@ while running:
                                 import traceback
                                 traceback.print_exc()
                             _stats_save_as_open = False
+                            # Saving IS the finish. Leaving the panel in
+                            # edit mode after an explicit save reads as
+                            # the save not having taken. Setup mode keeps
+                            # its own flow, so only end panel-only edits.
+                            if stats_layout_edit and not setup_mode:
+                                _stats_layout_edit_end()
                             consumed = True
                             break
                     if not consumed:
                         # Click outside dropdown items closes it.
                         _stats_save_as_open = False
+                        consumed = True
+                # Done button. Before Save-as: this is the exit, and a
+                # missed click here strands the user in edit mode.
+                if (not consumed) and _stats_done_button_rect:
+                    dx, dy, dw, dh = _stats_done_button_rect
+                    if dx <= mx < dx + dw and dy <= my < dy + dh:
+                        _stats_save_as_open = False
+                        _stats_layout_edit_end()
                         consumed = True
                 # Save-as button (only if dropdown not just consumed).
                 if (not consumed) and _stats_save_as_button_rect:
@@ -65216,7 +65612,7 @@ while running:
                         # Twin of the wheel-handler guard. (Issue #30)
                         continue
                     px, py = ppos
-                    scale  = panel_scales.get(name, 1.0)
+                    scale  = _party_scale_get(name)
                     d      = scaled_panel_dims(scale)
                     rh     = row_height(m, scale)
                     pw     = d["panel_w"]
@@ -65857,7 +66253,7 @@ while running:
                     # it was unreliable across the multiple keying
                     # conventions panel_anchors uses.)
                     if dragging_key.startswith("a1_") or dragging_key.startswith("a2_"):
-                        scale = panel_scales.get(dragging_key, 1.0)
+                        scale = _party_scale_get(dragging_key)
                         d_a   = scaled_ally_dims(scale)
                         if dragging_key in panel_positions:
                             pos = panel_positions[dragging_key]
@@ -65868,7 +66264,7 @@ while running:
                     else:
                         m = members_by_name.get(dragging_key)
                         if m is not None:
-                            scale = panel_scales.get(dragging_key, 1.0)
+                            scale = _party_scale_get(dragging_key)
                             pw    = scaled_panel_dims(scale)["panel_w"]
                             rh    = row_height(m, scale)
                             pos   = panel_positions[dragging_key]
@@ -66368,7 +66764,7 @@ while running:
                     # Could be a main-party member (keyed by name) or an
                     # alliance slot (keyed a1_0..a2_5).
                     if dragging_key.startswith("a1_") or dragging_key.startswith("a2_"):
-                        scale = panel_scales.get(dragging_key, 1.0)
+                        scale = _party_scale_get(dragging_key)
                         pw    = scaled_ally_dims(scale)["panel_w"]
                         new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
@@ -66378,7 +66774,7 @@ while running:
                     else:
                         m = members_by_name.get(dragging_key)
                         if m is not None:
-                            scale = panel_scales.get(dragging_key, 1.0)
+                            scale = _party_scale_get(dragging_key)
                             d     = scaled_panel_dims(scale)
                             pw    = d["panel_w"]
                             new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))

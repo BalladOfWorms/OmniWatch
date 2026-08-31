@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.12.2] — 2026-08-24
+
+### Added
+
+- **Hotbar copy now survives a profile switch and a restart** — a copied button, a copied page or a Ctrl+C multi-selection is kept until you copy something else, so you can copy out of one profile and paste into another (or into a different character's bars) rather than having to finish in one sitting.
+- **Four more shapes for the hotbar pad** — alongside 6x4 and 4x6 the pad can now be 8x3 or 3x8, and **8x5 or 5x8 for 40 slots** instead of 24. Pick one under HotBar → Pad shape. Buttons re-flow when you change shape, since a slot's place is its position in the row.
+
+### Fixed
+
+- **The Statistics cell editor can be closed** — editing the stat layout from Statistics ▸ Edit layout had no way out except turning setup mode on and off again. There is now a **Done** button beside **Save as**, and choosing a target from Save as finishes editing too.
+- **Party and alliance row sizes belong to the row, not to who is standing in it** — the sixth row would come back at full size whenever someone new joined, because a row's size was filed under that member's name. Slots one to five usually hold the same trusts and so looked fine; the last slot is the one that changes. Sizes are now kept per slot, so a row stays the size you set it to no matter who moves through it — and the sizes you set in setup mode, where there are no real names at all, now carry over to the real thing. Your existing sizes move across the first time each row is drawn.
+- **Setting a bazaar price from the overlay works again** — the inventory right-click ▸ **Bazaar** action would list the first item and then quietly do nothing for every one after it. It now closes your bazaar before setting a price and reopens it afterwards, which is the order the game's own menu uses; previously the reopen left the bazaar open and every later price was set against it. Removing an item is fixed by the same change. If anything like this turns up again, `//ow bzcap` logs the bazaar packets to omniwatch.log so they can be compared against the game's own.
+- **The Call Trust button no longer stops responding for the rest of a session** — a trust call that never finished, because you moved, got silenced, ran out of MP or zoned mid-sequence, left the addon believing a call was still in progress. Every later press was then turned away with "a trust call is already running", and only a `//lua reload omniwatch` cleared it — restarting the overlay could not, since the flag lived on the game side. A trust that does not answer — one you have not unlocked on that character, or one the game will not let you call right now — is now skipped after a few seconds and **the rest of the set is still called**, so one unavailable name no longer costs you the trusts behind it. Pressing the button on a stalled call takes over instead of refusing. The session log also records every press now, whether it was sent or declined for having no Trust Set equipped.
+- **Tooltips no longer show through a window opened on top of them** — hovering a hotbar button that sat behind the inventory list, the GearSwap rows, the sim window or a right-click menu floated that button's tooltip over the window in front of it, and item cards from the equipment panel did the same. Anything drawn over the panels now hides the tooltips underneath it.
+- **Simulation shows gear names instead of id numbers** — the Simulation window could only name a piece it found in the inventory list it receives from the game, so before that list arrives every slot read `id:26229`. It now falls back to the name the overlay already has for anything you are wearing, and says plainly when the inventory has not arrived yet so you know to press **REFRESH**. In the equipment panel, a piece whose icon has not been extracted yet shows its name rather than its id number.
+- **Icons are pulled for any item, not just gear you have worn** — the overlay now asks the addon to extract an icon the moment it needs one it doesn't have, so gear previewed in Simulation, seen in the auction house or sitting in a treasure pool gets a proper icon instead of a blank cell. The **ICONS MISSING** notice also clears when you leave Simulation rather than staying up for the rest of the session.
+
 ## [1.12.1] — 2026-08-15
 
 ### Added

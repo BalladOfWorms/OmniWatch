@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.12.1'
+_addon.version  = '1.12.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -5233,9 +5233,60 @@ end
 _OW_CALLTRUST_AFTERCAST = 3.0    -- pause after a cast completes, before next
 _OW_CALLTRUST_RETR      = 1.25   -- between individual /retr releases
 _OW_CALLTRUST_RETRALL   = 3.0    -- after /retr all, before the first call
+_OW_CALLTRUST_STALL     = 15.0   -- no progress for this long = abandoned
 
 _ow_calltrust_state = nil
--- { name=str, queue={ {id,english}, ... }, retr={names}, phase='retr'|'cast' }
+-- { name=str, queue={ {id,english}, ... }, retr={names}, phase='retr'|'cast',
+--   t=os.clock() of the last progress }
+
+-- WHY THE STAMP EXISTS.
+--
+-- The sequence advances on the 'action' event: a cast is de-queued only
+-- when its completion arrives. Anything that stops the cast from ever
+-- completing -- moving, silence, no MP, a full party, a zone -- means that
+-- event never comes, nothing is rescheduled, and _ow_calltrust_state stays
+-- set for the rest of the session. Every later press then hits the "already
+-- running" guard at the top of _ow_calltrust_start and does nothing, and
+-- because the flag lives in the LUA, restarting the python overlay does not
+-- clear it. Every path that moves the sequence forward re-stamps t, and the
+-- watchdog below closes it out when nothing has.
+
+function _ow_calltrust_touch()
+    if _ow_calltrust_state then
+        _ow_calltrust_state.t = os.clock()
+    end
+end
+
+function _ow_calltrust_stalled()
+    local st = _ow_calltrust_state
+    return st and (os.clock() - (st.t or 0)) > _OW_CALLTRUST_STALL
+end
+
+function _ow_calltrust_watchdog()
+    -- Scheduled after every send. Fires either into a finished sequence
+    -- (state already nil, nothing to do) or into one that has not moved.
+    --
+    -- A head that never completes is almost always one the game refused:
+    -- a trust you have not unlocked yet on this character, or one it will
+    -- not let you call right now. So SKIP IT AND CARRY ON rather than
+    -- abandoning the rest of the set -- one unavailable name in the middle
+    -- of a list should not cost you the trusts behind it.
+    if not _ow_calltrust_stalled() then return end
+    local st = _ow_calltrust_state
+    local q = st and st.queue
+    if q and #q > 0 then
+        local dropped = q[1].english
+        table.remove(q, 1)
+        ow_chat(207, '[OmniWatch] No response for "' .. tostring(dropped)
+            .. '" - skipping it.')
+        if #q > 0 then
+            _ow_calltrust_touch()
+            _ow_calltrust_cast()
+            return
+        end
+    end
+    _ow_calltrust_finish('done (some skipped)')
+end
 
 function _ow_trust_norm(s)
     return (tostring(s or ''):lower():gsub('[^%a%d]', ''))
@@ -5311,7 +5362,12 @@ function _ow_calltrust_cast()
     local st = _ow_calltrust_state
     if not st or st.phase ~= 'cast' then return end
     local q = st.queue
-    if not q or #q == 0 then return end
+    if not q or #q == 0 then
+        -- Nothing left to cast. Returning here without finishing is how the
+        -- state used to be left set with no one to clear it.
+        _ow_calltrust_finish('called')
+        return
+    end
     local nm = q[1].english
     local cast_name = nm
     if windower.to_shift_jis then
@@ -5319,6 +5375,8 @@ function _ow_calltrust_cast()
         if ok and s then cast_name = s end
     end
     windower.send_command('input /ma "' .. cast_name .. '" <me>')
+    _ow_calltrust_touch()
+    coroutine.schedule(_ow_calltrust_watchdog, _OW_CALLTRUST_STALL + 1)
     if _ow_cast_debug then
         ow_chat(207, '[OW] calltrust /ma "' .. nm .. '"')
     end
@@ -5331,6 +5389,7 @@ function _ow_calltrust_retr_step()
     if r and #r > 0 then
         local nm = table.remove(r, 1)
         windower.send_command('input /retr ' .. nm)
+        _ow_calltrust_touch()
         if _ow_cast_debug then
             ow_chat(207, '[OW] calltrust /retr ' .. nm)
         end
@@ -5347,9 +5406,18 @@ end
 
 function _ow_calltrust_start(setname, names_str)
     if _ow_calltrust_state then
-        ow_chat(123,
-            '[OmniWatch] A trust call is already running.')
-        return
+        if _ow_calltrust_stalled() then
+            -- Belt and braces with the watchdog: if a previous run was
+            -- abandoned, pressing the button again takes over rather than
+            -- refusing forever.
+            ow_chat(207,
+                '[OmniWatch] Previous trust call stalled - starting over.')
+            _ow_calltrust_state = nil
+        else
+            ow_chat(123,
+                '[OmniWatch] A trust call is already running.')
+            return
+        end
     end
     local p = windower.ffxi.get_player and windower.ffxi.get_player()
     if not p then return end
@@ -5419,7 +5487,8 @@ function _ow_calltrust_start(setname, names_str)
     end
 
     _ow_calltrust_state = { name = tostring(setname), queue = queue,
-                            retr = retr, phase = 'retr' }
+                            retr = retr, phase = 'retr', t = os.clock() }
+    coroutine.schedule(_ow_calltrust_watchdog, _OW_CALLTRUST_STALL + 1)
     ow_chat(207, '[OmniWatch] Trust set "' .. tostring(setname)
         .. '": releasing ' .. #retr .. ', calling ' .. #queue .. '...')
 
@@ -5468,6 +5537,7 @@ windower.register_event('action', function(act)
     local head = q[1]
     if act.category == 4 and act.param == head.id then
         table.remove(q, 1)
+        _ow_calltrust_touch()
         if #q > 0 then
             coroutine.schedule(_ow_calltrust_cast, _OW_CALLTRUST_AFTERCAST)
         else
@@ -5477,6 +5547,7 @@ windower.register_event('action', function(act)
             and act.targets and act.targets[1]
             and act.targets[1].actions and act.targets[1].actions[1]
             and act.targets[1].actions[1].param == head.id then
+        _ow_calltrust_touch()
         coroutine.schedule(_ow_calltrust_cast, _OW_CALLTRUST_AFTERCAST)
     end
 end)
@@ -5577,6 +5648,67 @@ local function _ow_inv_autodrop_by_id(item_id)
     ow_chat(207, '[OmniWatch] Auto-drop -> Treasury: ' .. nm)
 end
 
+-- Put the client's live sync counter on an outgoing packet we are about to
+-- inject. See the long note at the 'outgoing chunk' tracker below for why:
+-- 0x109/0x10A/0x10B are sync-checked and a zero is dropped in silence.
+-- Advances by one from the last value the client actually sent. Returns the
+-- packet so it can be used inline. A no-op before any traffic has been seen
+-- (which cannot happen in practice -- the client never stops talking).
+function _ow_stamp_sync(pkt)
+    if pkt and _ow_last_sync then
+        pcall(function()
+            pkt['_sequence'] = (_ow_last_sync + 1) % 65536
+        end)
+    end
+    return pkt
+end
+
+-- Inject <pkt> with the client's live sync counter actually IN THE BYTES.
+--
+-- Setting the _sequence field and hoping the library writes it out is the
+-- same class of assumption that broke this in the first place ("packets.new
+-- fills the sync counter"), so build the binary ourselves and patch bytes
+-- 3-4 before handing it over. windower.packets.inject_outgoing wants a
+-- pre-built STRING -- which is exactly what we have at that point, and why
+-- it is usable here when the note at the currency code says it is not.
+-- Falls back to packets.inject when the build path is unavailable, so an
+-- older library still gets the (unstamped) packet rather than nothing.
+-- Returns 'patched' / 'fallback' / 'nosync' for the log.
+function _ow_inject_synced(pkt, id)
+    local how = 'fallback'
+    if not _ow_last_sync then
+        packets.inject(pkt)
+        return 'nosync'
+    end
+    local ok = pcall(function()
+        if not (packets.build and windower.packets
+                and windower.packets.inject_outgoing) then
+            error('no build/inject_outgoing')
+        end
+        local raw = packets.build(pkt)
+        if type(raw) ~= 'string' or #raw < 4 then
+            error('build did not return bytes')
+        end
+        -- One value per packet. Our first attempt reused a single number
+--         for both 0x10A and 0x109; the client's own three carried three
+--         DIFFERENT, increasing values (4B12, 4B1F, 4B23). A duplicate
+--         counter is a replay, and would be dropped even when the payload
+--         is right.
+        _ow_sync_used = math.max(_ow_last_sync, _ow_sync_used or 0) + 1
+        local sq = _ow_sync_used % 65536
+        raw = raw:sub(1, 2)
+              .. string.char(sq % 256, math.floor(sq / 256))
+              .. raw:sub(5)
+        windower.packets.inject_outgoing(id, raw)
+        how = 'patched'
+    end)
+    if not ok or how ~= 'patched' then
+        packets.inject(pkt)
+        how = 'fallback'
+    end
+    return how
+end
+
 -- Set a bazaar price on an inventory item by id. Resolves the item's slot
 -- in the main inventory and injects the game's Set Bazaar Price packet
 -- (outgoing 0x10A), which puts the item into your bazaar at that price.
@@ -5600,43 +5732,125 @@ local function _ow_inv_bazaar_by_id(item_id, price)
     local nm = (res and res.items and res.items[item_id]
                 and (res.items[item_id].en or res.items[item_id].name))
                or tostring(item_id)
-    -- Use packets.new + packets.inject (NOT raw inject_outgoing): the
-    -- managed API fills the outgoing SYNC counter. A capture of the real
-    -- client showed our raw injects had sync=0000 while the client sends a
-    -- live sync -- the bazaar packet is sync-checked, so 0000 was silently
-    -- rejected (that's why every raw attempt failed). Layout confirmed from
-    -- the capture: ItemIndex (u8) @ 0x04, Price (u32) @ 0x08, and ItemIndex
-    -- == the Windower inventory index (not 0-based). 0x109 "Bazaar Open"
-    -- opens the bazaar after the price is set.
-    local ok = pcall(function()
-        if price == 0 then
-            -- Remove flow (confirmed from a capture of the client's own
-            -- remove): CLOSE the bazaar (0x10B) before setting price 0.
-            -- Injecting 0x10A price 0 alone -- the set flow -- does not
-            -- unlist the item.
-            packets.inject(packets.new('outgoing', 0x10B, {}))
-        end
+    -- HISTORY, so nobody re-derives it. The note that used to sit here said
+    -- packets.new + packets.inject "fills the outgoing SYNC counter". As of
+    -- 2026-08-25 it demonstrably does not: captured side by side, ours went
+    -- out as sync 00 00 and the client's carried a live value. We now build
+    -- the bytes and stamp bytes 3-4 ourselves (_ow_inject_synced).
+    -- Layout, confirmed twice by capture: Inventory Index (u8) @ 0x04,
+    -- 3 bytes of _junk1, Price (u32) @ 0x08, and the index is the Windower
+    -- inventory index (not 0-based). 0x109 opens the bazaar, 0x10B closes
+    -- it. Use //ow bzcap to capture again before changing any of this.
+    -- ORDER MATTERS, and ours was wrong. A capture of the client doing this
+    -- by hand goes 0x10B (close) -> 0x10A (set price) -> 0x109 (open), and
+    -- ONLY the remove path here was closing first. Once one of our 0x109s
+    -- had left the bazaar open, every later 0x10A was being sent against an
+    -- OPEN bazaar -- which the server appears to refuse. That also explains
+    -- the shape of the report: it worked once, from a clean state, and
+    -- never again. So close first every time, exactly like the client.
+    local ok, err = pcall(function()
+        _ow_inject_synced(_ow_stamp_sync(
+            packets.new('outgoing', 0x10B, {})), 0x10B)
         local pp = packets.new('outgoing', 0x10A, {})
-        pp['Price'] = price
-        pp['Item Index'] = idx
-        pp['ItemIndex'] = idx
+
+        -- FIELD NAMES ARE SETTLED, do not guess at them again. A dump of
+        -- the fresh packet's key set (2026-08-25) gave exactly:
+        --   Inventory Index, Price, _aliases, _args, _description, _dir,
+        --   _id, _junk1, _name, _sequence
+        -- so the schema is 'Inventory Index' (u8 @ 0x04), 3 bytes of
+        -- _junk1, then 'Price' (u32 @ 0x08) -- which matches the original
+        -- capture exactly. The old spray of five alias spellings only ever
+        -- added dead keys to a plain table; 'Inventory Index' was already
+        -- among them, so the bytes were right all along and a renamed
+        -- field is NOT why the item stopped listing.
         pp['Inventory Index'] = idx
-        pp['Index'] = idx
-        pp['Slot'] = idx
-        packets.inject(pp)
+        pp['Price'] = price
+        -- Spaced rather than fired in one frame: the client's own three sat
+        -- seconds apart (it was a person clicking menus) and the server has
+        -- a state change to make between each. Three packets in one frame
+        -- is the one thing about our sequence that could never look like a
+        -- real client.
+        coroutine.schedule(function()
+            _ow_stamp_sync(pp)
+            _ow_bz_how = _ow_inject_synced(pp, 0x10A)
+            -- re-open so any OTHER bazaared items stay listed (a removed
+            -- one is now at price 0 = unlisted, so it does not come back)
+            coroutine.schedule(function()
+                _ow_inject_synced(_ow_stamp_sync(
+                    packets.new('outgoing', 0x109, {})), 0x109)
+            end, 0.6)
+        end, 0.6)
     end)
-    -- re-open so any OTHER bazaared items stay listed (the removed one is
-    -- now at price 0 = unlisted, so it does not come back)
-    local ok2 = pcall(function()
-        packets.inject(packets.new('outgoing', 0x109, {}))
-    end)
+    local ok2, err2 = true, nil
     if ok then
         ow_chat(207, string.format(
-            '[OmniWatch] Bazaar: %s @ %d gil (slot %d)', nm, price, idx))
+            '[OmniWatch] Bazaar: %s @ %d gil (slot %d, sync %s, %s)',
+            nm, price, idx, tostring(_ow_last_sync),
+            tostring(_ow_bz_how or '?')))
     else
-        ow_chat(123, '[OmniWatch] Bazaar: packet inject failed')
+        -- The reason used to be swallowed. If packets.new rejects the
+        -- field names, or the library is missing, that message is the
+        -- whole diagnosis.
+        ow_chat(123, '[OmniWatch] Bazaar: set-price inject failed: '
+            .. tostring(err))
+    end
+    if not ok2 then
+        -- Distinct from the above: the price can be set and the re-open
+        -- still fail, which is exactly "nothing appears in my bazaar".
+        ow_chat(123, '[OmniWatch] Bazaar: open (0x109) failed: '
+            .. tostring(err2))
     end
 end
+
+-- ── Outgoing sequence counter ──────────────────────────────────────────────
+-- THE BAZAAR BUG, FOUND BY CAPTURE 2026-08-25. Bytes 3-4 of every outgoing
+-- packet are the client's SYNC counter. A capture of the same action done
+-- both ways:
+--   ours   0A 07 00 00 34 00 00 00 50 C3 00 00
+--   client 0A 07 DA 35 34 00 00 00 50 C3 00 00
+-- Identical payload -- 0x34 = slot 52, 0xC350 = 50000 gil -- and a SYNC OF
+-- ZERO on ours. 0x10A is sync-checked, so the server drops it silently:
+-- the inject succeeds, the log says success, and nothing ever lists. This
+-- is the exact failure the feature was originally fixed for by moving to
+-- packets.new + packets.inject "because the managed API fills the sync
+-- counter" -- it evidently no longer does, which is why this broke with no
+-- change on our side.
+--
+-- So read the counter off the client's own traffic and stamp it ourselves.
+_ow_last_sync = nil
+windower.register_event('outgoing chunk',
+    function(id, original, modified, injected, blocked)
+        if injected then return end        -- ours carry no counter yet
+        local d = original
+        if d and #d >= 4 then
+            _ow_last_sync = d:byte(3) + d:byte(4) * 256
+        end
+    end)
+
+-- ── Bazaar packet capture ──────────────────────────────────────────────────
+-- The injects succeed and the item still does not list, and the field names
+-- have been ruled out. The only thing left is to compare our bytes with the
+-- CLIENT'S OWN -- the same way the feature was got working the first time.
+-- Logs every outgoing 0x109 / 0x10A / 0x10B, ours and the game's, with the
+-- injected flag so the two are told apart. These packets are rare, so this
+-- costs nothing when no one is bazaaring.
+_ow_bz_cap = false   -- off by default; //ow bzcap turns it on when needed
+windower.register_event('outgoing chunk',
+    function(id, original, modified, injected, blocked)
+        if not _ow_bz_cap then return end
+        if id ~= 0x109 and id ~= 0x10A and id ~= 0x10B then return end
+        local data = modified or original or ''
+        local hex = {}
+        for i = 1, math.min(#data, 16) do
+            hex[#hex + 1] = string.format('%02X', data:byte(i))
+        end
+        ow_chat(207, string.format(
+            '[OmniWatch] BZCAP 0x%03X %s%s len=%d: %s',
+            id,
+            injected and 'INJECTED' or 'from-client',
+            blocked and ' BLOCKED' or '',
+            #data, table.concat(hex, ' ')))
+    end)
 
 -- Move <item_id> from one bag to another for the "Move to..." action on
 -- the overlay's item right-click menu. Bag names arrive on the wire as
@@ -9959,10 +10173,13 @@ local function _ow_drain_inbound()
                 local myname  = me and me.name or ''
                 if who ~= '' and myname ~= '' and who ~= myname then
                     -- Meant for a different character on this machine.
-                    -- Silently ignore so the wrong box never drops.
-                    if _ow_cast_debug then
+                    -- Silently ignore so the wrong box never drops --
+                    -- except for bazaar, where silence is indistinguishable
+                    -- from the feature being broken. Say so for that one.
+                    if _ow_cast_debug or action == 'bazaar' then
                         ow_chat(207,
-                            '[OW] INVACT ignored (for ' .. who
+                            '[OW] INVACT ' .. tostring(action)
+                            .. ' ignored (for ' .. who
                             .. ', I am ' .. myname .. ')')
                     end
                 elseif item_id then
@@ -9994,6 +10211,16 @@ local function _ow_drain_inbound()
                         end
                     end
                 end
+            end
+        elseif head == 'ICONREQ' then
+            -- The overlay failed to load an icon and is asking us to pull
+            -- it out of the client DATs. Extraction works from an item id
+            -- and does NOT require the item to be equipped, so gear that
+            -- has only been previewed in sim (or seen in the AH, or a
+            -- treasure pool) can get an icon too -- previously icons only
+            -- ever appeared for pieces as they were worn.
+            for _id in rest:gmatch('%d+') do
+                pcall(_ow_request_icon, _id)
             end
         elseif head == 'BLUSETS' then
             -- BLU Spellsets panel actions. Wire forms:
@@ -10824,6 +11051,15 @@ ow_safe_register('addon command', function(command, ...)
         _ow_ah_command(table.concat(args, '|'))
     elseif command == 'pupatt' or command == 'pup' then
         _ow_pupatt_command(table.concat(args, '|'))
+    elseif command == 'bzcap' then
+        _ow_bz_cap = not _ow_bz_cap
+        ow_chat(207, string.format('[OW] bazaar capture = %s',
+            tostring(_ow_bz_cap)))
+        if windower and windower.add_to_chat then
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] bazaar capture = %s (writes to omniwatch.log)',
+                tostring(_ow_bz_cap)))
+        end
     elseif command == 'debug' then
         _ow_cast_debug = not _ow_cast_debug
         _ow_gs_debug   = not _ow_gs_debug
@@ -12794,6 +13030,13 @@ local function ensure_icon(id)
 
     extracted_ids[id] = true
     return true
+end
+
+-- Public wrapper for the command dispatcher, which runs EARLIER in this
+-- file than ensure_icon's local declaration and so cannot see it. Globals
+-- resolve at call time, which is always after load.
+function _ow_request_icon(id)
+    return ensure_icon(tonumber(id) or 0)
 end
 
 -- Status-icon extraction: like ensure_icon but pulls from the buff DAT
