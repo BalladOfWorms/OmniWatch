@@ -1172,8 +1172,42 @@ function M.emit_chat(mode, sender_name, text)
             end
         end
     end
+    -- Corsair roll results share mode 1 with /say, and the drop below is
+    -- there for /say (the 0x017 packet path is canonical for real chat).
+    -- Until now a roll only survived by accident: the own-echo escape
+    -- further down keeps a dropped-mode line when the player's own name
+    -- falls in the first 30 characters, which is true of the short form
+    -- ("Wormfood <sep> Chaos Roll <n> (+22.27% Attack!)") and false of
+    -- the party-wide form, which lists everyone affected first. So a
+    -- roll appeared or vanished depending on where you sat in that list,
+    -- and the ones that appeared were classified downstream as /say and
+    -- landed in World. Recognising them here sends them on to the roll
+    -- branch in the Python classifier, which routes them to Battle.
+    --
+    -- ASCII ONLY, deliberately: this runs BEFORE _normalize_to_utf8, so
+    -- the separator (SJIS 81 C3) and the circled roll number (87 40-53)
+    -- are still raw bytes. The roll name and the bonus in parentheses
+    -- are plain text either way, so the test leans on those.
+    local _is_roll = false
+    if mode == 1 or mode == 2 or mode == 3 then
+        local at = text:find('Roll', 1, true)
+        while at and not _is_roll do
+            -- Whole word only, or "Rolling out (+1)" in a /say reads
+            -- as a roll and jumps the drop gate.
+            local prv = (at > 1) and text:sub(at - 1, at - 1) or ' '
+            local nxt = text:sub(at + 4, at + 4)
+            if not prv:find('^%w') and not nxt:find('^%w') then
+                local w = text:sub(at + 4, at + 28)
+                if w:find('%([%+%-]') or w:find('(Lucky', 1, true)
+                        or w:find('(Unlucky', 1, true) then
+                    _is_roll = true
+                end
+            end
+            at = text:find('Roll', at + 1, true)
+        end
+    end
     if DROPPED_CHAT_MODES[mode] and not _is_skillchain
-            and not _is_emote then
+            and not _is_emote and not _is_roll then
         local is_gearswap = false
         if text:sub(1, 10) == '[GearSwap]' or text:sub(1, 6) == '[CHAR]' then
             is_gearswap = true
@@ -1339,10 +1373,25 @@ function M.emit_chat(mode, sender_name, text)
         if _pn and _pn ~= '' and text and text ~= '' then
             local a, b = text:find(_pn, 1, true)
             if a and a <= 30 then
-                ev.segments = {
-                    { text = text:sub(1, b),     color = 'self_name' },
-                    { text = text:sub(b + 1),    color = 'default'   },
-                }
+                -- THE NAME ONLY. This used to colour sub(1, b) --
+                -- from the start of the line through the name --
+                -- which is the same thing when your name leads the
+                -- line, and wrong the moment it doesn't. An NPC
+                -- greeting you ("Dremi : Why if it isn't Wormfood.")
+                -- put your name inside the 30-char window with 24
+                -- characters of somebody else's words in front of
+                -- it, and all of it came out blue.
+                ev.segments = {}
+                if a > 1 then
+                    ev.segments[#ev.segments + 1] =
+                        { text = text:sub(1, a - 1), color = 'default' }
+                end
+                ev.segments[#ev.segments + 1] =
+                    { text = text:sub(a, b), color = 'self_name' }
+                if b < #text then
+                    ev.segments[#ev.segments + 1] =
+                        { text = text:sub(b + 1), color = 'default' }
+                end
             end
         end
     end

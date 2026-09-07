@@ -16,6 +16,10 @@
 --                                                          current sim main job)
 --   SIM|gift|<id>|<true|false> → set_value('gift', bool, id)
 --   SIM|reset                → wipe state to defaults
+--   SIM|strip                → force every gear slot explicitly empty
+--                              (naked). NOT the same as reset: reset
+--                              drops the overrides, and an absent slot
+--                              falls back to the player's real gear.
 --
 -- Internal state: _ow_sim_state. Keys mirror windower.ffxi.get_player() field
 -- names so OmniWatch's compute code (which reads p.main_job, p.merits.X,
@@ -452,6 +456,17 @@ end
 -- ─── State ─────────────────────────────────────────────────────────────────
 -- Default state: pure-scratch (everything zeroed) per the user's spec. When
 -- sim toggles on, the panel starts blank and the user fills values in.
+-- Canonical sim gear slots, in equipment-panel order. Mirrors
+-- SIM_GEAR_SLOTS on the python side. Declared up here (rather than
+-- reusing _SIM_VALID_SLOTS, which is defined further down for the
+-- import path) so set_value can see it as an upvalue.
+local _SIM_SLOT_KEYS = {
+    'main', 'sub', 'range', 'ammo',
+    'head', 'neck', 'left_ear', 'right_ear',
+    'body', 'hands', 'left_ring', 'right_ring',
+    'back', 'waist', 'legs', 'feet',
+}
+
 local function fresh_state()
     return {
         active   = false,    -- sim on/off
@@ -585,10 +600,27 @@ function M.set_value(key, value, sub)
         -- Parse instance ref form first.
         local id_s, bag_s, idx_s = raw:match('^(%-?%d+)@(%d+):(%d+)$')
         if id_s then
+            local nid = tonumber(id_s) or 0
+            local nbag = tonumber(bag_s) or 0
+            local nidx = tonumber(idx_s) or 0
+            -- Keep an imported set's augment list when the incoming ref
+            -- is the SAME piece. The wire form carries id/bag/idx only,
+            -- so an echo of what we already hold -- the overlay pushing
+            -- its equipment map back, say -- would otherwise quietly
+            -- replace a set-supplied augment list with nothing, and the
+            -- simulation would drift back to whichever copy the id
+            -- resolves to. A genuinely different pick drops it, which is
+            -- right: that is the user choosing a real item from the bag.
+            local prev = _ow_sim_state.equipment[sk]
+            local keep = nil
+            if type(prev) == 'table' and type(prev.augs) == 'table'
+               and (tonumber(prev.id) or 0) == nid
+               and (tonumber(prev.bag) or 0) == nbag
+               and (tonumber(prev.idx) or 0) == nidx then
+                keep = prev.augs
+            end
             _ow_sim_state.equipment[sk] = {
-                id  = tonumber(id_s)  or 0,
-                bag = tonumber(bag_s) or 0,
-                idx = tonumber(idx_s) or 0,
+                id = nid, bag = nbag, idx = nidx, augs = keep,
             }
         else
             -- Legacy id-only or "0" for empty.
@@ -610,6 +642,17 @@ function M.set_value(key, value, sub)
                 windower.add_to_chat(123, '[OW/Sim] export_set failed: ' .. tostring(err))
             end
         end
+    elseif key == 'strip' then
+        -- Naked baseline: every slot explicitly empty. Writing 0 into
+        -- each slot is deliberate — the compute path treats an ABSENT
+        -- slot as "use the real gear", so wiping the table would put
+        -- the player's gear back on instead of taking it off. Buffs,
+        -- jobs, merits and food are untouched.
+        local eq = {}
+        for _, sk in ipairs(_SIM_SLOT_KEYS) do
+            eq[sk] = 0
+        end
+        _ow_sim_state.equipment = eq
     elseif key == 'reset' then
         _ow_sim_state = fresh_state()
         _ow_sim_state.active = true   -- preserve active flag through reset
@@ -984,20 +1027,60 @@ function M.export_set()
         return out
     end
 
+    -- ── Which copy, when one piece fills two slots ──────────────────
+    -- Two Chirich Rings in ring1 and ring2 are two DIFFERENT objects that
+    -- share a name and an id. A set naming them both without saying where
+    -- they are hands GearSwap one description matching two things: it
+    -- equips whichever it reaches first, twice, and the second slot
+    -- silently keeps what was already on it. GearSwap's answer is bag=,
+    -- so the export writes one -- but ONLY for the ids that actually
+    -- repeat. A bag= on a piece used once is a promise the set breaks the
+    -- first time that item is reorganised into a different wardrobe.
+    --
+    -- Gear equips out of inventory and the eight wardrobes and nowhere
+    -- else, so a copy in safe or storage is never named as the answer
+    -- here: pointing GearSwap at a bag it can never equip from is worse
+    -- than saying nothing and letting it look.
+    local GS_BAG = {
+        [0]  = 'inventory', [8]  = 'wardrobe',
+        [10] = 'wardrobe2', [11] = 'wardrobe3', [12] = 'wardrobe4',
+        [13] = 'wardrobe5', [14] = 'wardrobe6', [15] = 'wardrobe7',
+        [16] = 'wardrobe8',
+    }
+    -- Every equippable copy of one id, in a stable order, so exporting
+    -- the same set twice names the same copies both times.
+    local function equippable_copies(item_id)
+        local found = {}
+        for bag_id in pairs(GS_BAG) do
+            local ok, items = pcall(windower.ffxi.get_items, bag_id)
+            if ok and type(items) == 'table' then
+                for idx, it in pairs(items) do
+                    if type(idx) == 'number' and type(it) == 'table'
+                       and it.id == item_id then
+                        found[#found + 1] = {bag = bag_id, idx = idx}
+                    end
+                end
+            end
+        end
+        table.sort(found, function(a, b)
+            if a.bag ~= b.bag then return a.bag < b.bag end
+            return a.idx < b.idx
+        end)
+        return found
+    end
+
     local slot_order = {
         'main', 'sub', 'range', 'ammo',
         'head', 'neck', 'left_ear', 'right_ear',
         'body', 'hands', 'left_ring', 'right_ring',
         'back', 'waist', 'legs', 'feet',
     }
-    local lines = {}
-    table.insert(lines, '-- OmniWatch sim export — ' .. os.date('%Y-%m-%d %H:%M:%S'))
-    table.insert(lines, '-- Paste this into your gearswap file or rename "exported"')
-    table.insert(lines, '-- to whatever set name you want (e.g. sets.engaged.DT.HighHaste).')
-    table.insert(lines, 'sets.exported = {')
+
+    -- Pass 1: resolve every filled slot. Nothing is written yet, because
+    -- whether a slot needs a bag= depends on the slots after it.
+    local rows, count_by_id = {}, {}
     for _, slot in ipairs(slot_order) do
         local ref = eq[slot]
-        -- Resolve the slot's item id + (bag, idx) from the stored ref.
         -- ref may be: a {id,bag,idx} instance table, a legacy id int, or
         -- 0 / nil (empty / unset → omitted from the export).
         local id, bag, idx
@@ -1012,18 +1095,90 @@ function M.export_set()
             local res_ok, item = pcall(function()
                 return res and res.items and res.items[id]
             end)
-            local name = (res_ok and item and (item.en or item.enl)) or ('item:' .. id)
-            local gs_slot = GS_SLOT[slot] or slot
-            local augs = read_augments(id, bag, idx)
-            if #augs > 0 then
-                local parts = {}
-                for _, a in ipairs(augs) do parts[#parts + 1] = quote_aug(a) end
-                table.insert(lines, string.format(
-                    '    %s={name=%q, augments={%s,}},',
-                    gs_slot, name, table.concat(parts, ',')))
-            else
-                table.insert(lines, string.format('    %s=%q,', gs_slot, name))
+            local name = (res_ok and item and (item.en or item.enl))
+                         or ('item:' .. id)
+            rows[#rows + 1] = {
+                gs_slot = GS_SLOT[slot] or slot,
+                id = id, bag = bag, idx = idx, name = name,
+                augs = read_augments(id, bag, idx),
+            }
+            count_by_id[id] = (count_by_id[id] or 0) + 1
+        end
+    end
+
+    -- Pass 2: give each repeated id a copy of its own. The slot's own
+    -- (bag, idx) is used first, when it names an equippable copy nothing
+    -- else has taken.
+    --
+    -- IT OFTEN WON'T, WHICH IS THE WHOLE REASON FOR THE SECOND LOOP: an
+    -- imported set resolves to bag 0 when it could not tell your copies
+    -- apart, the same copy can be picked in both slots from the dropdown,
+    -- and a legacy id-only slot carries no location at all. The set still
+    -- needs two distinct copies named in every one of those cases, so the
+    -- remainder are dealt out from what is really in the bags.
+    local pinned, unpinned, claimed = 0, {}, {}
+    for _, r in ipairs(rows) do
+        if (count_by_id[r.id] or 0) > 1 and r.bag and r.idx
+           and GS_BAG[r.bag] then
+            local key = r.bag .. ':' .. r.idx
+            if not claimed[key] then
+                claimed[key]  = true
+                r.bag_name    = GS_BAG[r.bag]
+                pinned        = pinned + 1
             end
+        end
+    end
+    for _, r in ipairs(rows) do
+        if (count_by_id[r.id] or 0) > 1 and not r.bag_name then
+            for _, c in ipairs(equippable_copies(r.id)) do
+                local key = c.bag .. ':' .. c.idx
+                if not claimed[key] then
+                    claimed[key] = true
+                    r.bag_name   = GS_BAG[c.bag]
+                    pinned       = pinned + 1
+                    break
+                end
+            end
+            -- Owning one copy of a piece the set puts in two slots is a
+            -- real thing to have done, and it is the set that is wrong,
+            -- not the export. Say so on the line instead of writing a
+            -- bag= that would send both slots at the same object anyway.
+            if not r.bag_name then
+                unpinned[#unpinned + 1] = r.gs_slot
+                r.note = '   -- only one copy owned; this slot cannot also equip it'
+            end
+        end
+    end
+
+    -- Pass 3: write it out.
+    local lines = {}
+    table.insert(lines, '-- OmniWatch sim export — ' .. os.date('%Y-%m-%d %H:%M:%S'))
+    table.insert(lines, '-- Paste this into your gearswap file or rename "exported"')
+    table.insert(lines, '-- to whatever set name you want (e.g. sets.engaged.DT.HighHaste).')
+    if pinned > 0 then
+        table.insert(lines, '-- bag= appears where one piece fills two slots, so each slot')
+        table.insert(lines, '-- equips a different copy instead of both naming the same one.')
+    end
+    table.insert(lines, 'sets.exported = {')
+    for _, r in ipairs(rows) do
+        local fields = {}
+        if r.bag_name then
+            fields[#fields + 1] = string.format('bag=%q', r.bag_name)
+        end
+        if #r.augs > 0 then
+            local parts = {}
+            for _, a in ipairs(r.augs) do parts[#parts + 1] = quote_aug(a) end
+            fields[#fields + 1] = 'augments={' .. table.concat(parts, ',') .. ',}'
+        end
+        if #fields == 0 then
+            -- Name and nothing else: keep the bare short form the export
+            -- has always written, so an ordinary set still reads like a
+            -- hand-written one rather than a generated table.
+            table.insert(lines, string.format('    %s=%q,%s',
+                r.gs_slot, r.name, r.note or ''))
+        else
+            table.insert(lines, string.format('    %s={name=%q, %s},%s',
+                r.gs_slot, r.name, table.concat(fields, ', '), r.note or ''))
         end
     end
     table.insert(lines, '}')
@@ -1058,7 +1213,16 @@ function M.export_set()
     end
     f:write(body)
     f:close()
-    windower.add_to_chat(207, '[OW/Sim] exported set to ' .. fname)
+    windower.add_to_chat(207, '[OW/Sim] exported set to ' .. fname
+        .. ((pinned > 0)
+            and (' (' .. pinned .. ' slot' .. ((pinned == 1) and '' or 's')
+                 .. ' pinned to a bag)')
+            or ''))
+    if #unpinned > 0 then
+        windower.add_to_chat(123, '[OW/Sim] one copy owned, two slots want it: '
+            .. table.concat(unpinned, ', ')
+            .. ' -- GearSwap can only equip that piece in one of them.')
+    end
 end
 
 -- ─── Set import ─────────────────────────────────────────────────────────────
@@ -1084,6 +1248,17 @@ local _SIM_SLOT_ALIASES = {
     -- body, hands, back, waist, legs, feet, left_ear, right_ear,
     -- left_ring, right_ring.
 }
+-- GearSwap bag names → windower bag ids. The set writes the name, the
+-- resolver needs the id. Only the bags gear can be equipped out of are
+-- listed: a set naming any other one is naming somewhere the game would
+-- refuse to equip from anyway, so it resolves to nothing and the import
+-- falls back to finding the piece wherever it actually is.
+local _SIM_BAG_ID_BY_NAME = {
+    inventory = 0,  wardrobe  = 8,  wardrobe2 = 10, wardrobe3 = 11,
+    wardrobe4 = 12, wardrobe5 = 13, wardrobe6 = 14, wardrobe7 = 15,
+    wardrobe8 = 16,
+}
+
 local _SIM_VALID_SLOTS = {
     main=true, sub=true, range=true, ammo=true, head=true, neck=true,
     left_ear=true, right_ear=true, body=true, hands=true,
@@ -1104,6 +1279,141 @@ local function _sim_build_name_index()
         end
     end
     return _sim_name_to_id
+end
+
+-- ─── Picking the RIGHT copy of an augmented item ────────────────────────
+-- A GearSwap set writes an augmented piece as
+--     { name="Andartia's Mantle", augments={'DEX+20','Accuracy+20 Attack+20',
+--       'Accuracy+10','"Dbl.Atk."+10','Damage taken-5%'} }
+-- and the import used to read `.name` and throw `.augments` away, leaving a
+-- bare item id. Every copy of that cape shares the id, so the compute path
+-- then took whichever one it met first walking the bags — which is why
+-- importing a set full of capes put arbitrary ones on. Nothing about the
+-- dropdown's labelling touched this: the two are separate paths.
+--
+-- STRING COMPARISON ALONE IS NOT ENOUGH, which is the reason for the second
+-- half of the score below. A gear file is hand-written from the in-game
+-- display and uses whatever shorthand its author likes — "Accy+20 Atk+20",
+-- "Mag. Acc.+20" — while the client's own augment text spells the stat out.
+-- So an exact line match is worth a lot when it happens, and the parsed
+-- stats are compared underneath it for when it doesn't.
+local function _sim_aug_norm(line)
+    return (tostring(line or ''):lower():gsub('[^%w%+%-]', ''))
+end
+
+local function _sim_aug_stats(augs)
+    local t = {}
+    for _, a in ipairs(augs or {}) do
+        -- _ow_parse_desc_line, not ow_parse_desc_line: the latter is a
+        -- file-local inside OmniWatch.lua and reads as nil from here, so
+        -- this whole half of the score used to be dead. The wrapper is
+        -- defined beside it as a global for exactly this reason.
+        if _ow_parse_desc_line then
+            pcall(_ow_parse_desc_line, t, tostring(a))
+        end
+    end
+    return t
+end
+
+local function _sim_score_augments(want, have)
+    if type(want) ~= 'table' or #want == 0 then return 0 end
+    if type(have) ~= 'table' or #have == 0 then return 0 end
+    local score = 0
+    local pool = {}
+    for _, a in ipairs(have) do
+        local k = _sim_aug_norm(a)
+        pool[k] = (pool[k] or 0) + 1
+    end
+    for _, a in ipairs(want) do
+        local k = _sim_aug_norm(a)
+        if pool[k] and pool[k] > 0 then
+            pool[k] = pool[k] - 1
+            score = score + 10
+        end
+    end
+    local ws, hs = _sim_aug_stats(want), _sim_aug_stats(have)
+    for k, v in pairs(ws) do
+        if type(v) == 'number' and hs[k] == v then
+            score = score + 3           -- same stat, same value
+        elseif hs[k] ~= nil then
+            score = score + 1           -- same stat, different value
+        end
+    end
+    return score
+end
+
+-- Find the inventory copy of item_id whose augments best match the set's.
+-- Returns {id=, bag=, idx=} and the score, or nil when nothing scores.
+local function _sim_find_instance(item_id, want_augs)
+    if not (windower.ffxi.get_items and res and res.bags) then return nil, 0 end
+    if not ow_get_item_augments then return nil, 0 end
+    local best, best_score, runner_up = nil, 0, 0
+    for _, bag in pairs(res.bags) do
+        local ok, items = pcall(windower.ffxi.get_items, bag.id)
+        if ok and type(items) == 'table' then
+            for idx, it in pairs(items) do
+                if type(idx) == 'number' and type(it) == 'table'
+                   and it.id == item_id then
+                    local okA, have = pcall(ow_get_item_augments, bag.id, idx)
+                    local sc = okA and _sim_score_augments(want_augs, have) or 0
+                    if sc > best_score then
+                        runner_up = best_score
+                        best_score = sc
+                        best = {id = item_id, bag = bag.id, idx = idx}
+                    elseif sc > runner_up then
+                        runner_up = sc
+                    end
+                end
+            end
+        end
+    end
+    -- A CLEAR winner or none at all. Copies of one item share most of
+    -- their augments -- every Ambuscade cape ends "Damage taken-5%" --
+    -- so a build you own no copy of still scores against all of them,
+    -- equally. Taking the highest of a tie would name an arbitrary copy
+    -- and report it as a match; requiring the best to beat the rest
+    -- means "I could not tell" comes back as nothing, and the caller
+    -- falls back to any copy while still applying the set's own
+    -- augments. Nothing is lost by declining to guess here.
+    if best and best_score > runner_up then
+        return best, best_score
+    end
+    return nil, 0
+end
+
+-- ── bag= : the set naming WHICH copy ──────────────────────────────
+-- A GearSwap set writes a duplicated piece as
+--     ring1={name="Chirich Ring +1", bag="wardrobe7"},
+--     ring2={name="Chirich Ring +1", bag="wardrobe8"},
+-- and bag= is the ONLY thing in that set that tells the two apart. The
+-- augment scorer below cannot help here: a pair of plain rings carries
+-- no augments to score, so both slots resolved to the same id and the
+-- compute path took whichever copy the bag walk reached first — the same
+-- copy, twice. Reading bag= gives each slot its own physical item, which
+-- is also what makes a round trip through the exporter come back intact.
+--
+-- Returns nil when the set named no bag, named one that isn't a real
+-- equippable bag, or named one that no longer holds a copy of the piece
+-- (it was reorganised since the set was written). Every one of those
+-- falls through to the existing resolution rather than failing the slot.
+local function _sim_bag_copy(item_id, ref)
+    if type(ref) ~= 'table' or type(ref.bag) ~= 'string' then return nil end
+    local key = ref.bag:lower():gsub('[%s_]+', '')
+    local bag_id = _SIM_BAG_ID_BY_NAME[key]
+    if not bag_id then return nil end
+    local ok, items = pcall(windower.ffxi.get_items, bag_id)
+    if not ok or type(items) ~= 'table' then return nil end
+    -- Lowest slot index wins when a bag holds two copies, so the answer
+    -- doesn't move between imports of the same file.
+    local best = nil
+    for idx, it in pairs(items) do
+        if type(idx) == 'number' and type(it) == 'table' and it.id == item_id
+           and (best == nil or idx < best) then
+            best = idx
+        end
+    end
+    if not best then return nil end
+    return {id = item_id, bag = bag_id, idx = best}
 end
 
 -- Resolve an item reference (string name, or a {name=,augments=} table, or a
@@ -1195,33 +1505,139 @@ local function _sim_make_sandbox()
     return env
 end
 
--- Walk a dotted path ("sets.engaged.HighHaste") into a table. Returns the
--- value or nil. Tolerant of a leading "sets." (the sandbox's top table IS
--- `sets`, so we strip a leading "sets." segment).
+-- Split a set path into segments. Accepts every shape a GearSwap set is
+-- actually written in, because that is what people copy out of their own
+-- lua file rather than retyping:
+--     sets.precast.WS['Blade: Hi']
+--     sets.precast.WS["Blade: Hi"]
+--     precast.WS[Blade: Hi]
+--     precast.WS.Blade: Hi
+--     sets.engaged.HighHaste
+--
+-- THE OLD VERSION COULD NOT RESOLVE A SET NAME CONTAINING A SPACE AT ALL.
+-- It began with gsub('%s+', '') over the WHOLE path, which turned
+-- 'Blade: Hi' into 'Blade:Hi' before the lookup, and it split purely on
+-- '.', so a bracket segment arrived as the literal key "WS['Blade:Hi']".
+-- Both the bracket form and the dotted form therefore missed, and every
+-- weapon-skill set (the ones that always carry a colon and a space) was
+-- unreachable. Whitespace is now only trimmed at the EDGES of a segment.
+local function _sim_split_path(setpath)
+    local p = tostring(setpath or ''):gsub('^%s+', ''):gsub('%s+$', '')
+    local segs, i, n = {}, 1, #p
+    while i <= n do
+        local c = p:sub(i, i)
+        if c == '.' then
+            i = i + 1
+        elseif c == '[' then
+            local close = p:find(']', i + 1, true)
+            if not close then
+                -- Unterminated bracket: take the rest as one segment
+                -- rather than dropping the whole path on the floor.
+                close = n + 1
+            end
+            local inner = p:sub(i + 1, close - 1)
+            inner = inner:gsub('^%s+', ''):gsub('%s+$', '')
+            inner = inner:match("^'(.*)'$") or inner:match('^"(.*)"$') or inner
+            if inner ~= '' then segs[#segs + 1] = inner end
+            i = close + 1
+        else
+            local nxt = p:find('[%.%[]', i)
+            local seg = nxt and p:sub(i, nxt - 1) or p:sub(i)
+            seg = seg:gsub('^%s+', ''):gsub('%s+$', '')
+            if seg ~= '' then segs[#segs + 1] = seg end
+            i = nxt or (n + 1)
+        end
+    end
+    return segs
+end
+
+-- Normalised form for the forgiving lookup below: case, spaces and
+-- underscores are the three things a hand-typed path gets wrong, and none
+-- of them distinguishes two real sets in practice.
+local function _sim_norm_key(s)
+    return (tostring(s):lower():gsub('[%s_]+', ''))
+end
+
+-- Index one segment. Exact key first (so an exact match always wins),
+-- then a numeric index, then the normalised scan.
+local function _sim_index(node, seg)
+    if type(node) ~= 'table' then return nil end
+    local v = rawget(node, seg)
+    if v ~= nil then return v end
+    local num = tonumber(seg)
+    if num ~= nil then
+        v = rawget(node, num)
+        if v ~= nil then return v end
+    end
+    local want = _sim_norm_key(seg)
+    for k, val in pairs(node) do
+        if type(k) == 'string' and _sim_norm_key(k) == want then
+            return val
+        end
+    end
+    return nil
+end
+
+-- Walk a set path into a table. Returns the value or nil. A leading
+-- "sets" segment is optional (the sandbox's top table IS `sets`).
 local function _sim_walk_path(root_sets, setpath)
-    local p = tostring(setpath or ''):gsub('%s+', '')
-    -- Strip a leading "sets." if present.
-    p = p:gsub('^sets%.', '')
-    if p == '' then return nil end
+    local segs = _sim_split_path(setpath)
+    if not segs or #segs == 0 then return nil end
+    if tostring(segs[1]):lower() == 'sets' then
+        table.remove(segs, 1)
+        -- A bare "sets" is not a set. Returning the root here would
+        -- import zero slots and report success; nil gets the honest
+        -- "set not found" message instead.
+        if #segs == 0 then return nil end
+    end
     local node = root_sets
-    for seg in p:gmatch('[^%.]+') do
-        if type(node) ~= 'table' then return nil end
-        -- Support bracket-quoted segments like ['Blade: Jin'] written as
-        -- Blade: Jin in the path (rare; users typically type dotted).
-        node = rawget(node, seg)
+    for _, seg in ipairs(segs) do
+        node = _sim_index(node, seg)
         if node == nil then return nil end
     end
     return node
 end
 
+-- Every failure below now says what went wrong AND hands the same
+-- sentence back to the caller, so OmniWatch.lua can put it in the import
+-- window. A chat line is the wrong place for this to live: the window
+-- that started the import said "sent -- check sim panel" whatever
+-- happened, and the real answer -- which was a syntax error in the gear
+-- file, on a named line -- scrolled past in chat while the sim panel sat
+-- there looking like the importer had done nothing.
+local function _sim_import_fail(msg)
+    windower.add_to_chat(123, '[OW/Sim] import: ' .. msg)
+    return false, msg
+end
+
+-- The source line a parse error points at. Lua names the file and the
+-- line but not what is on it, and "'}' expected near 'bag'" means very
+-- little until you see that the line is missing a comma. Read it back
+-- and quote it.
+local function _sim_source_line(filepath, lineno)
+    if not lineno then return nil end
+    local f = io.open(filepath, 'r')
+    if not f then return nil end
+    local n, out = 0, nil
+    for line in f:lines() do
+        n = n + 1
+        if n == lineno then out = line; break end
+    end
+    f:close()
+    if not out then return nil end
+    out = out:gsub('^%s+', ''):gsub('%s+$', '')
+    -- Plain dots: lua 5.1 has no \u escape (it silently drops the
+    -- backslash and prints 'u{2026}'), and the chat font has no ellipsis.
+    if #out > 90 then out = out:sub(1, 89) .. '...' end
+    return out
+end
+
 function M.import_set(filepath, setpath)
     if not filepath or filepath == '' then
-        windower.add_to_chat(123, '[OW/Sim] import: no file path given.')
-        return false
+        return _sim_import_fail('no file path given.')
     end
     if not setpath or setpath == '' then
-        windower.add_to_chat(123, '[OW/Sim] import: no set path given.')
-        return false
+        return _sim_import_fail('no set path given.')
     end
 
     -- Read + load the file under the sandbox env.
@@ -1233,16 +1649,24 @@ function M.import_set(filepath, setpath)
         -- Fallback: read bytes and loadstring (handles odd path cases).
         local f = io.open(filepath, 'r')
         if not f then
-            windower.add_to_chat(123,
-                '[OW/Sim] import: cannot open file: ' .. tostring(filepath))
-            return false
+            return _sim_import_fail('cannot open file: ' .. tostring(filepath))
         end
         local body = f:read('*a'); f:close()
         chunk, lerr = loadstring(body, '@' .. filepath)
         if not chunk then
-            windower.add_to_chat(123,
-                '[OW/Sim] import: parse error: ' .. tostring(lerr))
-            return false
+            -- A parse error is the gear FILE being invalid lua, not
+            -- anything the importer can work around -- GearSwap will be
+            -- refusing to load it too. Name the line and quote it, so the
+            -- missing comma is visible without opening an editor.
+            local emsg = tostring(lerr)
+            local lineno = tonumber(emsg:match(':(%d+):'))
+            local src = _sim_source_line(filepath, lineno)
+            local short = emsg:match('[^/\\]*:%d+:%s*(.*)$') or emsg
+            return _sim_import_fail(string.format(
+                'the gear file will not load -- %s:%s %s%s',
+                tostring(filepath:match('[^/\\]+$') or filepath),
+                tostring(lineno or '?'), short,
+                src and ('  >> ' .. src) or ''))
         end
     end
 
@@ -1250,9 +1674,8 @@ function M.import_set(filepath, setpath)
     setfenv(chunk, env)
     local ok_run, run_err = pcall(chunk)
     if not ok_run then
-        windower.add_to_chat(123,
-            '[OW/Sim] import: file error: ' .. tostring(run_err))
-        return false
+        return _sim_import_fail('the gear file errored while loading -- '
+                                .. tostring(run_err))
     end
 
     -- Most gear files build sets inside init_gear_sets() (and sometimes
@@ -1269,16 +1692,21 @@ function M.import_set(filepath, setpath)
 
     local set = _sim_walk_path(env.sets, setpath)
     if type(set) ~= 'table' then
-        windower.add_to_chat(123, string.format(
-            '[OW/Sim] import: set "%s" not found in %s',
-            tostring(setpath), tostring(filepath:match('[^/\\]+$') or filepath)))
-        return false
+        return _sim_import_fail(string.format('set "%s" not found in %s',
+            tostring(setpath),
+            tostring(filepath:match('[^/\\]+$') or filepath)))
     end
 
     -- Translate the resolved set into sim equipment. Clear existing sim
     -- equipment first so the imported set fully replaces it.
     _ow_sim_state.equipment = {}
-    local applied, skipped = 0, 0
+    local applied, skipped, matched, by_bag = 0, 0, 0, 0
+    -- Names the item table had no entry for. Counted AND kept, because
+    -- "3 unresolved" tells you something is wrong and nothing about
+    -- what: a slot silently staying (real) after an import reads as the
+    -- importer dropping gear, when it is usually one name that doesn't
+    -- match the item's real spelling.
+    local unresolved = {}
     for raw_slot, ref in pairs(set) do
         local sk = tostring(raw_slot):lower()
         sk = _SIM_SLOT_ALIASES[sk] or sk
@@ -1290,20 +1718,92 @@ function M.import_set(filepath, setpath)
             else
                 local iid = _sim_ref_to_id(ref)
                 if iid > 0 then
-                    _ow_sim_state.equipment[sk] = iid
+                    -- The set may have named the copy outright with bag=.
+                    -- That beats every heuristic below it, because it is
+                    -- the author telling us which item they meant rather
+                    -- than us deducing it.
+                    local named = _sim_bag_copy(iid, ref)
+                    -- Augmented reference: pick the copy that matches
+                    -- rather than leaving the id to resolve to whichever
+                    -- one the bag walk reaches first.
+                    if type(ref) == 'table' and type(ref.augments) == 'table'
+                       and #ref.augments > 0 then
+                        -- CARRY THE SET'S OWN AUGMENT LIST. A GearSwap set
+                        -- spells out every augment on a piece, so there is
+                        -- no need to deduce anything: the compute path
+                        -- applies exactly these, whichever physical copy
+                        -- the id resolves to. That is what makes importing
+                        -- a STR cape simulate a STR cape even when the
+                        -- first copy in your bags is the DEX one.
+                        --
+                        -- A matching copy is still located when one exists,
+                        -- because GearInfo's own gear walk (which owns
+                        -- accuracy/attack/evasion/defence) reads the real
+                        -- item and cannot be handed a list. When no copy
+                        -- matches, bag/idx stay 0 and the resolver falls
+                        -- back to any copy of the id -- the augments above
+                        -- are still applied, so a set naming a cape you do
+                        -- not own the exact build of still simulates the
+                        -- build the set asked for.
+                        local entry = {id = iid, bag = 0, idx = 0,
+                                       augs = ref.augments}
+                        if named then
+                            entry.bag = named.bag
+                            entry.idx = named.idx
+                            by_bag = by_bag + 1
+                        else
+                            local inst, sc = _sim_find_instance(iid, ref.augments)
+                            if inst and sc > 0 then
+                                entry.bag = inst.bag
+                                entry.idx = inst.idx
+                                matched = matched + 1
+                            end
+                        end
+                        _ow_sim_state.equipment[sk] = entry
+                    elseif named then
+                        -- Plain reference WITH a bag: no augments to carry,
+                        -- but the location still matters — it is what stops
+                        -- two slots resolving to one physical ring.
+                        _ow_sim_state.equipment[sk] = {
+                            id = iid, bag = named.bag, idx = named.idx,
+                        }
+                        by_bag = by_bag + 1
+                    else
+                        -- Plain reference, no augments and no bag named: a
+                        -- bare id is all the set gave us and all we need.
+                        _ow_sim_state.equipment[sk] = iid
+                    end
                     applied = applied + 1
                 else
                     skipped = skipped + 1
+                    local nm = ref
+                    if type(ref) == 'table' then
+                        nm = ref.name or ref.en or ref.enl
+                    end
+                    if nm ~= nil and #unresolved < 8 then
+                        unresolved[#unresolved + 1] =
+                            string.format('%s=%s', sk, tostring(nm))
+                    end
                 end
             end
         end
     end
 
-    windower.add_to_chat(207, string.format(
-        '[OW/Sim] imported "%s": %d slots applied%s',
-        tostring(setpath), applied,
-        (skipped > 0) and (', ' .. skipped .. ' unresolved') or ''))
-    return true
+    local summary = string.format('%d slots applied%s%s%s', applied,
+        (by_bag > 0) and (', ' .. by_bag .. ' pinned by bag') or '',
+        (matched > 0) and (', ' .. matched .. ' matched by augment') or '',
+        (skipped > 0) and (', ' .. skipped .. ' unresolved') or '')
+    windower.add_to_chat(207, string.format('[OW/Sim] imported "%s": %s',
+        tostring(setpath), summary))
+    if #unresolved > 0 then
+        windower.add_to_chat(207, '[OW/Sim] no such item: '
+            .. table.concat(unresolved, ', '))
+        summary = summary .. ' (no such item: '
+                  .. table.concat(unresolved, ', ') .. ')'
+    end
+    -- Second return value is what the import window shows. Nothing reads
+    -- it positionally anywhere else -- callers test the first value.
+    return true, summary
 end
 
 return M

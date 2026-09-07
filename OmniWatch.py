@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.12.2 (2026-08-24)"
+OMNIWATCH_BUILD_STAMP = "v1.12.3 (2026-09-01)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.12.2"
+OMNIWATCH_VERSION = "1.12.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -964,6 +964,20 @@ def _bind_udp(label):
         print(f"[OmniWatch] FATAL: could not open a UDP socket "
               f"({label}): {e}")
         raise
+    # Ask for a roomier receive buffer than the OS default (~64 KB on
+    # Windows). A snapshot is not one packet, it is a BURST: the addon
+    # writes every slot's gear list, then the tooltip cards, then the
+    # augment lines, then the end sentinel, all inside one game frame,
+    # and the overlay only drains them on its own next frame. Anything
+    # that overflows the buffer in between is dropped, and it is the TAIL
+    # of the burst that goes -- which is precisely where the tooltip data
+    # sits. Best-effort: the OS may cap or ignore the request, and a
+    # smaller buffer only means the old behaviour, so a failure here is
+    # not worth reporting.
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+    except OSError:
+        pass
     s.setblocking(False)
     return s, s.getsockname()[1]
 
@@ -1187,11 +1201,98 @@ profile_name_modal_error  = ""
 sim_import_cwd      = ""
 sim_import_file     = None
 sim_import_setpath  = ""
-sim_import_setpath_cursor = 0   # caret index within sim_import_setpath
 sim_import_scroll   = 0
 sim_import_field    = None
 sim_import_rects    = []     # (pygame.Rect, action_dict) per frame
 sim_import_status   = ""     # transient status/error line
+# True when sim_import_status came back as a FAILURE from the addon. The
+# window previously said "sent — check sim panel" whatever happened, so a
+# gear file with a syntax error in it looked exactly like a successful
+# import that the sim panel had ignored. The real answer only existed as
+# a chat line, which scrolls.
+sim_import_status_err = False
+
+def _decode_clipboard_bytes(raw):
+    """Decode raw clipboard bytes without guessing at the encoding.
+
+    THE FAILURE THIS EXISTS TO PREVENT IS SILENT IN ONE DIRECTION.
+    Decoding UTF-8 as UTF-16-LE does not raise: an even number of ASCII
+    bytes pairs up cleanly into CJK codepoints, which the overlay font
+    has no glyph for, so a pasted set path arrives as a row of boxes.
+    Decoding UTF-16 as UTF-8 fails loudly by comparison. So a try/except
+    around one decode with the other as fallback can only ever catch the
+    second case, which is why the old paste path mangled ordinary text.
+    Sniff the bytes instead.
+    """
+    try:
+        b = bytes(raw)
+    except Exception:
+        return ""
+    if not b:
+        return ""
+
+    def _as16(data, enc):
+        # A UTF-16 buffer is code units, so it must be cut to an even
+        # length; the clipboard's NUL terminator survives as a "\x00"
+        # character, which the caller strips along with any others.
+        return data[:len(data) - (len(data) % 2)].decode(enc, "ignore")
+
+    if b[:2] == b"\xff\xfe":
+        return _as16(b[2:], "utf-16-le")
+    if b[:2] == b"\xfe\xff":
+        return _as16(b[2:], "utf-16-be")
+    # No BOM. UTF-16 text made of Latin characters is close to half NUL
+    # bytes and they all sit on one side of each pair; UTF-8 text of the
+    # same content has none at all. Requiring a clear majority on one
+    # side keeps a lone NUL terminator on otherwise-UTF-8 data from
+    # flipping the decision. Do NOT strip trailing NULs before this runs
+    # — in UTF-16-LE the last byte of the final character IS a NUL, so
+    # stripping first eats the character with it.
+    if len(b) >= 4:
+        odd = sum(1 for i in range(1, len(b), 2) if b[i] == 0)
+        even = sum(1 for i in range(0, len(b), 2) if b[i] == 0)
+        need = max(1, (len(b) // 2) // 2)
+        if odd > even and odd >= need:
+            return _as16(b, "utf-16-le")
+        if even > odd and even >= need:
+            return _as16(b, "utf-16-be")
+    return b.rstrip(b"\x00").decode("utf-8", "ignore")
+
+
+def _clipboard_text():
+    """Return the clipboard as a plain str, ready to insert into a field.
+
+    Prefers pygame's own get_text() where the build has it (it hands back
+    a str and settles the encoding question entirely); falls back to the
+    raw SCRAP_TEXT bytes through _decode_clipboard_bytes. NULs and
+    control characters are stripped either way, since the font renderer
+    rejects them.
+    """
+    txt = None
+    try:
+        pygame.scrap.init()
+    except Exception:
+        pass
+    getter = getattr(pygame.scrap, "get_text", None)
+    if callable(getter):
+        try:
+            txt = getter()
+        except Exception:
+            txt = None
+    if txt is None:
+        try:
+            raw = pygame.scrap.get(pygame.SCRAP_TEXT)
+        except Exception:
+            raw = None
+        if isinstance(raw, str):
+            txt = raw
+        elif raw:
+            txt = _decode_clipboard_bytes(raw)
+    if not txt:
+        return ""
+    txt = txt.replace("\x00", "")
+    return "".join(c for c in txt if c == " " or ord(c) >= 32).strip()
+
 
 # Config file for just the gear-root path (kept separate from the main
 # settings schema to avoid its side-effect machinery — mirrors the
@@ -1632,6 +1733,28 @@ _SIM_FOOD_NAME_BY_ID = {fid: fname for fid, fname, _ in SIM_FOOD_LIST}
 # slot key -> equipment panel index, for falling back to the live stream.
 _SIM_SLOT_INDEX = {k: i for i, (k, _l) in enumerate(SIM_GEAR_SLOTS)}
 
+# Windower bag id -> the short label the sim window uses when it has to
+# say WHICH copy of a piece a row is. The long names already exist in
+# INVENTORY_BAG_ORDER, but a slot cell has room for about a dozen
+# characters after the item name, so "WD 7" is the form that survives
+# the truncation. Ids match res.bags (0 inventory, 8 wardrobe, 10-16 for
+# wardrobes 2-8); the others are here so a copy sitting in safe or
+# storage gets named honestly instead of falling back to a bare number.
+_SIM_BAG_SHORT = {
+    0: "Inv",   1: "Safe",  2: "Stor",  3: "Temp",  4: "Lock",
+    5: "Satch", 6: "Sack",  7: "Case",  8: "WD 1",  9: "Safe 2",
+    10: "WD 2", 11: "WD 3", 12: "WD 4", 13: "WD 5", 14: "WD 6",
+    15: "WD 7", 16: "WD 8",
+}
+
+
+def _sim_bag_short_label(bag_id):
+    """Short bag name for a sim inventory entry, e.g. 15 -> 'WD 7'."""
+    try:
+        return _SIM_BAG_SHORT.get(int(bag_id), f"bag {int(bag_id)}")
+    except (TypeError, ValueError):
+        return "?"
+
 
 def _sim_live_name_for(slot_key, target_id):
     """Item name from the LIVE equipment stream.
@@ -1661,6 +1784,134 @@ def _sim_have_inventory_snapshot():
     return bool(_inv_for_sim.get("by_slot"))
 
 
+# ── Slot-picker filter ───────────────────────────────────────────────
+# Free text, plus a comparison when you type one: "da>=5", "store tp>7".
+sim_slot_filter         = ""      # current query for the open dropdown
+sim_slot_filter_focused = False   # typing goes to the box
+sim_slot_filter_rect    = None    # per-frame hit rect, None when closed
+sim_slot_filter_slot    = None    # which slot the query belongs to
+
+# Shorthand people actually type, mapped onto EVERY wording that stat
+# appears under. One stat is spelled several ways across the game's own
+# text -- an augment says '"Dbl.Atk."+10', the short tag says "DA+10",
+# a description says "Double Attack" -- so a single canonical spelling
+# would miss two of the three.
+#
+# NOT a stat parser: a lookup used for matching only, so it can never
+# feed a number into the panel. Anything not listed still works, it
+# just has to be typed the way the item spells it.
+_SIM_STAT_ALIASES = {
+    "da":     ("double attack", "dbl.atk", "dblatk", "da"),
+    "ta":     ("triple attack", "trpl.atk", "ta"),
+    "qa":     ("quadruple attack", "quad.atk", "qa"),
+    "stp":    ("store tp", "stp"),
+    "dw":     ("dual wield", "dw"),
+    "fc":     ("fast cast", "fc"),
+    "sb":     ("subtle blow", "sb"),
+    "wsd":    ("weapon skill damage", "wpn skill dmg", "wsd"),
+    "macc":   ("magic accuracy", "mag. acc", "magacc", "macc"),
+    "mab":    ("magic atk", "mag. atk", "matk", "mab"),
+    "mdb":    ("magic def", "mag. def", "mdb"),
+    "meva":   ("magic evasion", "mag. eva", "meva"),
+    "racc":   ("ranged accuracy", "rng.acc", "racc"),
+    "ratt":   ("ranged attack", "rng.atk", "ratt"),
+    "acc":    ("accuracy", "acc"),
+    "att":    ("attack", "att"),
+    "crit":   ("critical hit rate", "crit"),
+    "critdmg": ("critical hit damage", "critdmg"),
+    "dt":     ("damage taken", "dt"),
+    "pdt":    ("physical damage taken", "pdt"),
+    "mdt":    ("magic damage taken", "mdt"),
+    "cure":   ("cure",),
+    "regen":  ("regen",),
+    "refresh": ("refresh",),
+    "haste":  ("haste",),
+    "eva":    ("evasion", "eva"),
+    "enmity": ("enmity",),
+    "mb":     ("magic burst", "mbd", "mb"),
+}
+
+
+def _sim_stat_terms(word, for_compare):
+    """Spellings to try for one typed word.
+
+    A bare two-letter form like "da" is only offered when a NUMBER has
+    to follow it, which is what keeps "da>=5" from being answered by
+    "damage taken". In plain-text mode the short forms are dropped and
+    only the spelled-out ones are searched."""
+    terms = _SIM_STAT_ALIASES.get(word)
+    if not terms:
+        return (word,)
+    if for_compare:
+        return terms
+    long_terms = tuple(t for t in terms if len(t) > 3)
+    return long_terms or terms
+
+_SIM_FILTER_CMP = re.compile(r"^\s*(.+?)\s*(>=|<=|=|>|<)\s*(-?\d+)\s*$")
+
+
+def _sim_entry_search_text(entry):
+    """Everything about one inventory copy that is worth searching:
+    its name, its short augment tag, the description stat lines for its
+    item id, and the augment lines for that exact copy.
+
+    Returns None when the item's card never arrived -- see
+    _sim_filter_matches for why that is not the same as "no match"."""
+    parts = [str(entry.get("name", "") or ""),
+             str(entry.get("tag", "") or "")]
+    iid = entry.get("id", 0) or 0
+    card = (_inv_for_sim.get("cards") or {}).get(iid)
+    bag, idx = entry.get("bag"), entry.get("idx")
+    augs = None
+    if bag is not None and idx is not None:
+        augs = (_inv_for_sim.get("augs") or {}).get((bag, idx))
+    if augs:
+        parts.extend(str(a) for a in augs)
+    if card is None:
+        return None
+    parts.extend(str(l) for l in (card.get("stat_lines") or []))
+    return " ".join(parts).lower()
+
+
+def _sim_filter_matches(entry, query):
+    """True when this copy should stay in the list.
+
+    A COPY WHOSE CARD HASN'T ARRIVED IS ALWAYS SHOWN. Card packets do get
+    dropped -- that is the "rows with no base stats" report -- and hiding
+    a piece because its stats are missing reads as "I don't own one",
+    which is worse than showing something that might not match."""
+    q = (query or "").strip().lower()
+    if not q:
+        return True
+    text = _sim_entry_search_text(entry)
+    if text is None:
+        return True
+
+    m = _SIM_FILTER_CMP.match(q)
+    if m:
+        word, op, want = m.group(1), m.group(2), int(m.group(3))
+        best = None
+        # The number that follows the stat's name, wherever it appears,
+        # under any of its spellings. Take the largest when a stat is
+        # named more than once, so a cape carrying Accuracy+20 and
+        # Accuracy+10 answers for the 20.
+        for term in _sim_stat_terms(word, True):
+            for hit in re.finditer(
+                    re.escape(term) + r'"?\s*:?\s*([+-]?\d+)', text):
+                val = int(hit.group(1))
+                if best is None or val > best:
+                    best = val
+        if best is None:
+            return False
+        return {">=": best >= want, "<=": best <= want, "=": best == want,
+                ">":  best >  want, "<":  best <  want}[op]
+
+    # Plain text: every word has to appear somewhere, so "double 5"
+    # narrows rather than widening the way a single blob would.
+    return all(any(t in text for t in _sim_stat_terms(w, False))
+               for w in q.split())
+
+
 def _sim_get_slot_options(slot):
     """Return a list of entry dicts valid for `slot` given the current
     player's main job and inventory contents. Each dict has:
@@ -1687,8 +1938,31 @@ def _sim_get_slot_options(slot):
             if cur_job not in ent_jobs:
                 continue
         out.append(entry)
+    # ── Two rows that read the same are two rows you can't choose between ──
+    # A pair of plain Chirich Rings, or two capes augmented identically,
+    # produce the same label from the same name and the same (or absent)
+    # augment tag -- so picking "the other one" for the second ring slot
+    # is guesswork, and the two slots quietly end up on one physical ring.
+    # Where the label repeats, say which bag each copy is in; where it
+    # doesn't, leave the row alone. Showing the bag on every row would
+    # push the item name out of the truncation on the slot cells for no
+    # gain, and it goes stale the moment gear is reorganised.
+    #
+    # The annotated entries are COPIES: `out` holds references straight
+    # into _inv_for_sim, which the snapshot owns and rebuilds wholesale.
+    groups = {}
+    for pos, entry in enumerate(out):
+        groups.setdefault(_display_name_for_item(entry), []).append(pos)
+    for positions in groups.values():
+        if len(positions) < 2:
+            continue
+        for pos in positions:
+            marked = dict(out[pos])
+            marked["bag_label"] = _sim_bag_short_label(marked.get("bag", 0))
+            out[pos] = marked
     # Sort by display name (which includes the augment tag, so two
-    # capes with same base name sort by their tag suffix).
+    # capes with same base name sort by their tag suffix, and the bag
+    # suffix above keeps identical copies in a stable bag order).
     out.sort(key=lambda e: _display_name_for_item(e).lower())
     return out
 
@@ -2287,6 +2561,27 @@ def _sim_send_reset():
         print(f"[OmniWatch] sim_send_reset failed: {e!r}")
 
 
+def _sim_send_strip():
+    """Force every gear slot explicitly empty on the lua side. Used by the
+    window's STRIP GEAR button.
+
+    One datagram, not sixteen SIM|equip|0|<slot> messages: the strip has to
+    be all-or-nothing, and a burst of sixteen is sixteen chances for the
+    sim and the overlay to end up disagreeing about a slot. Lua walks its
+    own canonical slot list, which is the same sixteen SIM_GEAR_SLOTS
+    holds here.
+
+    Note the difference from reset: reset CLEARS the override table, and an
+    absent slot means "use the real gear" — so reset puts your live gear
+    back. Strip WRITES an explicit 0 into every slot, which is what the
+    compute path reads as unequipped.
+    """
+    try:
+        sock_cmd_out.sendto(b"SIM|strip", _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] sim_send_strip failed: {e!r}")
+
+
 def _sim_send_import(filepath, setpath):
     """Ask Lua to sandbox-resolve <setpath> from <filepath> into the sim
     equipment. Wire form: SIM_IMPORT|<filepath>|<setpath>."""
@@ -2451,11 +2746,16 @@ def _display_name_for_item(entry):
     )
     fp = fp_entry.get("fp", "") if fp_entry else ""
     nick = _aug_nickname_for(entry.get("id", 0), fp)
+    # The bag suffix is set by _sim_get_slot_options, and only on copies
+    # that would otherwise be indistinguishable from each other. See the
+    # note there for why it isn't just always shown.
+    where = entry.get("bag_label")
+    suffix = f" [{where}]" if where else ""
     if nick:
-        return f"{name} ({nick})"
+        return f"{name} ({nick}){suffix}"
     if tag:
-        return f"{name} [{tag}]"
-    return name
+        return f"{name} [{tag}]{suffix}"
+    return f"{name}{suffix}"
 
 # ── Inventory snapshot socket (port 5012) ─────────────────────────────────
 # Lua sends one INV_BAG packet per bag, then a final INV_END sentinel.
@@ -3408,9 +3708,27 @@ _GEARSWAP_STATE_PATTERN_R = _re_routing.compile(
 # The buff itself (Store TP Bonus, Attack% bonus) is independently
 # applied via the action handler and renders on the Buffs tab, so
 # this routing doesn't lose anything.
+#
+# THE ORDINARY ROLL HAD NO ALTERNATIVE HERE. Every branch above needs
+# the word Lucky, Unlucky or Bust, so only a roll that hit its number
+# or busted was ever recognised; a plain one
+#   "Wormfood <sep> Chaos Roll <6> (+22.27% Attack!)"
+# fell through to the World branch below and was routed as /say.
+# Measured on mode 1, which is why it landed with the shouts. The last
+# alternative catches it on the shape every roll shares regardless of
+# outcome: the roll name, then within a couple of dozen characters a
+# parenthesised bonus opening with a sign. Deliberately ASCII — the
+# separator and the circled roll number are SJIS and survive the trip
+# from Windower less predictably than the text around them.
+#
+# It stays clear of the roll ANNOUNCEMENT lines ("Qultada Chaos Roll →
+# {4}: Wormfood, Eyril, ... (No effect)", modes 59/63/101), which carry
+# no signed bonus and continue to route to raw_battle via the arrow
+# check below — hidden, as they were.
 _ROLL_BROADCAST_PATTERN_R = _re_routing.compile(
     r"(Roll[\s\S]*Lucky|Roll[\s\S]*Unlucky|Roll's Lucky #|"
-    r"Roll[\s\S]*\(Bust!\)|^Bust!.*Roll)"
+    r"Roll[\s\S]*\(Bust!\)|^Bust!.*Roll|"
+    r"\bRoll\b[^\n]{0,24}\([-+])"
 )
 
 # Cast-start / ready text. FFXI's native incoming_text fires when any
@@ -3838,6 +4156,23 @@ def _chat_classify_event(ev):
     # default, but they're combat output, not chat. Match before
     # mode-based dispatch so /say chat content isn't affected.
     if _ROLL_BROADCAST_PATTERN_R.search(text):
+        # A roll is a buff landing on you, so it routes as buff_apply
+        # and follows wherever the user already sends buffs, instead
+        # of needing a cell of its own in the Filters grid.
+        #
+        # Actor forced to 'self' when your own name is in the line,
+        # for the same reason the skillchain branch does it: the roll
+        # text carries no resolvable sender, emit.lua defaults it to
+        # 'other', and 'other' commonly has buff_apply hidden — the
+        # line would disappear rather than move. A roll that does not
+        # name you is somebody else's party's and stays in battle,
+        # where it can't claim a row in your Buffs tab.
+        #
+        # No duplication: the 0x063 self-buff diff sees the roll but
+        # only emits chat events for debuffs, so this is the single
+        # source for a roll landing.
+        if current_char_name and current_char_name in text:
+            return ("self", "buff_apply")
         return (actor, "battle")
 
     # Cast-start / ready lines and cast-blocked notices route to Battle.
@@ -4420,8 +4755,13 @@ def _chat_route_event(ev):
 
     target_dim = _chat_target_dim(ev)
     tab_names = _chat_routing_lookup(actor, channel, target_dim)
-    if _ow_chat_route_debug and channel in (
-            "chat_assist", "chat_emote", "chat_other", "chat_npc"):
+    # EVERY channel, not a hand-picked four. This printed only for
+    # assist/emote/other/npc, which meant the one diagnostic built to
+    # answer "why is this line in the wrong tab" could not answer it
+    # for any of the tabs people actually ask about. It is off by
+    # default and toggled for a few seconds at a time, so the volume
+    # is not worth a filter.
+    if _ow_chat_route_debug:
         # Show full path: what came in, what the classifier said,
         # what routing decided, whether the channel-hide table is
         # eating it, and whether any tab subscribed.
@@ -5525,6 +5865,17 @@ inventory_dropdown_open  = False
 # UI scroll state per bag, and which bag is currently expanded.
 inventory_active_bag     = None       # None = bag-list view; str = bag-detail view
 inventory_bag_scroll     = {}         # bag_name -> int (item-row offset)
+# Scrollbar for the bag-detail list. Same shape as the checklist's:
+# the draw publishes the thumb/track rects and the max scroll it
+# computed, mousedown turns a thumb hit into a drag, and MOUSEMOTION
+# maps mouse pixels back to scroll units. Scroll here counts ROWS, not
+# pixels, so the mapping divides by rows rather than by row height.
+# All None / 0 when the list fits and no bar is drawn.
+_inv_scroll_drag           = None
+_inv_scrollbar_thumb_rect  = None
+_inv_scrollbar_track_rect  = None
+_inv_scrollbar_max_scroll  = 0
+_inv_scrollbar_bag_key     = None
 inventory_bag_sort_field = "name"     # single-bag sort: "name" | "category"
 inventory_bag_sort_rev   = False      # reverse (descending) sort
 # Rough in-game category ordering for the "Category" sort; unknown
@@ -6339,8 +6690,6 @@ hotbar_edit_draft     = None     # working copy of the slot being edited
 # other panel did nothing at all.
 hotbar_edit_page      = None
 hotbar_focused_field  = None     # "label" | "command" | None
-hotbar_text_cursor    = 0        # caret index within the focused field's text
-hotbar_text_blink_t0  = 0.0      # time.time() at last cursor reset (controls blink phase)
 hotbar_icon_picker_open   = False
 hotbar_icon_picker_scroll = 0    # vertical scroll offset within the picker grid
 # Module-level clipboard for the COPY/PASTE buttons in the slot editor.
@@ -11520,21 +11869,44 @@ SETTINGS_SCHEMA = [
     # persists them via save_layout()/load_layout(). Eventually that
     # file may merge into this one, but for now we leave them out so
     # the two systems don't fight over the same globals.
-    # ── Chat panel: keep-game-focus + type-anywhere ─────────────────
+    # ── Keep-game-focus + type-anywhere ─────────────────────────────
+    # These were tagged "Chat", which is not a section the settings
+    # list knows about -- SETTINGS_SECTIONS has "Chat Panel" -- so they
+    # grouped into nothing and never drew. Their only route was the
+    # Chat Panel CONFIGURE subdialog, which is the wrong place to look
+    # for them anyway: neither is about chat. Both are window-level
+    # keyboard behaviour, so they live in General now, in the list
+    # proper, and have been dropped from that subdialog rather than
+    # appearing in two places.
     {
         "key":     "no_focus_steal",
         "label":   "Keep game focus",
         "kind":    "bool",
         "default": False,
-        "section": "Chat",
+        "section": "General",
         "applies": "python",
+        "help":    "Stop clicks on the overlay from taking focus away "
+                   "from FFXI. Useful on a second monitor: press a "
+                   "hotbar button, then go straight back to playing "
+                   "without clicking the game first. Text fields in "
+                   "the overlay still take keys while you're typing "
+                   "in them.",
     },
+    # Type anywhere stays with the chat panel, not beside Keep game
+    # focus. The two sound like a pair and aren't: Keep game focus is
+    # window behaviour that applies to the whole overlay, while this one
+    # only ever feeds the CHAT COMPOSER and does nothing at all unless
+    # the input bar is visible. Sitting them together in General invited
+    # the reading that this is the general "type into the overlay from
+    # the game" switch, which it isn't.
+    # "_Hidden" because the Chat Panel subdialog owns the row -- that is
+    # how every other subdialog-owned setting is tagged.
     {
         "key":     "global_typing",
         "label":   "Type anywhere",
         "kind":    "bool",
         "default": False,
-        "section": "Chat",
+        "section": "_Hidden",
         "applies": "python",
     },
     {
@@ -12612,6 +12984,7 @@ def _open_hotbar_editor():
     # Unpin any page left over from a previous session's edit, so the
     # editor starts out following the primary panel again.
     hotbar_edit_page = None
+    _hotbar_editor_blur()
     hotbar_focused_field = None
     hotbar_icon_picker_open = False
     settings_menu_open = False        # close the dropdown so the hotbar's visible
@@ -13101,6 +13474,26 @@ def apply_setting_side_effects(key, value):
     global dps_panel_visible, buttons_panel_visible, chat_panel_visible
     global skillchain_panel_visible
     global chat_composer_visible
+    global _gt_capturing_active, chat_composer_focused
+    if key == "global_typing" and not value:
+        # END ANY LIVE CAPTURE SESSION. Turning the toggle off makes the
+        # hook pass keys through, but it does NOT by itself undo the
+        # state a running session left behind: _gt_capturing_active and
+        # chat_composer_focused both stay set, the composer keeps its
+        # caret, and -- with keep-game-focus on -- the borrow condition
+        # stays true, so the overlay holds OS keyboard focus and typing
+        # still lands in the composer. Which reads as "I turned it off
+        # and I still can't type in the game."
+        #
+        # Clearing the focus flag is what matters: the borrow condition
+        # goes false on the next frame and focus is handed back to the
+        # game. Draft text in the composer is left alone.
+        try:
+            _gt_state["capturing"] = False
+        except Exception:
+            pass
+        _gt_capturing_active = False
+        chat_composer_focused = False
     if key == "no_focus_steal":
         # Apply/remove WS_EX_NOACTIVATE immediately (defined further
         # down; by the time any setting can be toggled it exists).
@@ -14246,7 +14639,13 @@ def lookup_trust(name):
 # Each category is a dict:
 #   key          — checklist_known sub-dict key
 #   label        — header text shown in the modal
-#   row_iter()   — returns a list of (item_key, display_name) tuples
+#   row_iter()   — returns a list of (item_key, display_name) tuples.
+#                  A row whose item_key is None is a SECTION HEADING:
+#                  it draws as a label with no checkbox, is not
+#                  clickable, and counts toward neither the X/Y in the
+#                  header nor the all-complete achievement sweep. Used
+#                  where one category has named sub-groups the game
+#                  itself presents separately (Records of Eminence).
 #                  for all items in the category (the master list)
 #   is_checked() — given an item_key, returns 'auto', 'manual', or None.
 # Categories with no master data (DB not loaded, Pass 2/3 not built)
@@ -14821,6 +15220,88 @@ CHECKLIST_CATEGORIES = [
         "is_checked":   None,
         "url_builder":  None,
     },
+    # ── Group: Records of Eminence ────────────────────────────────────
+    # One category per RoE objective category, in the order the game's
+    # Objective List presents them. Row data is hand-authored (see
+    # _ROE_CATEGORY_MASTERS); an unpopulated category renders as an
+    # empty list rather than breaking the tab.
+    {
+        "key":          "roe_tutorial",
+        "label":        "Tutorial",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_combat_wide",
+        "label":        "Combat (Wide Area)",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_combat_region",
+        "label":        "Combat (Region)",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_fishing",
+        "label":        "Fishing",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_harvesting",
+        "label":        "Harvesting / Crafting",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_content",
+        "label":        "Content",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_unity",
+        "label":        "Unity Concord",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_achievements",
+        "label":        "Achievements",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_vanaversary",
+        "label":        "Vana'versary",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_other",
+        "label":        "Other",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "roe_limited",
+        "label":        "Limited-time",
+        "row_iter":     None,
+        "is_checked":   None,
+        "url_builder":  None,
+    },
 ]
 
 
@@ -14938,11 +15419,45 @@ CHECKLIST_TABS = [
         ],
     },
     {
+        "key":      "roe",
+        "label":    "Records of Eminence",
+        "cat_keys": [
+            "roe_tutorial",
+            "roe_combat_wide",
+            "roe_combat_region",
+            "roe_fishing",
+            "roe_harvesting",
+            "roe_content",
+            "roe_unity",
+            "roe_achievements",
+            "roe_vanaversary",
+            "roe_other",
+            "roe_limited",
+        ],
+    },
+    {
         "key":      "master_trials",
         "label":    "Master Trials",
         "cat_keys": ["master_trials"],
     },
 ]
+
+
+# Give every declared category a tracking slot.
+#
+# THIS IS WHY THE RECORDS OF EMINENCE TICKS DID NOT SURVIVE A RELOAD.
+# checklist_known is a hand-written literal far above this point, and
+# _checklist_load skips any key it does not already find there -- a
+# guard against junk keys in the file. Toggling used setdefault, so the
+# new categories saved to disk perfectly well and were then dropped on
+# the way back in, which looks exactly like "the save is broken".
+#
+# Deriving the slots from CHECKLIST_CATEGORIES instead of maintaining a
+# second list by hand means a category added in future cannot repeat
+# it. The literal above stays as-is; this only fills the gaps, so
+# nothing that reads checklist_known before this line changes.
+for _cat in CHECKLIST_CATEGORIES:
+    checklist_known.setdefault(_cat["key"], {"auto": set(), "manual": set()})
 
 
 def _checklist_active_tab():
@@ -16383,6 +16898,1887 @@ for _cat in CHECKLIST_CATEGORIES:
     _master = _WEAPON_CATEGORY_MASTERS.get(_cat["key"])
     if _master is not None:
         _cat["row_iter"]   = _make_spell_rows(_master)
+        _cat["is_checked"] = _make_spell_check_state(_cat["key"])
+
+
+# ── Records of Eminence master lists ─────────────────────────────────
+# One list per RoE objective category, each entry (name, repeatable).
+# Repeatable objectives render with a trailing " (R)"; that is the
+# whole of the extra information carried here, by request -- the
+# sparks/exp/accolade columns and objective text are deliberately not
+# duplicated from the wiki.
+#
+# ORDER IS THE GAME'S, NOT ALPHABETICAL. The Objective List presents
+# these in a fixed sequence and several unlock the next one along, so
+# _make_roe_rows preserves the authored order instead of sorting --
+# the same reason Wings of the Goddess missions preserve theirs.
+#
+# Categories with an empty list below are declared but not yet filled;
+# they show as an empty category rather than a missing sub-tab, so
+# filling one later is a data edit with no code change.
+
+# An entry whose second element is None is a SECTION HEADING, matching
+# the named sub-groups the game's Objective List and the wiki both use
+# (Basics, Intermediate, Synthesis, ...). Headings draw as a label and
+# count toward nothing -- see the row_iter contract above.
+def _roe_section(name):
+    return (name, None)
+
+
+# Tutorial. First Step Forward is the objective that unlocks Records
+# of Eminence at all, so it heads the list.
+_ROE_TUTORIAL_MASTER = [
+    _roe_section("Basics"),
+    ("First Step Forward",              False),
+    ("All for One",                     False),
+    ("Vanquish One Enemy",              False),
+    ("Undertake a FoV Training Regime", False),
+    ("Heal Without Using Magic",        False),
+    ("Undertake a GoV Training Regime", False),
+    ("Deeds are the Best!",             False),
+    ("Stepping into an Ambuscade",      False),
+    ("Call Forth an Alter Ego",         False),
+    ("Alter Ego: Valaineral",           False),
+    ("Alter Ego: Mihli Aliapoh",        False),
+    ("Alter Ego: Tenzen",               False),
+    ("Alter Ego: Adelheid",             False),
+    ("Alter Ego: Joachim",              False),
+    ("Exploring the Trove",             False),
+    ("Assist Channel",                  False),
+
+    _roe_section("Intermediate"),
+    ("Achieve Level 99",                False),
+    ("An Eminent Scholar",              False),
+    ("An Eminent Scholar 2",            False),
+    ("An Eminent Scholar 3",            False),
+    ("Always Stand on 117",             False),
+    ("Taming the Wilds",                False),
+    ("Skirmisher: Rala Waterways",      False),
+    ("Skirmisher: Cirdas Caverns",      False),
+    ("Skirmisher: Yorcia Weald",        False),
+    ("Repelling an Ambuscade",          False),
+    ("Artifact Reforger",               False),
+    ("Artifact Reforger 2",             False),
+    ("Reforging Relics",                False),
+    ("Reforging Relics 2",              False),
+    ("A. Skirmisher: Rala Waterways",   False),
+    ("A. Skirmisher: Cirdas Caverns",   False),
+    ("A. Skirmisher: Yorcia Weald",     False),
+    ("Mentor License",                  False),
+
+    _roe_section("Intermediate 2"),
+    ("Obtaining Ambuscade Armor",       False),
+    ("Reforging Ambuscade Armor",       False),
+    ("Reforging Ambuscade Armor 2",     False),
+    ("Obtaining Ambuscade Weapons",     False),
+    ("Reforging Ambuscade Weapons",     False),
+    ("Reforging Ambuscade Weapons 2",   False),
+    ("Reforging Ambuscade Weapons 3",   False),
+    ("Omen Good Routes",                False),
+    ("Artifacts Item Level 119 +2",     False),
+    ("Artifacts Item Level 119 +3",     False),
+    ("Joining a Shared Dynamis [D]",    False),
+    ("Relics Item Level 119 +2",        False),
+    ("Relics Item Level 119 +3",        False),
+    ("Entering Vagary",                 False),
+    ("Empyrean Armor Item Level 119",   False),
+    ("Joining a Sortie",                False),
+    ("Empyrean Armor Item Level 119 +2", False),
+    ("Empyrean Armor Item Level 119 +3", False),
+
+    _roe_section("Synthesis"),
+    ("Speak to Carpenters' Guild Master",   False),
+    ("Speak to Blacksmiths' Guild Master",  False),
+    ("Speak to Goldsmiths' Guild Master",   False),
+    ("Speak to Weavers' Guild Master",      False),
+    ("Speak to Tanners' Guild Master",      False),
+    ("Speak to Boneworkers' Guild Master",  False),
+    ("Speak to Alchemists' Guild Master",   False),
+    ("Speak to Culinarians' Guild Master",  False),
+    ("Woodworking: Padded Box",         False),
+    ("Smithing: Bronze Knife",          False),
+    ("Goldsmithing: Copper Ring",       False),
+    ("Weaving: Headgear",               False),
+    ("Tanning: Leather Bandana",        False),
+    ("Boneworking: Shell Powder",       False),
+    ("Alchemy: Black Ink",              False),
+    ("Cooking: Pebble Soup",            False),
+
+    _roe_section("Quests 1"),
+    ("Mog House Exit: San d'Oria",      False),
+    ("Mog House Exit: Bastok",          False),
+    ("Mog House Exit: Windurst",        False),
+    ("Mog House Exit: Jeuno",           False),
+    ("Mog House Exit: Aht Urhgan",      False),
+    ("Obtain a Support Job",            False),
+    ("Obtain an Alter Ego: San d'Oria", False),
+    ("Obtain an Alter Ego: Bastok",     False),
+    ("Obtain an Alter Ego: Windurst",   False),
+    ("Obtain a Chocobo License",        False),
+    ("Obtain Job: Paladin",             False),
+    ("Obtain Job: Dark Knight",         False),
+    ("Obtain Job: Beastmaster",         False),
+    ("Obtain Job: Bard",                False),
+    ("Obtain Job: Ranger",              False),
+    ("Obtain Job: Samurai",             False),
+    ("Obtain Job: Ninja",               False),
+    # The wiki prints this one without the space after the colon
+    # ("Obtain Job:Dragoon"); normalised here to match its 15 siblings.
+    ("Obtain Job: Dragoon",             False),
+    ("Obtain Job: Summoner",            False),
+    ("Obtain Job: Blue Mage",           False),
+    ("Obtain Job: Corsair",             False),
+    ("Obtain Job: Puppetmaster",        False),
+    ("Obtain Job: Dancer",              False),
+    ("Obtain Job: Scholar",             False),
+    ("Obtain Job: Geomancer",           False),
+    ("Obtain Job: Rune Fencer",         False),
+
+    _roe_section("Quests (Artifact 1)"),
+    ("WAR Artifact Quest I",            False),
+    ("WAR Artifact Quest II",           False),
+    ("WAR Artifact Quest III",          False),
+    ("MNK Artifact Quest I",            False),
+    ("MNK Artifact Quest II",           False),
+    ("MNK Artifact Quest III",          False),
+    ("WHM Artifact Quest I",            False),
+    ("WHM Artifact Quest II",           False),
+    ("WHM Artifact Quest III",          False),
+    ("BLM Artifact Quest I",            False),
+    ("BLM Artifact Quest II",           False),
+    ("BLM Artifact Quest III",          False),
+    ("RDM Artifact Quest I",            False),
+    ("RDM Artifact Quest II",           False),
+    ("RDM Artifact Quest III",          False),
+    ("THF Artifact Quest I",            False),
+    ("THF Artifact Quest II",           False),
+    ("THF Artifact Quest III",          False),
+    ("PLD Artifact Quest I",            False),
+    ("PLD Artifact Quest II",           False),
+    ("PLD Artifact Quest III",          False),
+    ("DRK Artifact Quest I",            False),
+    ("DRK Artifact Quest II",           False),
+    ("DRK Artifact Quest III",          False),
+    ("BST Artifact Quest I",            False),
+    ("BST Artifact Quest II",           False),
+    ("BST Artifact Quest III",          False),
+
+    _roe_section("Quests (Artifact 2)"),
+    ("BRD Artifact Quest I",            False),
+    ("BRD Artifact Quest II",           False),
+    ("BRD Artifact Quest III",          False),
+    ("RNG Artifact Quest I",            False),
+    ("RNG Artifact Quest II",           False),
+    ("RNG Artifact Quest III",          False),
+    ("SAM Artifact Quest I",            False),
+    ("SAM Artifact Quest II",           False),
+    ("SAM Artifact Quest III",          False),
+    # The wiki prints the first of these as "Nin Artifact Quest I";
+    # capitalised here to match its two siblings and every other job.
+    ("NIN Artifact Quest I",            False),
+    ("NIN Artifact Quest II",           False),
+    ("NIN Artifact Quest III",          False),
+    ("DRG Artifact Quest I",            False),
+    ("DRG Artifact Quest II",           False),
+    ("DRG Artifact Quest III",          False),
+    ("SMN Artifact Quest I",            False),
+    ("SMN Artifact Quest II",           False),
+    ("SMN Artifact Quest III",          False),
+    ("BLU Artifact Quest I",            False),
+    ("BLU Artifact Quest II",           False),
+    ("BLU Artifact Quest III",          False),
+    ("COR Artifact Quest I",            False),
+    ("COR Artifact Quest II",           False),
+    ("COR Artifact Quest III",          False),
+    ("PUP Artifact Quest I",            False),
+    ("PUP Artifact Quest II",           False),
+    ("PUP Artifact Quest III",          False),
+
+    _roe_section("Quests (Artifact 3)"),
+    ("DNC Artifact Quest I",            False),
+    ("DNC Artifact Quest II",           False),
+    ("DNC Artifact Quest III",          False),
+    ("SCH Artifact Quest I",            False),
+    ("SCH Artifact Quest II",           False),
+    ("SCH Artifact Quest III",          False),
+    ("GEO Artifact Quest I",            False),
+    ("GEO Artifact Quest II",           False),
+    ("GEO Artifact Quest III",          False),
+    ("RUN Artifact Quest I",            False),
+    ("RUN Artifact Quest II",           False),
+    ("RUN Artifact Quest III",          False),
+
+    _roe_section("Level Cap Increase"),
+    ("Level Cap Increase: 55",          False),
+    ("Level Cap Increase: 60",          False),
+    ("Level Cap Increase: 65",          False),
+    ("Level Cap Increase: 70",          False),
+    ("Level Cap Increase: 75",          False),
+    ("Level Cap Increase: 80",          False),
+    ("Level Cap Increase: 85",          False),
+    ("Level Cap Increase: 90",          False),
+    ("Level Cap Increase: 95",          False),
+    ("Level Cap Increase: 99",          False),
+    # The seven jobs that cannot take Maat's fight get their own
+    # cap-75 objective, so these sit alongside the plain "75" above
+    # rather than replacing it.
+    ("Level Cap Increase: 75 (BLU)",    False),
+    ("Level Cap Increase: 75 (COR)",    False),
+    ("Level Cap Increase: 75 (PUP)",    False),
+    ("Level Cap Increase: 75 (DNC)",    False),
+    ("Level Cap Increase: 75 (SCH)",    False),
+    ("Level Cap Increase: 75 (GEO)",    False),
+    ("Level Cap Increase: 75 (RUN)",    False),
+
+    _roe_section("Quests (Growth)"),
+    ("Unlocking Merit Points",          False),
+    ("Merit Point Weapon Skills",       False),
+    ("Unlocking Job Points",            False),
+    ("Unlocking Alter Ego Points",      False),
+    ("Unlocking Master Levels",         False),
+
+    _roe_section("Storage Expansion"),
+    ("Inventory Expansion 35",          False),
+    ("Inventory Expansion 40",          False),
+    ("Inventory Expansion 45",          False),
+    ("Inventory Expansion 50",          False),
+    ("Inventory Expansion 55",          False),
+    ("Inventory Expansion 60",          False),
+    ("Inventory Expansion 65",          False),
+    ("Inventory Expansion 70",          False),
+    ("Inventory Expansion 75",          False),
+    ("Inventory Expansion 80",          False),
+    ("Mog Safe Expansion: 60",          False),
+    ("Mog Safe Expansion: 70",          False),
+    ("Mog Safe Expansion: 80",          False),
+
+    _roe_section("Quests (Weapon Skills)"),
+    ("Asuran Fists",                    False),
+    ("Evisceration",                    False),
+    ("Savage Blade",                    False),
+    ("Ground Strike",                   False),
+    ("Decimation",                      False),
+    ("Steel Cyclone",                   False),
+    ("Spiral Hell",                     False),
+    ("Impulse Drive",                   False),
+    ("Blade: Ku",                       False),
+    ("Tachi: Kasha",                    False),
+    ("Black Halo",                      False),
+    ("Retribution",                     False),
+    ("Empyreal Arrow",                  False),
+    ("Detonator",                       False),
+
+    _roe_section("Missions (Rhapsodies of Vana'diel)"),
+    ("Rhapsodies of Vana'diel Chapter 1-1",          False),
+    ("Rhapsodies of Vana'diel Chapter 1-2",          False),
+    ("Rhapsodies of Vana'diel Chapter 1-3",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-1",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-2",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-3",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-4",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-5",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-6",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-7",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-8",          False),
+    ("Rhapsodies of Vana'diel Chapter 2-9",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-1",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-2",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-3",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-4",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-5",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-6",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-7",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-8",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-9",          False),
+    ("Rhapsodies of Vana'diel Chapter 3-10",         False),
+    ("Rhapsodies of Vana'diel Chapter 3-11",         False),
+    ("Rhapsodies of Vana'diel Chapter 3-12",         False),
+
+    _roe_section("Missions (San d'Oria)"),
+    # RESOLVED from the in-game Objective List: the wiki's table stops
+    # at Rank 6-1, but the game carries on to 9-2 exactly as Bastok and
+    # Windurst do. All three nations are the same 20 ranks.
+    ("San d'Oria Rank 1-1",                False),
+    ("San d'Oria Rank 1-2",                False),
+    ("San d'Oria Rank 1-3",                False),
+    ("San d'Oria Rank 2-1",                False),
+    ("San d'Oria Rank 2-2",                False),
+    ("San d'Oria Rank 2-3",                False),
+    ("San d'Oria Rank 3-1",                False),
+    ("San d'Oria Rank 3-2",                False),
+    ("San d'Oria Rank 3-3",                False),
+    ("San d'Oria Rank 4",                  False),
+    ("San d'Oria Rank 5-1",                False),
+    ("San d'Oria Rank 5-2",                False),
+    ("San d'Oria Rank 6-1",                False),
+    ("San d'Oria Rank 6-2",                False),
+    ("San d'Oria Rank 7-1",                False),
+    ("San d'Oria Rank 7-2",                False),
+    ("San d'Oria Rank 8-1",                False),
+    ("San d'Oria Rank 8-2",                False),
+    ("San d'Oria Rank 9-1",                False),
+    ("San d'Oria Rank 9-2",                False),
+
+    _roe_section("Missions (Bastok)"),
+    # Taken from the in-game Objective List; the wiki page carries no
+    # Bastok table at all.
+    ("Bastok Rank 1-1",                    False),
+    ("Bastok Rank 1-2",                    False),
+    ("Bastok Rank 1-3",                    False),
+    ("Bastok Rank 2-1",                    False),
+    ("Bastok Rank 2-2",                    False),
+    ("Bastok Rank 2-3",                    False),
+    ("Bastok Rank 3-1",                    False),
+    ("Bastok Rank 3-2",                    False),
+    ("Bastok Rank 3-3",                    False),
+    ("Bastok Rank 4",                      False),
+    ("Bastok Rank 5-1",                    False),
+    ("Bastok Rank 5-2",                    False),
+    ("Bastok Rank 6-1",                    False),
+    ("Bastok Rank 6-2",                    False),
+    ("Bastok Rank 7-1",                    False),
+    ("Bastok Rank 7-2",                    False),
+    ("Bastok Rank 8-1",                    False),
+    ("Bastok Rank 8-2",                    False),
+    ("Bastok Rank 9-1",                    False),
+    ("Bastok Rank 9-2",                    False),
+
+    _roe_section("Missions (Windurst)"),
+    # Also read off the in-game list; the wiki page has no table for
+    # Windurst either.
+    ("Windurst Rank 1-1",                  False),
+    ("Windurst Rank 1-2",                  False),
+    ("Windurst Rank 1-3",                  False),
+    ("Windurst Rank 2-1",                  False),
+    ("Windurst Rank 2-2",                  False),
+    ("Windurst Rank 2-3",                  False),
+    ("Windurst Rank 3-1",                  False),
+    ("Windurst Rank 3-2",                  False),
+    ("Windurst Rank 3-3",                  False),
+    ("Windurst Rank 4",                    False),
+    ("Windurst Rank 5-1",                  False),
+    ("Windurst Rank 5-2",                  False),
+    ("Windurst Rank 6-1",                  False),
+    ("Windurst Rank 6-2",                  False),
+    ("Windurst Rank 7-1",                  False),
+    ("Windurst Rank 7-2",                  False),
+    ("Windurst Rank 8-1",                  False),
+    ("Windurst Rank 8-2",                  False),
+    ("Windurst Rank 9-1",                  False),
+    ("Windurst Rank 9-2",                  False),
+
+    _roe_section("Missions (Zilart)"),
+    ("Rise of the Zilart 1",                           False),
+    ("Rise of the Zilart 2",                           False),
+    ("Rise of the Zilart 3",                           False),
+    ("Rise of the Zilart 4",                           False),
+    ("Rise of the Zilart 5",                           False),
+    ("Rise of the Zilart 6",                           False),
+    ("Rise of the Zilart 7",                           False),
+    ("Rise of the Zilart 8",                           False),
+    ("Rise of the Zilart 9",                           False),
+    ("Rise of the Zilart 10",                          False),
+    ("Rise of the Zilart 11",                          False),
+    ("Rise of the Zilart 12",                          False),
+    ("Rise of the Zilart 13",                          False),
+    ("Rise of the Zilart 14",                          False),
+    ("Rise of the Zilart 15",                          False),
+    ("Rise of the Zilart 16",                          False),
+
+    _roe_section("Missions (Promathia)"),
+    # The in-game header was out of frame for this one; named to match
+    # its siblings.
+    ("Chains of Promathia Chapter 1",                  False),
+    ("Chains of Promathia Chapter 2",                  False),
+    ("Chains of Promathia Chapter 3",                  False),
+    ("Chains of Promathia Chapter 4",                  False),
+    ("Chains of Promathia Chapter 5",                  False),
+    ("Chains of Promathia Chapter 6",                  False),
+    ("Chains of Promathia Chapter 7",                  False),
+    ("Chains of Promathia Chapter 8",                  False),
+
+    _roe_section("Missions (Aht Urhgan)"),
+    ("Treasures of Aht Urhgan 1",                      False),
+    ("Treasures of Aht Urhgan 2",                      False),
+    ("Treasures of Aht Urhgan 3",                      False),
+    ("Treasures of Aht Urhgan 4",                      False),
+    ("Treasures of Aht Urhgan 5",                      False),
+    ("Treasures of Aht Urhgan 6",                      False),
+
+    _roe_section("Missions (Altana)"),
+    # The game files Wings of the Goddess under "Altana", not under
+    # its own expansion name.
+    ("Wings of the Goddess 1",                         False),
+    ("Wings of the Goddess 2",                         False),
+    ("Wings of the Goddess 3",                         False),
+    ("Wings of the Goddess 4",                         False),
+    ("Wings of the Goddess 5",                         False),
+    ("Wings of the Goddess 6",                         False),
+    ("Wings of the Goddess 7",                         False),
+    ("Wings of the Goddess 8",                         False),
+
+    _roe_section("Missions (Adoulin)"),
+    ("Seekers of Adoulin Chapter 1",                   False),
+    ("Seekers of Adoulin Chapter 2",                   False),
+    ("Seekers of Adoulin Chapter 3",                   False),
+    ("Seekers of Adoulin Chapter 4",                   False),
+    ("Seekers of Adoulin Chapter 5",                   False),
+]
+
+_ROE_COMBAT_WIDE_MASTER   = [
+    _roe_section("Combat (General)"),
+    ("Vanquish Multiple Enemies I",            True),
+    ("Vanquish Multiple Enemies II",           False),
+    ("Vanquish Multiple Enemies III",          False),
+    ("Level Sync to Vanquish Enemies",         False),
+    ("Level Sync to Vanq. Enemies II",         True),
+    ("Deal 500+ Damage",                       True),
+    ("Deal 1000+ Damage",                      False),
+    ("Deal 1500+ Damage",                      False),
+    ("Deal 2000+ Damage",                      False),
+    ("Deal 10-20 Damage",                      False),
+    ("Deal 110-120 Damage",                    False),
+    ("Deal 310-320 Damage",                    False),
+    ("Deal 510-520 Damage",                    False),
+    ("Deal 1110-1120 Damage",                  False),
+    ("Total Damage I",                         False),
+    ("Total Damage II",                        False),
+    ("Total Damage III",                       False),
+    ("Total Healing I",                        False),
+    ("Total Healing II",                       False),
+    ("Total Healing III",                      False),
+    ("Total Damage Taken I",                   False),
+    ("Total Damage Taken II",                  False),
+    ("Total Damage Taken III",                 False),
+    ("Weapon Skills I",                        False),
+    ("Heal for 500+ HP",                       False),
+    ("Heal for 750+ HP",                       False),
+
+    _roe_section("Combat (Spoils) 1"),
+    ("Spoils (Fire Crystal)",                  True),
+    ("Spoils (Ice Crystal)",                   True),
+    ("Spoils (Wind Crystal)",                  True),
+    ("Spoils (Earth Crystal)",                 True),
+    ("Spoils (Lightning Crystal)",             True),
+    ("Spoils (Water Crystal)",                 True),
+    ("Spoils (Light Crystal)",                 True),
+    ("Spoils (Dark Crystal)",                  True),
+    ("Spoils (Flame Geode)",                   True),
+    ("Spoils (Snow Geode)",                    True),
+    ("Spoils (Breeze Geode)",                  True),
+    ("Spoils (Soil Geode)",                    True),
+    ("Spoils (Thunder Geode)",                 True),
+    ("Spoils (Aqua Geode)",                    True),
+    ("Spoils (Light Geode)",                   True),
+    ("Spoils (Shadow Geode)",                  True),
+    ("Spoils (Ifritite)",                      True),
+    ("Spoils (Shivite)",                       True),
+    ("Spoils (Garudite)",                      True),
+    ("Spoils (Titanite)",                      True),
+    ("Spoils (Ramuite)",                       True),
+    ("Spoils (Leviatite)",                     True),
+    ("Spoils (Carbite)",                       True),
+    ("Spoils (Fenrite)",                       True),
+
+    _roe_section("Combat (Spoils) 2"),
+    ("Spoils (Bat Wing)",                      True),
+    ("Spoils (Black Tiger Fang)",              True),
+    ("Spoils (Flint Stone)",                   True),
+    ("Spoils (Rabbit Hide)",                   True),
+    ("Spoils (Honey)",                         True),
+    ("Spoils (Sheepskin)",                     True),
+    ("Spoils (Lizard Skin)",                   True),
+    ("Spoils (Beetle Shell)",                  True),
+    ("Spoils (Zeruhn Soot)",                   True),
+    ("Spoils (Silver Name Tag)",               True),
+    ("Spoils (Quadav Helm)",                   True),
+    ("Spoils (Treant Bulb)",                   True),
+    ("Spoils (Wild Onion)",                    True),
+    ("Spoils (Sleepshroom)",                   True),
+    ("Spoils (Sand Bat Fang)",                 True),
+    ("Spoils (Zinc Ore)",                      True),
+    ("Spoils (Giant Bird Feather)",            True),
+    ("Spoils (Three-leaf Mandragora Bud)",     True),
+    ("Spoils (Four-leaf Mandragora Bud)",      True),
+    ("Spoils (Cornette)",                      True),
+    ("Spoils (Yuhtunga Sulfur)",               True),
+    ("Spoils (Snobby Letter)",                 True),
+    ("Spoils (Yagudo Bead Necklace)",          True),
+    ("Spoils (Woozyshroom)",                   True),
+    ("Spoils (Beehive Chip)",                  True),
+    ("Spoils (Remi Shell)",                    True),
+    ("Spoils (Twinstone Earring)",             True),
+]
+_ROE_COMBAT_REGION_MASTER = [
+    # Conflict rows are repeatable, Subjugation rows are not -- the
+    # NM only counts the once. Zeruhn Mines is the odd one out with a
+    # Conflict row and no Subjugation partner; that is the page, not
+    # a dropped line.
+    _roe_section("Combat (Original Areas) 1"),
+    ("Conflict: West Ronfaure",                True),
+    ("Subjugation: Jaggedy-Eared Jack",        False),
+    ("Conflict: East Ronfaure",                True),
+    ("Subjugation: Swamfisk",                  False),
+    ("Conflict: Ghelsba Outpost",              True),
+    ("Subjugation: Thousandarm Deshglesh",     False),
+    ("Conflict: Fort Ghelsba",                 True),
+    ("Subjugation: Hundredscar Hajwaj",        False),
+    ("Conflict: Yughott Grotto",               True),
+    ("Subjugation: Ashmaker Gotblut",          False),
+    ("Conflict: King Ranperre's Tomb",         True),
+    ("Subjugation: Barbastelle",               False),
+    ("Conflict: Bostaunieux Oubliette",        True),
+    ("Subjugation: Bloodsucker",               False),
+    ("Conflict: Valkurm Dunes",                True),
+    ("Subjugation: Valkurm Emperor",           False),
+    ("Conflict: Konschtat Highlands",          True),
+    ("Subjugation: Bendigeit Vran",            False),
+    ("Conflict: Gusgen Mines",                 True),
+    ("Subjugation: Juggler Hecatomb",          False),
+    ("Conflict: La Theine Plateau",            True),
+    ("Subjugation: Bloodtear Baldurf",         False),
+    ("Conflict: Ordelle's Caves",              True),
+    ("Subjugation: Morbolger",                 False),
+
+    _roe_section("Combat (Original Areas) 2"),
+    ("Conflict: Jugner Forest",                True),
+    ("Subjugation: King Arthro",               False),
+    ("Conflict: Batallia Downs",               True),
+    ("Subjugation: Lumber Jack",               False),
+    ("Conflict: Eldieme Necropolis",           True),
+    ("Subjugation: Cwn Cyrff",                 False),
+    ("Conflict: Davoi",                        True),
+    ("Subjugation: Hawkeyed Dnatbat",          False),
+    ("Conflict: North Gustaberg",              True),
+    ("Subjugation: Maighdean Uaine",           False),
+    ("Conflict: South Gustaberg",              True),
+    ("Subjugation: Carnero",                   False),
+    ("Conflict: Zeruhn Mines",                 True),
+    ("Conflict: Palborough Mines",             True),
+    ("Subjugation: Zi'Ghi Boneeater",          False),
+    ("Conflict: Dangruf Wadi",                 True),
+    ("Subjugation: Teporingo",                 False),
+    ("Conflict: Pashhow Marshlands",           True),
+    ("Subjugation: Ni'Zho Bladebender",        False),
+    ("Conflict: Rolanberry Fields",            True),
+    ("Subjugation: Simurgh",                   False),
+    ("Conflict: Crawlers' Nest",               True),
+    ("Subjugation: Demonic Tiphia",            False),
+    ("Conflict: Beadeaux",                     True),
+    ("Subjugation: Zo'Khu Blackcloud",         False),
+
+    _roe_section("Combat (Original Areas) 3"),
+    ("Conflict: West Sarutabaruta",            True),
+    ("Subjugation: Nunyenunc",                 False),
+    ("Conflict: East Sarutabaruta",            True),
+    ("Subjugation: Spiny Spipi",               False),
+    ("Conflict: Giddeus",                      True),
+    ("Subjugation: Hoo Mjuu the Torrent",      False),
+    ("Conflict: Toraimarai Canal",             True),
+    ("Subjugation: Oni Carcass",               False),
+    ("Conflict: Inner Horutoto Ruins",         True),
+    ("Subjugation: Maltha",                    False),
+    ("Conflict: Outer Horutoto Ruins",         True),
+    ("Subjugation: Bomb King",                 False),
+    ("Conflict: Buburimu Peninsula",           True),
+    ("Subjugation: Helldiver",                 False),
+    ("Conflict: Tahrongi Canyon",              True),
+    ("Subjugation: Serpopard Ishtar",          False),
+    ("Conflict: Maze of Shakhrami",            True),
+    ("Subjugation: Argus",                     False),
+    ("Conflict: Meriphataud Mountains",        True),
+    ("Subjugation: Daggerclaw Dracos",         False),
+    ("Conflict: Sauromugue Champaign",         True),
+    ("Subjugation: Roc",                       False),
+    ("Conflict: Garlaige Citadel",             True),
+    ("Subjugation: Serket",                    False),
+    ("Conflict: Castle Oztroja",               True),
+    ("Subjugation: Lii Jixa the Somnolist",    False),
+
+    _roe_section("Combat (Original Areas) 4"),
+    # RESOLVED: the full table ends on Behemoth's Dominion with no
+    # Subjugation row, so it is genuinely unpaired -- the same shape as
+    # Zeruhn Mines, not a truncated capture.
+    ("Conflict: Beaucedine Glacier",           True),
+    ("Subjugation: Nue",                       False),
+    ("Conflict: Ranguemont Pass",              True),
+    ("Subjugation: Gloom Eye",                 False),
+    ("Conflict: Fei'Yin",                      True),
+    ("Subjugation: Goliath",                   False),
+    ("Conflict: Xarcabard",                    True),
+    ("Subjugation: Biast",                     False),
+    ("Conflict: Castle Zvahl Baileys",         True),
+    ("Subjugation: Duke Haborym",              False),
+    ("Conflict: Castle Zvahl Keep",            True),
+    ("Subjugation: Baron Vapula",              False),
+    ("Conflict: Qufim Island",                 True),
+    ("Subjugation: Dosetsu Tree",              False),
+    ("Conflict: Lower Delkfutt's Tower",       True),
+    ("Subjugation: Epialtes",                  False),
+    ("Conflict: Middle Delkfutt's Tower",      True),
+    ("Subjugation: Ogygos",                    False),
+    ("Conflict: Upper Delkfutt's Tower",       True),
+    ("Subjugation: Enkelados",                 False),
+    ("Conflict: Behemoth's Dominion",          True),
+
+    # From here the sections drop the Subjugation rows entirely --
+    # expansion zones have no per-zone NM objective.
+    _roe_section("Combat (Adoulin) 1"),
+    ("Conflict: Rala Waterways I",             True),
+    ("Conflict: Rala Waterways II",            True),
+    ("Conflict: Rala Waterways III",           True),
+    ("Conflict: Ceizak Battlegrounds I",       True),
+    ("Conflict: Ceizak Battlegrounds II",      True),
+    ("Conflict: Ceizak Battlegrounds III",     True),
+    ("Conflict: Yahse Hunting Grounds I",      True),
+    ("Conflict: Yahse Hunting Grounds II",     True),
+    ("Conflict: Yahse Hunting Grounds III",    True),
+    ("Conflict: Foret de Hennetiel I",         True),
+    ("Conflict: Foret de Hennetiel II",        True),
+    ("Conflict: Foret de Hennetiel III",       True),
+    ("Conflict: Morimar Basalt Fields I",      True),
+    ("Conflict: Morimar Basalt Fields II",     True),
+    ("Conflict: Morimar Basalt Fields III",    True),
+    ("Conflict: Yorcia Weald I",               True),
+    ("Conflict: Yorcia Weald II",              True),
+    ("Conflict: Yorcia Weald III",             True),
+    ("Conflict: Marjami Ravine I",             True),
+    ("Conflict: Marjami Ravine II",            True),
+    ("Conflict: Marjami Ravine III",           True),
+
+    _roe_section("Combat (Adoulin) 2"),
+    ("Conflict: Kamihr Drifts I",              True),
+    ("Conflict: Kamihr Drifts II",             True),
+    ("Conflict: Kamihr Drifts III",            True),
+    ("Conflict: Sih Gates I",                  True),
+    ("Conflict: Sih Gates II",                 True),
+    ("Conflict: Sih Gates III",                True),
+    ("Conflict: Moh Gates I",                  True),
+    ("Conflict: Moh Gates II",                 True),
+    ("Conflict: Moh Gates III",                True),
+    ("Conflict: Cirdas Caverns I",             True),
+    ("Conflict: Cirdas Caverns II",            True),
+    ("Conflict: Cirdas Caverns III",           True),
+    ("Conflict: Dho Gates I",                  True),
+    ("Conflict: Dho Gates II",                 True),
+    ("Conflict: Dho Gates III",                True),
+    ("Conflict: Woh Gates I",                  True),
+    ("Conflict: Woh Gates II",                 True),
+    ("Conflict: Woh Gates III",                True),
+    ("Conflict: Outer Ra'Kaznar I",            True),
+    ("Conflict: Outer Ra'Kaznar II",           True),
+    ("Conflict: Outer Ra'Kaznar III",          True),
+    ("Conflict: Ra'Kaznar Inner Court I",      True),
+    ("Conflict: Ra'Kaznar Inner Court II",     True),
+    ("Conflict: Ra'Kaznar Inner Court III",    True),
+
+    _roe_section("Combat (Zilart) 1"),
+    ("Conflict: Sanctuary of Zi'Tah",          True),
+    ("Conflict: Ro'Maeve",                     True),
+    ("Conflict: Boyahda Tree",                 True),
+    ("Conflict: Dragon's Aery",                True),
+    ("Conflict: Eastern Altepa Desert",        True),
+    ("Conflict: Western Altepa Desert",        True),
+    ("Conflict: Quicksand Caves",              True),
+    ("Conflict: Gustav Tunnel",                True),
+    ("Conflict: Kuftal Tunnel",                True),
+    ("Conflict: Cape Teriggan",                True),
+    ("Conflict: Valley of Sorrows",            True),
+    ("Conflict: Yuhtunga Jungle",              True),
+
+    _roe_section("Combat (Zilart) 2"),
+    ("Conflict: Sea Serpent Grotto",           True),
+    ("Conflict: Yhoator Jungle",               True),
+    ("Conflict: Temple of Uggalepih",          True),
+    ("Conflict: Den of Rancor",                True),
+    ("Conflict: Ifrit's Cauldron",             True),
+    ("Conflict: Ru'Aun Gardens",               True),
+    ("Conflict: Ve'Lugannon Palace",           True),
+    ("Conflict: Shrine of Ru'Avitau",          True),
+    ("Conflict: Labyrinth of Onzozo",          True),
+    ("Conflict: Korroloka Tunnel",             True),
+
+    _roe_section("Combat (Promathia) 1"),
+    ("Conflict: Oldton Movalpolos",            True),
+    ("Conflict: Newton Movalpolos",            True),
+    ("Conflict: Lufaise Meadows",              True),
+    ("Conflict: Misareaux Coast",              True),
+    ("Conflict: Phomiuna Aqueducts",           True),
+    ("Conflict: Riverne - Site #A01",          True),
+    ("Conflict: Riverne - Site #B01",          True),
+    ("Conflict: Sacrarium",                    True),
+    ("Conflict: Promyvion - Holla",            True),
+    ("Conflict: Promyvion - Dem",              True),
+    ("Conflict: Promyvion - Mea",              True),
+    ("Conflict: Promyvion - Vahzl",            True),
+
+    _roe_section("Combat (Promathia) 2"),
+    ("Conflict: Al'Taieu",                     True),
+    ("Conflict: Grand Palace of Hu'Xzoi",      True),
+    ("Conflict: Garden of Ru'Hmet",            True),
+    ("Conflict: Carpenters' Landing",          True),
+    ("Conflict: Bibiki Bay",                   True),
+    ("Conflict: Attohwa Chasm",                True),
+    ("Conflict: Pso'Xja",                      True),
+    ("Conflict: Uleguerand Range",             True),
+
+    _roe_section("Combat (Aht Urhgan)"),
+    ("Conflict: Bhaflau Thickets",             True),
+    ("Conflict: Mamook",                       True),
+    ("Conflict: Wajaom Woodlands",             True),
+    ("Conflict: Aydeewa Subterrane",           True),
+    ("Conflict: Halvung",                      True),
+    ("Conflict: Mount Zhayolm",                True),
+    ("Conflict: Caedarva Mire",                True),
+    ("Conflict: Arrapago Reef",                True),
+    ("Conflict: Alza. Undersea Ruins",         True),
+
+    _roe_section("Combat (Goddess) 1"),
+    # Wings of the Goddess past-era zones; the [S] is part of the name.
+    ("Conflict: East Ronfaure [S]",            True),
+    ("Conflict: Jugner Forest [S]",            True),
+    ("Conflict: Batallia Downs [S]",           True),
+    ("Conflict: La Vaule [S]",                 True),
+    ("Conflict: Eldieme Necropolis [S]",       True),
+    ("Conflict: North Gustaberg [S]",          True),
+    ("Conflict: Grauberg [S]",                 True),
+    ("Conflict: Vunkerl Inlet [S]",            True),
+    ("Conflict: Pashhow Marshlands [S]",       True),
+    ("Conflict: Rolanberry Fields [S]",        True),
+    ("Conflict: Beadeaux [S]",                 True),
+    ("Conflict: Crawlers' Nest [S]",           True),
+
+    _roe_section("Combat (Goddess) 2"),
+    # "Meriph. Mountains" and "Sauro. Champaign" are abbreviated on the
+    # page itself, not shortened here.
+    ("Conflict: West Sarutabaruta [S]",        True),
+    ("Conflict: Fort Karugo-Narugo [S]",       True),
+    ("Conflict: Meriph. Mountains [S]",        True),
+    ("Conflict: Sauro. Champaign [S]",         True),
+    ("Conflict: Castle Oztroja [S]",           True),
+    ("Conflict: Garlaige Citadel [S]",         True),
+    ("Conflict: Beaucedine Glacier [S]",       True),
+    ("Conflict: Xarcabard [S]",                True),
+    ("Conflict: Castle Zvahl Baileys [S]",     True),
+    ("Conflict: Castle Zvahl Keep [S]",        True),
+
+    _roe_section("Combat (Abyssea)"),
+    ("Conflict: Abyssea - La Theine",          True),
+    ("Conflict: Abyssea - Konschtat",          True),
+    ("Conflict: Abyssea - Tahrongi",           True),
+    ("Conflict: Abyssea - Attohwa",            True),
+    ("Conflict: Abyssea - Misareaux",          True),
+    ("Conflict: Abyssea - Vunkerl",            True),
+    ("Conflict: Abyssea - Altepa",             True),
+    ("Conflict: Abyssea - Uleguerand",         True),
+    ("Conflict: Abyssea - Grauberg",           True),
+
+    _roe_section("Combat (Escha) 1"),
+    ("Conflict: Escha - Zi'Tah I",             True),
+    ("Conflict: Escha - Zi'Tah II",            True),
+    ("Conflict: Escha - Zi'Tah III",           True),
+    ("Conflict: Escha - Zi'Tah IV",            True),
+    ("Conflict: Escha - Zi'Tah V",             True),
+    ("Conflict: Escha - Zi'Tah VI",            True),
+    ("Conflict: Escha - Zi'Tah VII",           True),
+    ("Conflict: Escha - Ru'Aun I",             True),
+    ("Conflict: Escha - Ru'Aun II",            True),
+    ("Conflict: Escha - Ru'Aun III",           True),
+    ("Conflict: Escha - Ru'Aun IV",            True),
+    ("Conflict: Escha - Ru'Aun V",             True),
+    ("Conflict: Escha - Ru'Aun VI",            True),
+    ("Conflict: Escha - Ru'Aun VII",           True),
+    ("Conflict: Escha - Ru'Aun VIII",          True),
+    ("Conflict: Escha - Ru'Aun IX",            True),
+    ("Conflict: Escha - Ru'Aun X",             True),
+
+    _roe_section("Combat (Escha) 2"),
+    ("Conflict: Reisenjima I",                 True),
+    ("Conflict: Reisenjima II",                True),
+    ("Conflict: Reisenjima III",               True),
+    ("Conflict: Reisenjima IV",                True),
+    ("Conflict: Reisenjima V",                 True),
+    ("Conflict: Reisenjima VI",                True),
+    ("Conflict: Reisenjima VII",               True),
+    ("Conflict: Reisenjima VIII",              True),
+    ("Conflict: Reisenjima IX",                True),
+    ("Conflict: Reisenjima X",                 True),
+    ("Conflict: Reisenjima XI",                True),
+]
+_ROE_FISHING_MASTER       = [
+    _roe_section("Fishing: General"),
+    ("Speak to Fisherman's Guild Master",      False),
+    ("Reel in a Catch",                        False),
+    ("Reel in Multiple Small Fish I",          True),
+    ("Reel in Multiple Big Fish I",            True),
+    ("Reel in Multiple Rusted Objects",        True),
+    ("Total Enemies Reeled In",                True),
+    ("Participate in Fish Ranking",            False),
+    ("Total Catches (Anywhere)",               True),
+    ("Total Catches (Saltwater)",              True),
+    ("Total Catches (Freshwater)",             True),
+    ("Fish with a Willow Fishing Rod",         False),
+    ("Fish with a Yew Fishing Rod",            False),
+    ("Fish with a Bamboo Fishing Rod",         False),
+    ("Reel in 10 Different Catches",           False),
+    ("Reel in 25 Different Catches",           False),
+    ("Reel in 50 Different Catches",           False),
+    ("Reel in 75 Different Catches",           False),
+    ("Reel in 100 Different Catches",          False),
+
+    _roe_section("Fishing: Tenacity"),
+    # Opened by the quest "Thanks for All the Fish"; every objective
+    # here requires Lu Shang's Fishing Rod equipped.
+    ("Reel Endurance 1",                       False),
+    ("Reel Endurance 2",                       False),
+    ("Reel Endurance 3",                       False),
+    ("Reel Endurance 4",                       False),
+    ("Reel Endurance 5",                       False),
+    ("Reel Endurance 6",                       False),
+    ("Reel Endurance 7",                       False),
+    ("Reel Endurance 8",                       False),
+    ("Catch Size and Weight",                  False),
+    ("Region: Ronfaure",                       False),
+    ("Region: Gustaberg",                      False),
+    ("Region: Sarutabaruta",                   False),
+    ("Region: Zulkheim",                       False),
+    ("Region: Kolshushu",                      False),
+    ("Region: Norvallen",                      False),
+    ("Region: Derfland",                       False),
+    ("Region: Aragoneau",                      False),
+    ("Region: Qufim",                          False),
+    ("Region: Fauregandi",                     False),
+    ("Region: Kuzotz",                         False),
+    ("Region: Vollbow",                        False),
+    ("Region: Elshimo Lowlands",               False),
+    ("Region: Elshimo Uplands",                False),
+    ("Region: Li'Telor",                       False),
+    ("Region: Selbina - Mhuara Ferry",         False),
+]
+_ROE_HARVESTING_MASTER    = [
+    # The wiki keeps Crafting and Harvesting on one page under this
+    # category. Filed together here for that reason -- worth a glance at
+    # the in-game Objective List to confirm the game groups them the
+    # same way, the way the Bastok missions were checked.
+    _roe_section("Crafting: General"),
+    ("Total Successful Synthesis Attempts",        True),
+
+    _roe_section("Crafting: Escutcheons (Woodworking)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Clothcraft)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Alchemy)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Bonecraft)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Cooking)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Goldsmithing)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Leathercraft)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Crafting: Escutcheons (Smithing)"),
+    ("Guild Master's Request 1",                   False),
+    ("Guild Master's Request 2",                   False),
+    ("Guild Master's Request 3",                   False),
+    ("Guild Master's Request 4",                   False),
+
+    _roe_section("Harvesting (General)"),
+    ("Total Successful Harvesting Attempts",       False),
+    ("Total Suc. Harvesting Attempts II",          True),
+
+    _roe_section("Harvesting (Original Areas)"),
+    # The page prints "Buburimu Penisula"; corrected here, as with the
+    # other wiki typos.
+    ("Harvesting: East Ronfaure",                  True),
+    ("Harvesting: Ghelsba Outpost",                True),
+    ("Harvesting: Gusgen Mines",                   True),
+    ("Harvesting: Jugner Forest",                  True),
+    ("Harvesting: Zeruhn Mines",                   True),
+    ("Harvesting: Palborough Mines",               True),
+    ("Harvesting: West Sarutabaruta",              True),
+    ("Harvesting: Giddeus",                        True),
+    ("Harvesting: Buburimu Peninsula",             True),
+    ("Harvesting: Tahrongi Canyon",                True),
+    ("Harvesting: Maze of Shakhrami",              True),
+    ("Harvesting: Yughott Grotto",                 True),
+
+    _roe_section("Harvesting (Adoulin) 1"),
+    ("Harvesting: Ceizak Battlegrounds I",         True),
+    ("Harvesting: Ceizak Battlegrounds II",        True),
+    ("Harvesting: Yahse Hunting Grounds I",        True),
+    ("Harvesting: Yahse Hunting Grounds II",       True),
+    ("Harvesting: Foret de Hennetiel I",           True),
+    ("Harvesting: Foret de Hennetiel II",          True),
+    ("Harvesting: Morimar Basalt Fields I",        True),
+    ("Harvesting: Morimar Basalt Fields II",       True),
+    ("Harvesting: Yorcia Weald I",                 True),
+    ("Harvesting: Yorcia Weald II",                True),
+    ("Harvesting: Marjami Ravine I",               True),
+    ("Harvesting: Marjami Ravine II",              True),
+    ("Harvesting: Kamihr Drifts I",                True),
+    ("Harvesting: Kamihr Drifts II",               True),
+    ("Harvesting: Sih Gates I",                    True),
+    ("Harvesting: Sih Gates II",                   True),
+    ("Harvesting: Moh Gates I",                    True),
+    ("Harvesting: Moh Gates II",                   True),
+    ("Harvesting: Cirdas Caverns I",               True),
+    ("Harvesting: Cirdas Caverns II",              True),
+    ("Harvesting: Dho Gates I",                    True),
+    ("Harvesting: Dho Gates II",                   True),
+    ("Harvesting: Woh Gates I",                    True),
+    ("Harvesting: Woh Gates II",                   True),
+    ("Harvesting: Outer Ra'Kaznar I",              True),
+    ("Harvesting: Outer Ra'Kaznar II",             True),
+
+    _roe_section("Harvesting (Zilart)"),
+    ("Harvesting: Yuhtunga Jungle",                True),
+    ("Harvesting: Yhoator Jungle",                 True),
+    ("Harvesting: Ifrit's Cauldron",               True),
+    ("Harvesting: Korroloka Tunnel",               True),
+
+    _roe_section("Harvesting (Promathia)"),
+    ("Harvesting: Oldton Movalpolos",              True),
+    ("Harvesting: Newton Movalpolos",              True),
+    ("Harvesting: Lufaise Meadows",                True),
+    ("Harvesting: Misareaux Coast",                True),
+    ("Harvesting: Carpenters' Landing",            True),
+    ("Harvesting: Attohwa Chasm",                  True),
+
+    _roe_section("Harvesting (Aht Urhgan)"),
+    ("Harvesting: Bhaflau Thickets",               True),
+    ("Harvesting: Mamook",                         True),
+    ("Harvesting: Wajaom Woodlands",               True),
+    ("Harvesting: Halvung",                        True),
+    ("Harvesting: Mount Zhayolm",                  True),
+    ("Harvesting: Caedarva Mire",                  True),
+
+    _roe_section("Harvesting (Goddess)"),
+    ("Harvesting: East Ronfaure [S]",              True),
+    ("Harvesting: Jugner Forest [S]",              True),
+    ("Harvesting: North Gustaberg [S]",            True),
+    ("Harvesting: Grauberg [S]",                   True),
+    ("Harvesting: West Sarutabaruta [S]",          True),
+    ("Harvesting: Fort Karugo-Narugo [S]",         True),
+
+    _roe_section("Harvesting (Abyssea)"),
+    ("Harvesting: Abyssea - La Theine",            True),
+    ("Harvesting: Abyssea - Tahrongi",             True),
+    ("Harvesting: Abyssea - Attohwa",              True),
+    ("Harvesting: Abyssea - Misareaux",            True),
+    ("Harvesting: Abyssea - Grauberg",             True),
+]
+_ROE_CONTENT_MASTER       = [
+    _roe_section("Content (Ambuscade)"),
+    # The two Primer volumes appear twice: once as a one-shot daily and
+    # once as the repeatable standing objective. Both rows are real.
+    ("Ambuscade Primer Vol. 1 (Daily)",              False),
+    ("Ambuscade Primer Vol. 2 (Daily)",              False),
+    ("Intense Ambuscade (M)",                        False),
+    ("Ambuscade (W)",                                False),
+    ("Ambuscade Primer Vol. 1",                      True),
+    ("Ambuscade Primer Vol. 2",                      True),
+
+    _roe_section("Lair Reives"),
+    ("Lair Reives: Ceizak Battlegrounds",            True),
+    ("Lair Reives: Yahse Hunting Grounds",           True),
+    ("Lair Reives: Foret de Hennetiel",              True),
+    ("Lair Reives: Morimar Basalt Fields",           True),
+    ("Lair Reives: Yorcia Weald",                    True),
+    ("Lair Reives: Marjami Ravine",                  True),
+    ("Lair Reives: Kamihr Drifts",                   True),
+    ("Lair Reives: Cirdas Caverns",                  True),
+    ("Lair Reives: Outer Ra'Kaznar",                 True),
+    ("Lair Reives: Ra'Kaznar Inner Court",           True),
+
+    _roe_section("Colonization Reives"),
+    # Zone names are abbreviated on the page (Ceizak, Yahse, Hennetiel,
+    # Morimar, Ra'Kaznar I.C.); kept as printed.
+    ("Colonization Reives: Ceizak",                  True),
+    ("Colonization Reives: Yahse",                   True),
+    ("Colonization Reives: Hennetiel",               True),
+    ("Colonization Reives: Morimar",                 True),
+    ("Colonization Reives: Yorcia Weald",            True),
+    ("Colonization Reives: Marjami Ravine",          True),
+    ("Colonization Reives: Kamihr Drifts",           True),
+    ("Colonization Reives: Sih Gates",               True),
+    ("Colonization Reives: Moh Gates",               True),
+    ("Colonization Reives: Cirdas Caverns",          True),
+    ("Colonization Reives: Dho Gates",               True),
+    ("Colonization Reives: Woh Gates",               True),
+    ("Colonization Reives: Outer Ra'Kaznar",         True),
+    ("Colonization Reives: Ra'Kaznar I.C.",          True),
+
+    _roe_section("Wildskeeper Reives"),
+    ("Subjugation: Colkhab",                         True),
+    ("Subjugation: Tchakka",                         True),
+    ("Subjugation: Achuka",                          True),
+    ("Subjugation: Yumcax",                          True),
+    ("Subjugation: Hurkan",                          True),
+    ("Subjugation: Kumhau",                          True),
+
+    _roe_section("Content (Other)"),
+    ("Total Suc. Chocobo Digs",                      True),
+    ("Mons.: Total Monsters Vanquished",             True),
+    ("Unlock Treasure Chests and Coffers",           True),
+    ("Reaching the Crest",                           True),
+    ("Subjugation: Kirin",                           True),
+    ("Subjugation: Genbu",                           True),
+    ("Subjugation: Suzaku",                          True),
+    ("Subjugation: Seiryu",                          True),
+    ("Subjugation: Byakko",                          True),
+    ("Subjugation: Jailer of Justice",               True),
+    ("Subjugation: Jailer of Hope",                  True),
+    ("Subjugation: Jailer of Prudence",              True),
+    ("Subjugation: Jailer of Love",                  True),
+    ("Subjugation: Battleclad Chariot",              True),
+    ("Subjugation: Armored Chariot",                 True),
+    ("Subjugation: Long-Bowed Chariot",              True),
+    ("Subjugation: Long-Armed Chariot",              True),
+
+    _roe_section("Content (Dynamis) 1"),
+    # Entering a zone is one-shot; each of its five NMs repeats.
+    ("Entering Dynamis - San d'Oria",                False),
+    ("Subjugation: Overlord's Tombstone",            True),
+    ("Subjugation: Bladeburner Rokgevok",            True),
+    ("Subjugation: Steelshank Kratzvatz",            True),
+    ("Subjugation: Bloodfist Voshgrosh",             True),
+    ("Subjugation: Spellspear Djokvukk",             True),
+    ("Entering Dynamis - Bastok",                    False),
+    ("Subjugation: Gu'Dha Effigy",                   True),
+    ("Subjugation: Zo'Pha Forgesoul",                True),
+    ("Subjugation: Ra'Gho Darkfount",                True),
+    ("Subjugation: Va'Zhe Pummelsong",               True),
+    ("Subjugation: Bu'Bho Truesteel",                True),
+    ("Entering Dynamis - Windurst",                  False),
+    ("Subjugation: Tzee Xicu Idol",                  True),
+    ("Subjugation: Xuu Bhoqa the Enigma",            True),
+    ("Subjugation: Fuu Tzapo the Blessed",           True),
+    ("Subjugation: Naa Yixo the Stillrage",          True),
+    ("Subjugation: Tee Zaksa the Ceaseless",         True),
+    ("Entering Dynamis - Jeuno",                     False),
+    ("Subjugation: Goblin Golem",                    True),
+    ("Subjugation: Quicktrix Hexhands",              True),
+    ("Subjugation: Feralox Honeylips",               True),
+    ("Subjugation: Scourquix Scaleskin",             True),
+    ("Subjugation: Wilywox Tenderpalm",              True),
+
+    _roe_section("Content (Dynamis) 2"),
+    ("Entering Dynamis - Beaucedine",                False),
+    ("Subjugation: Angra Mainyu",                    True),
+    ("Subjugation: Taquede",                         True),
+    ("Subjugation: Pignonpausard",                   True),
+    ("Subjugation: Hitaume",                         True),
+    ("Subjugation: Cavanneche",                      True),
+    ("Entering Dynamis - Xarcabard",                 False),
+    ("Subjugation: Dynamis Lord",                    True),
+    ("Subjugation: Duke Haures",                     True),
+    ("Subjugation: Marquis Caim",                    True),
+    ("Subjugation: Baron Avnas",                     True),
+    ("Subjugation: Count Haagenti",                  True),
+
+    _roe_section("Content (ZNM)"),
+    ("Subjugation: Vulpangue",                       True),
+    ("Subjugation: Chamrosh",                        True),
+    ("Subjugation: Cheese Hoarder Gigiroon",         True),
+    ("Subjugation: Brass Borer",                     True),
+    ("Subjugation: Claret",                          True),
+    ("Subjugation: Ob",                              True),
+    ("Subjugation: Velionis",                        True),
+    ("Subjugation: Lil' Apkallu",                    True),
+    ("Subjugation: Chigre",                          True),
+    ("Subjugation: Iriz Ima",                        True),
+    ("Subjugation: Lividroot Amooshah",              True),
+    ("Subjugation: Iriri Samariri",                  True),
+    ("Subjugation: Anantaboga",                      True),
+    ("Subjugation: Reacton",                         True),
+    ("Subjugation: Dextrose",                        True),
+    ("Subjugation: Wulgaru",                         True),
+    ("Subjugation: Zareehkl the Jubilant",           True),
+    ("Subjugation: Verdelet",                        True),
+    ("Subjugation: Armed Gears",                     True),
+    ("Subjugation: Gotoh Zha the Redolent",          True),
+    ("Subjugation: Dea",                             True),
+    ("Subjugation: Nosferatu",                       True),
+    ("Subjugation: Khromasoul Bhurborlor",           True),
+    ("Subjugation: Achamoth",                        True),
+    ("Subjugation: Mahjlaef the Paintorn",           True),
+    ("Subjugation: Experimental Lamia",              True),
+    ("Subjugation: Nuhn",                            True),
+
+    _roe_section("Content (Vagary)"),
+    # The page switches between "Subjugation:" and "Subj.:" partway
+    # through this table; both prefixes are kept as printed.
+    ("Subjugation: Rancibus",                        False),
+    ("Subjugation: Palloritus",                      False),
+    ("Subjugation: Putraxia",                        False),
+    ("Subjugation: Plouton",                         False),
+    ("Subjugation: Perfidien",                       False),
+    ("Subj.: Putraxia 1 (W)",                        False),
+    ("Subj.: Putraxia 2 (W)",                        False),
+    ("Subj.: Rancibus 1 (W)",                        False),
+    ("Subj.: Rancibus 2 (W)",                        False),
+    ("Subj.: Palloritus 1 (W)",                      False),
+    ("Subj.: Palloritus 2 (W)",                      False),
+    ("Subj.: Perfidien 1 (W)",                       False),
+    ("Subj.: Perfidien 2 (W)",                       False),
+    ("Subjugation: Plouton 1 (W)",                   False),
+    ("Subjugation: Plouton 2 (W)",                   False),
+
+    _roe_section("Content (Omen)"),
+    ("Subjugation: Fu",                              False),
+    ("Subjugation: Kyou",                            False),
+    ("Subjugation: Kei",                             False),
+    ("Subjugation: Gin",                             False),
+    ("Subjugation: Kin",                             False),
+
+    _roe_section("A.M.A.N. Trove"),
+    ("A.M.A.N. Trove (M)",                           False),
+    ("Examine a Home Point (M)",                     False),
+    ("Auction an Item (M)",                          False),
+    ("Unity Chat Greetings (M)",                     False),
+    ("Conquest Participation (M)",                   False),
+    ("Besieged Participation (M)",                   False),
+    ("Campaign Participation (M)",                   False),
+    ("Reive Participation (M)",                      False),
+    ("Ambuscade Participation (M)",                  False),
+    ("Omen Participation (M)",                       False),
+    ("Dynamis - Divergence Participation (M)",       False),
+
+    _roe_section("Odyssey"),
+    ("Sheol A",                                      False),
+    ("Sheol B",                                      False),
+    ("Sheol C",                                      False),
+
+    _roe_section("Sortie"),
+    # "Subjugate:" here, not the "Subjugation:" every other section
+    # uses. Kept as printed.
+    ("Subjugate: Ghatjot",                           False),
+    ("Subjugate: Leshonn",                           False),
+    ("Subjugate: Skomora",                           False),
+    ("Subjugate: Degei",                             False),
+    ("Subjugate: Dhartok",                           False),
+    ("Subjugate: Gartell",                           False),
+    ("Subjugate: Triboulex",                         False),
+    ("Subjugate: Aita",                              False),
+    ("Subjugate: Aminon",                            False),
+]
+_ROE_UNITY_MASTER         = [
+    # NO REPEAT COLUMN ON THIS PAGE. Its note says these are not
+    # technically Repeatable but do reset at certain times, so none of
+    # them carry a (R) -- that flag means what the Repeat column means
+    # everywhere else, and inventing one here would be a guess.
+    #
+    # Every leader's list repeats "Heal Unity Allies (UC)" (objectives
+    # 1-5 and 3-5); see _make_roe_rows for how the two are kept apart.
+    #
+    # Corrected against the rest of the page: "Vanquish Plantiods" in
+    # Shared E and "Vanquish Couerls" under Yoran-Oran. Kept as printed:
+    # Ayame's "North Gustaberg (UC)" with no "Conflict:" prefix, and the
+    # "Subj.:" / "Conf.:" short forms several leaders use.
+    _roe_section("Unity (Shared A)"),
+    ("Unity Communique (UC)",                          False),
+    ("Home Point Comrade (UC)",                        False),
+    ("Vanquish Multiple Enemies (UC)",                 False),
+    ("Vanquish Aquans (UC)",                           False),
+    ("Van. Amorphs with Ph. Damage (UC)",              False),
+    ("Vanquish Beasts with Magic (UC)",                False),
+    ("Total Suc. Wood. Syntheses (UC)",                False),
+    ("Total Suc. Leath. Syntheses (UC)",               False),
+    ("Total Suc. Mining Attempts (UC)",                False),
+    ("Van. Enemies w. Unity Leader (UC)",              False),
+
+    _roe_section("Unity (Shared B)"),
+    ("Unity Communique (UC)",                          False),
+    ("Chocobo Digging (UC)",                           False),
+    ("Vanquish Multiple Enemies (UC)",                 False),
+    ("Vanquish Arcana (UC)",                           False),
+    ("Van. Undead with Ph. Damage (UC)",               False),
+    ("Vanquish Plantoids with Magic (UC)",             False),
+    ("Total Suc. Black. Syntheses (UC)",               False),
+    ("Reel in Multiple Small Fish (UC)",               False),
+    ("Total Suc. Logging Attempts (UC)",               False),
+    ("Van. Enemies w. Unity Leader (UC)",              False),
+
+    _roe_section("Unity (Shared C)"),
+    ("Unity Communique (UC)",                          False),
+    ("Home Point Comrade (UC)",                        False),
+    ("Vanquish Multiple Enemies (UC)",                 False),
+    ("Vanquish Vermin (UC)",                           False),
+    ("Van. Birds with Ph. Damage (UC)",                False),
+    ("Vanquish Lizards with Magic (UC)",               False),
+    ("Total Suc. Gold. Syntheses (UC)",                False),
+    ("Reel in Multiple Large Fish (UC)",               False),
+    ("Total Suc. Harvesting Attempts (UC)",            False),
+    ("Van. Enemies w. Unity Leader (UC)",              False),
+
+    _roe_section("Unity (Shared D)"),
+    ("Unity Communique (UC)",                          False),
+    ("Mons.: Tot. Monsters Vanquished (UC)",           False),
+    ("Vanquish Multiple Enemies (UC)",                 False),
+    ("Vanquish Beasts (UC)",                           False),
+    ("Van. Aquans with Ph. Damage (UC)",               False),
+    ("Vanquish Amorphs with Magic (UC)",               False),
+    ("Total Suc. Cloth. Syntheses (UC)",               False),
+    ("Total Suc. Bone. Syntheses (UC)",                False),
+    ("Total Suc. Mining Attempts (UC)",                False),
+    ("Van. Enemies w. Unity Leader (UC)",              False),
+
+    _roe_section("Unity (Shared E)"),
+    ("Unity Communique (UC)",                          False),
+    ("Home Point Comrade (UC)",                        False),
+    ("Vanquish Multiple Enemies (UC)",                 False),
+    ("Vanquish Plantoids (UC)",                        False),
+    ("Van. Arcana with Ph. Damage (UC)",               False),
+    ("Vanquish Undead with Magic (UC)",                False),
+    ("Total Suc. Cook. Syntheses (UC)",                False),
+    ("Total Saltwater Catches (UC)",                   False),
+    ("Total Suc. Logging Attempts (UC)",               False),
+    ("Van. Enemies w. Unity Leader (UC)",              False),
+
+    _roe_section("Unity (Shared F)"),
+    ("Unity Communique (UC)",                          False),
+    ("Level sync to vanquish enemies (UC)",            False),
+    ("Vanquish Multiple Enemies (UC)",                 False),
+    ("Vanquish Lizards (UC)",                          False),
+    ("Van. Vermin with Ph. Damage (UC)",               False),
+    ("Vanquish Birds with Magic (UC)",                 False),
+    ("Total Suc. Alchemy Syntheses (UC)",              False),
+    ("Total Freshwater Catches (UC)",                  False),
+    ("Total Suc. Harvesting Attempts (UC)",            False),
+    ("Van. Enemies w. Unity Leader (UC)",              False),
+
+    _roe_section("Unity (Aldo)"),
+    ("Dagger Weapon Skills (UC)",                      False),
+    ("Conflict: Sanctuary of Zi'Tah (UC)",             False),
+    ("Vanquish Hounds (UC)",                           False),
+    ("Subjugation: Bastet (UC)",                       False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Doll Shard) (UC)",                       False),
+    ("Conflict: Morimar Basalt Fields (UC)",           False),
+    ("Vanquish Dolls (UC)",                            False),
+    ("Subjugation: Nocuous Weapon (UC)",               False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Marksmanship Weapon Skills (UC)",                False),
+    ("Conflict: Boyahda Tree (UC)",                    False),
+    ("Vanquish Slimes (UC)",                           False),
+    ("Subjugation: Aquarius (UC)",                     False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Bird Egg) (UC)",                         False),
+    ("Conflict: Western Altepa Desert (UC)",           False),
+    ("Vanquish Crow-Type Birds (UC)",                  False),
+    ("Subjugation: Cactuar Cantautor (UC)",            False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Apururu)"),
+    ("Club Weapon Skills (UC)",                        False),
+    ("Conflict: West Sarutabaruta (UC)",               False),
+    ("Vanquish Bees (UC)",                             False),
+    ("Subjugation: Tom Tit Tat (UC)",                  False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Silk Thread) (UC)",                      False),
+    ("Conflict: Buburimu Peninsula (UC)",              False),
+    ("Vanquish Crawlers (UC)",                         False),
+    ("Subjugation: Buburimboo (UC)",                   False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Staff Weapon Skills (UC)",                       False),
+    ("Conflict: Castle Oztroja (UC)",                  False),
+    ("Vanquish Ghosts (UC)",                           False),
+    ("Subj.: Mee Deggi the Punisher (UC)",             False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Saruta Cotton) (UC)",                    False),
+    ("Conflict: Foret de Hennetiel (UC)",              False),
+    ("Vanquish Mandragoras (UC)",                      False),
+    ("Subj.: Juu Duzu the Whirlwind (UC)",             False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Ayame)"),
+    ("Great Katana Weapon Skills (UC)",                False),
+    ("North Gustaberg (UC)",                           False),
+    ("Vanquish Worms (UC)",                            False),
+    ("Subjugation: Stinging Sophie (UC)",              False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Cockatrice Meat) (UC)",                  False),
+    ("Conflict: Yahse Hunting Grounds (UC)",           False),
+    ("Vanquish Cockatrices (UC)",                      False),
+    ("Subjugation: Tococo (UC)",                       False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Archery Weapon Skills (UC)",                     False),
+    ("Conflict: Crawlers' Nest (UC)",                  False),
+    ("Vanquish Lizards (UC)",                          False),
+    ("Subjugation: Aqrabuamelu (UC)",                  False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Land Crab Meat) (UC)",                   False),
+    ("Conflict: Beadeaux (UC)",                        False),
+    ("Vanquish Crabs (UC)",                            False),
+    ("Subjugation: Ge'Dha Evileye (UC)",               False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Flaviria)"),
+    ("Polearm Weapon Skills (UC)",                     False),
+    ("Conflict: Cirdas Caverns (UC)",                  False),
+    ("Vanquish Pugils (UC)",                           False),
+    ("Subjugation: Hovering Hotpot (UC)",              False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Beetle Shell) (UC)",                     False),
+    ("Conflict: East Ronfaure (UC)",                   False),
+    ("Vanquish Beetles (UC)",                          False),
+    ("Subjugation: Bigmouth Billy (UC)",               False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Sword Weapon Skills (UC)",                       False),
+    ("Conflict: Xarcabard (UC)",                       False),
+    ("Vanquish Goobbues (UC)",                         False),
+    ("Subjugation: Barbaric Weapon (UC)",              False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Bone Chip) (UC)",                        False),
+    ("Conflict: Woh Gates (UC)",                       False),
+    ("Vanquish Skeletons (UC)",                        False),
+    ("Subjugation: Hyakume (UC)",                      False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Invincible Shield)"),
+    ("Axe Weapon Skills (UC)",                         False),
+    ("Conflict: South Gustaberg (UC)",                 False),
+    ("Vanquish Sea Monks (UC)",                        False),
+    ("Subjugation: Leaping Lizzy (UC)",                False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Sleepshroom) (UC)",                      False),
+    ("Conflict: Pashhow Marshlands (UC)",              False),
+    ("Vanquish Funguars (UC)",                         False),
+    ("Subjugation: Bloodpool Vorax (UC)",              False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Great Axe Weapon Skills (UC)",                   False),
+    ("Conflict: Ceizak Battlegrounds (UC)",            False),
+    ("Vanquish Flies (UC)",                            False),
+    ("Subjugation: Be'Hya Hundredwall (UC)",           False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Raptor Skin) (UC)",                      False),
+    ("Conflict: Beaucedine Glacier (UC)",              False),
+    ("Vanquish Raptors (UC)",                          False),
+    ("Subjugation: Gargantua (UC)",                    False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Jakoh Wahcondalo)"),
+    ("Dagger Weapon Skills (UC)",                      False),
+    ("Conflict: Yuhtunga Jungle (UC)",                 False),
+    ("Vanquish Sheep (UC)",                            False),
+    ("Subj.: Mischievous Micholas (UC)",               False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Scorpion Claw) (UC)",                    False),
+    ("Conflict: East Sarutabaruta (UC)",               False),
+    ("Vanquish Scorpions (UC)",                        False),
+    ("Subjugation: Sharp-Eared Ropipi (UC)",           False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Archery Weapon Skills (UC)",                     False),
+    ("Conflict: Marjami Ravine (UC)",                  False),
+    ("Vanquish Opo-opos (UC)",                         False),
+    ("Subjugation: Ah Puch (UC)",                      False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Black Tiger Fang) (UC)",                 False),
+    ("Conflict: Sea Serpent Grotto (UC)",              False),
+    ("Vanquish Tigers (UC)",                           False),
+    ("Subjugation: Fyuu the Seabellow (UC)",           False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Maat)"),
+    ("Hand-to-Hand Weapon Skills (UC)",                False),
+    ("Conflict: Yorcia Weald (UC)",                    False),
+    ("Vanquish Leeches (UC)",                          False),
+    ("Subjugation: Canal Moocher (UC)",                False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Spider Web) (UC)",                       False),
+    ("Conflict: Rolanberry Fields (UC)",               False),
+    ("Vanquish Spiders (UC)",                          False),
+    ("Subjugation: Eldritch Edge (UC)",                False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Great Sword Weapon Skills (UC)",                 False),
+    ("Conflict: Meriphataud Mountains (UC)",           False),
+    ("Vanquish Wyverns (UC)",                          False),
+    ("Subjugation: Patripatan (UC)",                   False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Hecteyes Eye) (UC)",                     False),
+    ("Conflict: Sauromugue Champaign (UC)",            False),
+    ("Vanquish Hecteyes (UC)",                         False),
+    ("Subjugation: Bashe (UC)",                        False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Naja Salaheem)"),
+    ("Club Weapon Skills (UC)",                        False),
+    ("Conflict: Bhaflau Thickets (UC)",                False),
+    ("Vanquish Evil Weapons (UC)",                     False),
+    ("Subjugation: Emergent Elm (UC)",                 False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Puk Wing) (UC)",                         False),
+    ("Conflict: West Ronfaure (UC)",                   False),
+    ("Vanquish Puks (UC)",                             False),
+    ("Subjugation: Fungus Beetle (UC)",                False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Staff Weapon Skills (UC)",                       False),
+    ("Conflict: Wajaom Woodlands (UC)",                False),
+    ("Vanquish Elementals (UC)",                       False),
+    ("Subjugation: Jaded Jody (UC)",                   False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Dhalmel Meat) (UC)",                     False),
+    ("Conflict: Kamihr Drifts (UC)",                   False),
+    ("Vanquish Dhalmel (UC)",                          False),
+    ("Subjugation: Trembler Tabitha (UC)",             False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Pieuje)"),
+    ("Club Weapon Skills (UC)",                        False),
+    ("Conflict: Rala Waterways (UC)",                  False),
+    ("Vanquish Rabbits (UC)",                          False),
+    ("Subjugation: Rambukk (UC)",                      False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Bat Fang) (UC)",                         False),
+    ("Conflict: La Theine Plateau (UC)",               False),
+    ("Vanquish Bats (UC)",                             False),
+    ("Subjugation: Tumbling Truffle (UC)",             False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Staff Weapon Skills (UC)",                       False),
+    ("Conflict: Eldieme Necropolis (UC)",              False),
+    ("Vanquish Treants (UC)",                          False),
+    ("Subjugation: Duke Decapod (UC)",                 False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Bomb Ash) (UC)",                         False),
+    ("Conflict: Davoi (UC)",                           False),
+    ("Vanquish Bombs (UC)",                            False),
+    ("Subj.: Poisonhand Gnadgad (UC)",                 False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Sylvie)"),
+    ("Club Weapon Skills (UC)",                        False),
+    ("Conflict: Sih Gates (UC)",                       False),
+    ("Vanquish Acuex (UC)",                            False),
+    ("Subjugation: Intulo (UC)",                       False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Demon Horn) (UC)",                       False),
+    ("Conf.: Konschtat Highlands (UC)",                False),
+    ("Vanquish Demons (UC)",                           False),
+    ("Subj.: Marquis Naberius (UC)",                   False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Staff Weapon Skills (UC)",                       False),
+    ("Conflict: Dho Gates (UC)",                       False),
+    ("Vanquish Velkk (UC)",                            False),
+    ("Subjugation: Dune Widow (UC)",                   False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Twitherym Wing) (UC)",                   False),
+    ("Conflict: Qufim Island (UC)",                    False),
+    ("Vanquish Twitherym (UC)",                        False),
+    ("Subj.: Atkorkamuy (UC)",                         False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Yoran-Oran)"),
+    ("Club Weapon Skills (UC)",                        False),
+    ("Conflict: Giddeus (UC)",                         False),
+    ("Vanquish Efts (UC)",                             False),
+    ("Subj.: Herbage Hunter (UC)",                     False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Rotten Meat) (UC)",                      False),
+    ("Conflict: Moh Gates (UC)",                       False),
+    ("Vanquish Antica (UC)",                           False),
+    ("Subj.: Antican Praefectus (UC)",                 False),
+    ("Cure Status Ailments (UC)",                      False),
+    ("Staff Weapon Skills (UC)",                       False),
+    ("Conflict: Toraimarai Canal (UC)",                False),
+    ("Vanquish Coeurls (UC)",                          False),
+    ("Subjugation: Ose (UC)",                          False),
+    ("Heal Unity Allies (UC)",                         False),
+    ("Spoils (Dullahan Armor) (UC)",                   False),
+    ("Conflict: Outer Ra'Kaznar (UC)",                 False),
+    ("Vanquish Dullahan (UC)",                         False),
+    ("Subj.: Capricious Cassie (UC)",                  False),
+    ("Magic Bursts (UC)",                              False),
+
+    _roe_section("Unity (Wanted)"),
+    # No Repeat column here either -- these cost Accolades to take and
+    # pay a coffer per kill, so the page tracks them differently.
+    ("Subjugation: Hugemaw Harold (UC)",               False),
+    ("Subjugation: Bounding Belinda (UC)",             False),
+    ("Subjugation: Prickly Pitriv (UC)",               False),
+    ("Subjugation: Ironhorn Baldurno (UC)",            False),
+    ("Subjugation: Sleepy Mabel (UC)",                 False),
+    ("Subjugation: Valkurm Imperator (UC)",            False),
+    ("Subjugation: Serpopard Ninlil (UC)",             False),
+    ("Subjugation: Abyssdiver (UC)",                   False),
+    ("Subjugation: Intuila (UC)",                      False),
+    ("Subjugation: Emperor Arthro (UC)",               False),
+    ("Subjugation: Orcfeltrap (UC)",                   False),
+    ("Subjugation: Lumber Jill (UC)",                  False),
+    ("Subjugation: Joyous Green (UC)",                 False),
+    ("Subjugation: Strix (UC)",                        False),
+    ("Subjugation: Warblade Beak (UC)",                False),
+    ("Subjugation: Arke (UC)",                         False),
+    ("Subjugation: Largantua (UC)",                    False),
+    ("Subjugation: Beist (UC)",                        False),
+    ("Subjugation: Jester Malatrix (UC)",              False),
+    ("Subjugation: Cactrot Veloz (UC)",                False),
+    ("Subjugation: Woodland Mender (UC)",              False),
+]
+_ROE_ACHIEVEMENTS_MASTER  = [
+    # Four sections of 4 levels x 22 jobs. Job names are spelled out as
+    # the page spells them, not abbreviated to the three-letter codes
+    # the artifact-quest rows use.
+    _roe_section("Job Levels 1"),
+    ("Level 30 Warrior",                             False),
+    ("Level 50 Warrior",                             False),
+    ("Level 75 Warrior",                             False),
+    ("Level 99 Warrior",                             False),
+    ("Level 30 Monk",                                False),
+    ("Level 50 Monk",                                False),
+    ("Level 75 Monk",                                False),
+    ("Level 99 Monk",                                False),
+    ("Level 30 White Mage",                          False),
+    ("Level 50 White Mage",                          False),
+    ("Level 75 White Mage",                          False),
+    ("Level 99 White Mage",                          False),
+    ("Level 30 Black Mage",                          False),
+    ("Level 50 Black Mage",                          False),
+    ("Level 75 Black Mage",                          False),
+    ("Level 99 Black Mage",                          False),
+    ("Level 30 Red Mage",                            False),
+    ("Level 50 Red Mage",                            False),
+    ("Level 75 Red Mage",                            False),
+    ("Level 99 Red Mage",                            False),
+    ("Level 30 Thief",                               False),
+    ("Level 50 Thief",                               False),
+    ("Level 75 Thief",                               False),
+    ("Level 99 Thief",                               False),
+
+    _roe_section("Job Levels 2"),
+    ("Level 30 Paladin",                             False),
+    ("Level 50 Paladin",                             False),
+    ("Level 75 Paladin",                             False),
+    ("Level 99 Paladin",                             False),
+    ("Level 30 Dark Knight",                         False),
+    ("Level 50 Dark Knight",                         False),
+    ("Level 75 Dark Knight",                         False),
+    ("Level 99 Dark Knight",                         False),
+    ("Level 30 Beastmaster",                         False),
+    ("Level 50 Beastmaster",                         False),
+    ("Level 75 Beastmaster",                         False),
+    ("Level 99 Beastmaster",                         False),
+    ("Level 30 Bard",                                False),
+    ("Level 50 Bard",                                False),
+    ("Level 75 Bard",                                False),
+    ("Level 99 Bard",                                False),
+    ("Level 30 Ranger",                              False),
+    ("Level 50 Ranger",                              False),
+    ("Level 75 Ranger",                              False),
+    ("Level 99 Ranger",                              False),
+    ("Level 30 Samurai",                             False),
+    ("Level 50 Samurai",                             False),
+    ("Level 75 Samurai",                             False),
+    ("Level 99 Samurai",                             False),
+
+    _roe_section("Job Levels 3"),
+    ("Level 30 Ninja",                               False),
+    ("Level 50 Ninja",                               False),
+    ("Level 75 Ninja",                               False),
+    ("Level 99 Ninja",                               False),
+    ("Level 30 Dragoon",                             False),
+    ("Level 50 Dragoon",                             False),
+    ("Level 75 Dragoon",                             False),
+    ("Level 99 Dragoon",                             False),
+    ("Level 30 Summoner",                            False),
+    ("Level 50 Summoner",                            False),
+    ("Level 75 Summoner",                            False),
+    ("Level 99 Summoner",                            False),
+    ("Level 30 Blue Mage",                           False),
+    ("Level 50 Blue Mage",                           False),
+    ("Level 75 Blue Mage",                           False),
+    ("Level 99 Blue Mage",                           False),
+    ("Level 30 Corsair",                             False),
+    ("Level 50 Corsair",                             False),
+    ("Level 75 Corsair",                             False),
+    ("Level 99 Corsair",                             False),
+    ("Level 30 Puppetmaster",                        False),
+    ("Level 50 Puppetmaster",                        False),
+    ("Level 75 Puppetmaster",                        False),
+    ("Level 99 Puppetmaster",                        False),
+
+    _roe_section("Job Levels 4"),
+    ("Level 30 Dancer",                              False),
+    ("Level 50 Dancer",                              False),
+    ("Level 75 Dancer",                              False),
+    ("Level 99 Dancer",                              False),
+    ("Level 30 Scholar",                             False),
+    ("Level 50 Scholar",                             False),
+    ("Level 75 Scholar",                             False),
+    ("Level 99 Scholar",                             False),
+    ("Level 30 Geomancer",                           False),
+    ("Level 50 Geomancer",                           False),
+    ("Level 75 Geomancer",                           False),
+    ("Level 99 Geomancer",                           False),
+    ("Level 30 Rune Fencer",                         False),
+    ("Level 50 Rune Fencer",                         False),
+    ("Level 75 Rune Fencer",                         False),
+    ("Level 99 Rune Fencer",                         False),
+
+    _roe_section("Fame"),
+    # The page writes this row's zone as "Abyssea - La Thiene"; every
+    # other mention of it, here and in Combat and Harvesting, is
+    # "La Theine". Corrected to match.
+    ("Fame: San d'Oria",                             False),
+    ("Fame: Bastok",                                 False),
+    ("Fame: Windurst",                               False),
+    ("Fame: Norg",                                   False),
+    ("Fame: Abyssea - La Theine",                    False),
+    ("Fame: Abyssea - Konschtat",                    False),
+    ("Fame: Abyssea - Tahrongi",                     False),
+    ("Fame: Abyssea - Attohwa",                      False),
+    ("Fame: Abyssea - Misareaux",                    False),
+    ("Fame: Abyssea - Vunkerl",                      False),
+    ("Fame: Abyssea - Altepa",                       False),
+    ("Fame: Abyssea - Uleguerand",                   False),
+    ("Fame: Abyssea - Grauberg",                     False),
+    ("Fame: Adoulin",                                False),
+]
+_ROE_VANAVERSARY_MASTER   = [
+    # Unlocked by the Tutorial objective First Step Forward. Nothing
+    # here repeats; the (W) suffix is the page's own weekly marker and
+    # is part of the name, not a repeat flag.
+    #
+    # One objective in V is named with a star glyph and nothing else.
+    # Kept verbatim -- if the overlay font has no glyph for it the row
+    # will draw as a box, in which case say so and it becomes a word.
+    _roe_section("15th Vana'versary I"),
+    ("Mythril Marathon",                               False),
+    ("Mythril Marathon (W)",                           False),
+    ("The Star of Tenshodo (W)",                       False),
+    ("Claret Carp (W)",                                False),
+    ("Gastro-revolution (W)",                          False),
+    ("Cure for What Ails You (W)",                     False),
+    ("Jinx (W)",                                       False),
+    ("Stop Right There! (W)",                          False),
+    ("Signet, brb (W)",                                False),
+
+    _roe_section("15th Vana'versary II"),
+    ("Selbinary",                                      False),
+    ("Selbinary (W)",                                  False),
+    ("Mhauranian (W)",                                 False),
+    ("Sunsand Rush (W)",                               False),
+    ("Gastro-revolution 2 (W)",                        False),
+    ("Crustacean Infusion (W)",                        False),
+    ("Yaaar! (W)",                                     False),
+    ("Colorless (W)",                                  False),
+    ("No Time to Be Sheepish (W)",                     False),
+
+    _roe_section("15th Vana'versary III"),
+    ("Papyrus Pursuer",                                False),
+    ("Papyrus Pursuer (W)",                            False),
+    ("Hide-and-Go-Seek (W)",                           False),
+    ("Full Deck (W)",                                  False),
+    ("Unwavering Protector (W)",                       False),
+    ("Sit (W)",                                        False),
+    ("Gastro-Revolution 3 (W)",                        False),
+    ("It's All a Blur (W)",                            False),
+    ("All That Glitters... (W)",                       False),
+
+    _roe_section("15th Vana'versary IV"),
+    ("Miratete 1",                                     False),
+    ("Miratete 1 (W)",                                 False),
+    ("Miratete 2 (W)",                                 False),
+    ("A Strong Fellowship (W)",                        False),
+    ("Red Rover (W)",                                  False),
+    ("100 or Bust (W)",                                False),
+    ("Break the Blockade (W)",                         False),
+    ("Gastro-Revolution 4 (W)",                        False),
+    ("Crustacean King (W)",                            False),
+
+    _roe_section("15th Vana'versary V"),
+    ("Say \"Cheese\"!",                                False),
+    ("Say \"Cheese\"! (W)",                            False),
+    ("Auction House Blues (W)",                        False),
+    ("Let Me Solo This (W)",                           False),
+    ("Ring Around the Rosie (W)",                      False),
+    ("The One True Path (W)",                          False),
+    ("☆ (W)",                                          False),
+    ("Gukumatz (W)",                                   False),
+    ("See the Unseen (W)",                             False),
+
+    _roe_section("17th Vana'versary"),
+    ("\"True Love\" Participation",                    False),
+    ("\"A Fond Farewell\" Participation",              False),
+]
+_ROE_OTHER_MASTER         = [
+    _roe_section("RoE Quests"),
+    # Golden Rule and A Thousand Cuts are the only two that repeat.
+    ("Telepoint Pilgrimage",                           False),
+    ("Culling the Darkness",                           False),
+    ("Petals of Recollection",                         False),
+    ("Grudge",                                         False),
+    ("Golden Rule",                                    True),
+    ("Impermanence",                                   False),
+    ("Panta Rhei",                                     False),
+    ("Leonine Excruciation",                           False),
+    ("Shiver Me Timbers",                              False),
+    ("Go With the Flow",                               False),
+    ("Over Ninety-Thousand",                           False),
+    ("Minnow Wrangler",                                False),
+    ("A Thousand Cuts",                                True),
+    ("Disappointment Valley",                          False),
+    ("Remembrance of Flowers Past",                    False),
+
+    _roe_section("RoE Quests 2"),
+    ("The Ygnas Directive 1",                          False),
+    ("The Ygnas Directive 2",                          False),
+    ("The Ygnas Directive 3",                          False),
+    ("The Ygnas Directive 4",                          False),
+    ("The Ygnas Directive 5",                          False),
+    ("The Ygnas Directive 6",                          False),
+    ("The Arciela Directive 1",                        False),
+
+    _roe_section("RoE Quests 3"),
+    # The page writes "Overcome your Cowardice" in lower case where its
+    # four siblings capitalise; corrected to match them.
+    ("Quell Your Rage",                                False),
+    ("Temper Your Arrogance",                          False),
+    ("Stifle Your Envy",                               False),
+    ("Overcome Your Cowardice",                        False),
+    ("Eliminate Your Apathy",                          False),
+    ("Filled to Capacity",                             False),
+    ("Over Capacity",                                  False),
+    ("Way Over Capacity",                              False),
+
+    _roe_section("RoE Quests 4"),
+    ("Peculiar Foes I (M)",                            False),
+    ("Peculiar Foes II (M)",                           False),
+    ("Peculiar Foes III (M)",                          False),
+    ("Peculiar Foes IV (M)",                           False),
+    ("Peculiar Foes V (M)",                            False),
+    ("Peculiar Foes VI (M)",                           False),
+    ("Peculiar Foes VII (M)",                          False),
+    ("Peculiar Foes VIII (M)",                         False),
+    ("Peculiar Foes IX (M)",                           False),
+    ("Peculiar Foes X (M)",                            False),
+    ("Peculiar Foes XI (M)",                           False),
+    ("Peculiar Foes XII (M)",                          False),
+    ("Peculiar Foes XIII (M)",                         False),
+    ("Peculiar Foes XIV (M)",                          False),
+    ("Peculiar Foes XV (M)",                           False),
+
+    _roe_section("Daily Objectives"),
+    ("Vanquish Multiple Enemies (D)",                  False),
+    ("Buff Allies (D)",                                False),
+    ("Heal for 500+ HP (D)",                           False),
+
+    _roe_section("Monthly Objectives"),
+    ("Goblin Mystery Box (M)",                         False),
+    ("Chocobo Races (M)",                              False),
+    ("Walk of Echoes (M)",                             False),
+    ("High-Tier Mission Battlefields (M)",             False),
+]
+_ROE_LIMITED_MASTER       = [
+    # These cycle every four hours, are always active, and do not count
+    # against the 30-objective limit. One flat list, so no section
+    # heading -- the sub-tab name is the heading.
+    ("Gain Experience",                                True),
+    ("Magic Damage Kills",                             True),
+    ("Obtain Seals",                                   True),
+    ("Vanquish Aquans",                                True),
+    ("Vanquish Beasts",                                True),
+    ("Vanquish Lizards",                               True),
+    ("Vanquish Plantoids",                             True),
+    ("Vanquish Vermin",                                True),
+    ("Crack Treasure Caskets",                         True),
+    ("Crack Treasure Chests",                          True),
+]
+
+_ROE_CATEGORY_MASTERS = {
+    "roe_tutorial":      _ROE_TUTORIAL_MASTER,
+    "roe_combat_wide":   _ROE_COMBAT_WIDE_MASTER,
+    "roe_combat_region": _ROE_COMBAT_REGION_MASTER,
+    "roe_fishing":       _ROE_FISHING_MASTER,
+    "roe_harvesting":    _ROE_HARVESTING_MASTER,
+    "roe_content":       _ROE_CONTENT_MASTER,
+    "roe_unity":         _ROE_UNITY_MASTER,
+    "roe_achievements":  _ROE_ACHIEVEMENTS_MASTER,
+    "roe_vanaversary":   _ROE_VANAVERSARY_MASTER,
+    "roe_other":         _ROE_OTHER_MASTER,
+    "roe_limited":       _ROE_LIMITED_MASTER,
+}
+
+
+def _make_roe_rows(master_list):
+    """Factory: row_iter for one RoE category.
+
+    Key is the section name and the objective name, lowercased -- NOT
+    the display string. Two things follow from that:
+
+    - The " (R)" suffix is presentation only, so a record later
+      corrected from one-shot to repeatable (or back) keeps the tick
+      the player already made instead of reading as a new row.
+    - THE SECTION IS PART OF THE KEY BECAUSE NAMES REPEAT ACROSS
+      SECTIONS. All eight crafting Escutcheons sections list a "Guild
+      Master's Request 1" through 4; on a bare-name key those 32 rows
+      would collapse to 4, and ticking Woodworking's first request
+      would tick every craft's. Renaming a section therefore resets
+      its ticks, which is the right trade against silently sharing
+      them.
+    - A NAME CAN ALSO REPEAT WITHIN ONE SECTION. Every Unity leader
+      lists "Heal Unity Allies (UC)" twice -- they are objectives 1-5
+      and 3-5, genuinely two of them -- so the second and later
+      occurrences take a "#2" suffix on the key. That is positional, so
+      inserting a row above one of them shifts its tick onto its
+      neighbour. The alternative was two rows sharing a tick, which is
+      both worse and silent.
+    """
+    def _rows():
+        out = []
+        section = ""
+        seen = {}
+        for (name, repeatable) in master_list:
+            if repeatable is None:
+                section = name
+                out.append((None, name))          # section heading
+            else:
+                key = ("%s|%s" % (section, name)).lower() if section \
+                      else name.lower()
+                seen[key] = seen.get(key, 0) + 1
+                if seen[key] > 1:
+                    key = "%s#%d" % (key, seen[key])
+                out.append((key,
+                            name + (" (R)" if repeatable else "")))
+        return out
+    return _rows
+
+
+# Backfill row_iter / is_checked for every RoE category. The manual
+# check-state factory is reused as-is: there is no server-side feed
+# for objective completion, so every tick is by hand.
+for _cat in CHECKLIST_CATEGORIES:
+    _roe_master = _ROE_CATEGORY_MASTERS.get(_cat["key"])
+    if _roe_master is not None:
+        _cat["row_iter"]   = _make_roe_rows(_roe_master)
         _cat["is_checked"] = _make_spell_check_state(_cat["key"])
 
 
@@ -18867,6 +21263,8 @@ def _checklist_check_achievement():
         sets = checklist_known.get(cat["key"], {})
         union = sets.get("auto", set()) | sets.get("manual", set())
         for item_key, _disp in rows:
+            if item_key is None:
+                continue    # section heading, nothing to check
             if item_key not in union:
                 return
     # All rows in all categories checked. Award the achievement.
@@ -29392,6 +31790,60 @@ def _skillup_handle_event(event):
 
 
 # ── Reusable single-line text field ─────────────────────────────────────
+# Which text field the mouse is currently dragging a selection in, as
+# {"field": <_TextField>, "get": callable -> str, "rect": pygame.Rect}.
+# Held here rather than on the field so the motion and release handlers
+# in the event loop don't have to know which box was pressed.
+_field_drag = None
+# Last press per field key, for recognising a double-click. pygame has no
+# double-click event, so it is a time-and-place test: two presses close
+# together, on nearly the same pixel.
+_field_last_click = {}
+_FIELD_DBLCLICK_SECS = 0.4
+_FIELD_DBLCLICK_PX = 4
+# One persistent _TextField per named box, for the boxes that keep their
+# text in a module global rather than owning it.
+_text_fields = {}
+
+
+def _text_field_for(key, max_length=200):
+    """The persistent editor for one named box.
+
+    Boxes migrated onto this keep their text in the module global they
+    always used -- the field object owns only the caret, the selection
+    and the horizontal scroll. Every existing reader of those globals
+    keeps working while the editing behaviour comes from one place
+    instead of being reimplemented per box."""
+    f = _text_fields.get(key)
+    if f is None:
+        f = _TextField(max_length=max_length)
+        _text_fields[key] = f
+    return f
+
+
+def _field_begin_drag(field, text, mouse_x, rect, get_text, key=None):
+    """Mouse down in a text box: place the caret and start a selection
+    from it, or take the whole word when this is a double-click."""
+    global _field_drag
+    now = time.time()
+    dbl = False
+    if key is not None:
+        prev = _field_last_click.get(key)
+        if (prev and now - prev[0] <= _FIELD_DBLCLICK_SECS
+                and abs(mouse_x - prev[1]) <= _FIELD_DBLCLICK_PX):
+            dbl = True
+        _field_last_click[key] = (now, mouse_x)
+    if dbl:
+        field.select_word_at(text, mouse_x, rect)
+        # No drag registered: a double-click has already chosen its
+        # range, and letting the following motion extend it would undo
+        # the word the moment the mouse twitched.
+        _field_drag = None
+        return
+    field.begin_drag(text, mouse_x, rect)
+    _field_drag = {"field": field, "get": get_text, "rect": rect}
+
+
 class _TextField:
     """Small pygame text editor: cursor, selection, filtering and drawing."""
 
@@ -29415,20 +31867,88 @@ class _TextField:
     def _reset_blink(self):
         self.blink_at = time.time()
 
+    def index_at_x(self, text, mouse_x, rect=None):
+        """Caret index nearest a screen x. Falls back to the end of the
+        text when the box hasn't been drawn yet and so has no font or
+        rect to measure against."""
+        target_rect = rect or self._rect
+        if mouse_x is None or target_rect is None or not self._font:
+            return len(text)
+        px = max(0, mouse_x - target_rect.x - self._pad + self.scroll_x)
+        for i in range(len(text)):
+            left = self._font.size(text[:i])[0]
+            right = self._font.size(text[:i + 1])[0]
+            if px < (left + right) / 2:
+                return i
+        return len(text)
+
     def focus(self, text, mouse_x=None, rect=None):
         self.focused = True
         self.anchor = None
+        self.cursor = self.index_at_x(text, mouse_x, rect)
+        self._reset_blink()
+
+    # ── Mouse selection ──────────────────────────────────────────────
+    # The class already knew how to HOLD a selection -- anchor plus
+    # cursor, _replace_selection, the highlight in draw(), and shift+
+    # arrows to build one. What it had no way to do was make one with
+    # the mouse, so clearing a long entry meant holding backspace.
+    def begin_drag(self, text, mouse_x, rect=None):
+        """Mouse down: drop the caret and anchor a selection there."""
+        self.focused = True
+        self.cursor = self.index_at_x(text, mouse_x, rect)
+        self.anchor = self.cursor
+        self._reset_blink()
+
+    def drag_to(self, text, mouse_x, rect=None):
+        """Mouse moved with the button held: extend to here. The anchor
+        stays where the press landed, so dragging back past it selects
+        the other way round."""
+        if not self.focused:
+            return
+        if self.anchor is None:
+            self.anchor = self.cursor
+        self.cursor = self.index_at_x(text, mouse_x, rect)
+        self._reset_blink()
+
+    def end_drag(self):
+        """Mouse up. A press and release without movement leaves anchor
+        == cursor, which _selection() already reads as no selection, so
+        a plain click still just places the caret."""
+        if self.anchor is not None and self.anchor == self.cursor:
+            self.anchor = None
+
+    def select_all(self, text):
+        self.focused = True
+        self.anchor = 0
         self.cursor = len(text)
-        target_rect = rect or self._rect
-        if mouse_x is not None and target_rect is not None and self._font:
-            px = max(0, mouse_x - target_rect.x - self._pad + self.scroll_x)
-            self.cursor = len(text)
-            for i in range(len(text)):
-                left = self._font.size(text[:i])[0]
-                right = self._font.size(text[:i + 1])[0]
-                if px < (left + right) / 2:
-                    self.cursor = i
-                    break
+        self._reset_blink()
+
+    def select_word_at(self, text, mouse_x, rect=None):
+        """Double-click: take the run of word characters under the
+        cursor. On an empty box, or in the gap between words, this
+        collapses to a plain caret rather than selecting nothing
+        visible. Dots stay OUT of the word set on purpose -- the box
+        this was built for holds `sets.precast.WS`, and taking one
+        segment of a set path is the useful thing to double-click for."""
+        i = self.index_at_x(text, mouse_x, rect)
+        if not text:
+            self.focus(text, mouse_x, rect)
+            return
+        i = min(i, len(text) - 1)
+        word = lambda c: c.isalnum() or c in "_'"
+        if not word(text[i]):
+            self.focus(text, mouse_x, rect)
+            return
+        lo = i
+        while lo > 0 and word(text[lo - 1]):
+            lo -= 1
+        hi = i
+        while hi < len(text) and word(text[hi]):
+            hi += 1
+        self.focused = True
+        self.anchor = lo
+        self.cursor = hi
         self._reset_blink()
 
     def blur(self):
@@ -31959,7 +34479,9 @@ def _ah_handle_event(event):
         if r.get("search") and r["search"].collidepoint(mx, my):
             _ah_commit_edit()
             _claim_overlay_text_focus()
-            _ah_search_field.focus(ah_state["search"], mx, r["search"])
+            _field_begin_drag(_ah_search_field, ah_state["search"], mx,
+                              r["search"], lambda: ah_state["search"],
+                              key="ah_search")
             return True
         else:
             _ah_search_field.blur()
@@ -32044,7 +34566,9 @@ def _ah_handle_event(event):
                 ah_state["edit_buf"] = (str(ah_state.get("sell_price", 0))
                                         if ah_state.get("sell_price") else "")
                 _ah_edit_field.allowed = "0123456789"
-                _ah_edit_field.focus(ah_state["edit_buf"], mx, rr)
+                _field_begin_drag(_ah_edit_field, ah_state["edit_buf"],
+                                  mx, rr, lambda: ah_state["edit_buf"],
+                                  key="ah_edit")
                 return True
             if key == "selllist":
                 _ah_commit_edit()
@@ -32067,7 +34591,9 @@ def _ah_handle_event(event):
                 ah_state["edit"] = ("q", int(qi), fld)
                 ah_state["edit_buf"] = str(ah_state["queue"][int(qi)][fld])
                 _ah_edit_field.allowed = "0123456789"
-                _ah_edit_field.focus(ah_state["edit_buf"], mx, rr)
+                _field_begin_drag(_ah_edit_field, ah_state["edit_buf"],
+                                  mx, rr, lambda: ah_state["edit_buf"],
+                                  key="ah_edit")
                 return True
             if key == "throttle":
                 _ah_commit_edit()
@@ -32075,7 +34601,9 @@ def _ah_handle_event(event):
                 ah_state["edit"] = ("throttle",)
                 ah_state["edit_buf"] = str(ah_state["throttle"])
                 _ah_edit_field.allowed = "0123456789."
-                _ah_edit_field.focus(ah_state["edit_buf"], mx, rr)
+                _field_begin_drag(_ah_edit_field, ah_state["edit_buf"],
+                                  mx, rr, lambda: ah_state["edit_buf"],
+                                  key="ah_edit")
                 return True
             if key == "ah_sort":
                 _order = ["name", "level_asc", "level_desc"]
@@ -34692,7 +37220,11 @@ def _alert_editor_handle_event(event):
                         else 160 if key == "match"
                         else ALERT_CURE_FIELD_MAX if key == "cure"
                         else ALERT_SHORT_FIELD_MAX)
-                    _alert_field.focus(_alert_field_text(i, key), mx, fr)
+                    _field_begin_drag(_alert_field, _alert_field_text(i, key),
+                                  mx, fr,
+                                  (lambda _i=i, _k=key:
+                                       _alert_field_text(_i, _k)),
+                                  key="alert")
                     return True
         if r.get("ed:panel") and r["ed:panel"].collidepoint(mx, my):
             _alert_editor_blur()
@@ -37285,7 +39817,9 @@ def _scanzone_handle_event(event):
             _claim_overlay_text_focus()
             _scanzone_field.max_length = (
                 32 if scanzone_alias_target is not None else 40)
-            _scanzone_field.focus(scanzone_input, mx, r["input"])
+            _field_begin_drag(_scanzone_field, scanzone_input, mx,
+                              r["input"], lambda: scanzone_input,
+                              key="scanzone")
             return True
         _scanzone_field.blur()
         if scanzone_alias_target is not None:
@@ -39578,6 +42112,15 @@ INVENTORY_BAG_ORDER = [
     ("satchel",   "Satchel"),
     ("sack",      "Sack"),
     ("case",      "Case"),
+    # Not storage, so they sit under it rather than among it. Key items
+    # aren't a bag at all -- the lua sends them shaped like one so the
+    # list, scrolling, search and wiki links here work on them unchanged.
+    # They arrive as two lists because the game splits them that way;
+    # "Temporary Items" above is the separate temp-item BAG, which is a
+    # different thing again despite the similar name.
+    ("temporary",      "Temporary Items"),
+    ("key_items",      "Perm. Key Items"),
+    ("key_items_temp", "Temp. Key Items"),
 ]
 
 # ── Header currency cycle order ────────────────────────────────────────
@@ -39750,6 +42293,46 @@ def _porter_slip_set_nickname(slip_id, nickname):
         return False
 
 
+# Bags worth a row only when they hold something. Temporary items
+# exist inside a handful of content types and nowhere else, so a
+# permanent "Temporary Items   0" line is a dead row every other hour
+# of play -- but deleting the bag outright would mean no way to see
+# them at all in the one place they matter.
+INVENTORY_HIDE_WHEN_EMPTY = {"temporary"}
+
+# Entries rendered BELOW the Porter Slips row, under a separator rule.
+# Key items aren't storage and aren't a bag -- grouping them with the
+# wardrobes read as though they were. Order within this tuple is the
+# order they draw in.
+INVENTORY_AFTER_SLIPS = ("key_items", "key_items_temp")
+# Vertical space the separator rule occupies: a 1px line with a gap
+# either side. Named because the panel-height calculation has to
+# account for it too.
+INVENTORY_SEPARATOR_H = 9
+
+
+def _inventory_visible_bags():
+    """INVENTORY_BAG_ORDER minus the bags that earn their row only when
+    they have contents. The renderer and the panel-height calculation
+    both read this, which is the point: the panel was a fixed 380px
+    tall and silently clipped its last rows the moment the bag list
+    grew, so height has to be derived from the same list that gets
+    drawn rather than guessed alongside it."""
+    return [(k, lbl) for k, lbl in INVENTORY_BAG_ORDER
+            if k not in INVENTORY_AFTER_SLIPS
+            and (k not in INVENTORY_HIDE_WHEN_EMPTY
+                 or inventory_state.get(k))]
+
+
+def _inventory_after_slip_rows():
+    """The entries that draw below the Porter Slips row, in the order
+    INVENTORY_AFTER_SLIPS gives. Always shown, empty or not, so they
+    stay a fixed landmark at the bottom of the list rather than
+    shuffling position as their contents change."""
+    _by_key = dict(INVENTORY_BAG_ORDER)
+    return [(k, _by_key[k]) for k in INVENTORY_AFTER_SLIPS if k in _by_key]
+
+
 def _inventory_panel_geometry():
     """Single source of truth for the inventory dropdown panel's
     position and size. The renderer, the dispatch function, and the
@@ -39762,7 +42345,24 @@ def _inventory_panel_geometry():
     if not inventory_button_rect:
         return None
     panel_w = 320
-    panel_h = 380
+    # Height follows the bag list. These constants mirror the ones the
+    # renderer uses a few hundred lines down (pad 8, row_h 18, the
+    # header and search box, the Porter Slips row, the GearSwap footer);
+    # a change there wants the same change here, which is why they're
+    # named rather than folded into one number.
+    _pad, _row_h = 8, 18
+    _header_h = 19          # title font + its 4px gap
+    _search_h = _row_h + 8  # box height + the gap under it
+    _footer_h = 18          # GearSwap hint line + its 4px gap
+    panel_h = (_pad
+               + _header_h
+               + _search_h
+               + _row_h * (len(_inventory_visible_bags()) + 1)   # +1 slips
+               + (INVENTORY_SEPARATOR_H if _inventory_after_slip_rows()
+                  else 0)
+               + _row_h * len(_inventory_after_slip_rows())
+               + _footer_h
+               + _pad)
     panel_x = inventory_button_rect.x
     panel_y = inventory_button_rect.bottom + 2
     # Horizontal clamp: don't bleed off the right edge.
@@ -40702,8 +43302,9 @@ def draw_inventory_dropdown(surface):
                 }))
             return
 
-        # Render one row per known bag with item count.
-        for bag_key, bag_label in INVENTORY_BAG_ORDER:
+        # Render one row per known bag with item count. Same list the
+        # panel height was measured from -- see _inventory_visible_bags.
+        for bag_key, bag_label in _inventory_visible_bags():
             row_rect = pygame.Rect(panel_x + 2, cy,
                                    panel_w - 4, row_h)
             if row_rect.collidepoint(pygame.mouse.get_pos()):
@@ -40762,6 +43363,38 @@ def draw_inventory_dropdown(surface):
             "kind": "open_slip_list",
         }))
         cy += row_h
+
+        # ── Separator, then the key-item rows ───────────────────────
+        # Key items are neither storage nor a bag, so they sit below
+        # the rule rather than reading as another wardrobe. Drawn from
+        # _inventory_after_slip_rows so the panel-height calculation
+        # and this loop can't disagree about how many rows there are.
+        after_rows = _inventory_after_slip_rows()
+        if after_rows:
+            sep_y = cy + INVENTORY_SEPARATOR_H // 2
+            pygame.draw.line(surface, (70, 74, 90),
+                             (panel_x + pad, sep_y),
+                             (panel_x + panel_w - pad, sep_y))
+            cy += INVENTORY_SEPARATOR_H
+        for bag_key, bag_label in after_rows:
+            row_rect = pygame.Rect(panel_x + 2, cy, panel_w - 4, row_h)
+            if row_rect.collidepoint(pygame.mouse.get_pos()):
+                pygame.draw.rect(surface, (40, 40, 52), row_rect)
+            items_here = inventory_state.get(bag_key, [])
+            count_str, count_col = inventory_bag_fill(bag_key,
+                                                      len(items_here))
+            label_surf = label_font.render(bag_label, True, (220, 220, 230))
+            count_surf = label_font.render(count_str, True, count_col)
+            surface.blit(label_surf,
+                (panel_x + pad,
+                 cy + (row_h - label_surf.get_height()) // 2))
+            surface.blit(count_surf,
+                (panel_x + panel_w - count_surf.get_width() - pad,
+                 cy + (row_h - count_surf.get_height()) // 2))
+            inventory_dropdown_rects.append((row_rect, {
+                "kind": "open_bag", "bag": bag_key,
+            }))
+            cy += row_h
 
         # Footer hint about gearswap scan status.
         cy += 4
@@ -40827,17 +43460,53 @@ def draw_inventory_dropdown(surface):
     scroll = max(0, min(scroll, max_scroll))
     inventory_bag_scroll[bag_key] = scroll
 
+    # Publish the bar's geometry for the click/drag handlers. Reset
+    # every frame so a list that shrinks below one screenful stops
+    # being draggable rather than leaving a stale thumb behind.
+    global _inv_scrollbar_thumb_rect, _inv_scrollbar_track_rect
+    global _inv_scrollbar_max_scroll, _inv_scrollbar_bag_key
+    _inv_scrollbar_thumb_rect = None
+    _inv_scrollbar_track_rect = None
+    _inv_scrollbar_max_scroll = 0
+    _inv_scrollbar_bag_key    = None
+    # Rows give up 10px on the right when a bar is showing, so the
+    # count column doesn't run underneath it.
+    sb_w = 8 if max_scroll > 0 else 0
+    row_w = panel_w - 4 - (sb_w + 2 if sb_w else 0)
+    right_pad = pad + (sb_w + 2 if sb_w else 0)
+
     if not items:
         ph = small_font.render("(empty)", True, COL_LABEL_DIM)
         surface.blit(ph, (panel_x + pad, cy + 2))
         return
 
+    if max_scroll > 0:
+        track_rect = pygame.Rect(panel_x + panel_w - sb_w - 2, list_top,
+                                 sb_w, list_bottom - list_top)
+        pygame.draw.rect(surface, (40, 46, 60), track_rect, border_radius=3)
+        # Thumb length is the visible fraction of the list, floored at
+        # 28px so a 559-row bag still leaves something you can grab.
+        thumb_h = max(28, int(track_rect.h * available_rows / len(items)))
+        thumb_h = min(thumb_h, track_rect.h)
+        thumb_y = track_rect.y + int(
+            (track_rect.h - thumb_h) * scroll / max_scroll)
+        thumb_rect = pygame.Rect(track_rect.x, thumb_y, sb_w, thumb_h)
+        is_dragging = _inv_scroll_drag is not None
+        is_hover = thumb_rect.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(surface,
+                         (180, 200, 230) if (is_dragging or is_hover)
+                         else (110, 130, 170),
+                         thumb_rect, border_radius=3)
+        _inv_scrollbar_track_rect = track_rect
+        _inv_scrollbar_thumb_rect = thumb_rect
+        _inv_scrollbar_max_scroll = max_scroll
+        _inv_scrollbar_bag_key    = bag_key
+
     visible = items[scroll:scroll + available_rows]
     for it in visible:
         nm  = it.get("name", "") or f"#{it.get('id', 0)}"
         cnt = it.get("count", 1)
-        row_rect = pygame.Rect(panel_x + 2, cy,
-                               panel_w - 4, row_h)
+        row_rect = pygame.Rect(panel_x + 2, cy, row_w, row_h)
         # Hover highlight + reserve as click target.
         is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
         if is_hover:
@@ -40872,7 +43541,7 @@ def draw_inventory_dropdown(surface):
         if cnt > 1:
             cnt_surf = label_font.render(f"x{cnt}", True, COL_LABEL_DIM)
             surface.blit(cnt_surf,
-                (panel_x + panel_w - cnt_surf.get_width() - pad,
+                (panel_x + panel_w - cnt_surf.get_width() - right_pad,
                  cy + (row_h - cnt_surf.get_height()) // 2))
 
         if it.get("bazaar", 0):
@@ -40934,6 +43603,34 @@ def dispatch_inventory_dropdown_click(mx, my):
 
     if not inventory_dropdown_open:
         return False
+
+    # Scrollbar before the row rects. The bar sits over the right edge
+    # of the list, and the rows underneath it are wiki links -- if the
+    # rows won the hit-test, grabbing the thumb would open a browser.
+    global _inv_scroll_drag
+    thumb = _inv_scrollbar_thumb_rect
+    track = _inv_scrollbar_track_rect
+    if thumb and thumb.collidepoint(mx, my):
+        _inv_scroll_drag = {
+            "bag":          _inv_scrollbar_bag_key,
+            "origin_mouse_y": my,
+            "origin_scroll":  inventory_bag_scroll.get(
+                                  _inv_scrollbar_bag_key, 0),
+            "track_h":      track.h if track else 1,
+            "thumb_h":      thumb.h,
+            "max_scroll":   _inv_scrollbar_max_scroll,
+        }
+        return True
+    if track and track.collidepoint(mx, my):
+        # Clicked the track above or below the thumb: jump a page that
+        # way, the way every other scrollbar behaves.
+        bag = _inv_scrollbar_bag_key
+        cur = inventory_bag_scroll.get(bag, 0)
+        page = max(1, _inv_scrollbar_max_scroll // 8)
+        cur += page if my > thumb.bottom else -page
+        inventory_bag_scroll[bag] = max(
+            0, min(cur, _inv_scrollbar_max_scroll))
+        return True
 
     # Hit-test individual rects first.
     for rect, action in inventory_dropdown_rects:
@@ -41575,6 +44272,7 @@ def _sim_compute_height():
     h += SIM_WIN_ROW_H            # export
     h += SIM_WIN_ROW_H            # refresh
     h += SIM_WIN_ROW_H            # reset
+    h += SIM_WIN_ROW_H            # strip gear
     h += SIM_WIN_PAD
     return h
 
@@ -41792,24 +44490,46 @@ def draw_sim_window(surface):
         elif is_dict or is_int:
             # Resolve display name from inventory snapshot.
             target_id = sim_val["id"] if is_dict else sim_val
-            target_loc = (sim_val.get("bag", 0), sim_val.get("idx", 0)) if is_dict else None
+            target_loc = None
+            if is_dict:
+                _b, _i = sim_val.get("bag", 0), sim_val.get("idx", 0)
+                # (0, 0) means "no particular copy" -- an imported set that
+                # named augments no copy of yours clearly matches. It is a
+                # non-empty tuple, so testing it for truth said "yes, we
+                # have a location", the location matched nothing, and the
+                # match-by-id fallback below was gated behind the same test
+                # and never ran. The row then had no entry at all: no name,
+                # so it printed the bare id, and no card, so there was no
+                # tooltip either.
+                if _b or _i:
+                    target_loc = (_b, _i)
             display = f"id:{target_id}"
-            for entry in _sim_get_slot_options(slot_key):
-                # Match exact instance when possible (dict ref), else by id.
-                if target_loc and (entry.get("bag", 0), entry.get("idx", 0)) == target_loc:
-                    display = _display_name_for_item(entry)
-                    matched_entry = entry
-                    break
-                if not target_loc and entry.get("id") == target_id:
-                    display = _display_name_for_item(entry)
-                    matched_entry = entry
-                    break
+            # Exact copy first, then any copy of the same item.
+            _opts = _sim_get_slot_options(slot_key)
+            if target_loc:
+                for entry in _opts:
+                    if (entry.get("bag", 0), entry.get("idx", 0)) == target_loc:
+                        matched_entry = entry
+                        break
+            if matched_entry is None:
+                for entry in _opts:
+                    if entry.get("id") == target_id:
+                        matched_entry = entry
+                        break
+            if matched_entry is not None:
+                display = _display_name_for_item(matched_entry)
             if matched_entry is None:
                 # No snapshot entry -- the overlay may still know this
                 # piece from the live equipment stream.
                 _fb = _sim_live_name_for(slot_key, target_id)
                 if _fb:
                     display = _fb
+            # An imported set carries its own augment list, and that is
+            # what the simulation computes with -- so label the row with
+            # it rather than with whichever copy the id resolved to.
+            if is_dict and sim_val.get("tag"):
+                base = display.split(" [")[0].split(" (")[0]
+                display = f"{base} [{sim_val['tag']}]"
             dim = False
         else:
             display, dim = "(real)", True
@@ -41865,6 +44585,53 @@ def draw_sim_window(surface):
             full_w = ww - SIM_WIN_PAD * 2
             opt_x = wx + SIM_WIN_PAD
             opt_max_chars = max(8, (full_w - 12) // 6)
+
+            # ── Filter box ──────────────────────────────────────────
+            # One line above the list. Deliberately plain: same row
+            # height as an option, no icon, placeholder instead of a
+            # label, so it reads as part of the list rather than as
+            # another control bolted on.
+            global sim_slot_filter, sim_slot_filter_rect
+            global sim_slot_filter_slot
+            if sim_slot_filter_slot != active_slot:
+                # Opened a different slot: the old query almost never
+                # applies, and a list that silently starts filtered is
+                # the worst version of this feature.
+                sim_slot_filter = ""
+                sim_slot_filter_slot = active_slot
+            f_rect = pygame.Rect(opt_x, cy, full_w, 18)
+            sim_slot_filter_rect = f_rect
+            pygame.draw.rect(surface, (20, 22, 28), f_rect, border_radius=2)
+            pygame.draw.rect(surface,
+                             (150, 175, 220) if sim_slot_filter_focused
+                             else (70, 74, 92),
+                             f_rect, 1, border_radius=2)
+            if sim_slot_filter:
+                f_surf = label_font.render(sim_slot_filter, True,
+                                           SIM_WIN_VALUE)
+            else:
+                f_surf = label_font.render("filter…  e.g. da>=5",
+                                           True, SIM_WIN_DIM)
+            surface.blit(f_surf, (f_rect.x + 6,
+                                  f_rect.y + (18 - f_surf.get_height()) // 2))
+            if sim_slot_filter_focused and (int(time.time() * 2) % 2) == 0:
+                _cx = f_rect.x + 6 + (f_surf.get_width()
+                                      if sim_slot_filter else 0)
+                pygame.draw.line(surface, (220, 220, 230),
+                                 (_cx, f_rect.y + 3),
+                                 (_cx, f_rect.bottom - 3))
+            sim_window_rects.append((f_rect, {"action": "slot_filter_focus"}))
+            cy += 18
+
+            if sim_slot_filter:
+                _before = len(options)
+                options = [e for e in options
+                           if _sim_filter_matches(e, sim_slot_filter)]
+                if not options:
+                    n_surf = label_font.render(
+                        f"(no match in {_before})", True, SIM_WIN_DIM)
+                    surface.blit(n_surf, (opt_x + 6, cy + 2))
+                    cy += 18
 
             # "(empty)" sentinel
             opt_rect = pygame.Rect(opt_x, cy, full_w, 18)
@@ -42360,6 +45127,19 @@ def draw_sim_window(surface):
     sim_window_rects.append((reset_rect, {"action": "reset"}))
     cy += SIM_WIN_ROW_H
 
+    # Strip Gear button, under Reset. Empties all sixteen slots so the
+    # sim computes against a naked character — the baseline for "what is
+    # this piece actually worth". Distinct from Reset, which drops the
+    # overrides and so hands you back your live gear.
+    strip_rect = pygame.Rect(wx + SIM_WIN_PAD, cy + 2,
+                             ww - SIM_WIN_PAD * 2, SIM_WIN_ROW_H - 4)
+    pygame.draw.rect(surface, (70, 60, 45), strip_rect, border_radius=3)
+    st_surf = value_font.render("STRIP GEAR", True, (240, 230, 210))
+    surface.blit(st_surf, (strip_rect.x + (strip_rect.width - st_surf.get_width()) // 2,
+                           strip_rect.y + (strip_rect.height - st_surf.get_height()) // 2))
+    sim_window_rects.append((strip_rect, {"action": "strip"}))
+    cy += SIM_WIN_ROW_H
+
     # ── Restore clip + chrome (scrollbar, resize grip) ──────────────────────
     # Drawn AFTER restoring the previous clip so the chrome can sit on
     # top of the rounded border instead of being clipped at the body
@@ -42467,6 +45247,30 @@ def _sim_import_list_dir(path):
     return folders, files
 
 
+def _sim_wrap_text(text, font, width):
+    """Greedy word wrap for the import status line. Long unbroken runs
+    (a Windows path with no spaces in it) are split mid-word rather than
+    left to overflow the panel."""
+    out, line = [], ""
+    for word in str(text).split(" "):
+        probe = word if not line else line + " " + word
+        if font.size(probe)[0] <= width:
+            line = probe
+            continue
+        if line:
+            out.append(line)
+        while font.size(word)[0] > width and len(word) > 1:
+            cut = len(word)
+            while cut > 1 and font.size(word[:cut])[0] > width:
+                cut -= 1
+            out.append(word[:cut])
+            word = word[cut:]
+        line = word
+    if line:
+        out.append(line)
+    return out
+
+
 def draw_sim_import_modal(surface):
     """In-overlay file browser for importing a gear set into the sim.
     Rooted at the configured GearSwap data path. Lists folders + .lua
@@ -42479,7 +45283,10 @@ def draw_sim_import_modal(surface):
 
     sw, sh = surface.get_size()
     mw = min(520, sw - 40)
-    mh = min(200, sh - 40)
+    # Taller when a failure is showing: the message names the gear file,
+    # the line number and the source line, which needs up to three
+    # wrapped rows under the IMPORT button rather than a stub beside it.
+    mh = min(260 if sim_import_status_err else 200, sh - 40)
     mx = (sw - mw) // 2
     my = (sh - mh) // 2
 
@@ -42543,23 +45350,23 @@ def draw_sim_import_modal(surface):
                  (mx + pad, cy))
     sp_box = pygame.Rect(mx + pad + 64, cy - 2, mw - pad * 2 - 64, 20)
     focused_sp = (sim_import_field == "setpath")
-    pygame.draw.rect(surface, (16, 20, 26), sp_box, border_radius=3)
-    pygame.draw.rect(surface, (90, 140, 120) if focused_sp else (60, 70, 80),
-                     sp_box, 1, border_radius=3)
-    sp_txt = sim_import_setpath or "sets.engaged.HighHaste"
-    sp_txt = _sim_safe_text(sp_txt)
-    sp_col = (220, 230, 240) if sim_import_setpath else (110, 115, 125)
-    if focused_sp and sim_import_setpath:
-        # Draw text with a caret at the cursor position. Clamp cursor to
-        # the current text length (it can lag after external edits).
-        cpos = max(0, min(sim_import_setpath_cursor, len(sim_import_setpath)))
-        before = _sim_safe_text(sim_import_setpath[:cpos])
-        blink = (int(time.time() * 1.9) % 2 == 0)
-        shown = before + ("|" if blink else "") + _sim_safe_text(sim_import_setpath[cpos:])
-        sp_surf = sm_font.render(shown, True, sp_col)
-    else:
-        sp_surf = sm_font.render(sp_txt + ("|" if focused_sp else ""), True, sp_col)
-    surface.blit(sp_surf, (sp_box.x + 5, sp_box.y + (20 - sp_surf.get_height()) // 2))
+    # Drawn by the shared editor, which is what brings the selection
+    # highlight with it. The hand-rolled "|" caret this replaces knew a
+    # single position and so could never show a range -- and a long set
+    # path was clipped at the right edge rather than scrolling into
+    # view, which is the other thing that came along with the class.
+    # NB: the caret is NOT restamped here. draw() clamps it to the text
+    # length itself, and writing a position in from outside on every
+    # frame is what stopped a drag selection from ever surviving to the
+    # next frame.
+    _spf = _text_field_for("sim_setpath", max_length=120)
+    _spf.focused = focused_sp
+    _spf.draw(surface, sp_box, sim_import_setpath, sm_font,
+              placeholder="sets.engaged.HighHaste",
+              bg=(16, 20, 26),
+              border=(60, 70, 80), focus_border=(90, 140, 120),
+              text_color=(220, 230, 240),
+              placeholder_color=(110, 115, 125))
     sim_import_rects.append((sp_box, {"action": "imp_focus", "field": "setpath"}))
     cy += 26
 
@@ -42574,9 +45381,22 @@ def draw_sim_import_modal(surface):
                   imp_btn.y + (22 - lbl_font.get_height()) // 2))
     if can_import:
         sim_import_rects.append((imp_btn, {"action": "imp_confirm"}))
+    # Status line. A success fits beside the button; a failure names the
+    # gear file, the line and what is on it, so it wraps under the button
+    # across the full width of the panel instead of running off the edge.
     if sim_import_status:
-        surface.blit(sm_font.render(_sim_safe_text(sim_import_status), True, (200, 190, 150)),
-                     (imp_btn.right + 10, cy + 4))
+        st_col = (240, 170, 150) if sim_import_status_err else (200, 190, 150)
+        st_txt = _sim_safe_text(sim_import_status)
+        avail_beside = mx + mw - pad - (imp_btn.right + 10)
+        if (not sim_import_status_err
+                and sm_font.size(st_txt)[0] <= avail_beside):
+            surface.blit(sm_font.render(st_txt, True, st_col),
+                         (imp_btn.right + 10, cy + 4))
+        else:
+            wy = imp_btn.bottom + 6
+            for ln in _sim_wrap_text(st_txt, sm_font, mw - pad * 2)[:3]:
+                surface.blit(sm_font.render(ln, True, st_col), (mx + pad, wy))
+                wy += 14
 
 
 def _draw_checkbox_check(surface, cb_rect, color=(140, 220, 140)):
@@ -44886,15 +47706,20 @@ _SUBDIALOG_CONFIGS = {
     },
     "chat": {
         "title":    "Chat Panel",
-        "subtitle": "Chat panel visibility, font size, and input bar.",
+        "subtitle": "Chat panel visibility, font size, input bar, "
+                    "and where your typing goes.",
         "rows": [
             ("show_chat",          "Show chat panel", "bool"),
             ("chat_font_size",     "Font size",       "enum"),
             ("show_chat_composer", "Show input bar",  "bool"),
-            ("no_focus_steal",     "Keep game focus", "bool"),
             ("global_typing",      "Type anywhere",   "bool"),
         ],
-        "helpers": {},
+        "helpers": {
+            "global_typing":
+                "Route your typing into the input bar above while FFXI "
+                "has focus, instead of into the game. Needs the input "
+                "bar shown. Turn it off to type in the game again.",
+        },
     },
     "skillchain": {
         "title":    "Skillchain",
@@ -45423,7 +48248,7 @@ def draw_checklist_modal(surface):
     sets = checklist_known.get(cat["key"], {})
     auto = sets.get("auto", set())
     manual = sets.get("manual", set())
-    known_keys = {k for k, _disp in rows}
+    known_keys = {k for k, _disp in rows if k is not None}
     have = (auto | manual) & known_keys
     x_count = len(have)
     y_count = len(known_keys)
@@ -45529,6 +48354,22 @@ def draw_checklist_modal(surface):
         if ry > list_bot + row_h:
             break       # off-screen below — list is sorted by position
         rrect = pygame.Rect(inner_x, ry, inner_w, row_h - 2)
+
+        # Section heading: a label with a rule under it, no checkbox
+        # and no click target. Registering no rect is what makes it
+        # unclickable — the modal's panel-background rect underneath
+        # swallows the click, so a stray hit on a heading does not
+        # fall through and tick whatever happens to be behind it.
+        if item_key is None:
+            h_surf = row_font.render(disp, True, (235, 220, 160))
+            surface.blit(h_surf,
+                         (inner_x + 2,
+                          ry + (row_h - h_surf.get_height()) // 2))
+            pygame.draw.line(
+                surface, (60, 72, 92),
+                (inner_x + 2, ry + row_h - 3),
+                (inner_x + inner_w - 4, ry + row_h - 3))
+            continue
 
         # Hover highlight (only if cursor is in the visible list area).
         in_list = list_clip.collidepoint(mpos)
@@ -46891,7 +49732,7 @@ def dispatch_sim_import_click(mx, my):
     Only active while sim_import_open."""
     global sim_import_open, sim_import_cwd, sim_import_file, sim_import_field
     global sim_import_scroll, sim_import_status, sim_import_root
-    global sim_import_setpath_cursor
+    global sim_import_status_err
     if not sim_import_open:
         return False
     for rect, payload in reversed(sim_import_rects):
@@ -46911,7 +49752,10 @@ def dispatch_sim_import_click(mx, my):
         if act == "imp_focus":
             sim_import_field = payload.get("field")
             if sim_import_field == "setpath":
-                sim_import_setpath_cursor = len(sim_import_setpath)
+                _spf = _text_field_for("sim_setpath", max_length=120)
+                _field_begin_drag(_spf, sim_import_setpath, mx, rect,
+                                  lambda: sim_import_setpath,
+                                  key="sim_setpath")
             return True
         if act == "imp_browse":
             # Open the native OS file picker. Blocks until the user picks
@@ -46930,7 +49774,10 @@ def dispatch_sim_import_click(mx, my):
         if act == "imp_confirm":
             if sim_import_file and sim_import_setpath:
                 _sim_send_import(sim_import_file, sim_import_setpath)
-                sim_import_status = "sent — check sim panel"
+                # Placeholder only. The addon answers with what actually
+                # happened (SIM_INV|IMPORTSTATUS) and that replaces this.
+                sim_import_status = "importing…"
+                sim_import_status_err = False
             return True
     return True   # swallow clicks anywhere over the modal (it's on top)
 
@@ -46940,6 +49787,7 @@ def dispatch_sim_window_click(mx, my):
     click was handled (caller should not propagate to other handlers).
     Also updates sim_state and pushes the change to lua over UDP."""
     global sim_active_field, sim_state, sim_buff_picker
+    global sim_slot_filter_focused, sim_slot_filter, sim_slot_filter_slot
     if not sim_window_open:
         return False
     # Walk in reverse so dropdown options (added LAST) take priority over
@@ -46949,6 +49797,13 @@ def dispatch_sim_window_click(mx, my):
         if not rect.collidepoint(mx, my):
             continue
         action = payload.get("action")
+        if action == "slot_filter_focus":
+            sim_slot_filter_focused = True
+            return True
+        # Any other click inside the window gives the box up, so keys
+        # go back to the game (or the game keeps them, with keep-game-
+        # focus on) the moment you stop typing.
+        sim_slot_filter_focused = False
         if action == "close":
             # Same as flipping sim_mode off — call set_setting so the
             # checkbox in Settings updates and side effects fire.
@@ -46965,6 +49820,8 @@ def dispatch_sim_window_click(mx, my):
                     and sim_active_field.get("kind") == kind
                     and sim_active_field.get("slot") == slot):
                 sim_active_field = None
+                sim_slot_filter = ""
+                sim_slot_filter_slot = None
             else:
                 sim_active_field = {"kind": kind}
                 if slot is not None:
@@ -47022,8 +49879,13 @@ def dispatch_sim_window_click(mx, my):
             # Open the in-overlay file browser modal. Seed cwd from the
             # saved root (or wherever we last were).
             global sim_import_open, sim_import_cwd, sim_import_status
+            global sim_import_status_err
             sim_import_open = True
             sim_import_status = ""
+            sim_import_status_err = False
+            # The field outlives the modal, so a selection left over from
+            # last time would still be highlighted on reopening.
+            _text_field_for("sim_setpath", max_length=120).blur()
             if not sim_import_cwd and sim_import_root:
                 sim_import_cwd = sim_import_root
             return True
@@ -47150,6 +50012,18 @@ def dispatch_sim_window_click(mx, my):
             sim_buff_picker = None
             sim_active_field = None
             _sim_send_reset()
+            return True
+        if action == "strip":
+            # Naked baseline. Write an EXPLICIT 0 into every slot rather
+            # than clearing the dict: an absent slot falls back to live
+            # gear under the delta rule (see _sim_build_equip_display), so
+            # clearing would put your gear back on rather than take it off.
+            # Explicit zeros also stop the SIM_INV|EQUIPPED seed from
+            # re-filling the slots on the next snapshot, since that only
+            # fires when the equipment dict is empty.
+            sim_state["equipment"] = {k: 0 for k, _lbl in SIM_GEAR_SLOTS}
+            sim_active_field = None
+            _sim_send_strip()
             return True
     # Click was inside the window envelope but not on any control →
     # close the dropdown (if open) but otherwise no-op. Read actual
@@ -51733,6 +54607,29 @@ HOTBAR_EDIT_FIELD_H  = 22
 # runs at import time and validates against it.
 
 
+def _hotbar_editor_field(field_name):
+    """The shared text editor backing one hotbar form field.
+
+    Both boxes used to keep a caret in the module global
+    hotbar_text_cursor, which is one integer and so could not describe a
+    range -- there was nothing to drag-select, and nothing to type over.
+    They run through _TextField now, which owns the caret AND the
+    selection. Nothing writes a caret position in from outside: doing
+    that on every frame is exactly what stopped selections surviving in
+    the Simulation import box."""
+    return _text_field_for("hb_" + field_name, max_length=512)
+
+
+def _hotbar_editor_blur():
+    """Drop focus and any selection on both boxes. The fields outlive the
+    editor, so without this a reopened editor still shows last time's
+    highlight."""
+    for _n in ("label", "command"):
+        _f = _hotbar_editor_field(_n)
+        _f.focused = False
+        _f.anchor = None
+
+
 def _hotbar_editor_get_focused_text():
     """Return the text currently in the focused field (or empty string)."""
     if hotbar_edit_draft is None or hotbar_focused_field is None:
@@ -51750,55 +54647,51 @@ def _hotbar_editor_set_focused_text(new_text):
 def hotbar_editor_handle_keydown(event):
     """Apply a pygame KEYDOWN to the focused text field. Called from the
     main event loop when hotbar_edit_mode is on AND a field is focused.
-    Supports backspace, delete, left/right arrows, home/end, and printable
-    characters via event.unicode.
 
-    Returns True if the event was consumed (so other handlers skip it)."""
-    global hotbar_text_cursor, hotbar_text_blink_t0, hotbar_focused_field
+    Editing runs through the shared _TextField, which is what brings
+    Ctrl+A, shift+arrows, drag selections and typing over a highlighted
+    run. Returns True if the event was consumed."""
+    global hotbar_focused_field
     if hotbar_edit_draft is None or hotbar_focused_field is None:
         return False
+    field = _hotbar_editor_field(hotbar_focused_field)
+    field.focused = True
     text = _hotbar_editor_get_focused_text()
-    cursor = max(0, min(hotbar_text_cursor, len(text)))
 
-    if event.key == pygame.K_BACKSPACE:
-        if cursor > 0:
-            text = text[:cursor - 1] + text[cursor:]
-            cursor -= 1
-    elif event.key == pygame.K_DELETE:
-        if cursor < len(text):
-            text = text[:cursor] + text[cursor + 1:]
-    elif event.key == pygame.K_LEFT:
-        cursor = max(0, cursor - 1)
-    elif event.key == pygame.K_RIGHT:
-        cursor = min(len(text), cursor + 1)
-    elif event.key == pygame.K_HOME:
-        cursor = 0
-    elif event.key == pygame.K_END:
-        cursor = len(text)
-    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_TAB):
-        # Move focus: label → command → label.
+    # Enter and Tab move focus label → command → label. Taken before the
+    # field sees them: handle_event reads Enter as "submit", and there is
+    # nothing here to submit to.
+    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_TAB):
+        field.focused = False
+        field.anchor = None
         hotbar_focused_field = (
             "command" if hotbar_focused_field == "label" else "label")
-        new_text = _hotbar_editor_get_focused_text()
-        cursor = len(new_text)
-        text = new_text
-    elif event.key == pygame.K_ESCAPE:
-        # Defocus.
-        hotbar_focused_field = None
-    else:
-        # Printable character. event.unicode is already the right
-        # character including shift / dead keys / etc.
-        ch = event.unicode
-        if ch and ch.isprintable():
-            text = text[:cursor] + ch + text[cursor:]
-            cursor += len(ch)
-        else:
-            return False  # not consumed
+        nxt = _hotbar_editor_field(hotbar_focused_field)
+        nxt.focused = True
+        nxt.anchor = None
+        nxt.cursor = len(_hotbar_editor_get_focused_text())
+        nxt._reset_blink()
+        return True
 
-    _hotbar_editor_set_focused_text(text)
-    hotbar_text_cursor = cursor
-    hotbar_text_blink_t0 = time.time()  # reset blink so cursor stays solid
-    return True
+    # Typing, before delegation: handle_event answers "handled" to every
+    # key it doesn't recognise, an ordinary letter among them, because
+    # its own character path is TEXTINPUT and this editor has always
+    # taken characters off KEYDOWN.unicode instead.
+    ch = event.unicode
+    if (ch and ch.isprintable()
+            and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_ALT))):
+        _hotbar_editor_set_focused_text(field._replace_selection(text, ch))
+        return True
+
+    new_text, act = field.handle_event(event, text)
+    if act == "cancel":
+        _hotbar_editor_blur()
+        hotbar_focused_field = None
+        return True
+    if act == "changed":
+        _hotbar_editor_set_focused_text(new_text)
+        return True
+    return act == "handled"
 
 
 def _list_ui_icons():
@@ -52092,31 +54985,22 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
         surface.blit(s, (form_rect.x + pad, y + (HOTBAR_EDIT_FIELD_H - s.get_height()) // 2))
 
     def _draw_text_input(field_name, y):
-        """Render a text input box for hotbar_edit_draft[field_name]."""
+        """Render a text input box for hotbar_edit_draft[field_name].
+
+        Drawn by the shared editor, which brings the selection highlight
+        and scrolls a long command into view instead of clipping it off
+        the right edge. The caret is NOT written in from here -- draw()
+        clamps its own, and stamping a position every frame is what
+        stopped drag selections surviving in the import box."""
         rect = pygame.Rect(control_x, y, control_w, HOTBAR_EDIT_FIELD_H)
         is_focused = hotbar_focused_field == field_name
-        bg = (44, 44, 56) if is_focused else (36, 36, 46)
-        bdr = (200, 180, 130) if is_focused else (90, 90, 110)
-        pygame.draw.rect(surface, bg, rect, border_radius=2)
-        pygame.draw.rect(surface, bdr, rect, 1, border_radius=2)
-        text = hotbar_edit_draft.get(field_name, "") or ""
-        ts = field_font.render(text, True, (230, 230, 240))
-        # Clip text to box.
-        text_y = rect.y + (rect.h - ts.get_height()) // 2
-        surface.blit(ts, (rect.x + 4, text_y),
-                     pygame.Rect(0, 0, rect.w - 8, rect.h))
-
-        # Cursor: blink at 2 Hz, drawn after the n-th character where
-        # n = hotbar_text_cursor. Only when this field is focused.
-        if is_focused:
-            blink_phase = ((time.time() - hotbar_text_blink_t0) % 1.0) < 0.5
-            if blink_phase:
-                cursor_idx = max(0, min(hotbar_text_cursor, len(text)))
-                prefix = text[:cursor_idx]
-                px = rect.x + 4 + field_font.size(prefix)[0]
-                pygame.draw.line(surface, (220, 220, 240),
-                                 (px, rect.y + 3),
-                                 (px, rect.y + rect.h - 3), 1)
+        fld = _hotbar_editor_field(field_name)
+        fld.focused = is_focused
+        fld.draw(surface, rect,
+                 hotbar_edit_draft.get(field_name, "") or "", field_font,
+                 bg=(44, 44, 56) if is_focused else (36, 36, 46),
+                 border=(90, 90, 110), focus_border=(200, 180, 130),
+                 text_color=(230, 230, 240))
         hotbar_editor_rects.append(
             (rect, {"kind": "focus", "field": field_name}))
 
@@ -52520,7 +55404,7 @@ def dispatch_hotbar_editor_click(mx, my):
     if this returns False AND we're in edit mode.
     """
     global hotbar_edit_mode, hotbar_edit_slot, hotbar_edit_draft
-    global hotbar_focused_field, hotbar_text_cursor, hotbar_text_blink_t0
+    global hotbar_focused_field
     global hotbar_icon_picker_open, hotbar_icon_picker_scroll
     global _hotbar_clipboard, _hb_editor_drag
     for rect, action in hotbar_editor_rects:
@@ -52536,6 +55420,7 @@ def dispatch_hotbar_editor_click(mx, my):
             hotbar_edit_mode = False
             hotbar_edit_slot = -1
             hotbar_edit_draft = None
+            _hotbar_editor_blur()
             hotbar_focused_field = None
             hotbar_icon_picker_open = False
             print("[OmniWatch] hotbar editor closed")
@@ -52543,8 +55428,12 @@ def dispatch_hotbar_editor_click(mx, my):
             hotbar_focused_field = action["field"]
             text = (hotbar_edit_draft.get(action["field"], "")
                     if hotbar_edit_draft else "")
-            hotbar_text_cursor = len(text)
-            hotbar_text_blink_t0 = time.time()
+            _hotbar_editor_blur()
+            _field_begin_drag(_hotbar_editor_field(action["field"]), text,
+                              mx, rect, (lambda _f=action["field"]:
+                                         (hotbar_edit_draft or {}).get(_f, "")
+                                         or ""),
+                              key="hb_" + action["field"])
         elif kind == "copy_page":
             _pg = (hotbar_edit_page
                    if (hotbar_edit_page is not None
@@ -52598,21 +55487,36 @@ def dispatch_hotbar_editor_click(mx, my):
             # drop markers into the command.
             if hotbar_edit_draft is not None:
                 hotbar_focused_field = "label"
+                _lf = _hotbar_editor_field("label")
+                _lf.focused = True
                 _txt = hotbar_edit_draft.get("label", "") or ""
-                _i = max(0, min(hotbar_text_cursor, len(_txt)))
                 _open = "{" + action["code"] + "}"
-                hotbar_edit_draft["label"] = (
-                    _txt[:_i] + _open + "{/}" + _txt[_i:])
-                hotbar_text_cursor = _i + len(_open)
-                hotbar_text_blink_t0 = time.time()
+                _lo, _hi = _lf._selection()
+                if _lo != _hi:
+                    # Something is highlighted, so colour THAT rather
+                    # than dropping an empty pair into the middle of it.
+                    hotbar_edit_draft["label"] = (
+                        _txt[:_lo] + _open + _txt[_lo:_hi] + "{/}"
+                        + _txt[_hi:])
+                    _lf.cursor = _hi + len(_open) + 3
+                else:
+                    _i = max(0, min(_lf.cursor, len(_txt)))
+                    hotbar_edit_draft["label"] = (
+                        _txt[:_i] + _open + "{/}" + _txt[_i:])
+                    _lf.cursor = _i + len(_open)
+                _lf.anchor = None
+                _lf._reset_blink()
         elif kind == "label_color_clear":
             # Strip every marker, keeping the text inside them.
             if hotbar_edit_draft is not None:
                 hotbar_focused_field = "label"
                 hotbar_edit_draft["label"] = _hb_label_plain(
                     hotbar_edit_draft.get("label", "") or "")
-                hotbar_text_cursor = len(hotbar_edit_draft["label"])
-                hotbar_text_blink_t0 = time.time()
+                _lf = _hotbar_editor_field("label")
+                _lf.focused = True
+                _lf.anchor = None
+                _lf.cursor = len(hotbar_edit_draft["label"])
+                _lf._reset_blink()
         elif kind == "kind_step":
             if hotbar_edit_draft is not None:
                 cur = hotbar_edit_draft.get("kind", "none")
@@ -52712,6 +55616,7 @@ def dispatch_hotbar_editor_click(mx, my):
                           f"{_hotbar_edit_buttons()[hotbar_edit_slot]}")
             hotbar_edit_slot = -1
             hotbar_edit_draft = None
+            _hotbar_editor_blur()
             hotbar_focused_field = None
             hotbar_icon_picker_open = False
         elif kind == "cancel":
@@ -52720,6 +55625,7 @@ def dispatch_hotbar_editor_click(mx, my):
             # the user in edit mode (use Done Editing to leave entirely).
             hotbar_edit_slot = -1
             hotbar_edit_draft = None
+            _hotbar_editor_blur()
             hotbar_focused_field = None
             hotbar_icon_picker_open = False
             print("[OmniWatch] hotbar slot edit cancelled")
@@ -52756,6 +55662,7 @@ def dispatch_hotbar_editor_click(mx, my):
                     dict(_hotbar_clipboard))
                 save_buttons_config()
                 hotbar_edit_draft = dict(_bs[hotbar_edit_slot])
+                _hotbar_editor_blur()
                 hotbar_focused_field = None
                 hotbar_icon_picker_open = False
                 print(f"[OmniWatch] hotbar paste -> slot "
@@ -52776,6 +55683,7 @@ def dispatch_hotbar_editor_click(mx, my):
                 save_buttons_config()
                 hotbar_edit_draft = dict(
                     _hotbar_edit_buttons()[hotbar_edit_slot])
+                _hotbar_editor_blur()
                 hotbar_focused_field = None
                 hotbar_icon_picker_open = False
                 print(f"[OmniWatch] hotbar slot "
@@ -52835,6 +55743,7 @@ def hotbar_select_slot(slot_idx, page_idx=None):
     if 0 <= slot_idx < len(_btns):
         hotbar_edit_slot = slot_idx
         hotbar_edit_draft = dict(_btns[slot_idx])
+        _hotbar_editor_blur()
         hotbar_focused_field = None
         hotbar_icon_picker_open = False
         print(f"[OmniWatch] hotbar editor: now editing slot "
@@ -58228,7 +61137,11 @@ def _gt_hook_thread():
         print("[OmniWatch] type-anywhere: hook install FAILED "
               f"(err {ctypes.get_last_error()})")
         return
-    print("[OmniWatch] type-anywhere: ready (continuous capture; toggle in Settings > Chat Panel)")
+    print("[OmniWatch] type-anywhere: ready (continuous capture; "
+          "toggle in Settings > Chat Panel > CONFIGURE > Type "
+          "anywhere). Capture also requires the chat input bar to be "
+          "visible, in the same dialog -- with it hidden the hook "
+          "passes every key through to the game.")
     _elev = _process_is_elevated()
     if _elev is False:
         print("[OmniWatch] type-anywhere: NOTE this process is NOT elevated. "
@@ -60036,7 +62949,11 @@ while running:
                             "id": iid, "count": cnt, "name": nm,
                             "bazaar": baz, "category": cat,
                         })
-                _inv_buffer[bag_name] = items_in_bag
+                # APPEND, not replace: a bag's entries arrive across
+                # several packets when the list is long (key items run
+                # to four figures). The buffer is emptied on INV_START,
+                # so this cannot accumulate across snapshots.
+                _inv_buffer.setdefault(bag_name, []).extend(items_in_bag)
             elif raw.startswith("SUPCAST|"):
                 # We landed a buff on a party member:
                 #   SUPCAST|<target id>|<buff id>|<duration>|<spell>
@@ -60671,6 +63588,15 @@ while running:
                     nname = parts[1].strip() if len(parts) > 1 else ""
                     _player_nation_state["id"] = nid
                     _player_nation_state["name"] = nname
+            elif raw.startswith("INV_START|"):
+                # A new snapshot is beginning. Clear the staging
+                # buffers so the appends below start from nothing --
+                # a snapshot that died before its INV_END would
+                # otherwise leave entries for this one to pile onto,
+                # and the bag would read double.
+                _inv_buffer = {}
+                _inv_caps_buffer = {}
+                _inv_slip_buffer = {}
             elif raw.startswith("INV_END|"):
                 # Atomic swap. Replace inventory_state with the new
                 # snapshot and clear the staging buffer for the next
@@ -60715,6 +63641,9 @@ while running:
                     # change as items move between bags).
                     _sim_inv_buffer["cards"] = {}
                     _sim_inv_buffer["augs"] = {}
+                    # by_slot too, now that SLOT packets append: a slot
+                    # that emptied between snapshots has to actually empty.
+                    _sim_inv_buffer["by_slot"] = {}
                 elif sub == "SLOT" and len(parts) >= 4:
                     # New entry format: <id>@<bag>:<idx>:<tag>:<name>
                     # - id, bag, idx ints
@@ -60750,7 +63679,13 @@ while running:
                                 "id": iid, "bag": bag_id, "idx": idx_id,
                                 "tag": tag, "name": name,
                             })
-                    _sim_inv_buffer.setdefault("by_slot", {})[slot] = items
+                    # APPEND, don't replace: lua splits a slot across
+                    # several packets when its entry list would exceed
+                    # this socket's 16 KB recv. The buffer is cleared
+                    # wholesale on MAIN_JOB at the start of each snapshot,
+                    # so appending here cannot accumulate across passes.
+                    _sim_inv_buffer.setdefault("by_slot", {}).setdefault(
+                        slot, []).extend(items)
                 elif sub == "EQUIPPED" and len(parts) >= 3:
                     # New format: SIM_INV|EQUIPPED|<slot>:<id>@<bag>:<idx>;...
                     # Parse into staging dict; seeded into sim_state on END
@@ -60779,8 +63714,11 @@ while running:
                     # Gear set imported via the sim "Import Set" modal, echoed
                     # back from lua (M.import_set) after it resolved the named
                     # set to item ids. Wire form:
-                    #   SIM_INV|IMPORTED|<slot>:<id>;<slot>:<id>;...
-                    # id 0 = explicit empty slot.
+                    #   SIM_INV|IMPORTED|<slot>:<id>@<bag>:<idx>;...
+                    # id 0 = explicit empty slot. The @bag:idx suffix names
+                    # the exact copy for augmented gear; 0:0 means the set
+                    # named no augments, so any copy of the id will do. The
+                    # older id-only form is still accepted.
                     #
                     # Unlike EQUIPPED (which only SEEDS sim_state when it is
                     # empty), an import REPLACES sim_state.equipment wholesale
@@ -60794,15 +63732,54 @@ while running:
                         for ent in body.split(";"):
                             if not ent:
                                 continue
+                            bag_id = idx_id = 0
+                            imp_tag = ""
+                            if "#" in ent:
+                                ent, imp_tag = ent.split("#", 1)
                             try:
-                                slot_name, id_str = ent.split(":", 1)
+                                slot_name, rest_s = ent.split(":", 1)
+                                if "@" in rest_s:
+                                    id_str, loc = rest_s.split("@", 1)
+                                    bag_str, idx_str = loc.split(":", 1)
+                                    bag_id = int(bag_str)
+                                    idx_id = int(idx_str)
+                                else:
+                                    id_str = rest_s
                                 iid = int(id_str)
                             except (ValueError, IndexError):
                                 continue
-                            # 0 = explicit empty; >0 = item by id (augmented
-                            # items arrive id-only — no specific instance).
-                            eq_map[slot_name] = iid
+                            # 0 = explicit empty. A located instance is kept
+                            # in dict form so the window highlights and the
+                            # dropdown resolve to that exact augmented copy;
+                            # a bare id still means "any copy of this item".
+                            if iid > 0 and (bag_id or idx_id or imp_tag):
+                                ref = {"id": iid, "bag": bag_id, "idx": idx_id}
+                                if imp_tag:
+                                    # The augments the SET named, which are
+                                    # what the simulation is computing with.
+                                    # Shown in place of the matched copy's
+                                    # own tag so the row says what was
+                                    # imported rather than what happens to
+                                    # be sitting in the bag.
+                                    ref["tag"] = imp_tag
+                                eq_map[slot_name] = ref
+                            else:
+                                eq_map[slot_name] = iid
                     sim_state["equipment"] = eq_map
+                elif sub == "IMPORTSTATUS" and len(parts) >= 3:
+                    # What the import actually did, echoed back so the
+                    # import window can say it. Wire form:
+                    #   SIM_INV|IMPORTSTATUS|ok|<summary>
+                    #   SIM_INV|IMPORTSTATUS|err|<what went wrong>
+                    # An 'err' here is nearly always the gear FILE, not
+                    # the importer -- a set path that doesn't exist, or
+                    # lua that won't parse (which GearSwap will be
+                    # refusing to load too). The message names the file
+                    # and line and quotes the offending source line.
+                    sim_import_status_err = (parts[2] != "ok")
+                    sim_import_status = "|".join(parts[3:]).strip() or (
+                        "import failed" if sim_import_status_err
+                        else "imported")
                 elif sub == "FP" and len(parts) >= 3:
                     # Fingerprint index: <bag>:<idx>:<id>:<fingerprint>;...
                     # Used for nickname lookup (key = item_id + fingerprint).
@@ -63377,7 +66354,18 @@ while running:
                        or (scanzone_panel_open
                            and _scanzone_field.focused)
                        or (sim_import_open and sim_import_field)
-                       or (alert_editor_open and _alert_field.focused))
+                       or (alert_editor_open and _alert_field.focused)
+                       # Hotbar editor label/command boxes. Same
+                       # omission again: they take printable keys, so
+                       # with keep-game-focus on, renaming a button
+                       # typed the name into the game instead. The one
+                       # text field most likely to be reached FROM the
+                       # hotbar, which is the whole reason someone
+                       # turns keep-game-focus on.
+                       or (hotbar_edit_mode
+                           and hotbar_focused_field is not None)
+                       # Simulation slot-picker filter box.
+                       or (sim_window_open and sim_slot_filter_focused))
                       and not _gt_capturing_active)
     if setting("no_focus_steal"):
         if _focus_now and not _composer_focus_prev:
@@ -63640,6 +66628,31 @@ while running:
                     buff_scroll[(name, col_key)] = max(0, cur - event.y)
                 break
 
+        elif (sim_window_open and sim_slot_filter_focused
+              and event.type in (pygame.KEYDOWN, pygame.TEXTINPUT)):
+            # Slot-picker filter box.
+            #
+            # THIS HAS TO SIT ABOVE THE GENERAL KEYDOWN BRANCH BELOW.
+            # That branch matches every KEYDOWN and consumes it, so with
+            # this block underneath it, TEXTINPUT arrived here and typing
+            # worked while backspace, Escape and Enter never got past it
+            # -- letters went in and nothing could take them out again.
+            if event.type == pygame.TEXTINPUT:
+                if len(sim_slot_filter) < 40:
+                    sim_slot_filter += event.text
+            elif event.key == pygame.K_BACKSPACE:
+                sim_slot_filter = sim_slot_filter[:-1]
+            elif event.key == pygame.K_ESCAPE:
+                # First Escape clears, a second gives up the box --
+                # so it never takes two presses to get back to the game.
+                if sim_slot_filter:
+                    sim_slot_filter = ""
+                else:
+                    sim_slot_filter_focused = False
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                sim_slot_filter_focused = False
+            continue
+
         elif event.type == pygame.KEYDOWN:
             # Cheat sheet delete menu: Escape dismisses it first.
             if _cs_ctx_menu is not None and event.key == pygame.K_ESCAPE:
@@ -63720,69 +66733,60 @@ while running:
                 if event.key == pygame.K_ESCAPE:
                     sim_import_field = None
                     continue
-                # Only the set-path field is editable now (the root field
-                # was replaced by the native Browse button). All edits are
-                # cursor-aware so Left/Right/Home/End move the caret and
-                # Backspace/Delete/typing act at the caret.
+                # Only the set-path field is editable (the root field was
+                # replaced by the native Browse button). Editing runs
+                # through the shared _TextField, which is what brings
+                # Ctrl+A, shift+arrows and drag selections, and typing or
+                # Delete acting on a highlighted run. The caret
+                # arithmetic this replaces tracked one integer, and one
+                # integer cannot represent a range -- which is exactly
+                # why there was nothing to delete over.
                 if sim_import_field == "setpath":
-                    cur = sim_import_setpath_cursor
-                    if event.key == pygame.K_BACKSPACE:
-                        if cur > 0:
-                            sim_import_setpath = (sim_import_setpath[:cur - 1]
-                                                  + sim_import_setpath[cur:])
-                            sim_import_setpath_cursor = cur - 1
+                    _spf = _text_field_for("sim_setpath", max_length=120)
+                    _spf.focused = True
+                    # Ctrl+V FIRST. handle_event answers "handled" to any
+                    # key it doesn't recognise, Ctrl+V among them, so a
+                    # paste branch sitting after the delegation would
+                    # never be reached. _clipboard_text sniffs the
+                    # encoding rather than assuming one — see the note on
+                    # _decode_clipboard_bytes for why assuming UTF-16-LE
+                    # turned an ordinary pasted set path into a row of
+                    # boxes. Sanitised on the way in because the field
+                    # renders what it stores and pygame's renderer
+                    # raises on a control character.
+                    if (event.key == pygame.K_v
+                            and (event.mod & pygame.KMOD_CTRL)):
+                        try:
+                            _paste = _sim_safe_text(_clipboard_text())
+                            if _paste:
+                                sim_import_setpath = _spf._replace_selection(
+                                    sim_import_setpath, _paste)
+                        except Exception:
+                            pass
                         continue
-                    if event.key == pygame.K_DELETE:
-                        sim_import_setpath = (sim_import_setpath[:cur]
-                                              + sim_import_setpath[cur + 1:])
+                    _new, _act = _spf.handle_event(event, sim_import_setpath)
+                    if _act in ("changed", "handled"):
+                        sim_import_setpath = _new
                         continue
-                    if event.key == pygame.K_LEFT:
-                        sim_import_setpath_cursor = max(0, cur - 1)
+                    if _act == "cancel":
+                        sim_import_field = None
                         continue
-                    if event.key == pygame.K_RIGHT:
-                        sim_import_setpath_cursor = min(len(sim_import_setpath),
-                                                        cur + 1)
-                        continue
-                    if event.key == pygame.K_HOME:
-                        sim_import_setpath_cursor = 0
-                        continue
-                    if event.key == pygame.K_END:
-                        sim_import_setpath_cursor = len(sim_import_setpath)
+                    if _act == "submit":
+                        if sim_import_file and sim_import_setpath:
+                            _sim_send_import(sim_import_file,
+                                             sim_import_setpath)
+                            sim_import_status = "importing…"
+                            sim_import_status_err = False
+                        sim_import_field = None
                         continue
                 if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     if sim_import_field == "setpath":
                         # Enter on set path = confirm import if a file is picked.
                         if sim_import_file and sim_import_setpath:
                             _sim_send_import(sim_import_file, sim_import_setpath)
-                            sim_import_status = "sent — check sim panel"
+                            sim_import_status = "importing…"
+                            sim_import_status_err = False
                     sim_import_field = None
-                    continue
-                # Ctrl+V paste into the set-path field at the caret. Windows
-                # clipboard via pygame.scrap returns UTF-16-LE with interleaved
-                # null bytes — decoding as UTF-8 produced "extra characters".
-                # Decode correctly, strip nulls/control chars, insert at caret.
-                if (event.key == pygame.K_v
-                        and (event.mod & pygame.KMOD_CTRL)):
-                    try:
-                        pygame.scrap.init()
-                        raw = pygame.scrap.get(pygame.SCRAP_TEXT)
-                        text = ""
-                        if raw:
-                            try:
-                                text = raw.decode("utf-16-le")
-                            except Exception:
-                                text = raw.decode("utf-8", "ignore")
-                            text = text.replace("\x00", "")
-                            text = "".join(c for c in text
-                                            if c == " " or ord(c) >= 32).strip()
-                        if text and sim_import_field == "setpath":
-                            cur = sim_import_setpath_cursor
-                            new = (sim_import_setpath[:cur] + text
-                                   + sim_import_setpath[cur:])[:120]
-                            sim_import_setpath = new
-                            sim_import_setpath_cursor = min(len(new), cur + len(text))
-                    except Exception:
-                        pass
                     continue
                 # Other printable keys arrive via TEXTINPUT below; consume
                 # nothing else here so modifiers still work.
@@ -64050,6 +67054,7 @@ while running:
                     hotbar_edit_mode = False
                     hotbar_edit_slot = -1
                     hotbar_edit_draft = None
+                    _hotbar_editor_blur()
                     hotbar_focused_field = None
                     # Selection is an editing-session thing; leaving the
                     # editor with cells still outlined would be a puzzle
@@ -65952,6 +68957,19 @@ while running:
             if _chat_scroll_drag is not None:
                 _chat_scroll_drag = None
                 continue
+            if _inv_scroll_drag is not None:
+                _inv_scroll_drag = None
+                continue
+            if _field_drag is not None:
+                # Released outside the box still ends the drag, or the
+                # next mouse move anywhere would keep re-selecting.
+                try:
+                    _field_drag["field"].end_drag()
+                except Exception:
+                    pass
+                _field_drag = None
+                # Deliberately no `continue`: a click that merely placed
+                # a caret must still reach whatever else is under it.
 
             # ── Hide/show nub: resize / drag / click release ────────
             # Resolved before the hotbar drag so a nub interaction can't
@@ -66353,11 +69371,13 @@ while running:
                 ch = ch.replace("\x00", "")
                 ch = "".join(c for c in ch if c == " " or ord(c) >= 32)
                 if ch and sim_import_field == "setpath":
-                    if len(sim_import_setpath) < 120:
-                        cur = sim_import_setpath_cursor
-                        sim_import_setpath = (sim_import_setpath[:cur] + ch
-                                              + sim_import_setpath[cur:])
-                        sim_import_setpath_cursor = cur + len(ch)
+                    # Through the field: typing over a highlighted run
+                    # replaces it, which inserting at a caret index
+                    # could not do. max_length is the field's now.
+                    _spf = _text_field_for("sim_setpath", max_length=120)
+                    _spf.focused = True
+                    sim_import_setpath = _spf._replace_selection(
+                        sim_import_setpath, ch)
                 continue
             # Only routed to the composer when a composer field is
             # focused. event.text is the typed char(s); for IME
@@ -66660,6 +69680,33 @@ while running:
                 if new_scroll > max_scroll:
                     new_scroll = max_scroll
                 checklist_scroll = new_scroll
+
+        elif (event.type == pygame.MOUSEMOTION
+              and _field_drag is not None):
+            # Extending a text selection. The text is re-read through the
+            # registered getter every frame rather than captured at press
+            # time, so a box whose contents change under the drag still
+            # measures against what is actually on screen.
+            try:
+                _field_drag["field"].drag_to(_field_drag["get"](),
+                                             event.pos[0],
+                                             _field_drag["rect"])
+            except Exception:
+                _field_drag = None
+
+        elif (event.type == pygame.MOUSEMOTION
+              and _inv_scroll_drag is not None):
+            # Drag the inventory bag-list thumb. Unlike the checklist,
+            # this scroll counts ROWS, so the mouse delta is mapped
+            # through (track_h - thumb_h) onto the row range directly.
+            drag = _inv_scroll_drag
+            _, _my = event.pos
+            _usable = max(1, drag["track_h"] - drag["thumb_h"])
+            _maxs = drag.get("max_scroll", 0)
+            if _maxs > 0 and drag.get("bag"):
+                _new = drag["origin_scroll"] + int(
+                    (_my - drag["origin_mouse_y"]) * _maxs / _usable)
+                inventory_bag_scroll[drag["bag"]] = max(0, min(_new, _maxs))
 
         elif (event.type == pygame.MOUSEMOTION
               and _chat_scroll_drag is not None):

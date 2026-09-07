@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.12.2'
+_addon.version  = '1.12.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -53,8 +53,13 @@ function ow_chat(...)
     text = tostring(text or ''):gsub('[%z\1-\8\11-\31]', '')
     if not _ow_log_started then
         _ow_log_started = true
+        -- Read the version rather than carrying a literal: this said
+        -- 1.8.1 for a dozen releases while the line underneath it
+        -- reported the real one, which makes an uploaded log look
+        -- like it came from an ancient build.
         _ow_log_write(os.date(
-            '\n===== OmniWatch 1.8.1 log started %Y-%m-%d %H:%M:%S =====\n'))
+            '\n===== OmniWatch ' .. tostring(_addon.version or '?')
+            .. ' log started %Y-%m-%d %H:%M:%S =====\n'))
     end
     _ow_log_write(os.date('[%Y-%m-%d %H:%M:%S] ') .. text .. '\n')
 end
@@ -2603,6 +2608,11 @@ local _OW_BAG_INV_BAGS = {
     'satchel',   'sack', 'case',
     'wardrobe',  'wardrobe2', 'wardrobe3', 'wardrobe4',
     'wardrobe5', 'wardrobe6', 'wardrobe7', 'wardrobe8',
+    -- Temporary items are a real bag as far as windower is concerned
+    -- (its own id, its own count/max), so they come through the same
+    -- path as everything else. Listed last so they sit at the bottom
+    -- of the overlay's bag list rather than among the storage bags.
+    'temporary',
 }
 
 function _ow_sanitize_item_name(name)
@@ -2876,6 +2886,62 @@ do
     end)
 end
 
+-- Capitalise the first LETTER of a key-item name, leaving the rest of
+-- the string alone.
+--
+-- Windower's key-item resource stores names the way the data files do,
+-- which is lower case for anything that isn't a proper noun: "blue
+-- abyssite", "barge multi-ticket". The game shows them with a leading
+-- capital, so the overlay looked wrong beside it.
+--
+-- FIRST LETTER, NOT FIRST CHARACTER: several names open with a quote
+-- mark ('"Elite Training: Introduction"'), and upper-casing a quote is
+-- a no-op that leaves the E alone. And NOT title case -- the resource
+-- already capitalises proper nouns mid-name ("bowl of bland Goblin
+-- salad", "Booming Naakual paragon"), so title-casing every word would
+-- introduce errors the game doesn't have.
+--
+-- Only PUNCTUATION and whitespace are skipped over on the way to that
+-- letter, not digits: a name that opens with a number is left exactly
+-- as the resource has it rather than guessing that "4-leaf clover"
+-- wants its L raised.
+local function _ow_cap_first_letter(name)
+    local s = tostring(name or '')
+    local pre, letter, rest = s:match('^([%p%s]*)(%a)(.*)$')
+    if not letter then return s end     -- no leading letter: leave it
+    return pre .. letter:upper() .. rest
+end
+
+
+-- Send one bag's entries, split across as many packets as it takes.
+--
+-- CHUNKED BECAUSE OF KEY ITEMS. A real bag tops out at 80 items and
+-- fits in one datagram comfortably; the key-item list runs to over a
+-- thousand entries and would be several times the overlay's 16 KB
+-- recv, which does not truncate politely -- it fails the read and
+-- takes the rest of that frame's packets with it. The overlay appends
+-- successive lines for the same bag, so splitting is invisible there.
+-- An empty bag still sends exactly one line, which is how the overlay
+-- learns the bag is empty rather than absent.
+local function _ow_send_inv_bag(bag_name, entries)
+    local chunk, chunk_len = {}, 0
+    local function flush()
+        local payload = string.format('INV_BAG|%s|%d|%s',
+            bag_name, #chunk, table.concat(chunk, ';'))
+        pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+        chunk, chunk_len = {}, 0
+    end
+    for _, ent in ipairs(entries) do
+        if chunk_len > 0 and chunk_len + #ent + 1 > 12000 then
+            flush()
+        end
+        chunk[#chunk + 1] = ent
+        chunk_len = chunk_len + #ent + 1
+    end
+    flush()
+end
+
+
 local function _ow_emit_inventory_snapshot()
     local items = windower.ffxi.get_items and windower.ffxi.get_items()
     if not items then return end
@@ -2899,6 +2965,16 @@ local function _ow_emit_inventory_snapshot()
     -- count/max come from windower's own totals rather than from the
     -- entries we enumerate below: those are what the game menu shows,
     -- and they stay right even for a bag we can't reach from here.
+    -- Start-of-snapshot sentinel. The overlay accumulates bag lines
+    -- and swaps them in on INV_END; with bag lines now arriving in
+    -- several packets each, it appends rather than replaces, so it
+    -- needs a point at which to clear. Without this, a snapshot that
+    -- died before its INV_END would leave entries behind for the next
+    -- one to pile onto.
+    pcall(function()
+        udp_inv:send(_OW_MB_TAG('INV_START|' .. tostring(os.time())))
+    end)
+
     local _caps = {}
     for _, bag_name in ipairs(_OW_BAG_INV_BAGS) do
         local _cnt = tonumber(items['count_' .. bag_name]) or -1
@@ -2930,9 +3006,63 @@ local function _ow_emit_inventory_snapshot()
                 end
             end
         end
-        local payload = string.format('INV_BAG|%s|%d|%s',
-            bag_name, #entries, table.concat(entries, ';'))
-        pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+        _ow_send_inv_bag(bag_name, entries)
+    end
+
+    -- ── Key items ────────────────────────────────────────────────────
+    -- Not a bag: windower keeps them in their own list and their ids
+    -- index res.key_items, not res.items. Emitted AS a bag anyway, so
+    -- the overlay's existing bag list, scrolling, search and wiki links
+    -- all work on them with no change on that side -- the item rows
+    -- there link by name, not by id, so a key item id landing in an
+    -- item-id field never gets followed.
+    --
+    -- Count is 1 apiece: a key item is held or it isn't.
+    if windower.ffxi.get_key_items then
+        local okk, kis = pcall(windower.ffxi.get_key_items)
+        if okk and type(kis) == 'table' then
+            -- SPLIT PERMANENT FROM TEMPORARY. get_key_items returns one
+            -- flat list, but the resource entry carries the same
+            -- category the game's own menu splits on -- "Permanent Key
+            -- Items" / "Temporary Key Items". Sending the flat list put
+            -- both under one heading.
+            --
+            -- Anything whose category is missing or unrecognised goes
+            -- to the permanent list on purpose: an unclassified key
+            -- item is better sitting in the main list than hidden in a
+            -- secondary one nobody thinks to open.
+            local kperm, ktemp = {}, {}
+            for _, kid in ipairs(kis) do
+                local kdef = (res and res.key_items) and res.key_items[kid]
+                local knm = kdef and (kdef.english or kdef.en) or ''
+                if knm == '' then knm = '#' .. tostring(kid) end
+                local kcat = tostring((kdef and kdef.category) or '')
+                local into = kcat:lower():match('^%s*temporary') and ktemp
+                             or kperm
+                -- Held as {id, name} and formatted after sorting. The
+                -- wire line starts with the id, so sorting the finished
+                -- strings would order the list by id and read as
+                -- unsorted -- which is what it was doing.
+                into[#into + 1] = {
+                    id   = kid,
+                    name = _ow_cap_first_letter(
+                               _ow_sanitize_item_name(knm)),
+                }
+            end
+            local function _by_name(a, b)
+                return a.name:lower() < b.name:lower()
+            end
+            local function _wire(list)
+                table.sort(list, _by_name)
+                local out = {}
+                for _, e in ipairs(list) do
+                    out[#out + 1] = string.format('%d,1,0,%s', e.id, e.name)
+                end
+                return out
+            end
+            _ow_send_inv_bag('key_items', _wire(kperm))
+            _ow_send_inv_bag('key_items_temp', _wire(ktemp))
+        end
     end
 
     -- ── Porter Slip contents ─────────────────────────────────────────────
@@ -4817,15 +4947,82 @@ local function _ow_send_sim_inventory()
                             local en = meta.en or meta.enl or ('item:' .. it.id)
                             -- Augments: read via extdata, build tag + fingerprint
                             local augs = ow_get_item_augments(bag.id, slot_idx)
-                            local tag  = augs and ow_augment_tag(augs) or ''
+                            local tparts = augs and ow_augment_tag_parts(augs)
+                                           or {}
+                            local tag  = table.concat(tparts, '/')
                             local fp   = augs and ow_augment_fingerprint(augs) or ''
                             table.insert(pool, {
                                 id = it.id, name = en,
                                 slots = meta.slots, jobs = meta.jobs,
                                 bag = bag.id, idx = slot_idx,
-                                tag = tag, fp = fp, augs = augs,
+                                tag = tag, tagparts = tparts,
+                                fp = fp, augs = augs,
                             })
                         end
+                    end
+                end
+            end
+        end
+    end
+
+    -- ── Label each copy by what makes it DIFFERENT ──────────────────
+    -- Several Ambuscade capes share one item id and one name, and the
+    -- dropdown tells them apart by the augment tag alone. Spelling the
+    -- augments out in the order they sit on the item made every copy
+    -- open with the same run of segments --
+    -- "DEX+20/Acc+20/Att+20/Acc+10/DA+10/DT-5" against the same string
+    -- with STP+10 in it -- and since the dropdown truncates from the
+    -- right, the one segment that differed was exactly the part cut
+    -- off. Six capes, six identical-looking rows.
+    --
+    -- So within each set of copies sharing an item id: drop the
+    -- segments EVERY copy carries (a DT-5 on all of them identifies
+    -- none of them), and order what is left rarest-first, so the stat
+    -- unique to this copy leads the tag and survives the truncation.
+    -- Ties keep the item's own order, so the tag still reads sensibly.
+    -- The full augment text is on the item card either way; the tag's
+    -- job here is to tell one copy from another, not to transcribe it.
+    --
+    -- Only applied where there is something to compare: a lone copy
+    -- keeps its tag verbatim and in its original order, and copies
+    -- augmented identically keep theirs too, because "no difference"
+    -- is the honest answer there and a blank tag would look broken.
+    do
+        local by_id = {}
+        for _, item in ipairs(pool) do
+            if item.tagparts and #item.tagparts > 0 then
+                by_id[item.id] = by_id[item.id] or {}
+                table.insert(by_id[item.id], item)
+            end
+        end
+        for _, group in pairs(by_id) do
+            if #group > 1 then
+                local counts = {}
+                for _, item in ipairs(group) do
+                    local once = {}
+                    for _, seg in ipairs(item.tagparts) do
+                        if not once[seg] then
+                            once[seg] = true
+                            counts[seg] = (counts[seg] or 0) + 1
+                        end
+                    end
+                end
+                for _, item in ipairs(group) do
+                    local kept = {}
+                    for pos, seg in ipairs(item.tagparts) do
+                        if counts[seg] ~= #group then
+                            kept[#kept + 1] = {seg = seg, pos = pos,
+                                               n = counts[seg] or 1}
+                        end
+                    end
+                    if #kept > 0 then
+                        table.sort(kept, function(x, y)
+                            if x.n ~= y.n then return x.n < y.n end
+                            return x.pos < y.pos
+                        end)
+                        local out = {}
+                        for _, k in ipairs(kept) do out[#out + 1] = k.seg end
+                        item.tag = table.concat(out, '/')
                     end
                 end
             end
@@ -4867,11 +5064,37 @@ local function _ow_send_sim_inventory()
             end
             -- Send even when empty so python knows we considered the
             -- slot (vs. left it stale from a previous job/snapshot).
-            local body = 'SIM_INV|SLOT|' .. slot_key .. '|' .. table.concat(parts, ';')
-            -- UDP packets can't exceed ~64KB but slots typically have
-            -- <100 items, so this is fine. If a freak edge case ever
-            -- hits the limit, we'd switch to chunked sends.
-            pcall(function() udp_inv:send(body) end)
+            --
+            -- CHUNKED, and it has to be. Python reads this socket with
+            -- recvfrom(16384); the CARD and AUG streams below already
+            -- flush at 12000 for that reason, and this one was left as a
+            -- single unbounded datagram on the assumption that a slot
+            -- never holds enough gear to matter. It is the wrong kind of
+            -- assumption to leave in: an oversized datagram does not
+            -- politely truncate on Windows, it fails the recv outright,
+            -- and the drain loop that read it gives up for the rest of
+            -- the frame -- taking SIM_INV|END with it, which is the one
+            -- packet that swaps the snapshot into place. That is exactly
+            -- the shape of the "no inventory yet - press REFRESH" report,
+            -- and anything that makes an entry a few characters longer
+            -- (a fuller augment tag, say) walks a large slot into it.
+            -- Python appends successive SLOT packets for the same slot,
+            -- so splitting one slot across several is safe.
+            local chunk, chunk_len = {}, 0
+            local function flush_slot()
+                local body = 'SIM_INV|SLOT|' .. slot_key .. '|'
+                             .. table.concat(chunk, ';')
+                pcall(function() udp_inv:send(body) end)
+                chunk, chunk_len = {}, 0
+            end
+            for _, ent in ipairs(parts) do
+                if chunk_len > 0 and chunk_len + #ent + 1 > 12000 then
+                    flush_slot()
+                end
+                chunk[#chunk + 1] = ent
+                chunk_len = chunk_len + #ent + 1
+            end
+            flush_slot()   -- always fires, so an empty slot still reports
         end
     end
 
@@ -5562,6 +5785,7 @@ end)
 --   SIM|<key>|<value>         → _sim.set_value(key, value)
 --   SIM|<key>|<value>|<sub>   → _sim.set_value(key, value, sub)
 --   SIM|reset                 → _sim.set_value('reset', nil)
+--   SIM|strip                 → _sim.set_value('strip', nil)  (naked)
 --   SETTING|<key>|<value>     → reserved for future schema-pushed settings
 --
 -- Bind is best-effort: if another instance is already listening, we
@@ -9824,11 +10048,28 @@ local function _ow_drain_inbound()
             if s1 and _sim and _sim.import_set then
                 local fpath = rest:sub(1, s1 - 1)
                 local spath = rest:sub(s1 + 1)
-                local ok_imp, err_imp = pcall(_sim.import_set, fpath, spath)
+                -- import_set now returns (ok, message). The message is
+                -- the sentence the import window shows -- see the note in
+                -- OmniWatch_Sim.lua: the window used to say "sent -- check
+                -- sim panel" whether the set had loaded or the gear file
+                -- had a syntax error in it, and the real answer only
+                -- existed as a chat line that scrolled away.
+                local ok_imp, ret_imp, msg_imp = pcall(_sim.import_set,
+                                                       fpath, spath)
+                local function say_status(kind, text)
+                    pcall(function()
+                        udp_inv:send('SIM_INV|IMPORTSTATUS|' .. kind .. '|'
+                            .. tostring(text or ''):gsub('|', '/'))
+                    end)
+                end
                 if not ok_imp then
                     ow_chat(123,
-                        '[OmniWatch] sim import error: ' .. tostring(err_imp))
-                elseif err_imp == true and _sim.get_equipment then
+                        '[OmniWatch] sim import error: ' .. tostring(ret_imp))
+                    say_status('err', ret_imp)
+                elseif ret_imp ~= true then
+                    say_status('err', msg_imp or 'import failed')
+                elseif ret_imp == true and _sim.get_equipment then
+                    say_status('ok', msg_imp or 'imported')
                     -- Import landed in the lua sim state. Echo the resolved
                     -- equipment back to python so the sim WINDOW (which is
                     -- rendered from python's sim_state, not the lua state)
@@ -9836,20 +10077,53 @@ local function _ow_drain_inbound()
                     -- import succeeds silently lua-side and the window keeps
                     -- displaying live gear -- the "it sent but doesn't show"
                     -- symptom.
-                    --   SIM_INV|IMPORTED|<slot>:<id>;<slot>:<id>;...
-                    -- id 0 = explicit empty slot; augmented items are id-only.
+                    --   SIM_INV|IMPORTED|<slot>:<id>@<bag>:<idx>#<tag>;...
+                    -- id 0 = explicit empty slot. The @bag:idx suffix is
+                    -- what makes an augmented piece land on the copy the
+                    -- set actually named: import_set matches the set's
+                    -- augment list against the copies in your bags, and
+                    -- sending the id alone would throw that away again at
+                    -- the last step, leaving the window (and its dropdown)
+                    -- showing whichever copy it met first. Same shape the
+                    -- EQUIPPED stream already uses. bag/idx are 0 when the
+                    -- set named no augments and any copy will do.
                     local eq = _sim.get_equipment()
                     if type(eq) == 'table' then
                         local parts = {}
                         for slot, val in pairs(eq) do
-                            local id = 0
+                            local id, bag, idx, tag = 0, 0, 0, ''
                             if type(val) == 'number' then
                                 id = val
                             elseif type(val) == 'table' then
-                                id = tonumber(val.id) or 0
+                                id  = tonumber(val.id)  or 0
+                                bag = tonumber(val.bag) or 0
+                                idx = tonumber(val.idx) or 0
+                                -- The set's own augments, summarised the
+                                -- same way the dropdown summarises a
+                                -- copy's. Without this the window names
+                                -- the piece from the inventory snapshot
+                                -- by id alone and shows whichever copy it
+                                -- matches first -- which reads as "it
+                                -- imported the wrong cape" even when the
+                                -- stats underneath are the set's.
+                                -- An opaque {'Path: A'} would render as
+                                -- the bare label "Path A", which tells
+                                -- you less than the copy's own resolved
+                                -- augments. Leave the tag empty and let
+                                -- the inventory snapshot label the row.
+                                if type(val.augs) == 'table'
+                                   and ow_augment_tag
+                                   and not (ow_augments_are_opaque
+                                            and ow_augments_are_opaque(val.augs)) then
+                                    local okt, t = pcall(ow_augment_tag,
+                                                         val.augs)
+                                    if okt and type(t) == 'string' then
+                                        tag = t:gsub('[;:|#]', ' ')
+                                    end
+                                end
                             end
-                            parts[#parts+1] = string.format('%s:%d',
-                                tostring(slot), id)
+                            parts[#parts+1] = string.format('%s:%d@%d:%d#%s',
+                                tostring(slot), id, bag, idx, tag)
                         end
                         local body = 'SIM_INV|IMPORTED|' ..
                             table.concat(parts, ';')
@@ -11542,7 +11816,7 @@ ow_safe_register('addon command', function(command, ...)
                         end
                         -- extdata visibility + the stats-overlay verdict
                         local gi_visible = false
-                        if extdata then
+                        if extdata and ow_extdata_ok(item and item.extdata) then
                             local oke, extd = pcall(extdata.decode, item)
                             if oke and extd
                                     and type(extd.augments) == 'table' then
@@ -12513,7 +12787,7 @@ ow_safe_register('addon command', function(command, ...)
                         end
                         -- Augments via extdata (preferred) + item_data fallback.
                         local augs
-                        if extdata and idata.extdata then
+                        if extdata and ow_extdata_ok(idata.extdata) then
                             local ok, ext = pcall(extdata.decode, idata)
                             if ok and ext and ext.augments then
                                 augs = ext.augments
@@ -18504,6 +18778,16 @@ local ow_integrate = {
     ['ratt'] = 'ranged attack',
     ['ratk'] = 'ranged attack',
     ['racc'] = 'ranged accuracy',
+    -- Shorthand that only ever appears in hand-written GearSwap gear
+    -- files, not in item text. Registered so the sim's set import can
+    -- compare a set's augment lines against the real ones on the copies
+    -- in your bags ("Accy+20 Atk+20" against "Accuracy+20 Attack+20").
+    ['accy'] = 'accuracy',
+    ['critdmg'] = 'critical hit damage',
+    ['crit dmg'] = 'critical hit damage',
+    ['wsd'] = 'weapon skill damage',
+    ['dbl atk'] = 'double attack',
+    ['trpl atk'] = 'triple attack',
     ['rng acc'] = 'ranged accuracy',
     ['rng atk'] = 'ranged attack',
     -- unspaced forms: 'Rng.Acc.+15' has no spaces, so the period strip
@@ -19091,7 +19375,13 @@ end
 -- NOTE: assigns to a previously forward-declared local (see header
 -- near line 720). Don't change this to `local function` — the
 -- forward decl makes the closures registered above this point work.
-ow_parse_desc_line = function(tbl, text, prefix)
+-- `order`, when given, additionally receives {key=, value=} entries in
+-- the order they appear in the TEXT. tbl is a hash, so its iteration
+-- order is arbitrary and a caller that wants to render an augment line
+-- back out ("Accuracy+20 Attack+20") cannot recover which came first,
+-- or even see both. Only the augment-tag builder uses this; every other
+-- caller passes three arguments and is unaffected.
+ow_parse_desc_line = function(tbl, text, prefix, order)
     if not text or text == '' then return end
     -- Pattern mirrors checkparam: capture a non-digit key, optional colon,
     -- then a signed integer, optional % and trailing whitespace.
@@ -19125,6 +19415,9 @@ ow_parse_desc_line = function(tbl, text, prefix)
                         part = ow_integrate[part] or part
                         if prefix then part = prefix .. part end
                         tbl[part] = cv + (tbl[part] or 0)
+                        if order then
+                            order[#order + 1] = {key = part, value = cv}
+                        end
                     end
                 end
             end
@@ -19145,6 +19438,13 @@ ow_parse_desc_line = function(tbl, text, prefix)
                         ow_chat(207, string.format(
                             '[OW] dw+: +%d from "%s"', v, text:sub(1, 60)))
                     end
+                end
+                -- Logged BEFORE the expansions below on purpose: a
+                -- 'damage taken' line is ONE augment and should read as
+                -- DT-5, not as whichever of the three sub-types the hash
+                -- happened to yield first (it was rendering as BDT).
+                if order then
+                    order[#order + 1] = {key = key, value = v}
                 end
                 -- checkparam expands 'damage taken' into physical/magic/breath.
                 -- We track BOTH the generic-DT-only sum (so the DT cell
@@ -19170,6 +19470,34 @@ ow_parse_desc_line = function(tbl, text, prefix)
     end
 end
 
+-- True when this extdata blob is long enough for Windower's decoder.
+--
+-- PCALL DOES NOT SUPPRESS THE COMPLAINT, which is the whole reason this
+-- exists. extdata.decode rejects a short or empty blob through the
+-- logger, which PRINTS "OmniWatch Error: extdata.decode was passed an
+-- invalid extdata string () ID = ..." straight to the game chat and then
+-- returns normally -- it does not raise, so wrapping the call changes
+-- nothing a player can see. The only way not to be told off is not to
+-- ask. Windower wants 24 bytes; an empty string is what bags report for
+-- gear whose extdata hasn't been filled in, and walking every bag looking
+-- for a matching copy meets plenty of those.
+function ow_extdata_ok(blob)
+    return type(blob) == 'string' and #blob >= 24
+end
+
+-- GLOBAL wrapper. ow_parse_desc_line is a file-LOCAL (forward-declared
+-- at the top so closures above can capture it), which means the modules
+-- loaded alongside this one -- OmniWatch_Sim.lua in particular -- cannot
+-- see it at all: they look it up as a global and find nil. That silently
+-- cost the sim's set import its stat-level augment comparison, which is
+-- the half that copes with a gear file writing "Accy+20 Atk+20" where the
+-- client says "Accuracy+20 Attack+20". Same scope trap, and the same
+-- remedy, as _ow_request_icon beside ensure_icon: globals resolve at call
+-- time, so the wrapper works from anywhere.
+function _ow_parse_desc_line(tbl, text, prefix, order)
+    return ow_parse_desc_line(tbl, text, prefix, order)
+end
+
 -- ─── Augment introspection helpers ─────────────────────────────────────
 -- Used by the sim inventory builder to differentiate items that share an
 -- item id but carry different augments (e.g. multiple Camulus's Mantles).
@@ -19187,13 +19515,17 @@ function ow_get_item_augments(bag, idx)
     -- answers. Self-gating: returns nil for non-rank gear, absent
     -- function, or empty data — so the chain below is untouched
     -- everywhere the native path doesn't apply.
+    -- No length gate here on purpose. _ow_native_item_augments goes to
+    -- the client's own resolver, not to extdata.decode, so it is not the
+    -- thing that complains -- and it is free to make sense of a blob the
+    -- decoder would turn away. Only the decode calls are gated.
     if item.extdata and _ow_native_item_augments then
         local okn, nat_lines = pcall(_ow_native_item_augments,
                                      item.id, item.extdata)
         if okn and type(nat_lines) == 'table' then augs = nat_lines end
     end
     -- Prefer extdata.decode (Windower's library) since it's authoritative.
-    if not augs and extdata and item.extdata then
+    if not augs and extdata and ow_extdata_ok(item.extdata) then
         local ok, ext = pcall(extdata.decode, {id = item.id, extdata = item.extdata})
         if ok and ext then
             -- Rank-augmented bundle gear (Odyssey etc.): resolve the
@@ -19275,58 +19607,92 @@ local _OW_AUG_TAG_ABBREV = {
     ['blood pact damage']     = 'BPD',
     ['pet: damage taken']     = 'PetDT',
     ['skillchain damage']     = 'SCD',
+    -- The DT family: 'damage taken' had no entry at all, so a cape's
+    -- "Damage taken-5%" fell through to the generic abbreviator and came
+    -- out as 'Breat-5'.
+    ['damage taken']          = 'DT',
+    ['physical damage taken'] = 'PDT',
+    ['magic damage taken']    = 'MDT',
+    ['breath damage taken']   = 'BDT',
+    ['snapshot']              = 'Snap',
+    ['magic burst damage']    = 'MBD',
+    -- ow_parse_desc_line leaves '"Cure" potency' as a quoted key (it only
+    -- unquotes a key that is quoted end to end), which abbreviated to
+    -- '"cure'. Name it here rather than loosening the parser.
+    ['"cure" potency']        = 'CurP',
 }
 
-function ow_augment_tag(augs)
-    if type(augs) ~= 'table' or #augs == 0 then return '' end
-    -- Build a compact tag with abbreviated stat keys + their values.
-    -- Example output: "DEX+30/Acc+30/WSD+10".
-    -- All augments are included (no cap), since multiple augmented
-    -- copies of the same item often share early stats and only differ
-    -- on later ones. Capping would make distinct items look identical.
-    --
-    -- Each augment string is parsed via ow_parse_desc_line; the first
-    -- (key, value) pair is used. If the parser produces nothing, the
-    -- raw augment string is included instead so the user still sees
-    -- something distinguishing.
-    local seen = {}
-    local tags = {}
+-- Build the augment tag as a LIST of segments, in the order the stats
+-- appear in the augment text.
+--
+-- WHAT THIS REPLACES: the old builder took ONE stat per augment line,
+-- picked by whichever key pairs() handed back first, and skipped any
+-- stat name it had already emitted. So "Accuracy+20 Attack+20" showed
+-- only one of the two, arbitrarily; an Ambuscade cape's second
+-- "Accuracy+10" was dropped as a repeat and fell through to the raw-text
+-- fallback; and "Damage taken-5%" surfaced as one of its three expanded
+-- sub-types. Every segment is emitted now, in text order, deduped by
+-- nothing — a cape that genuinely carries accuracy twice says so.
+-- True when an augment list says nothing a parser can use -- i.e. it is
+-- entirely opaque "Path: A" / "Path: B" strings, which is how GearSwap
+-- writes rank gear (Odyssey ammo, path weapons, JSE necks). The letter is
+-- not the augments; the CLIENT resolves it against the copy's own rank.
+-- So a set carrying only these has no stats to contribute and must not
+-- displace what the item itself reports.
+function ow_augments_are_opaque(augs)
+    if type(augs) ~= 'table' or #augs == 0 then return true end
+    for _, a in ipairs(augs) do
+        local t = tostring(a or ''):gsub('^%s+', ''):gsub('%s+$', '')
+        if t ~= '' and t:lower() ~= 'none'
+           and not t:lower():match('^path%s*:') then
+            return false
+        end
+    end
+    return true
+end
+
+function ow_augment_tag_parts(augs)
+    if type(augs) ~= 'table' or #augs == 0 then return {} end
+    local parts = {}
     for _, a in ipairs(augs) do
         local raw = tostring(a)
-        local tmp = {}
-        ow_parse_desc_line(tmp, raw)
-        local emitted = false
-        for k, v in pairs(tmp) do
-            if not seen[k] then
-                seen[k] = true
-                local abbr = _OW_AUG_TAG_ABBREV[k]
+        local order = {}
+        ow_parse_desc_line({}, raw, nil, order)
+        if #order == 0 then
+            -- Parsed to nothing (an "Enhances ... effect" line, a path
+            -- string). Show the raw text so the copy is still tellable
+            -- apart. Strip the wire delimiters AND '/', which separates
+            -- segments here.
+            local short = raw:gsub('[;:|/]', ' ')
+                             :gsub('%s+', ' ')
+                             :gsub('^%s+', ''):gsub('%s+$', '')
+            if short ~= '' then parts[#parts + 1] = short end
+        else
+            for _, ent in ipairs(order) do
+                local abbr = _OW_AUG_TAG_ABBREV[ent.key]
                 if not abbr then
-                    local first = k:match('^(%w+)') or k
+                    -- Generic fallback: drop punctuation first so a
+                    -- quoted key doesn't abbreviate to its own quote.
+                    local clean = tostring(ent.key):gsub('[^%w%s]', '')
+                    local first = clean:match('^%s*(%w+)') or clean
                     abbr = first:sub(1, 1):upper() .. first:sub(2, 5)
                 end
-                -- Format value with sign — positive numbers get a
-                -- leading +; negative numbers already have the minus.
+                local v = ent.value
                 local sval
                 if type(v) == 'number' then
                     sval = (v >= 0) and ('+' .. tostring(v)) or tostring(v)
                 else
                     sval = tostring(v)
                 end
-                tags[#tags+1] = abbr .. sval
-                emitted = true
-                break
+                parts[#parts + 1] = abbr .. sval
             end
         end
-        if not emitted then
-            -- Parser produced nothing — fall back to a short form of
-            -- the raw augment string so the user has SOMETHING to
-            -- distinguish copies. Strip wire-delimiters that would
-            -- corrupt the SIM_INV protocol.
-            local short = raw:gsub('[;:|]', ' '):gsub('^%s+', ''):gsub('%s+$', '')
-            if short ~= '' then tags[#tags+1] = short end
-        end
     end
-    return table.concat(tags, '/')
+    return parts
+end
+
+function ow_augment_tag(augs)
+    return table.concat(ow_augment_tag_parts(augs), '/')
 end
 
 -- Compute the full stat dict from currently equipped gear.
@@ -19704,6 +20070,83 @@ local function ow_compute_haste(gear_haste_pct)
     return raw_gear, raw_ma, raw_ja, total
 end
 
+-- ═══ GearInfo double-count guard ═════════════════════════════════════
+-- THERE ARE TWO COMPLETE GEAR WALKS IN THIS ADDON AND THEY READ THE SAME
+-- TEXT. compute_stats walks the 16 equipped items itself (item
+-- descriptions via ow_parse_desc_line, extdata augments, set bonuses),
+-- and GearInfo's get_equip_stats walks exactly the same items into
+-- Gear_info. For any stat that is then COPIED out of Gear_info onto
+-- stats[] further down, every piece was therefore counted twice.
+--
+-- That is the bug behind the Fast Cast fix (2026-06-30), the Magic
+-- Evasion fix, and the Subtle Blow fix (2026-08-03) — each time it was
+-- solved by deleting one copy, which also threw away whatever GearInfo
+-- alone could see (Unity-rank augments, its own set bonuses). This is
+-- the general version: the walk RECORDS what it credited from the
+-- sources GearInfo also parses, and the copy adds only the remainder.
+--
+-- Proven doubled before this guard (lua5.1 harness over both parsers,
+-- gi/t_dup.lua): Double/Triple/Quadruple Attack, Critical hit rate,
+-- Critical hit damage, Rapid Shot, Magic Accuracy and Magic Atk. Bonus
+-- on non-weapon slots, Regain, and augmented Cure Potency. A gear piece
+-- printing "Double Attack"-5% was landing as -10.
+--
+-- Keys that ONLY this walk can see (DREMA path augments, ow_enhanced,
+-- native rank augments, JSE neck tables, DW_Gear, Martial_Arts_Gear)
+-- are deliberately NOT recorded — GearInfo cannot see them, so they
+-- must survive the subtraction untouched.
+local _OW_GI_COPIED_KEYS = {
+    ['magic accuracy']      = true,
+    ['magic attack bonus']  = true,
+    ['magic def. bonus']    = true,
+    ['regain']              = true,
+    ['double attack']       = true,
+    ['triple attack']       = true,
+    ['quadruple attack']    = true,
+    ['critical hit rate']   = true,
+    ['critical hit damage'] = true,
+    ['cure potency']        = true,
+    ['rapid shot']          = true,
+}
+
+-- Per-compute tally of what our own walk credited from GearInfo-visible
+-- sources. Reset at the top of every compute_stats (globals, not
+-- locals, because compute_stats is already near the 200-local cap).
+_ow_gi_seen = {}
+
+-- Merge a parsed scratch table into stats[], recording the part
+-- GearInfo will also report so _ow_gi_copy can net it out.
+function _ow_merge_gear_stats(stats, scratch)
+    for k, v in pairs(scratch) do
+        if type(v) == 'number' then
+            stats[k] = (stats[k] or 0) + v
+            if _OW_GI_COPIED_KEYS[k] then
+                _ow_gi_seen[k] = (_ow_gi_seen[k] or 0) + v
+            end
+        end
+    end
+end
+
+-- Copy Gear_info[<stat>] onto stats[<panel key>], minus whatever this
+-- compute already credited from the same sources.
+--
+-- THE CLAMP IS THE WHOLE SAFETY STORY: the subtraction is only applied
+-- when it moves the value TOWARD zero from GearInfo's own figure. If our
+-- walk credited more than GearInfo did — a quoted augment spelling its
+-- anchored _AUGMENT_NAME_TO_KEY doesn't list, an item its set-bonus gate
+-- dropped on a mis-cased key — the delta comes back with the wrong sign
+-- and we add nothing at all. Worst case is the old behaviour on that one
+-- stat; it can never delete a value the walk legitimately found. That is
+-- why widening GearInfo's augment table is NOT a prerequisite for this
+-- fix, and why the guard is a no-op wherever no double existed.
+function _ow_gi_copy(stats, panel_key, gi_value)
+    if type(gi_value) ~= 'number' or gi_value == 0 then return end
+    local delta = gi_value - (_ow_gi_seen[panel_key] or 0)
+    if (gi_value > 0 and delta > 0) or (gi_value < 0 and delta < 0) then
+        stats[panel_key] = (stats[panel_key] or 0) + delta
+    end
+end
+
 -- Map from GearInfo Set_bonus stat keys → our lowercase stat-dict keys.
 -- The keys that are already lowercase match directly; this table handles
 -- the abbreviated and mixed-case forms.
@@ -19957,6 +20400,24 @@ function ow_compute_stats()
                     synth[slot_key]            = idx
                     synth[slot_key .. '_bag']  = bag
                 end
+                -- A set imported from a GearSwap file NAMES its augments
+                -- ({name="Andartia's Mantle", augments={...}}), so for an
+                -- augmented piece the set is the authority on what it
+                -- carries -- not whichever physical copy the id happened
+                -- to resolve to. Hand the list to the gear walk below.
+                -- ...but ONLY when the set names real augments. GearSwap
+                -- writes rank gear as {'Path: A'}, which carries no stats
+                -- at all -- the client resolves that letter against the
+                -- copy you own and its current rank. Letting it override
+                -- would swap real augments for a letter and, worse, skip
+                -- the native-rank resolution below that is the only thing
+                -- able to read them. Seething Bomblet +1 losing its stats
+                -- and its tooltip was exactly this.
+                if type(ref) == 'table' and type(ref.augs) == 'table'
+                   and #ref.augs > 0
+                   and not ow_augments_are_opaque(ref.augs) then
+                    _ow_sim_aug_override[slot_key] = ref.augs
+                end
             end
         end
         equipment = synth
@@ -19978,6 +20439,13 @@ function ow_compute_stats()
     -- overlay dict) so a stale value can't linger if the restamp block
     -- is skipped this tick.
     _ow_jse_primary_overlay = {}
+    -- Reset the GearInfo-visible tally (see _ow_gi_copy). Must happen
+    -- every compute or the previous frame's gear keeps being netted out.
+    _ow_gi_seen = {}
+    -- Per-slot augment lists supplied by an imported GearSwap set. See
+    -- the note where these are read, below. Global rather than local:
+    -- this function is close to Lua's 200-local ceiling.
+    _ow_sim_aug_override = {}
 
     -- Walk all 16 slot keys exposed by the equipment table.
     for pos = 0, 15 do
@@ -20013,34 +20481,23 @@ function ow_compute_stats()
                             base_text = helptext
                             pet_text  = nil
                         end
-                        -- Parse all newline-delimited lines of the base block.
-                        -- For WEAPON slots (main/sub), Magic Accuracy and
-                        -- Magic Atk. Bonus are intentionally excluded here:
-                        -- GearInfo's compute already accumulates a weapon's
-                        -- gear magic acc / matkb, and OmniWatch copies those
-                        -- through after the gear scan (the 2026-05-18 patch,
-                        -- Gear_info['Magic Accuracy'] etc.). Parsing them from
-                        -- the weapon description HERE too double-counted them
-                        -- — e.g. Fudo Masamune alone showed Magic Accuracy
-                        -- +100 instead of +50. Non-weapon slots are
-                        -- unaffected (they keep using this description parse
-                        -- for magic acc as before). We parse each weapon line
-                        -- into a scratch table, drop the two magic keys, then
-                        -- merge the remainder into stats.
-                        local is_weapon_slot = (entry.slot_name == 'main'
-                                                or entry.slot_name == 'sub')
+                        -- Parse all newline-delimited lines of the base
+                        -- block through _ow_merge_gear_stats, which credits
+                        -- stats[] and records the GearInfo-visible part for
+                        -- the copy below to net out.
+                        --
+                        -- This replaces the 2026-05-18 weapon-slot carve-out
+                        -- (which nil'd magic acc / MAB on main and sub only,
+                        -- after Fudo Masamune showed Magic Accuracy +100
+                        -- instead of +50). That carve-out fixed one slot pair
+                        -- for two stats; the same double was live on every
+                        -- other slot and on eight other copied stats, and it
+                        -- under-counted whenever GearInfo failed to load and
+                        -- the copy never ran. The tally handles all of it.
                         for line in base_text:gmatch('[^\r\n]+') do
-                            if is_weapon_slot then
-                                local scratch = {}
-                                ow_parse_desc_line(scratch, line)
-                                scratch['magic accuracy']     = nil
-                                scratch['magic attack bonus'] = nil
-                                for k, v in pairs(scratch) do
-                                    stats[k] = (stats[k] or 0) + v
-                                end
-                            else
-                                ow_parse_desc_line(stats, line)
-                            end
+                            local scratch = {}
+                            ow_parse_desc_line(scratch, line)
+                            _ow_merge_gear_stats(stats, scratch)
                         end
                         -- Parse pet block (if any) with the 'pet: ' prefix.
                         if pet_text and pet_text ~= '' then
@@ -20050,9 +20507,16 @@ function ow_compute_stats()
                         end
                     end
 
-                    -- 2) Augments from extdata (most accurate) or item_data fallback.
-                    local augs
-                    if extdata and item_data.extdata then
+                    -- 2) Augments. An imported sim set wins over extdata:
+                    -- the set says which augments the piece is meant to
+                    -- have, and the id it resolved to is just some copy in
+                    -- your bags. Reading that copy's extdata instead is
+                    -- what made an imported STR cape compute as whichever
+                    -- cape the bag walk found first.
+                    local augs = _ow_sim_aug_override[entry.slot_name]
+                    local sim_augs = augs
+                    if not augs and extdata
+                            and ow_extdata_ok(item_data.extdata) then
                         local ok, ext = pcall(extdata.decode,
                             {id = id, extdata = item_data.extdata})
                         if ok and ext and ext.augments then augs = ext.augments end
@@ -20124,7 +20588,12 @@ function ow_compute_stats()
                                             _ow_path_aug_stats._by_slot[_slot], line)
                                     end
                                 else
-                                    ow_parse_desc_line(stats, astr)
+                                    -- GearInfo's parse_augment_line reads
+                                    -- these same strings, so record what we
+                                    -- credit here for the copy to net out.
+                                    local _ascratch = {}
+                                    ow_parse_desc_line(_ascratch, astr)
+                                    _ow_merge_gear_stats(stats, _ascratch)
                                 end
                             end
                         end
@@ -20243,7 +20712,8 @@ function ow_compute_stats()
                     -- gear, rank Mythics, and JSE necks are all
                     -- Path-only/empty, so they keep their native stats.
                     local gi_visible = false
-                    if extdata and item_data and item_data.extdata then
+                    if extdata and item_data
+                            and ow_extdata_ok(item_data.extdata) then
                         local oke, extd = pcall(extdata.decode, item_data)
                         if oke and extd
                                 and type(extd.augments) == 'table' then
@@ -20269,7 +20739,11 @@ function ow_compute_stats()
                     -- and Heishi's Acc+30 each counted twice). Items
                     -- with a DREMA entry stay on the res-file path;
                     -- native covers only gear in NO static table.
-                    local native_done = false
+                    -- With set-supplied augments in hand, the overlays
+                    -- that infer augments from the physical copy would be
+                    -- describing a different cape. Skip both.
+                    local native_done = (sim_augs ~= nil)
+                    if sim_augs then gi_visible = true end
                     if not gi_visible
                             and _ow_native_item_augments and item_data
                             and item_data.extdata
@@ -20299,6 +20773,7 @@ function ow_compute_stats()
                     -- one source: DREMA wins; this fallback covers only
                     -- gear in NO other table (JSE necks et al.).
                     if not native_done
+                            and not sim_augs
                             and not (Unity_rank and Unity_rank[id])
                             and not (ow_path_augments
                                      and ow_path_augments[id]) then
@@ -20354,7 +20829,20 @@ function ow_compute_stats()
                             -- GearInfo uses abbreviations. Map to our keys.
                             local mapped = _PW_SET_BONUS_STAT_MAP[stat_key]
                                         or stat_key:lower()
+                            -- GearInfo applies set bonuses too (its own
+                            -- Set_bonus_by_Set_ID pass inside
+                            -- get_equip_stats), so record ours the same
+                            -- way per-piece stats are recorded. Where the
+                            -- two disagree — GearInfo drops a bonus whose
+                            -- key isn't in its stat_table, or picks a
+                            -- different tier — the clamp in _ow_gi_copy
+                            -- keeps whichever is larger rather than
+                            -- summing them.
                             stats[mapped] = (stats[mapped] or 0) + val
+                            if _OW_GI_COPIED_KEYS[mapped] then
+                                _ow_gi_seen[mapped] =
+                                    (_ow_gi_seen[mapped] or 0) + val
+                            end
                         end
                     end
                 end
@@ -20893,14 +21381,10 @@ function ow_compute_stats()
                 -- function, so the panel reads gear + INT/2 as
                 -- expected.
                 if Gear_info then
-                    if type(Gear_info['Magic Accuracy']) == 'number' then
-                        stats['magic accuracy'] = (stats['magic accuracy'] or 0)
-                                                + Gear_info['Magic Accuracy']
-                    end
-                    if type(Gear_info['Magic Atk. Bonus']) == 'number' then
-                        stats['magic attack bonus'] = (stats['magic attack bonus'] or 0)
-                                                    + Gear_info['Magic Atk. Bonus']
-                    end
+                    _ow_gi_copy(stats, 'magic accuracy',
+                                Gear_info['Magic Accuracy'])
+                    _ow_gi_copy(stats, 'magic attack bonus',
+                                Gear_info['Magic Atk. Bonus'])
                     -- Magic Evasion is NOT added here. GearInfo's
                     -- compute_player_stats already returns the gear
                     -- portion in stats['magic evasion'], so adding
@@ -20910,22 +21394,21 @@ function ow_compute_stats()
                     -- 1002 before this loop even ran.
                     --
                     -- Same class of bug as Fast Cast (fixed 2026-06-30)
-                    -- and Subtle Blow (2026-08-03). The three stats
-                    -- still added below have NOT been verified the same
-                    -- way — run //ow whystat on each and check the
-                    -- baseline line before trusting them.
-                    if type(Gear_info['Magic Def. Bonus']) == 'number' then
-                        stats['magic def. bonus'] = (stats['magic def. bonus'] or 0)
-                                                  + Gear_info['Magic Def. Bonus']
-                    end
+                    -- and Subtle Blow (2026-08-03). Every remaining copy
+                    -- below now goes through _ow_gi_copy, which nets out
+                    -- whatever this compute's own gear walk already
+                    -- credited from the same item text — so the "which of
+                    -- these is double-counted?" question is answered
+                    -- structurally instead of one //ow whystat run at a
+                    -- time. Magic Evasion stays out because the walk is
+                    -- its sole source and there is nothing to net.
+                    _ow_gi_copy(stats, 'magic def. bonus',
+                                Gear_info['Magic Def. Bonus'])
                     -- Regain from gear (e.g. Republican Platinum Medal's
                     -- Citizen of Bastok: "Regain"+2 when player is Bastok-
                     -- aligned). Adds on top of any roll-supplied regain
                     -- already in stats['regain'].
-                    if type(Gear_info['Regain']) == 'number' then
-                        stats['regain'] = (stats['regain'] or 0)
-                                        + Gear_info['Regain']
-                    end
+                    _ow_gi_copy(stats, 'regain', Gear_info['Regain'])
                     -- OmniWatch patch (2026-05-27): gear-derived multi-hit
                     -- and "extra" combat stats. Same gap as Magic Accuracy
                     -- above — GearInfo accumulates these into its stat_table
@@ -20973,11 +21456,7 @@ function ow_compute_stats()
                     local _ws_before = _ow_whystat_pending
                         and (stats[_ow_whystat_pending] or 0) or 0
                     for panel_key, gi_key in pairs(_GI_GEAR_EXTRA) do
-                        if type(Gear_info[gi_key]) == 'number'
-                           and Gear_info[gi_key] ~= 0 then
-                            stats[panel_key] = (stats[panel_key] or 0)
-                                             + Gear_info[gi_key]
-                        end
+                        _ow_gi_copy(stats, panel_key, Gear_info[gi_key])
                     end
                     if _ow_whystat_pending then
                         -- Print the value ALREADY present before this loop.
@@ -21200,6 +21679,22 @@ function ow_compute_stats()
                             -- be. Delete that entry rather than
                             -- populating it.
                             ['magic evasion'] = true,
+                            -- Snapshot. Same story as Magic Evasion
+                            -- above: "Snapshot Effect" was already in
+                            -- _PW_GIFT_STAT_MAP and this list was the
+                            -- only thing stopping it, so //ow dumpgifts
+                            -- reported the gift as mapped while the
+                            -- Snapshot cell stayed at whatever the gear
+                            -- gave -- nothing at all, stripped.
+                            -- Safe against the double-count this list
+                            -- exists to prevent: nothing else writes
+                            -- stats['snapshot'] except gear parsing,
+                            -- the Flurry buff and Courser's Roll, and
+                            -- no job has an innate Snapshot trait in
+                            -- JOB_TRAITS to collide with (COR's whole
+                            -- 10% is the gift; RNG's is merits, which
+                            -- come in on their own path).
+                            ['snapshot'] = true,
                         }
                         local jpd = p.job_points[mjob:lower()]
                         local jp_spent = (jpd and tonumber(jpd.jp_spent)) or 0
@@ -24060,7 +24555,7 @@ ow_safe_register('prerender', function()
                                 end
                             end
                             if #augs == 0 and extdata and item_data
-                                    and item_data.extdata then
+                                    and ow_extdata_ok(item_data.extdata) then
                                 local ok_ext, ext = pcall(extdata.decode, item_data)
                                 if ok_ext and ext and ext.augments then
                                     _aug_src = ext.augments
