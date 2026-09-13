@@ -14,7 +14,9 @@
     "merged_at": "2026-05-13T02:38:08.386907+00:00",
     "ability_details_count": 1754,
     "rebuilt_at": "2026-07-31",
-    "rebuilt_from": "MobileWatch bestiary rev 409"
+    "rebuilt_from": "MobileWatch bestiary rev 409",
+    "patched_at": "2026-08-16",
+    "patched_from": "MobileWatch bestiary rev 412 (Puk kit + element-row fix)"
   },
   "individuals": {
     "1st gold musketeer": {
@@ -6120,15 +6122,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.25, "h2h": 1.0, "impact": 1.0, "fire": 1.0, "ice": 1.125,
-        "wind": 1.0, "earth": 1.0, "lightning": 1.0, "water": 1.0, "light": 1.0, "dark": 1.0,
-        "ranged": 1.0, "physical": 1.0, "magical": 1.0, "breath": 1.0
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
+        "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": [],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -37859,15 +37861,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -47693,15 +47695,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -55782,15 +55784,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -58428,15 +58430,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -68661,15 +68663,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -110853,15 +110855,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
       "abilities": ["Wind Shear", "Crosswind", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -142412,15 +142414,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -148299,15 +148301,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
       "abilities": ["Ill Wind", "Wind Shear", "Obfuscate", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -150462,15 +150464,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -160863,15 +160865,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -161963,15 +161965,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -162030,15 +162032,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Boreas Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -162938,15 +162940,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -167390,15 +167392,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -167422,15 +167424,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -168069,15 +168071,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -180729,15 +180731,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
       "abilities": ["Wind Shear", "Crosswind", "Ill Wind", "Somnial Durance"],
       "spells": ["Aero IV", "Aeroga II", "Aeroga III", "Silencega"],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -182543,15 +182545,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -183316,15 +183318,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -184491,15 +184493,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -192400,15 +192402,15 @@
       "job": 0,
       "notorious": false,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -229614,15 +229616,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 3.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 3.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -232450,15 +232452,15 @@
       "job": 0,
       "notorious": true,
       "modifiers": {
-        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.0,
-        "wind": 1.0, "earth": 1.15, "lightning": 1.3, "water": 1.15, "light": 1.15,
+        "slashing": 1.0, "piercing": 1.125, "h2h": 1.0, "impact": 1.0, "fire": 1.15, "ice": 1.3,
+        "wind": 1.0, "earth": 1.15, "lightning": 1.0, "water": 1.15, "light": 1.15,
         "dark": 1.15, "ranged": 1.125, "physical": 1.0, "magical": 1.0, "breath": 1.0
       },
-      "abilities": [],
+      "abilities": ["Crosswind", "Obfuscate", "Wind Shear", "Zephyr Mantle", "Ill Wind", "White Wind"],
       "spells": [],
       "resists": [],
       "susceptible": [],
-      "absorbs": ["Ice"],
+      "absorbs": ["Wind"],
       "immune": [],
       "traits": []
     },
@@ -251409,7 +251411,7 @@
       "dispel": "N/A",
       "utsusemi": "Ignores shadows",
       "range": "10' radial",
-      "notes": "Bypasses shadows, but does not remove them.",
+      "notes": "Bypasses shadows, but does not remove them. Light-based (inflicts Flash).",
       "description": "Inflicts Flash on players in an area of effect."
     },
     "Oblivion Smash": {
@@ -254427,11 +254429,11 @@
     },
     "Somnial Durance": {
       "name": "Somnial Durance",
-      "family": "",
+      "family": "Puk",
       "type": "",
       "dispel": "N/A",
       "utsusemi": "",
-      "range": "",
+      "range": "AoE",
       "notes": "Used by Sarimanok when below 50% HP.",
       "description": "Inflicts Sleep on players in an area of effect."
     },
@@ -257188,7 +257190,7 @@
     },
     "White Wind": {
       "name": "White Wind",
-      "family": "",
+      "family": "Puk",
       "type": "",
       "dispel": "",
       "utsusemi": "",
@@ -257588,11 +257590,11 @@
     },
     "Zephyr Mantle": {
       "name": "Zephyr Mantle",
-      "family": "",
+      "family": "Puk",
       "type": "",
       "dispel": "N/A",
       "utsusemi": "",
-      "range": "",
+      "range": "Self",
       "notes": "4 shadows for ordinary Puks; up to 10 for Notorious Monsters.",
       "description": "Grants the caster Blink."
     },
@@ -257899,7 +257901,10 @@
       "Aqua Ball", "Intimidate (Pugil)", "Recoil Dive", "Splash Breath", "Water Shield",
       "Water Wall"
     ],
-    "puk": ["Boreas Mantle", "Crosswind", "Ill Wind", "Obfuscate", "Wind Shear"],
+    "puk": [
+      "Boreas Mantle", "Crosswind", "Ill Wind", "Obfuscate", "Somnial Durance", "White Wind",
+      "Wind Shear", "Zephyr Mantle"
+    ],
     "qiqirn": ["Cutpurse", "Deadeye", "Faze", "Kibosh", "Strap Cutter"],
     "quadav": [
       "Diamond Shell", "Ore Lob", "Ore Toss", "Shell Bash", "Shell Charge", "Shell Guard",

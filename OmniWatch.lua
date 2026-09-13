@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.12.3'
+_addon.version  = '1.13.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2711,6 +2711,130 @@ end
 --
 -- Wrapped in do...end: the main chunk is at Lua 5.1's 200-local ceiling,
 -- so everything shared lives on _G and nothing new is added up top.
+-- ── What can I actually use right now ───────────────────────────────────
+-- The overlay's click-a-debuff-to-cure needs to fall through a list of
+-- options -- Poisona, then Healing Waltz, then an Antidote -- and skip
+-- anything unavailable. Only the game knows what is available, so it is
+-- answered here:
+--
+--   * SPELLS: learned AND castable by the CURRENT main/sub at the
+--     CURRENT levels. get_spells() alone is not enough -- it reports
+--     everything the character has ever learned, so a WHM main would be
+--     offered a spell it cannot cast on this job.
+--   * JOB ABILITIES: get_abilities().job_abilities is already job-aware,
+--     so it needs no filtering. Sent as id:Name so the overlay can check
+--     recast by id and send the name.
+--
+-- Items are NOT reported: the overlay knows the inventory already, and
+-- an item can only ever be used on yourself.
+--
+--   out: CANUSE|<spell id,...>|<ja id:Name,...>
+do
+    local CANUSE_EVERY = 5
+    local canuse_last  = 0
+    local canuse_prev  = ''
+
+    local function castable(sp, me)
+        if not (sp and sp.levels) then return false end
+        local mj, ml = me.main_job_id, me.main_job_level
+        local sj, sl = me.sub_job_id,  me.sub_job_level
+        local need = mj and sp.levels[mj]
+        if need and ml and ml >= need then return true end
+        need = sj and sp.levels[sj]
+        if need and sl and sl >= need then return true end
+        return false
+    end
+
+    _G._ow_canuse_tick = function()
+        if (os.clock() - canuse_last) < CANUSE_EVERY then return end
+        canuse_last = os.clock()
+        local me = windower.ffxi.get_player()
+        if not me then return end
+        local spells, jas = {}, {}
+        local ok_s, learned = pcall(windower.ffxi.get_spells)
+        if ok_s and learned then
+            for id, known in pairs(learned) do
+                if known and res.spells[id] and castable(res.spells[id], me) then
+                    spells[#spells + 1] = tostring(id)
+                end
+            end
+        end
+        local ok_a, ab = pcall(windower.ffxi.get_abilities)
+        if ok_a and ab and ab.job_abilities then
+            for _, id in ipairs(ab.job_abilities) do
+                local r = res.job_abilities[id]
+                if r and r.en then
+                    jas[#jas + 1] = tostring(id) .. ':'
+                        .. r.en:gsub('[|,:]', ' ')
+                end
+            end
+        end
+        local payload = 'CANUSE|' .. table.concat(spells, ',')
+            .. '|' .. table.concat(jas, ',')
+        -- Only on change: this is a big line and it moves on job change,
+        -- level up and scroll learning, not every five seconds.
+        if payload ~= canuse_prev then
+            canuse_prev = payload
+            pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+        end
+    end
+end
+
+-- ── Tagged mobs ─────────────────────────────────────────────────────────
+-- The overlay can "tag" a mob from the target card and keep watching it
+-- after the cursor has moved on. Nothing on the wire reports a mob you
+-- are not targeting, so this polls the entity table by ID -- the same
+-- passive read the scan-zone lamp uses, no packets involved.
+--
+--   in :  TAGSET|<id>,<id>,...        (empty clears)
+--   out:  TAGS|<id>~<name>~<hpp>~<dist>~<valid>;...
+--
+-- <valid> is 1 while the entity is rendered and targetable; the overlay
+-- keeps a stale row visible but dimmed rather than dropping it, because
+-- a mob walking out of render range is not the same as a dead one.
+do
+    local TAG_HZ       = 2
+    local tag_ids      = {}
+    local tag_last     = 0
+
+    _G._ow_tag_set = function(csv)
+        tag_ids = {}
+        for chunk in tostring(csv or ''):gmatch('[^,]+') do
+            local id = tonumber(chunk)
+            if id and id > 0 then tag_ids[#tag_ids + 1] = id end
+        end
+        tag_last = 0
+    end
+
+    _G._ow_tag_tick = function()
+        if #tag_ids == 0 then return end
+        if (os.clock() - tag_last) < (1 / TAG_HZ) then return end
+        tag_last = os.clock()
+        if not (windower.ffxi and windower.ffxi.get_mob_by_id) then return end
+        local me = windower.ffxi.get_mob_by_target and
+                   windower.ffxi.get_mob_by_target('me')
+        local parts = {}
+        for _, id in ipairs(tag_ids) do
+            local mob = windower.ffxi.get_mob_by_id(id)
+            local nm, hpp, dist, valid = '', -1, -1, 0
+            if mob then
+                nm = mob.name or ''
+                hpp = mob.hpp or -1
+                valid = (mob.valid_target and 1) or 0
+                if me and mob.x and me.x then
+                    local dx, dy = mob.x - me.x, mob.y - me.y
+                    dist = math.floor(math.sqrt(dx * dx + dy * dy) * 10) / 10
+                end
+            end
+            parts[#parts + 1] = string.format('%d~%s~%d~%s~%d',
+                id, nm:gsub('[|~;]', ' '), hpp, tostring(dist), valid)
+        end
+        pcall(function()
+            udp_inv:send(_OW_MB_TAG('TAGS|' .. table.concat(parts, ';')))
+        end)
+    end
+end
+
 do
     -- The pool is ten slots, indexed from zero.
     local POOL_LAST_SLOT = 9
@@ -10493,8 +10617,19 @@ local function _ow_drain_inbound()
             -- has only been previewed in sim (or seen in the AH, or a
             -- treasure pool) can get an icon too -- previously icons only
             -- ever appeared for pieces as they were worn.
+            -- An explicit request CLEARS the attempted-once marker
+            -- first. ensure_icon records every id it tries, success or
+            -- failure, so a piece that failed early in the session --
+            -- or was extracted before the file went missing -- could
+            -- never be retried without reloading the addon.
             for _id in rest:gmatch('%d+') do
-                pcall(_ow_request_icon, _id)
+                local n = tonumber(_id)
+                if n then
+                    _ow_forget_icon(n)
+                    local ok = _ow_request_icon(n)
+                    ow_chat(207, '[OmniWatch] icon '.. tostring(n) ..
+                            (ok and ' extracted' or ' extract FAILED'))
+                end
             end
         elseif head == 'BLUSETS' then
             -- BLU Spellsets panel actions. Wire forms:
@@ -10610,21 +10745,53 @@ local function _ow_drain_inbound()
             -- Cure Helper: cast <cure> on <party member>, sent when a cure
             -- is clicked in the panel. Payload: "<cure name>|<target>".
             --
-            -- ALWAYS /ma. Cures that are items or abilities are not usable
-            -- on another party member anyway, so resolving a verb per cure
-            -- bought nothing but ways to be wrong.
+            -- The VERB now comes from the overlay as a third field,
+            -- because it is the side that knows what is actually usable:
+            -- what this job can cast at this level, what job abilities
+            -- the current job grants, and what is in the bags. Missing
+            -- or unrecognised means /ma, which is what this did before.
+            -- An item is only ever sent for yourself; FFXI will not use
+            -- one on another party member.
             --
             -- FFXI takes a player NAME as a command target, so nothing is
             -- targeted or retargeted -- the same trick the <pc> hotbar
             -- substitution uses. A name we can't cast on (or a typo in the
             -- Cure column) is reported by the game itself.
-            local c_sep = rest:find('|', 1, true)
-            local c_name = c_sep and rest:sub(1, c_sep - 1) or ''
-            local c_targ = c_sep and rest:sub(c_sep + 1) or ''
+            local c_name, c_targ, c_verb = rest:match('^([^|]*)|([^|]*)|?(.*)$')
+            c_name = c_name or ''
+            c_targ = c_targ or ''
+            if c_verb ~= 'ja' and c_verb ~= 'item' then c_verb = 'ma' end
             if c_name ~= '' and c_targ ~= '' then
-                windower.chat.input(string.format('/ma "%s" %s',
-                    c_name, c_targ))
+                if c_verb == 'item' then
+                    windower.chat.input(string.format('/item "%s" %s',
+                        c_name, c_targ))
+                elseif c_verb == 'ja' then
+                    windower.chat.input(string.format('/ja "%s" %s',
+                        c_name, c_targ))
+                else
+                    windower.chat.input(string.format('/ma "%s" %s',
+                        c_name, c_targ))
+                end
             end
+        elseif head == 'RESEND' then
+            -- The overlay switched which character it is showing and
+            -- has thrown away what it had. Forget every change-detection
+            -- cache so the next tick sends a COMPLETE picture instead of
+            -- only what happens to change next. Without this the overlay
+            -- waits on the game for the missing pieces, and anything
+            -- that only resends on change -- the rich item records --
+            -- may not arrive for a full thirty seconds.
+            last_equip_send = 0
+            last_rich_full  = 0
+            last_ammo_count = -1
+            for k in pairs(last_rich_ids) do last_rich_ids[k] = nil end
+            if _G._ow_force_full_resend then
+                pcall(_G._ow_force_full_resend)
+            end
+
+        elseif head == 'TAGSET' then
+            if _G._ow_tag_set then _G._ow_tag_set(rest) end
+
         elseif head == 'POOLACT' then
             -- Lot or pass a treasure pool slot from the overlay panel.
             -- Payload: "<lot|pass>|<slot>|<item id>". The item id is
@@ -13311,6 +13478,13 @@ end
 -- resolve at call time, which is always after load.
 function _ow_request_icon(id)
     return ensure_icon(tonumber(id) or 0)
+end
+
+-- Drop the "already tried this one" marker so the next request really
+-- re-reads the DAT instead of returning the earlier answer.
+function _ow_forget_icon(id)
+    id = tonumber(id)
+    if id then extracted_ids[id] = nil end
 end
 
 -- Status-icon extraction: like ensure_icon but pulls from the buff DAT
@@ -24179,6 +24353,12 @@ ow_safe_register('prerender', function()
     -- tick, so this is cheap to call every prerender. Runs whether or
     -- not the panel is open -- the overlay's auto lot/pass rules read
     -- the same snapshot.
+    if _G._ow_canuse_tick then
+        pcall(_G._ow_canuse_tick)
+    end
+    if _G._ow_tag_tick then
+        pcall(_G._ow_tag_tick)
+    end
     if _G._ow_pool_tick then
         pcall(_G._ow_pool_tick)
     end

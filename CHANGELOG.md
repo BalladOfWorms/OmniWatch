@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.13.0] — 2026-09-09
+
+### Added
+
+- **Alliance rows now match the party rows** — job plate with the subjob under it, name above the bars, HP across the full width with MP and TP beneath, TP flashing as it crosses 1000. They can stack as one list per group and size independently of the party.
+
+- **A second OmniWatch window** — turn on **Settings ▸ General ▸ Second window** and OmniWatch opens a second borderless window showing a different part of the same layout. The panels you want over the game — equipment, statistics, your hotbars — stay in the main window, while the ones you reach for less often — the auction house, crafting, scan zone — can sit on another monitor, or on another virtual desktop entirely. Nothing moves when you switch it on. To send a panel across, drag it into the second window, or **hold a panel and press TAB** to jump it over and back without moving the cursor at all — which is the only way that works when the two windows are on desktops you tab between, since they are never on screen together. Turn on **Position mode** to see where the boundary falls: it is drawn as a marked seam with each side labelled, and panels only cross it when you take the cursor over there or press TAB, so a panel nudged against the right edge stays put. The second window carries its own settings button in its top-right corner with the handful of things that only make sense one window at a time — **Full screen**, **Transparent**, **Always on top** and **Close this window** — so it can be a solid panel on a spare monitor or a transparent overlay in its own right, whatever the main window is doing, and either window can be full screen on its own monitor. Both windows take clicks without pulling focus off FFXI, the same as the main window always has. Move it by holding SHIFT and dragging anywhere in it, resize it from the grip in its bottom-right corner, and its position and size are remembered with your profile, so a layout made for a second monitor reopens there.
+
+- **Party rows can stack as one list.** Turn on **Stack rows as one list** in the party panel's CONFIGURE dialog and the whole party is positioned once instead of row by row. It grows from whichever corner you drag it nearest — anchor it to a bottom corner and the bottom edge stays put, so the list collapses downward as members leave rather than leaving a gap where they were. Rows share one size while it is on. Your per-row positions and sizes are left on disk untouched and come back the moment you switch it off.
+
+- **Click a debuff icon in a party row to cure it.** The icon you click uses the first remedy you can actually use on the member whose row it is in — list `Poisona, Healing Waltz, Antidote` against Poison and it casts the spell, falls to the ability if the spell is down or not on your job, and reaches for the item only when the row is your own and one is in your bags. Spells are checked against what your **current job and level** can cast, abilities against what the job actually grants, and anything still on recast is skipped rather than stalled on — click the Doom icon on someone and it sends Cursna at them, no targeting and no macro. The spell comes from **your own Support Helper debuff sections**, so it is the list you already keep rather than a second one to maintain, and adding a status there makes its icon clickable everywhere. Buff icons are deliberately not castable, and nothing casts while you are positioning panels.
+
+- **Party status tooltips show a time.** Hovering a buff or debuff icon in a party row now adds a second line under the name: your own buffs count down for real — and two of the same song each get their own timer, the way the buff timer panel shows them — a buff you cast on someone else counts down from the spell's base duration with a **~** since gear and merits stretch it, and anything else shows how long it has been up — also with a **~** when it was already there the first time OmniWatch saw that person. A status with none of the three gets no line rather than a guess.
+
+- **Tag a mob from the target card and keep watching it.** A **TAG** button sits in the target card's title strip. Tagged mobs get a small panel of their own — name, entity id and an HP bar each — that keeps updating after you have targeted something else, so you can watch a puller's mob or the next link without holding it. **Click a row to target it again**, or the x to drop it. A tag disappears when you untag it or when the mob dies, and one whose mob has been out of range for a while is dropped too. Up to eight at once. Drag the panel by its header to move it, or turn on Position mode where the whole thing is a handle and an example row shows even with nothing tagged — and it remembers where you put it, per profile like every other panel.
+
+### Changed
+
+- **The party rows have been rebuilt.** A job plate sits at the left of each row, the name moved up onto its own line, and the job / subjob text is gone — the plate says it. The bars run the full width underneath, with MP and TP sharing a line beneath HP. The row is a good deal narrower and somewhat taller than before, which is the trade that gives the status icons room to sit two rows deep instead of one. HP takes the height MP and TP gave up, because it is the one you act on, and TP is notched at 1000 and 2000 so a weaponskill coming up is something you see rather than a number you read. The bars pick up rounded ends and a highlight along the top of the fill, TP flashes as it crosses 1000 so a weaponskill coming up is something you catch out of the corner of your eye, and a pet gets a small orange strip above its name showing its health at a glance. Long character and pet names are trimmed to their space instead of running into the status icons. **Drop your own job icons into `icons/jobs/` as `WHM.png` and so on and they replace the lettered plates.** Buffs and debuffs share one full-width section instead of two narrow columns — buffs along the top line, debuffs underneath — so twice as many fit per line and neither side wastes the other's width. Worth a pass through Position mode after updating, since the rows changed shape.
+
+### Fixed
+
+- **“Save layout to all profiles” now carries the second window.** Panels moved into the second window came home again on the next profile switch: the layout push copied where they sat, but whether the window was open lived with the settings, which the push deliberately leaves alone — so every other profile opened with one window and nothing to put them in. The window's existence travels with the arrangement now, alongside its position and size.
+
+- **Replacement status icon sets are picked up.** Icons were only ever loaded as `.bmp`, and the community icon packs — the ones that colour code bard songs and Corsair rolls, which the game itself draws with one shared image — ship as PNG. Dropping a set into `icons/status/` left every cell showing its two-letter fallback badge instead. Both formats are read now, PNG first, so a set you installed wins over the icons extracted from the game.
+
+- **Item icons are correct again.** A client patch changed the size of an item record in the game's data files from 3072 to 5120 bytes, so every tool reading them — including this one and the extractor it shares with other addons — was decoding the wrong region. Icons already on disk kept working, which is why it only showed up for gear you had never equipped before, or after clearing the icon folder. OmniWatch now reads the icons itself and checks each record really holds the item it asked for.
+
+- **Alliance panels stay where you put them.** Dragging one toward the right of the screen made it jump back part-way, or across to the other window. A safety clamp was reserving the width of a PARTY row for every panel, so an alliance list — less than half as wide — was pulled back several hundred pixels short of the edge.
+
+- **Panels in the second window are bounded by that window**, not by the first one. Dragging one could previously fling it across the divide.
+
+- **Scrolling works in the second window.** Wheel events carry no cursor position, so a scroll there was measured against the wrong window and missed whatever was under the pointer — the warp menu, the chat panel, the cheat sheet.
+
+- **Menus and popovers open in the window you called them from**, and stay there while you use them. The warp menu, cheat sheet, Support Helper, BLU and Trust set windows, and the floating buttons. Settings dialogs still centre in the main window.
+
+- **Clicking a hotbar slot in the second window no longer drags your screen back to the first.** Keyboard focus follows the window you clicked in.
+
+- **Hotbar page names keep leading spaces**, so titles can be indented to line up across bars.
+
+- Timer text on the buff and recast panels is white with a shadow rather than tinted like the bar it sits on, which made it unreadable on the paler colours.
+
+
 ## [1.12.3] — 2026-09-01
 
 ### Added

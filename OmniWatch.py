@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.12.3 (2026-09-01)"
+OMNIWATCH_BUILD_STAMP = "v1.13.0 (2026-09-09)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.12.3"
+OMNIWATCH_VERSION = "1.13.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -790,6 +790,14 @@ if sys.platform == "win32":
 # vars, and it has to be in place before the window exists.
 os.environ.setdefault("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1")
 
+# This process sets PER_MONITOR_AWARE_V2 itself (see the DPI block
+# above), so SDL must not apply a scaling factor of its own on top: with
+# it on, Window.size is in scaled units and the window comes out smaller
+# than the monitor rect we asked for, leaving an unpainted strip down the
+# side in full screen. set_mode never had this problem because it sized
+# the window through a different path. 0 = sizes are physical pixels.
+os.environ.setdefault("SDL_WINDOWS_DPI_SCALING", "0")
+
 
 pygame.init()
 
@@ -858,6 +866,7 @@ try:
                 except Exception:
                     pass
                 pygame.display.set_icon(icon)
+                _ow_icon_surface = icon
                 print(f"[OmniWatch] Set window icon from: {_icon_path}")
                 _icon_loaded = True
                 break
@@ -869,6 +878,961 @@ try:
 except Exception as e:
     print(f"[OmniWatch] window icon load failed: {e!r}")
 
+# ── Canvas / viewport layer ─────────────────────────────────────────────
+# Every panel in OmniWatch draws onto ONE surface. Until now that surface
+# WAS the OS window surface returned by set_mode, which is why "which
+# monitor is this panel on" has never been an answerable question: one
+# window means one screen.
+#
+# `screen` is now an offscreen CANVAS; `display_surface` is the surface of
+# the OS window (a pygame._sdl2 Window as of phase 2a).
+# _present() copies the canvas into the window once per frame. With a
+# single viewport sitting at the canvas origin the result is identical to
+# before -- deliberately so, this phase changes plumbing only. What it
+# buys is that the canvas is no longer tied to one window: a second window
+# can later present a DIFFERENT rect of the same canvas, and not one line
+# of drawing code has to know it happened.
+#
+# THREE SEAMS ARE INTRODUCED HERE AND ARE IDENTITY FUNCTIONS FOR NOW.
+# They exist so that adding the second window is a change in one place
+# each rather than a sweep through 90-odd call sites all over again:
+#   _mouse_pos()          cursor in canvas coords   (82 sites swept)
+#   _event_to_canvas(ev)  event.pos in canvas coords
+#   _ow_hwnd(name)        HWND of a NAMED window    (9 sites swept)
+# PHASE 2a: the window is now a pygame._sdl2 SURFACE window rather than
+# the display module's set_mode window. Surface-based (Window.get_surface
+# + Window.flip), NOT renderer-based -- a renderer would mean a texture
+# upload per frame, and a software window surface is both cheaper and a
+# closer match to what set_mode was doing all along.
+#
+# THE ONE NON-OBVIOUS CONSTRAINT: Surface.convert() / .convert_alpha()
+# need a convert format, which set_mode used to establish. Without a
+# display surface they raise "No convert format has been set". Calling
+# Window.get_surface() ONCE sets it, so _set_display_mode must run before
+# any convert in this file -- which it does, since it is called at import
+# and the icon load below already guards its own convert with
+# `except pygame.error`.
+from pygame._sdl2 import video as _sdl2video
+
+# Captions must be unique: _ow_hwnd resolves a window's HWND by title.
+OW_WINDOW_CAPTIONS = {"main": "OmniWatch", "desk": "OmniWatch Desk"}
+_ow_windows = {}
+_ow_hwnd_cache = {}
+_VIEWPORTS = {"main": [0, 0, 0, 0]}
+_MOUSE_WINDOW = "main"
+
+# ── The desk window (phase 2b) ──────────────────────────────────────────
+# A SECOND OS window showing a different rect of the same canvas. Panels
+# are not assigned to it: drag one past the right edge of the main window
+# and it is in the desk viewport, because that is where it now sits on the
+# canvas. Which means profiles, setup mode, panel_anchors and every drag
+# path keep working with no idea that a second window exists.
+#
+# Borderless like the main window (he asked for it after the first live
+# run), so it gets the same handling: SHIFT+drag anywhere to move it, and
+# its own resize grip in its bottom-right corner. It is still a separate
+# HWND, so Task View can still put it on another virtual desktop.
+OW_DESK_MIN_W = 240
+OW_DESK_MIN_H = 200
+_desk_on = False
+# Set by load_layout, applied by _apply_window_geometry. The two are
+# separated on purpose: a profile switch reloads the SETTINGS after the
+# layout, so opening the window inside load_layout would be undone a
+# moment later by the destination profile's own second_window value.
+# Geometry runs last in that sequence, which is where this has to land.
+_desk_pending = None
+# Full-screen state from the layout, applied once the window exists.
+_desk_fs_pending = None
+_desk_size = [640, 760]
+_desk_pos = [None, None]
+_desk_warned = False
+
+
+def _desk_enabled():
+    return bool(_desk_on and _ow_windows.get("desk") is not None)
+
+
+def _viewport_containing(x, y):
+    """Which viewport a canvas point falls in. Ties go to main."""
+    vp = _VIEWPORTS.get("main")
+    if vp and vp[0] <= x < vp[0] + vp[2] and vp[1] <= y < vp[1] + vp[3]:
+        return "main"
+    for name, vp in _VIEWPORTS.items():
+        if name == "main":
+            continue
+        if vp[0] <= x < vp[0] + vp[2] and vp[1] <= y < vp[1] + vp[3]:
+            return name
+    return "main"
+
+
+def _rebuild_canvas():
+    """Size the canvas to hold every viewport and lay the viewports out.
+
+    The desk viewport is placed to the RIGHT of the main one in canvas
+    space. That has nothing to do with where its window sits on your
+    desk -- the two mappings are independent, which is why this survives
+    virtual desktops when one wide window does not.
+    """
+    global screen
+    mw, mh = int(WIDTH), int(HEIGHT)
+    _VIEWPORTS["main"] = [0, 0, mw, mh]
+    if _desk_on and _ow_windows.get("desk") is not None:
+        dw = max(OW_DESK_MIN_W, int(_desk_size[0]))
+        dh = max(OW_DESK_MIN_H, int(_desk_size[1]))
+        _VIEWPORTS["desk"] = [mw, 0, dw, dh]
+        cw, ch = mw + dw, max(mh, dh)
+    else:
+        _VIEWPORTS.pop("desk", None)
+        cw, ch = mw, mh
+    cur = globals().get("screen")
+    if cur is None or cur.get_size() != (cw, ch):
+        try:
+            screen = pygame.Surface((cw, ch)).convert()
+        except pygame.error:
+            screen = pygame.Surface((cw, ch), 0, 32)
+    return screen
+
+
+def _open_desk_window():
+    """Create the desk window. Safe to call when it already exists."""
+    global _desk_on, _desk_warned
+    if _ow_windows.get("desk") is not None:
+        _desk_on = True
+        _rebuild_canvas()
+        return True
+    # An orphan from a previous close would sit behind the new window
+    # showing a frozen frame. Clear it before making another.
+    _verify_window_gone("desk")
+    try:
+        dw = max(OW_DESK_MIN_W, int(_desk_size[0]))
+        dh = max(OW_DESK_MIN_H, int(_desk_size[1]))
+        win = _sdl2video.Window(OW_WINDOW_CAPTIONS["desk"],
+                                size=(dw, dh), borderless=True)
+        icon = globals().get("_ow_icon_surface")
+        if icon is not None:
+            try:
+                win.set_icon(icon)
+            except Exception:
+                pass
+        if _desk_pos[0] is not None and _desk_pos[1] is not None:
+            try:
+                win.position = (int(_desk_pos[0]), int(_desk_pos[1]))
+            except Exception:
+                pass
+        _ow_windows["desk"] = win
+        _ow_hwnd_cache.pop("desk", None)
+        _desk_on = True
+        _rebuild_canvas()
+        # Same focus contract as the main window: it can be clicked but
+        # it never takes the keyboard off the game.
+        _desk_apply_flags()
+        print("[OmniWatch] desk window opened (%dx%d)" % (dw, dh))
+        return True
+    except Exception as e:
+        _desk_on = False
+        if not _desk_warned:
+            _desk_warned = True
+            print(f"[OmniWatch] could not open the desk window: {e!r}")
+        _rebuild_canvas()
+        return False
+
+
+_desk_fs_rect = None      # (x, y, w, h) saved while full-screen
+_desk_menu_open = False
+_desk_menu_rects = []
+_desk_gear_rect = None
+
+
+def _monitor_rect_for(hwnd):
+    """(x, y, w, h) of the monitor a window is on, or None. Separate
+    from the main window's copy on purpose: that one is entangled with
+    the restore-rect bookkeeping for the main window."""
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _MI(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD),
+                        ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD)]
+
+        u32 = ctypes.windll.user32
+        hmon = u32.MonitorFromWindow(wintypes.HWND(hwnd), 2)  # NEAREST
+        if not hmon:
+            return None
+        mi = _MI()
+        mi.cbSize = ctypes.sizeof(_MI)
+        if not u32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return None
+        r = mi.rcMonitor
+        return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+    except Exception as e:
+        print(f"[OmniWatch] _monitor_rect_for: {e!r}")
+        return None
+
+
+def _desk_fullscreen_on():
+    return _desk_fs_rect is not None
+
+
+def _desk_set_fullscreen(on):
+    """Fill (or stop filling) the monitor the desk window is on.
+
+    Its own restore rect, because the desk window and the main window
+    can be full-screen on different monitors at the same time -- which
+    is the whole point of having two.
+    """
+    global _desk_fs_rect
+    win = _ow_windows.get("desk")
+    if win is None:
+        return False
+    if bool(on) == (_desk_fs_rect is not None):
+        return True
+    try:
+        if on:
+            pos = _desk_window_pos() or [0, 0]
+            mon = _monitor_rect_for(_ow_hwnd("desk"))
+            if mon is None:
+                return False
+            _desk_fs_rect = (int(pos[0]), int(pos[1]),
+                             int(_desk_size[0]), int(_desk_size[1]))
+            mx, my, mw, mh = mon
+            _desk_size[0], _desk_size[1] = mw, mh
+            win.size = (mw, mh)
+            win.position = (mx, my)
+        else:
+            x, y, w, h = _desk_fs_rect
+            _desk_fs_rect = None
+            _desk_size[0], _desk_size[1] = w, h
+            win.size = (w, h)
+            win.position = (x, y)
+        _rebuild_canvas()
+        # Neither size nor position clears an extended style on an
+        # _sdl2 window, but colorkey is worth re-asserting after the
+        # surface behind it changes size.
+        _desk_apply_flags()
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] desk full-screen failed: {e!r}")
+        return False
+
+
+def _desk_apply_flags():
+    """Push the desk window's own appearance settings onto its HWND."""
+    if _ow_windows.get("desk") is None:
+        return
+    try:
+        _apply_always_on_top(bool(setting("desk_on_top")), "desk")
+    except Exception:
+        pass
+    try:
+        _apply_transparent_background(bool(setting("desk_transparent")),
+                                      "desk")
+    except Exception:
+        pass
+    try:
+        _apply_no_activate(bool(setting("no_focus_steal")), "desk")
+    except Exception:
+        pass
+
+
+def _desk_reassert_size():
+    """Put the desk window back to the size OmniWatch believes in."""
+    win = _ow_windows.get("desk")
+    if win is None:
+        return
+    want = (max(OW_DESK_MIN_W, int(_desk_size[0])),
+            max(OW_DESK_MIN_H, int(_desk_size[1])))
+    try:
+        if tuple(win.size) != want:
+            win.size = want
+    except Exception:
+        pass
+    _rebuild_canvas()
+
+
+def _verify_window_gone(which):
+    """Make sure a window we destroyed is actually off the screen.
+
+    A destroy that quietly fails leaves an ORPHAN: a window still
+    painted with its last frame, no longer in _ow_windows, so nothing
+    repaints it and nothing closes it. On screen that is a second copy
+    of whatever it was showing — a duplicate party panel, or the hotbars
+    from the profile you just left — while every internal report says
+    the state is correct, because it is. The canvas moved on; that
+    window did not.
+
+    Falls back to asking Windows to close it. Never raises.
+    """
+    try:
+        import ctypes
+        cap = OW_WINDOW_CAPTIONS.get(which)
+        if not cap:
+            return
+        u32 = ctypes.windll.user32
+        hwnd = u32.FindWindowW(None, cap)
+        if not hwnd:
+            return
+        print(f"[OmniWatch] {which} window survived destroy "
+              f"(hwnd={hwnd}) — closing it directly")
+        u32.SendMessageW(hwnd, 0x0010, 0, 0)   # WM_CLOSE
+        if u32.FindWindowW(None, cap):
+            print(f"[OmniWatch] *** {which} window is ORPHANED: still on "
+                  "screen and no longer ours. It will show a frozen copy "
+                  "of whatever it last drew.")
+    except Exception as e:
+        print(f"[OmniWatch] verify {which} window: {e!r}")
+
+
+def _close_desk_window():
+    """Close the desk window and bring the canvas back to one viewport.
+
+    Panels whose anchor names the desk viewport fall back to main (see
+    resolve_anchor), so nothing is stranded off-canvas.
+    """
+    global _desk_on, _desk_fs_rect, _desk_menu_open
+    _desk_menu_open = False
+    if _desk_fs_rect is not None:
+        # Put the saved size back so the layout records the windowed
+        # box, not a monitor.
+        _desk_size[0], _desk_size[1] = _desk_fs_rect[2], _desk_fs_rect[3]
+        _desk_pos[0], _desk_pos[1] = _desk_fs_rect[0], _desk_fs_rect[1]
+        _desk_fs_rect = None
+    win = _ow_windows.pop("desk", None)
+    _ow_hwnd_cache.pop("desk", None)
+    _desk_on = False
+    if win is not None:
+        try:
+            _desk_pos[0], _desk_pos[1] = tuple(win.position)
+        except Exception:
+            pass
+        try:
+            win.destroy()
+            _verify_window_gone("desk")
+        except Exception:
+            pass
+    _rebuild_canvas()
+
+
+def _viewport_origin(name=None):
+    """Canvas-space top-left of a window's viewport."""
+    vp = _VIEWPORTS.get(name or _MOUSE_WINDOW) or _VIEWPORTS["main"]
+    return (vp[0], vp[1])
+
+
+def _mouse_pos():
+    """Cursor position in CANVAS coordinates.
+
+    pygame.mouse.get_pos() is WINDOW-relative and so starts lying the
+    moment a second window exists. Every hover test, tooltip, drag and
+    hit-test in this file asks here instead.
+    """
+    mx, my = pygame.mouse.get_pos()
+    ox, oy = _viewport_origin()
+    return (mx + ox, my + oy)
+
+
+def _event_to_canvas(event):
+    """Translate a mouse event's .pos into canvas coordinates.
+
+    Reads event.window, finds that window's viewport and returns a NEW
+    event with the offset applied -- so the whole event chain below keeps
+    seeing canvas coordinates and never learns that windows exist. The
+    probe confirmed event.window is populated on this pygame build, so no
+    cursor hit-test fallback is needed.
+
+    A mouse event also records WHICH window the cursor is in, because
+    _mouse_pos() has no event to consult and would otherwise offset by
+    the wrong viewport.
+    """
+    global _MOUSE_WINDOW
+
+    def _win_name(ev):
+        w = getattr(ev, "window", None)
+        if w is None:
+            return None
+        wid = getattr(w, "id", None)
+        for key, win in _ow_windows.items():
+            if win is not None and getattr(win, "id", None) == wid:
+                return key
+        return None
+
+    if not hasattr(event, "pos"):
+        # A WHEEL event carries no position but DOES carry its window,
+        # and it still has to record where the cursor is: _mouse_pos()
+        # has no event to consult, so without this a scroll offsets by
+        # whichever viewport the last mouse MOVE was in. Scroll a menu
+        # in the second window without moving the pointer first and
+        # every hit test misses it.
+        _wn = _win_name(event)
+        if _wn:
+            _MOUSE_WINDOW = _wn
+        return event
+    # An event that does not identify its window keeps the LAST KNOWN
+    # one rather than defaulting to main. Defaulting was a 1920-pixel
+    # lie: a motion event in the desk window with no window attached
+    # was translated with no offset, so the panel being dragged jumped
+    # a full screen to the left for that frame and back on the next.
+    # Mid-drag, and worst when the desk window is full screen and
+    # generating the most motion events.
+    name = _win_name(event) or _MOUSE_WINDOW or "main"
+    _MOUSE_WINDOW = name
+    vp = _VIEWPORTS.get(name)
+    if not vp or (not vp[0] and not vp[1]):
+        return event
+    try:
+        d = dict(event.dict)
+        d["pos"] = (event.pos[0] + vp[0], event.pos[1] + vp[1])
+        return pygame.event.Event(event.type, d)
+    except Exception:
+        return event
+
+
+def _ow_hwnd(name="main"):
+    """HWND of a named OmniWatch window, or 0 if it cannot be had.
+
+    pygame._sdl2 does not expose SDL_GetWindowWMInfo, so this resolves by
+    the window's caption, which is why every window gets a unique one.
+    Cached, because this is on the path of always-on-top, opacity and the
+    transparent-background reapply. get_wm_info stays as the fallback so
+    nothing breaks if the display module ever owns a window again.
+    """
+    if sys.platform != "win32":
+        return 0
+    cached = _ow_hwnd_cache.get(name) or 0
+    try:
+        import ctypes
+        u32 = ctypes.windll.user32
+        if cached and u32.IsWindow(ctypes.c_void_p(cached)):
+            return cached
+        cap = OW_WINDOW_CAPTIONS.get(name)
+        if cap:
+            u32.FindWindowW.restype = ctypes.c_void_p
+            u32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+            h = u32.FindWindowW(None, cap) or 0
+            if h:
+                _ow_hwnd_cache[name] = h
+                return h
+    except Exception:
+        pass
+    try:
+        info = pygame.display.get_wm_info()
+        return info.get("window") or info.get("hwnd") or 0
+    except Exception:
+        return 0
+
+
+def _canvas():
+    """The surface panels draw onto. NOT the OS window surface."""
+    return globals().get("screen")
+
+
+def _drag_edge_for(pw):
+    """Right-hand limit for dragging a panel `pw` wide.
+
+    Clamped to the viewport the PANEL IS IN, captured when the drag
+    started — not to wherever the cursor happens to be. _drag_right()
+    answers for the cursor's window, so dragging a panel that lives in
+    the desk window would be clamped to the MAIN window's right edge:
+    1920 on a full-screen main, which is off the left side of the desk
+    viewport. The panel shot across the seam while the user was nowhere
+    near an edge.
+
+    Crossing on purpose still works — the whole canvas is allowed then.
+    """
+    if _drag_view_shift:
+        return _drag_right() - GRIP_VISIBLE
+    home = globals().get("_drag_home_view")
+    vp = _VIEWPORTS.get(home) if home else None
+    if not vp:
+        edge = _drag_right()
+        return edge - (max(GRIP_VISIBLE, pw // 2 + 1)
+                       if _desk_enabled() else GRIP_VISIBLE)
+    # Whole panel inside its own viewport. Half-out is what let the
+    # midpoint decide the anchor belonged to the neighbouring window.
+    return vp[0] + vp[2] - pw
+
+
+def _drag_left_for(pw):
+    """Left-hand limit, by the same rule."""
+    if _drag_view_shift:
+        return GRIP_VISIBLE - pw
+    home = globals().get("_drag_home_view")
+    vp = _VIEWPORTS.get(home) if home else None
+    if not vp:
+        return GRIP_VISIBLE - pw
+    return vp[0]
+
+
+def _drag_right():
+    """Right-hand limit for a panel drag.
+
+    The canvas only while the drag is genuinely headed for the desk
+    window -- i.e. the cursor is IN it, or TAB has been pressed. With the
+    cursor in the main window the limit is the main window, exactly as it
+    was before there was a second one, so nudging a panel against the
+    right edge can no longer post it through to the other screen.
+    """
+    cv = globals().get("screen")
+    if (_desk_enabled() and cv is not None
+            and (_drag_view_shift or _MOUSE_WINDOW == "desk")):
+        return cv.get_width()
+    return WIDTH
+
+
+def _view_keep_x(x, w):
+    """Keep a panel's x inside the viewport it is in, per frame.
+
+    Distinct from _drag_right(), which governs whether a DRAG may cross
+    into the desk window and so deliberately stays at the main window's
+    edge until the cursor goes over there. This one runs on every frame
+    for a panel that is already placed, so it has to respect where the
+    panel actually lives -- otherwise a panel moved into the desk window
+    is clamped back to the main window's right edge the very next frame,
+    which is precisely what it looks like when a panel "won't keep its
+    position".
+
+    The viewport is chosen by the panel's midpoint, the same test
+    anchor_for_pos uses, so the clamp and the anchor can never disagree
+    about which window a panel is in. GRIP_VISIBLE of overhang off the
+    left edge is preserved, as before.
+    """
+    vp = _view_bounds_at(int(x) + max(1, int(w) // 2), 1)
+    return max(vp[0] + GRIP_VISIBLE - w,
+               min(int(x), vp[0] + vp[2] - GRIP_VISIBLE))
+
+
+def _view_keep_y(y, h=0, x=0):
+    """As _view_keep_x. The main window reserves room for the header
+    strip (layout_top/layout_bottom); the desk window has no header, so
+    it uses its own edges.
+
+    `h` is optional and only nudges the probe point: the two viewports
+    sit side by side and share a y origin, so it is x that decides which
+    window a panel is in. A party row has no fixed height to pass -- its
+    height is content-driven -- and the original clamp never used one
+    either, pinning the row's TOP rather than its bottom edge.
+    """
+    name = _viewport_containing(int(x) + 1, int(y) + max(1, int(h) // 2))
+    if name == "main":
+        return max(layout_top(), min(int(y), layout_bottom() - GRIP_VISIBLE))
+    vp = _VIEWPORTS[name]
+    return max(vp[1], min(int(y), vp[1] + vp[3] - GRIP_VISIBLE))
+
+
+def _ui_view_at(pos):
+    """The viewport a PANEL at `pos` lives in, as (x, y, w, h).
+
+    _ui_view() answers "where is the cursor NOW", which is right the
+    moment a popover opens and wrong for anything with a saved
+    position: a panel re-asking every frame gets clamped into whichever
+    window the pointer is over, so it appears to exist on both screens
+    at once and can only be dragged inside whichever one the cursor is
+    in. A panel belongs to the viewport its own position is in.
+
+    Falls back to the cursor's viewport before it has a position — the
+    first frame of a panel that has never been placed.
+    """
+    try:
+        if pos and len(pos) >= 2 and pos[0] is not None:
+            return tuple(_view_bounds_at(int(pos[0]), int(pos[1])))
+    except Exception:
+        pass
+    return _ui_view()
+
+
+def _view_bounds_at(x, y):
+    """The viewport rect a floating window at (x, y) belongs to.
+
+    Floating windows (Auction House, Craft, Scan Zone, the Loadouts
+    family, the treasure pool) size and clamp themselves against the
+    surface they are drawn on. That surface used to BE the window, so
+    the canvas silently became their idea of the screen the moment the
+    desk window opened -- which is why one would open centred across the
+    boundary between the two, half on each screen.
+    """
+    name = _viewport_containing(x, y)
+    return _VIEWPORTS.get(name) or _VIEWPORTS["main"]
+
+
+def _clamp_win_x(x, w):
+    """Clamp a floating window's x inside whichever viewport it is in."""
+    vp = _view_bounds_at(int(x) + 1, 1)
+    return max(vp[0], min(int(x), vp[0] + vp[2] - w))
+
+
+def _clamp_win_y(y, h, x=0):
+    vp = _view_bounds_at(int(x) + 1, int(y) + 1)
+    return max(vp[1], min(int(y), vp[1] + vp[3] - h))
+
+
+def _ui_screen():
+    """What a full-window UI element should treat as "the screen".
+
+    Modals, dialogs, banners and the floating buttons all centre or
+    clamp themselves against the surface they are handed. That surface
+    used to BE the window; it is now the canvas, so with the desk window
+    open every one of them centred across the boundary between the two
+    screens -- and a modal is not draggable, so there was no way to pull
+    it back. They belong on the main window, always.
+    """
+    return WIDTH, HEIGHT
+
+
+# Everything that can be mid-drag when the mouse button is released
+# somewhere we never hear about. Each is None when idle.
+_DRAG_STATE_GLOBALS = (
+    "dragging_key", "_borderless_drag", "_ow_window_resize", "hotbar_drag",
+    "_cs_drag", "_hb_editor_drag", "_stats_cell_drag", "sim_window_drag",
+    "sim_window_resize", "_cs_btn_drag", "_cs_btn_resize", "_ct_btn_drag",
+    "_ct_btn_resize", "_sing_btn_drag", "_sing_btn_resize", "_warp_btn_drag",
+    "_warp_btn_resize", "_warp_menu_drag", "_warp_confirm_drag", "_gsd_drag",
+    "_gsd_resize", "_pupatt_win_drag", "_brdset_win_drag", "_syn_drag_off",
+    "_craft_drag_off", "_pool_drag_off", "_alert_drag_off", "_fisher_drag_off",
+    "_tag_drag",
+)
+
+
+def _drag_in_flight():
+    g = globals()
+    return any(g.get(n) is not None for n in _DRAG_STATE_GLOBALS)
+
+
+def _real_mouse_down(event=None):
+    """Is a mouse button PHYSICALLY held, per Windows rather than SDL?
+
+    SDL's idea of the button state comes from the events it received,
+    and the second window does not always deliver the button-up
+    promptly. When it goes missing SDL keeps reporting the button held,
+    every MOUSEMOTION says pressed, and a drag started over there runs
+    on after you have let go — which is exactly what a panel moved to
+    the desk window does and one in the main window never did.
+
+    GetAsyncKeyState reads the hardware state and does not care which
+    window SDL thinks owns the mouse. Falls back to the event's own
+    button tuple off Windows, where this problem does not arise.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            gaks = ctypes.windll.user32.GetAsyncKeyState
+            # VK_LBUTTON / VK_RBUTTON / VK_MBUTTON
+            return any(gaks(vk) & 0x8000 for vk in (0x01, 0x02, 0x04))
+        except Exception:
+            pass
+    if event is not None:
+        return any(getattr(event, "buttons", (0, 0, 0)))
+    return True
+
+
+def _raise_window(name):
+    """Bring one of our windows to the front WITHOUT activating it.
+
+    No activation, so the game keeps the keyboard exactly as it does for
+    every other click. A window whose own always-on-top is set is raised
+    as topmost so raising cannot quietly clear that flag.
+    """
+    if sys.platform != "win32":
+        return
+    hwnd = _ow_hwnd(name)
+    if not hwnd:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        on_top = bool(setting("desk_on_top")) if name == "desk" \
+            else bool(setting("always_on_top"))
+        u32 = ctypes.windll.user32
+        u32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                     ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int,
+                                     wintypes.UINT]
+        u32.SetWindowPos(wintypes.HWND(hwnd),
+                         wintypes.HWND(-1 if on_top else 0),
+                         0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010)
+    except Exception as e:
+        print(f"[OmniWatch] _raise_window({name}): {e!r}")
+
+
+def _panel_pos_ref(key):
+    """The mutable [x, y] a panel's position lives in, or None.
+
+    Most panels are entries in panel_positions; a handful own a module
+    global instead. Both are lists, so a caller can shift either in
+    place without knowing which kind it has.
+    """
+    named = {
+        "__equip__": "equip_pos", "__stats__": "stats_pos",
+        "__target__": "target_pos", "__target_st__": "target_pos_st",
+        "__recast__": "recast_pos", "__buff__": "buff_pos",
+        "__dps__": "dps_pos", "__chat__": "chat_pos",
+        "__skillchain__": "skillchain_pos",
+    }
+    if key in named:
+        v = globals().get(named[key])
+        return v if isinstance(v, list) and len(v) >= 2 else None
+    v = panel_positions.get(key)
+    return v if isinstance(v, list) and len(v) >= 2 else None
+
+
+def _send_panel_to_other_window(hit):
+    """Move the panel under the cursor to the window it is not in.
+
+    It keeps its position WITHIN the viewport, so it lands in the same
+    place on the other screen rather than wherever the arithmetic puts
+    it. Committing the anchor immediately means the move survives even
+    if nothing else touches the layout afterwards.
+    """
+    vp = _VIEWPORTS.get("desk")
+    if not vp:
+        return False
+    kind, key, px, py, _mode, pw, ph, _scale = hit
+    pos = _panel_pos_ref(key)
+    if pos is None:
+        print(f"[OmniWatch] send-to-window: no position for {key!r}")
+        return False
+    here = _viewport_containing(int(pos[0]) + max(1, int(pw) // 2),
+                                int(pos[1]) + 1)
+    main = _VIEWPORTS.get("main") or [0, 0, WIDTH, HEIGHT]
+    dx = (vp[0] - main[0]) if here == "main" else (main[0] - vp[0])
+    pos[0] = int(pos[0]) + dx
+    pos[1] = int(pos[1])
+    pos[0] = _view_keep_x(pos[0], pw)
+    pos[1] = _view_keep_y(pos[1], ph, pos[0])
+    try:
+        _commit_panel_anchor(key, pos, pw, ph)
+    except Exception as e:
+        print(f"[OmniWatch] send-to-window anchor {key!r}: {e!r}")
+    _raise_window("desk" if here == "main" else "main")
+    try:
+        save_layout()
+    except Exception as e:
+        print(f"[OmniWatch] send-to-window save: {e!r}")
+    return True
+
+
+def _commit_panel_anchor(key, pos, pw, ph):
+    """Write the anchor for a panel that was just moved by hand."""
+    named = {
+        "__equip__": "equip_anchor", "__stats__": "stats_anchor",
+        "__target__": "target_anchor", "__target_st__": "target_anchor_st",
+        "__recast__": "recast_anchor", "__buff__": "buff_anchor",
+        "__dps__": "dps_anchor", "__chat__": "chat_anchor",
+        "__skillchain__": "skillchain_anchor",
+    }
+    a = anchor_for_pos(pos[0], pos[1], pw, ph, WIDTH, HEIGHT)
+    if key in named:
+        globals()[named[key]] = a
+    else:
+        panel_anchors[key] = a
+
+
+def _drag_toggle_window():
+    """Send the panel being dragged to the other window and back.
+
+    Shifts the DRAG, not the cursor: the panel moves across while the
+    mouse stays exactly where it is. That is the only thing that can
+    work in the two cases that matter -- the windows being on different
+    virtual desktops (the cursor cannot be in both), and the target
+    window sitting behind or on top of the one you are dragging in.
+    The destination is raised so you can see where the panel went.
+    """
+    global _drag_view_shift
+    vp = _VIEWPORTS.get("desk")
+    if not vp:
+        return
+    _drag_view_shift = 0 if _drag_view_shift else int(vp[0])
+    _raise_window("desk" if _drag_view_shift else "main")
+
+
+def _ui_view(win=None):
+    """The whole viewport rect, as (x, y, w, h).
+
+    `win` names a window and pins the answer to it. WITHOUT it the
+    answer follows the cursor, which is right at the moment something
+    opens and wrong every frame after: a popover asking each frame
+    where the cursor is now gets relocated the instant the pointer
+    leaves it, which reads as the panel vanishing and coming back. A
+    popover should capture the window it opened in and keep asking
+    about THAT one.
+
+
+    _ui_edge() gives only the far corner, which is enough to stop a
+    popup running off the right or bottom. A tooltip needs the near
+    corner too: its "don't go past the left edge" clamp was max(0, ...),
+    and 0 is the left edge of the MAIN window, so a tooltip raised over
+    in the desk window was pulled back across onto the main screen.
+    """
+    vp = (_VIEWPORTS.get(win) if win else None) \
+        or _VIEWPORTS.get(_MOUSE_WINDOW) or _VIEWPORTS["main"]
+    return tuple(vp)
+
+
+def _ui_edge():
+    """Right and bottom edge, in canvas coords, of the viewport the
+    CURSOR is in -- for popups that open where you clicked and so have
+    to stay inside whichever window that was. Identical to _ui_screen()
+    whenever the cursor is in the main window."""
+    vp = _VIEWPORTS.get(_MOUSE_WINDOW) or _VIEWPORTS["main"]
+    return vp[0] + vp[2], vp[1] + vp[3]
+
+
+_seam_font = None
+
+
+def _draw_viewport_seam(surface):
+    """Mark the boundary between viewports while in position mode.
+
+    The two viewports are never on screen together, so without this a
+    panel dragged off the right edge just disappears into a window you
+    may not be looking at.
+    """
+    global _seam_font
+    vp = _VIEWPORTS.get("desk")
+    if not vp:
+        return
+    if _seam_font is None:
+        try:
+            _seam_font = pygame.font.SysFont("Segoe UI", 15, bold=True)
+        except Exception:
+            _seam_font = pygame.font.Font(None, 18)
+    x = vp[0]
+    h = surface.get_height()
+    for i, col in ((0, (250, 210, 120)), (1, (90, 70, 30))):
+        pygame.draw.line(surface, col, (x - i, 0), (x - i, h), 1)
+    for label, lx, align_right in (
+            ("game overlay", x - 10, True),
+            ("desk window", x + 10, False),
+            ("drag a panel and RIGHT-CLICK to send it across",
+             x - 10, True)):
+        try:
+            img = _seam_font.render(label, True, (250, 210, 120))
+        except Exception:
+            return
+        px = lx - img.get_width() if align_right else lx
+        py = 6 if "window" in label or "overlay" in label else 32
+        bg = pygame.Surface((img.get_width() + 10, img.get_height() + 6))
+        bg.fill((26, 22, 12))
+        surface.blit(bg, (px - 5, py))
+        surface.blit(img, (px, py + 3))
+
+
+def _set_display_mode(w, h):
+    """Size the OS window and the canvas that feeds it, creating the
+    window on the first call.
+
+    Every former `screen = pygame.display.set_mode(...)` goes through
+    here so the two can never disagree about size. A mismatch would show
+    up as panels drawn off the bottom of the window after a resize or a
+    full-screen toggle, which is exactly the sort of thing that is
+    invisible until someone drags the grip.
+
+    Unlike set_mode, resizing an _sdl2 window does NOT clear the extended
+    window styles, so always-on-top / opacity / colorkey survive a resize
+    on their own. _reapply_window_flags() is now belt and braces.
+    """
+    global display_surface, WIDTH, HEIGHT
+    WIDTH, HEIGHT = int(w), int(h)
+    win = _ow_windows.get("main")
+    if win is None:
+        win = _sdl2video.Window(OW_WINDOW_CAPTIONS["main"], size=(w, h),
+                                borderless=True)
+        _ow_windows["main"] = win
+        icon = globals().get("_ow_icon_surface")
+        if icon is not None:
+            try:
+                win.set_icon(icon)
+            except Exception:
+                pass
+    elif tuple(win.size) != (w, h):
+        win.size = (w, h)
+        _ow_hwnd_cache.pop("main", None)
+    # Re-fetch every time: the window surface is invalidated by a resize.
+    display_surface = win.get_surface()
+    _report_size_mismatch(w, h, win, display_surface)
+    return _rebuild_canvas()
+
+
+_size_warned = None
+
+
+def _report_size_mismatch(w, h, win, surf):
+    """Log once when the size we asked for, the size SDL made and the
+    size Windows reports all fail to agree.
+
+    Three separate things have to line up: what we asked for, the
+    surface we paint into, and the client area the OS actually shows. If
+    the surface is smaller than the client area the difference is an
+    unpainted strip; if the client area is smaller than the monitor the
+    difference is a gap. Both look like "not quite full screen", and
+    without this there is nothing in the log to tell them apart.
+    """
+    global _size_warned
+    try:
+        sw, sh = surf.get_size()
+        try:
+            ww, wh = tuple(win.size)
+        except Exception:
+            ww, wh = sw, sh
+        cw = ch = -1
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+            hwnd = _ow_hwnd("main")
+            if hwnd:
+                rc = wintypes.RECT()
+                ctypes.windll.user32.GetClientRect(wintypes.HWND(hwnd),
+                                                   ctypes.byref(rc))
+                cw, ch = rc.right - rc.left, rc.bottom - rc.top
+        if (sw, sh) == (w, h) and (ww, wh) == (w, h) and (
+                cw < 0 or (cw, ch) == (w, h)):
+            return
+        key = (w, h, sw, sh, ww, wh, cw, ch)
+        if key == _size_warned:
+            return
+        _size_warned = key
+        print("[OmniWatch] window size mismatch: asked %dx%d, "
+              "sdl window %dx%d, surface %dx%d, client %dx%d"
+              % (w, h, ww, wh, sw, sh, cw, ch))
+    except Exception as e:
+        print(f"[OmniWatch] _report_size_mismatch: {e!r}")
+
+
+def _present():
+    """Push the canvas to the OS window and flip.
+
+    One blit per frame is the cost of the indirection. The canvas is
+    .convert()ed to the window format and carries no alpha, so this is a
+    straight copy rather than a per-pixel blend, and there is no texture
+    upload because the window is surface-based.
+    """
+    global _desk_warned
+    cv = globals().get("screen")
+    if cv is None:
+        return
+    for name, win in list(_ow_windows.items()):
+        vp = _VIEWPORTS.get(name)
+        if win is None or not vp:
+            continue
+        try:
+            surf = win.get_surface()
+            surf.blit(cv, (0, 0), pygame.Rect(vp[0], vp[1],
+                                              vp[2] or WIDTH,
+                                              vp[3] or HEIGHT))
+            win.flip()
+        except Exception as e:
+            if name == "desk":
+                if not _desk_warned:
+                    _desk_warned = True
+                    print(f"[OmniWatch] desk window present failed: {e!r}")
+                _close_desk_window()
+            else:
+                raise
+
+
 # Borderless from the first frame. v1.2.x supported toggling between
 # framed and borderless via Settings; v1.3.0 dropped that toggle and
 # OmniWatch is now always borderless. The OS [X] close button is gone
@@ -877,11 +1841,13 @@ except Exception as e:
 # with Shift+drag anywhere in the window — see the MOUSEBUTTONDOWN
 # handler in the main loop.
 #
-# We pass NOFRAME (no caption, no resize handles, no min/max/close
-# buttons) but NOT FULLSCREEN — the window is a normal application
+# The window is created borderless (no caption, no resize handles, no
+# min/max/close buttons) but NOT fullscreen — a normal application
 # window minus its decorations, so it still respects the taskbar,
-# Alt+Tab, and the user's existing window arrangement.
-screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
+# Alt+Tab, and the user's existing window arrangement. This was the
+# NOFRAME flag to set_mode before phase 2a; borderless=True on the
+# _sdl2 Window is the same thing.
+screen = _set_display_mode(WIDTH, HEIGHT)
 pygame.display.set_caption("OmniWatch")
 
 # Note: the previous build minimized the console window after launch
@@ -1362,8 +2328,7 @@ def _ow_get_window_pos():
     try:
         import ctypes
         from ctypes import wintypes
-        info = pygame.display.get_wm_info()
-        hwnd = info.get("window") or info.get("hwnd") or 0
+        hwnd = _ow_hwnd()
         if not hwnd:
             return None
         rect = wintypes.RECT()
@@ -1415,8 +2380,7 @@ def _ow_move_window(x, y):
     try:
         import ctypes
         from ctypes import wintypes
-        info = pygame.display.get_wm_info()
-        hwnd = info.get("window") or info.get("hwnd") or 0
+        hwnd = _ow_hwnd()
         if not hwnd:
             return False
         SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0001, 0x0004, 0x0010
@@ -1433,6 +2397,53 @@ def _ow_move_window(x, y):
         return False
 
 
+def _desk_window_pos():
+    """Live screen position of the desk window, or None. Read from the
+    window rather than tracked, since the OS frame lets it be dragged and
+    snapped without OmniWatch ever hearing about it."""
+    win = _ow_windows.get("desk")
+    if win is None:
+        return None
+    try:
+        pos = list(win.position)
+    except Exception:
+        return None
+    # Windows parks a window at -32000 when it is minimised or otherwise
+    # not composited, which a virtual-desktop switch can produce. Saving
+    # that would reopen the window somewhere unreachable next launch.
+    if pos[0] < -30000 or pos[1] < -30000:
+        return None
+    return pos
+
+
+def _apply_desk_pending():
+    """Open or close the desk window to match the loaded layout."""
+    global _desk_pending
+    want = _desk_pending
+    _desk_pending = None
+    if want is None:
+        return
+    try:
+        # Keep the setting in step, or the next toggle reads as a no-op
+        # because it still thinks the window is in the state the old
+        # profile left it in.
+        settings["second_window"] = bool(want)
+        if want:
+            _open_desk_window()
+            # Full screen AFTER the window exists, and only when the
+            # layout said something — an explicit False must be able to
+            # take it OUT of full screen too.
+            _fs = globals().get("_desk_fs_pending")
+            if _fs is not None:
+                globals()["_desk_fs_pending"] = None
+                _desk_set_fullscreen(bool(_fs))
+        else:
+            globals()["_desk_fs_pending"] = None
+            _close_desk_window()
+    except Exception as e:
+        print(f"[OmniWatch] desk window from layout: {e!r}")
+
+
 def _apply_window_geometry():
     """Resize and reposition the OS window to the loaded layout's saved
     values. Called at startup and after a profile switch. Does nothing while
@@ -1447,7 +2458,7 @@ def _apply_window_geometry():
                      or int(_windowed_size[1]) != HEIGHT)):
             WIDTH = max(OW_MIN_W, int(_windowed_size[0]))
             HEIGHT = max(OW_MIN_H, int(_windowed_size[1]))
-            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
+            screen = _set_display_mode(WIDTH, HEIGHT)
     except Exception as e:
         print(f"[OmniWatch] _apply_window_geometry (size): {e!r}")
     try:
@@ -6398,6 +7409,11 @@ _tc_measured_h  = {}
 # to show the buff name as a small tooltip when the cursor is over an
 # icon. Only populated when the "Compact icon grid" setting is on.
 _party_buff_icon_rects = []
+# (rect, scale key) per row, rebuilt every frame. The wheel resizes
+# whatever it is over, which needs no grip to hit and — unlike the
+# corner — cannot run away from the cursor when the row it is attached
+# to changes height.
+_scale_wheel_rects = []
 
 # Target card state. target_info is None when no target. last_target_time is
 # the wall-clock time of the most recent non-empty target packet, used for
@@ -6560,6 +7576,7 @@ _warp_btn_drag      = None    # click-or-drag state {grab_dx,..,moved}
 # relocating itself is worse than one in a spot you chose.
 warp_menu_pos       = None    # [x, y] once the user has dragged it
 _warp_menu_drag     = None    # {grab_dx, grab_dy}
+_warp_menu_win      = None    # window the menu was opened in
 # Same for the warp CONFIRM box, which is a second popover with the same
 # problem — it opens beside the anchor and lands on whatever is there.
 warp_confirm_pos    = None    # [x, y] once the user has dragged it
@@ -6847,6 +7864,7 @@ settings_menu_scroll  = 0       # vertical scroll offset (px). Reset on close.
 settings_menu_panel_rect = None # actual rendered panel rect, for wheel hit-test
 
 dragging_key    = None          # name string, "__equip__", or None
+_drag_view_shift = 0            # canvas-x added during a drag (TAB)
 drag_mode       = None          # "move" or "resize"
 drag_offset     = (0, 0)        # mouse offset from panel top-left at drag start
 drag_start_scale = 1.0          # scale at the moment resize started
@@ -6888,6 +7906,7 @@ def _overlay_blocks_point(pos):
 # Every window drawn AFTER the hotbar that records its own envelope under
 # a "panel" key. Read by name so a rename can't raise here.
 _LATER_PANEL_RECT_DICTS = (
+    "_tag_rects",
     "_alert_rects", "_pool_rects", "_ah_rects", "_craft_rects",
     "_syn_rects", "_fisher_rects", "_skillup_rects", "_sz_rects",
     # The GearSwap rows. This one already published its envelope and was
@@ -7012,6 +8031,19 @@ def _party_scale_key(key):
     """
     if not key:
         return key
+    # BEFORE the alliance pass-through below, or a1_/a2_ returns early
+    # and never reaches the stacked rule.
+    if setting("party_stacked"):
+        # A list has to line up, so every row in one reads and writes a
+        # single size entry — but the party and each alliance group get
+        # their OWN, so sizing one never touches the others. Per-slot
+        # sizes stay on disk untouched and come back the moment stacking
+        # is switched off.
+        if key.startswith("a1_"):
+            return ALLY_LIST_KEYS[0]
+        if key.startswith("a2_"):
+            return ALLY_LIST_KEYS[1]
+        return "p0"
     if key.startswith("a1_") or key.startswith("a2_"):
         return key
     if len(key) == 2 and key[0] == "p" and key[1].isdigit():
@@ -7057,6 +8089,11 @@ def _party_scale_apply(key, scale):
     # again and is forgotten the moment that member is replaced.
     key = _party_scale_key(key)
     panel_scales[key] = scale
+    if setting("party_stacked"):
+        # Each list already shares one key, so there is nothing to link
+        # — and linking ACROSS lists is exactly what "size alliance
+        # separately" is asking not to happen.
+        return
     if not setting("party_link_size") or not _is_party_key(key):
         return
     for k in _party_group_keys():
@@ -7615,6 +8652,16 @@ def draw_glow_text(surface, font, text, pos, color=(120, 190, 255),
 
 
 _font_cache = {}
+# Names read as names in a proportional face; the BARS stay monospace
+# so HP digits line up down the party, which is the only place the fixed
+# pitch was earning anything.
+UI_FACE = "Segoe UI,DejaVu Sans,Verdana,Arial"
+
+
+def get_ui_font(size, bold=False):
+    return get_font(UI_FACE, size, bold=bold)
+
+
 def get_font(name, size, bold=False, italic=False):
     size = max(6, int(size))
     key  = (name, size, bold, italic)
@@ -7628,6 +8675,32 @@ def get_font(name, size, bold=False, italic=False):
 # Each panel is pinned to the nearest window corner. Positions are stored as
 # (anchor, ox, oy) — offset from that corner — so they remain visually stable
 # across window resolutions.
+# Positions are CANVAS coordinates, and an anchor is relative to the
+# corner of the VIEWPORT the panel sits in -- tagged "tr@desk" when that
+# viewport is not the main one. A plain "tr" means main, so every layout
+# and profile written before the desk window existed reads unchanged, and
+# with the desk window off the arithmetic below is identical to what it
+# always was (main's origin is 0,0 and its size is the win_w/win_h the
+# caller passes). Anchoring per viewport rather than per canvas is what
+# stops enabling the second window from flinging right-anchored panels
+# across to the far edge.
+def _anchor_frame(name, win_w, win_h):
+    """(origin_x, origin_y, w, h) of the frame an anchor is measured in."""
+    if name == "main" or name not in _VIEWPORTS:
+        return 0, 0, win_w, win_h
+    vp = _VIEWPORTS[name]
+    return vp[0], vp[1], vp[2], vp[3]
+
+
+def _split_anchor(a):
+    if "@" in a:
+        base, name = a.split("@", 1)
+        if name in _VIEWPORTS:
+            return base, name
+        return base, "main"
+    return a, "main"
+
+
 def anchor_for_pos(x, y, pw, ph, win_w, win_h):
     """Given an absolute panel position + size and the window size, pick the
     closest corner and return [anchor, ox, oy] where ox/oy are offsets from
@@ -7635,24 +8708,31 @@ def anchor_for_pos(x, y, pw, ph, win_w, win_h):
     # Midpoints of the panel, to decide which half of the window it's in.
     cx = x + pw / 2
     cy = y + ph / 2
-    horiz = "l" if cx < win_w / 2 else "r"
-    vert  = "t" if cy < win_h / 2 else "b"
+    name = _viewport_containing(cx, cy)
+    fx, fy, fw, fh = _anchor_frame(name, win_w, win_h)
+    lx, ly = x - fx, y - fy
+    horiz = "l" if (cx - fx) < fw / 2 else "r"
+    vert  = "t" if (cy - fy) < fh / 2 else "b"
     anchor = vert + horiz
-    if   anchor == "tl": ox, oy = x,                y
-    elif anchor == "tr": ox, oy = win_w - (x + pw), y
-    elif anchor == "bl": ox, oy = x,                win_h - (y + ph)
+    if   anchor == "tl": ox, oy = lx,                ly
+    elif anchor == "tr": ox, oy = fw - (lx + pw),    ly
+    elif anchor == "bl": ox, oy = lx,                fh - (ly + ph)
     else: # br
-        ox, oy = win_w - (x + pw),                  win_h - (y + ph)
-    return [anchor, int(ox), int(oy)]
+        ox, oy = fw - (lx + pw),                     fh - (ly + ph)
+    tag = anchor if name == "main" else anchor + "@" + name
+    return [tag, int(ox), int(oy)]
 
 def resolve_anchor(anchor_tuple, pw, ph, win_w, win_h):
     """Inverse of anchor_for_pos — returns absolute (x, y)."""
     a, ox, oy = anchor_tuple
-    if   a == "tl": return ox,                oy
-    elif a == "tr": return win_w - pw - ox,   oy
-    elif a == "bl": return ox,                win_h - ph - oy
+    a, name = _split_anchor(a)
+    fx, fy, fw, fh = _anchor_frame(name, win_w, win_h)
+    if   a == "tl": lx, ly = ox,                oy
+    elif a == "tr": lx, ly = fw - pw - ox,      oy
+    elif a == "bl": lx, ly = ox,                fh - ph - oy
     else: # br
-        return win_w - pw - ox,               win_h - ph - oy
+        lx, ly = fw - pw - ox,                  fh - ph - oy
+    return lx + fx, ly + fy
 
 # Cache of loaded item icons, keyed by (item_id, size_px).
 # _icon_raw_cache stores the original surface; _icon_scaled_cache stores
@@ -7693,13 +8773,53 @@ def load_icon_surface(item_id):
     """
     if not item_id or item_id == 0:
         return None
+    path = _icon_path_existing(item_id) or _icon_paths(item_id)[1]
     cached = _icon_raw_cache.get(item_id)
     if cached is not None:
+        # A cached icon is re-checked against the FILE, at most every
+        # couple of seconds. The extractor writes these lazily while the
+        # overlay is running, so a read can land mid-write: pygame loads
+        # the partial file without complaint, and the garbage that comes
+        # out used to be cached for the rest of the session. Switching
+        # character makes that likely, because it asks for a whole set
+        # of icons that have never been extracted on this machine.
+        _st = _icon_file_stat.get(item_id)
+        if _st is not None and (time.time() - _st[2]) > 2.0:
+            try:
+                _now_st = os.stat(path)
+                if (_now_st.st_size, _now_st.st_mtime) != (_st[0], _st[1]):
+                    # The file changed under us — the extractor finished.
+                    _icon_raw_cache.pop(item_id, None)
+                    _icon_file_stat.pop(item_id, None)
+                    for _k in [k for k in _icon_scaled_cache
+                               if k[0] == item_id]:
+                        _icon_scaled_cache.pop(_k, None)
+                    cached = None
+                else:
+                    _icon_file_stat[item_id] = (_st[0], _st[1], time.time())
+            except OSError:
+                pass
+    if cached is not None:
         return cached
-    path = os.path.join(ICON_DIR, f"{item_id}.bmp")
-    if not os.path.isfile(path):
-        _icon_missing_ids.add(item_id)
-        request_icon_extract(item_id)
+    # OUR COPY OR A FRESH EXTRACTION — never the addon's, unless we
+    # cannot produce one. The addon still reads with the old 0xC00
+    # stride, so the files it writes are wrong; and because a file
+    # existing anywhere used to count as "found", one of those blocked
+    # the good extraction from ever running for that id.
+    _ours = os.path.join(ICON_DIR_RW, f"{int(item_id)}.bmp")
+    if os.path.isfile(_ours):
+        path = _ours
+    else:
+        _made = extract_item_icon(item_id)
+        if _made and os.path.isfile(_made):
+            path = _made
+        elif not os.path.isfile(path):
+            _icon_missing_ids.add(item_id)
+            request_icon_extract(item_id)
+            return None
+    if not _bmp_looks_complete(path):
+        # Half-written. Say nothing and try again next frame rather than
+        # caching a corrupt image.
         return None
     try:
         surf = pygame.image.load(path).convert_alpha()
@@ -7711,6 +8831,11 @@ def load_icon_surface(item_id):
         _icon_missing_ids.add(item_id)
         return None
     _icon_raw_cache[item_id] = surf
+    try:
+        _s = os.stat(path)
+        _icon_file_stat[item_id] = (_s.st_size, _s.st_mtime, time.time())
+    except OSError:
+        pass
     # Successful load — if this id was previously marked missing (icon
     # arrived mid-session), drop it from the miss set so the banner
     # accurately reflects current state.
@@ -7721,6 +8846,96 @@ def load_icon_surface(item_id):
 # cheap but the DAT read is not, so ask once per id and let the existing
 # "don't cache misses" rule pick the file up on a later frame.
 _icon_requested_ids = set()
+_icon_badge_rect = None     # the "icons missing" badge, clickable
+# item id -> (file size, mtime, when we last checked)
+_icon_file_stat = {}
+
+
+def _bmp_looks_complete(path):
+    """True when a .bmp on disk is whole.
+
+    A BMP header states the file's total size in bytes at offset 2. If
+    what is on disk is shorter, the extractor is still writing it —
+    pygame will load it anyway and hand back a surface of noise.
+    """
+    try:
+        actual = os.path.getsize(path)
+        if actual < 54:                      # smaller than the header
+            return False
+        with open(path, "rb") as fh:
+            head = fh.read(6)
+        if head[:2] != b"BM":
+            return True                      # not a BMP; let pygame judge
+        declared = int.from_bytes(head[2:6], "little")
+        return declared <= actual
+    except Exception:
+        return True
+
+
+def reextract_icon(item_id):
+    """Throw away one icon file and ask for it again."""
+    try:
+        item_id = int(item_id)
+    except (TypeError, ValueError):
+        return False
+    if not item_id:
+        return False
+    existed = blocked = False
+    for _p in _icon_paths(item_id):
+        try:
+            if os.path.isfile(_p):
+                os.remove(_p)
+                existed = True
+        except OSError:
+            # Program Files. Not fatal: the new copy lands in the
+            # writable folder, which is read first, so it shadows this
+            # one rather than needing to replace it.
+            blocked = True
+    _icon_raw_cache.pop(item_id, None)
+    _icon_file_stat.pop(item_id, None)
+    for _k in [k for k in _icon_scaled_cache if k[0] == item_id]:
+        _icon_scaled_cache.pop(_k, None)
+    _icon_requested_ids.discard(item_id)
+    _icon_missing_ids.discard(item_id)
+    made = extract_item_icon(item_id)
+    if not made:
+        request_icon_extract(item_id)
+    print(f"[OmniWatch] re-extracting icon {item_id}"
+          f"{' from the DATs' if made else ' via the addon'}"
+          f"{'' if existed else ' (no file was on disk)'}"
+          f"{' — the read-only copy will be shadowed' if blocked else ''}")
+    return True
+
+
+def reextract_equipped_icons():
+    """Delete the .bmp for everything currently worn and ask again.
+
+    The truncation guard above catches a file caught mid-write, but a
+    file that was written BADLY — valid bmp, wrong pixels — looks
+    perfectly fine to every check there is. The only cure is to throw it
+    away and have the extractor produce it again, which is what this
+    does for the sixteen slots on screen.
+    """
+    gone = 0
+    for _id in list(equip_data or []):
+        if not _id:
+            continue
+        _p = os.path.join(ICON_DIR, f"{int(_id)}.bmp")
+        try:
+            if os.path.isfile(_p):
+                os.remove(_p)
+                gone += 1
+        except OSError as e:
+            print(f"[OmniWatch] could not remove {_p}: {e!r}")
+        _icon_raw_cache.pop(_id, None)
+        _icon_file_stat.pop(_id, None)
+        for _k in [k for k in _icon_scaled_cache if k[0] == _id]:
+            _icon_scaled_cache.pop(_k, None)
+        _icon_requested_ids.discard(_id)
+        request_icon_extract(_id)
+    print(f"[OmniWatch] re-extracting {gone} equipment icon(s); they will "
+          "reappear over the next few seconds")
+    return gone
 
 
 def request_icon_extract(item_id):
@@ -7900,6 +9115,24 @@ def get_trust_portrait_scaled(rel_path, w, h):
 
 # Size of the corner resize grip in pixels (visual + hit target).
 RESIZE_GRIP = 14
+# Resize gain: how much of the cursor's travel becomes scale change.
+# A grip on a 200px-wide alliance row moved 1:1 changes its size by half
+# a percent per pixel, which is impossible to land on a round number.
+RESIZE_GAIN = 0.85
+
+
+def _resize_scale(start_scale, start_w, target_w):
+    """Scale for a resize drag, damped and settled to 1% steps.
+
+    Damped because the raw ratio makes a narrow panel violently
+    sensitive, and quantised because a scale that never repeats a value
+    cannot be matched between two panels by eye.
+    """
+    raw = target_w / max(1, start_w)
+    eased = 1.0 + (raw - 1.0) * RESIZE_GAIN
+    return round(start_scale * eased, 2)
+
+
 MIN_SCALE   = 0.5
 MAX_SCALE   = 2.5
 
@@ -8036,6 +9269,37 @@ class _MBSkip(Exception):
     silently by each gated recv's handler."""
     pass
 
+def _mb_report_streams(why=""):
+    """Which senders each labelled stream has actually heard from."""
+    try:
+        tgt = _mb_lock_target()
+        print(f"[OmniWatch][mb] locked to {tgt!r}{(' — ' + why) if why else ''}")
+        if not _mb_seen_by_stream:
+            print("[OmniWatch][mb] no tagged packets seen on any labelled "
+                  "stream yet")
+            return
+        for name in sorted(_mb_seen_by_stream):
+            print(f"[OmniWatch][mb]   {name}: "
+                  f"{dict(_mb_seen_by_stream[name])}")
+    except Exception as e:
+        print(f"[OmniWatch][mb] stream report: {e!r}")
+
+
+def _request_full_resend():
+    """Tell every connected lua to resend everything it has.
+
+    Sent on a character switch. Each addon clears its change-detection
+    caches and emits a complete set on its next tick, so the panels
+    refill from the newly selected character immediately rather than
+    piecemeal as things happen to change.
+    """
+    try:
+        sock_cmd_out.sendto(b"RESEND|", _cmd_addr())
+        print("[OmniWatch] asked the addon(s) for a full resend")
+    except Exception as e:
+        print(f"[OmniWatch] full resend request failed: {e!r}")
+
+
 def _mb_clear_live_data():
     """Blank the live per-character display state so that switching the
     locked character (via the dropdown) refreshes the panels to the new
@@ -8104,7 +9368,10 @@ def _mb_known_chars():
             pass
     return result
 
-def _mb_gate(raw, for_chat=False):
+_mb_seen_by_stream = {}     # stream name -> {sender: packets seen}
+
+
+def _mb_gate(raw, for_chat=False, stream=None):
     if not raw or raw[0] != "@":
         return True, raw            # untagged → pass through unchanged
     end = raw.find("@", 1)
@@ -8114,6 +9381,13 @@ def _mb_gate(raw, for_chat=False):
     payload = raw[end + 1:]
     if sender:
         _mb_seen_senders.add(sender)
+    if stream:
+        # Per-stream tally. "Everything updates except equipment" is
+        # either a sender that stream never hears from, or one it hears
+        # from and rejects — and those need opposite fixes.
+        _mb_seen_by_stream.setdefault(stream, {})
+        _mb_seen_by_stream[stream][sender or "(unnamed)"] = (
+            _mb_seen_by_stream[stream].get(sender or "(unnamed)", 0) + 1)
     # Chat pins to the chosen main character; all other streams follow the
     # selected/locked character.
     target = _mb_chat_lock_target() if for_chat else _mb_lock_target()
@@ -8132,6 +9406,13 @@ def _mb_gate(raw, for_chat=False):
 char_view_button_rect = None     # set by draw_header, read by click handler
 char_view_dropdown_open = False
 char_view_dropdown_rects = []
+
+# Folders under USER_DIR that are OURS, not characters. Adding a cache
+# directory here without adding it to this set puts it in the character
+# switcher — which is what "icons" did the moment icons started being
+# written to %APPDATA%.
+_NON_CHAR_DIRS = {"logs", "icons", "cache", "backups", "temp"}
+
 
 def list_known_characters():
     """Return a sorted list of character names that have a config
@@ -8157,7 +9438,7 @@ def list_known_characters():
                 continue
             if entry.startswith(".") or entry.startswith("_"):
                 continue
-            if entry.lower() == "logs":
+            if entry.lower() in _NON_CHAR_DIRS:
                 continue
             if entry.lower() in sim_names:
                 continue
@@ -8352,6 +9633,13 @@ def _switch_active_view(name):
     if _prev_view != active_view_char:
         try:
             _mb_clear_live_data()
+            # DUMP OLD, RETRIEVE NEW. Clearing is only half of it: some
+            # streams only resend when something CHANGES, so a character
+            # standing still can leave the panel waiting — the rich item
+            # records are on a thirty-second full-refresh cycle. Ask for
+            # a complete picture instead of hoping the next packet
+            # carries one.
+            _request_full_resend()
         except Exception as _e:
             print(f"[OmniWatch] live-data clear on switch: {_e!r}")
     _rebuild_path_constants()
@@ -9781,12 +11069,15 @@ def _hotbar_run_action(key):
     if not callable(fn):
         print(f"[OmniWatch] hotbar action {key!r}: {entry[2]} missing")
         return
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     if key == "warp":
         # Open the travel menu next to the slot that opened it. Without
         # this it anchors to the floating Warp button, which is very
         # possibly hidden — the menu would appear across the screen.
         _warp_menu_anchor = [mx, my]
+        # And WHICH WINDOW, captured now, so the menu keeps asking about
+        # this one rather than about wherever the cursor later goes.
+        globals()["_warp_menu_win"] = globals().get("_MOUSE_WINDOW")
         fn()
         if not globals().get("warp_menu_open"):
             _warp_menu_anchor = None
@@ -9869,7 +11160,7 @@ def draw_party_target_hint(surface):
                   "checklist_modal_open", "campaigns_modal_open"):
         if globals().get(_flag):
             return
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     if _overlay_blocks_point((mx, my)):
         return
     hover_name = None
@@ -9986,6 +11277,11 @@ def dispatch_button(idx):
             payload = cmd.lstrip("/").strip()
             sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
             print(f"[OmniWatch] button '{label}' -> windower //{payload}")
+            # THE SELECTION SURVIVES THE CAST. Clearing it here meant
+            # two spells on the same person cost two clicks, which is
+            # the common case. It is released by clicking that member
+            # again, or replaced by clicking another — the panel is the
+            # only thing that changes it.
         elif kind == "action":
             print(f"[OmniWatch] button '{label}' -> action {cmd}")
             _hotbar_run_action(cmd.strip().lower())
@@ -10119,6 +11415,39 @@ SETTINGS_SCHEMA = [
                    "always-on-top enabled, this gives you a "
                    "fullscreen-overlay effect over the game. Windows "
                    "only.",
+    },
+    {
+        "key":     "desk_transparent",
+        "label":   "(internal) desk window transparent background",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Set from the gear button in the second window.",
+    },
+    {
+        "key":     "desk_on_top",
+        "label":   "(internal) desk window always on top",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Set from the gear button in the second window.",
+    },
+    {
+        "key":     "second_window",
+        "label":   "Second window",
+        "kind":    "bool",
+        "default": False,
+        "section": "General",
+        "applies": "python",
+        "help":    "Open a second OmniWatch window with its own OS "
+                   "frame, so you can keep the panels you use less "
+                   "often on another monitor (or another virtual "
+                   "desktop) while the main window overlays the game. "
+                   "Drag a panel off the right edge of the main window "
+                   "to move it across. Turn on Position mode to see "
+                   "where the boundary is.",
     },
     {
         "key":     "always_on_top",
@@ -10534,6 +11863,44 @@ SETTINGS_SCHEMA = [
                    "more lines per panel; Large is easier to read at "
                    "a glance. No effect when 'Compact icon grid' is "
                    "enabled (that mode uses fixed-size icons).",
+    },
+    {
+        "key":     "party_status_left",
+        "label":   "Status icons on the left",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Put the buff and debuff icons between the job plate "
+                   "and the bars instead of to the right of them. The "
+                   "row is the same width either way.",
+    },
+    {
+        "key":     "party_status_clear",
+        "label":   "Clear behind status icons",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Leave the buff and debuff area of a party row "
+                   "unpainted, so the game shows through behind the "
+                   "icons instead of a panel background. Position mode "
+                   "outlines the area so it can still be seen and "
+                   "placed.",
+    },
+    {
+        "key":     "party_stacked",
+        "label":   "Stack rows as one list",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Place the party rows as a single list under one "
+                   "position instead of positioning each row on its own. "
+                   "The list grows from whichever corner you drag it "
+                   "nearest, so a bottom corner keeps its bottom edge "
+                   "fixed and the list collapses downward as members "
+                   "leave. Rows share one size while this is on.",
     },
     {
         "key":     "party_buff_icon_grid",
@@ -12414,7 +13781,7 @@ def _open_update_page():
     except Exception as e:
         print(f"[OmniWatch] could not open update page: {e!r}")
 
-def _apply_always_on_top(enabled):
+def _apply_always_on_top(enabled, name="main"):
     """Pin (or unpin) the OmniWatch window above all other windows.
 
     Windows-only via ctypes SetWindowPos. The HWND is obtained from
@@ -12439,8 +13806,7 @@ def _apply_always_on_top(enabled):
         from ctypes import wintypes
         # Get pygame's window HWND. The wm_info dict layout varies across
         # pygame versions — try the modern key first.
-        info = pygame.display.get_wm_info()
-        hwnd = info.get("window") or info.get("hwnd") or 0
+        hwnd = _ow_hwnd(name)
         if not hwnd:
             print("[OmniWatch] always-on-top: could not get HWND")
             return
@@ -12509,8 +13875,7 @@ def _apply_window_opacity(percent):
     try:
         import ctypes
         from ctypes import wintypes
-        info = pygame.display.get_wm_info()
-        hwnd = info.get("window") or info.get("hwnd") or 0
+        hwnd = _ow_hwnd()
         if not hwnd:
             print("[OmniWatch] window-opacity: could not get HWND")
             return
@@ -12556,7 +13921,7 @@ def _apply_window_opacity(percent):
         print(f"[OmniWatch] window-opacity apply failed: {e!r}")
 
 
-def _apply_transparent_background(on):
+def _apply_transparent_background(on, name="main"):
     """Punch out the OmniWatch background color so the desktop/game
     shows through underneath the panels and text.
 
@@ -12585,8 +13950,7 @@ def _apply_transparent_background(on):
     try:
         import ctypes
         from ctypes import wintypes
-        info = pygame.display.get_wm_info()
-        hwnd = info.get("window") or info.get("hwnd") or 0
+        hwnd = _ow_hwnd(name)
         if not hwnd:
             print("[OmniWatch] transparent-bg: could not get HWND")
             return
@@ -13178,8 +14542,7 @@ def _toggle_fullscreen():
     try:
         import ctypes
         from ctypes import wintypes
-        info = pygame.display.get_wm_info()
-        hwnd = info.get("window") or info.get("hwnd") or 0
+        hwnd = _ow_hwnd()
         if not hwnd:
             print("[OmniWatch] full-screen toggle: no HWND available")
             return
@@ -13237,8 +14600,7 @@ def _toggle_fullscreen():
             #    update WIDTH/HEIGHT so the render path sees the new
             #    dimensions. NOFRAME flag preserved so we stay
             #    borderless.
-            screen = pygame.display.set_mode((mon_w, mon_h),
-                                             pygame.NOFRAME)
+            screen = _set_display_mode(mon_w, mon_h)
             WIDTH, HEIGHT = mon_w, mon_h
 
             # 4) Position the new window to cover the monitor.
@@ -13294,8 +14656,7 @@ def _toggle_fullscreen():
             saved_x, saved_y, saved_w, saved_h = _fullscreen_saved_rect
 
             # Recreate pygame surface at the saved size.
-            screen = pygame.display.set_mode((saved_w, saved_h),
-                                             pygame.NOFRAME)
+            screen = _set_display_mode(saved_w, saved_h)
             WIDTH, HEIGHT = saved_w, saved_h
 
             # Reposition to the saved screen coords.
@@ -13361,6 +14722,176 @@ def _reapply_window_flags():
         pass
 
 
+def _draw_grip_at(surface, gx, gy, hot):
+    """Draw a bottom-right resize grip whose corner is (gx, gy) and
+    return its rect. Shared so the two windows' grips cannot drift."""
+    g = max(12, round(15 * _menu_g()))
+    rect = pygame.Rect(gx - g, gy - g, g, g)
+    mx, my = _mouse_pos()
+    hov = rect.collidepoint(mx, my) or hot
+    if hov:
+        pygame.draw.rect(surface, (44, 44, 58), rect)
+        pygame.draw.rect(surface, (90, 90, 115), rect, 1)
+    col = (170, 170, 190) if hov else (90, 90, 110)
+    for off in (3, 7, 11, 15):
+        if off < g:
+            pygame.draw.line(surface, col, (gx - off, gy - 1), (gx - 1, gy - off))
+    return rect
+
+
+_ow_desk_grip_rect = None
+_desk_menu_font = None
+
+
+DESK_MENU_ROWS = (
+    ("fullscreen",  "Full screen"),
+    ("transparent", "Transparent"),
+    ("ontop",       "Always on top"),
+    ("close",       "Close this window"),
+)
+
+
+def _desk_menu_state(key):
+    if key == "fullscreen":
+        return _desk_fullscreen_on()
+    if key == "transparent":
+        return bool(setting("desk_transparent"))
+    if key == "ontop":
+        return bool(setting("desk_on_top"))
+    return None
+
+
+def draw_desk_settings_button(surface):
+    """A gear in the desk window's top-right corner, and its menu.
+
+    The desk window has no OS frame and is not part of the main
+    window's settings dropdown, so without this there is no way to
+    reach its own appearance. Deliberately four rows: the things that
+    only make sense per window.
+    """
+    global _desk_gear_rect, _desk_menu_rects, _desk_menu_font
+    _desk_gear_rect = None
+    _desk_menu_rects = []
+    if not _desk_enabled() or display_hidden:
+        return
+    vp = _VIEWPORTS.get("desk")
+    if not vp:
+        return
+    if _desk_menu_font is None:
+        try:
+            _desk_menu_font = pygame.font.SysFont("Segoe UI", 14)
+        except Exception:
+            _desk_menu_font = pygame.font.Font(None, 17)
+    g = max(16, round(18 * _menu_g()))
+    bx = vp[0] + vp[2] - g - 6
+    by = vp[1] + 6
+    _desk_gear_rect = pygame.Rect(bx, by, g, g)
+    mx, my = _mouse_pos()
+    hot = _desk_menu_open or _desk_gear_rect.collidepoint(mx, my)
+    pygame.draw.rect(surface, (44, 44, 58) if hot else (28, 28, 36),
+                     _desk_gear_rect, border_radius=3)
+    pygame.draw.rect(surface, (110, 110, 140) if hot else (70, 70, 90),
+                     _desk_gear_rect, 1, border_radius=3)
+    col = (210, 210, 225) if hot else (150, 150, 170)
+    cx, cy = _desk_gear_rect.center
+    pygame.draw.circle(surface, col, (cx, cy), max(3, g // 5), 1)
+    for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+        pygame.draw.line(surface, col,
+                         (cx + dx * (g // 5), cy + dy * (g // 5)),
+                         (cx + dx * (g // 3), cy + dy * (g // 3)), 1)
+    if not _desk_menu_open:
+        return
+    rows = DESK_MENU_ROWS
+    rw, rh = 190, 24
+    mxx = _desk_gear_rect.right - rw
+    myy = _desk_gear_rect.bottom + 4
+    box = pygame.Rect(mxx, myy, rw, rh * len(rows) + 8)
+    # Keep it inside the desk viewport.
+    if box.bottom > vp[1] + vp[3]:
+        box.bottom = vp[1] + vp[3]
+    if box.left < vp[0]:
+        box.left = vp[0]
+    pygame.draw.rect(surface, (24, 24, 32), box, border_radius=4)
+    pygame.draw.rect(surface, (90, 90, 115), box, 1, border_radius=4)
+    ry = box.y + 4
+    for key, label in rows:
+        r = pygame.Rect(box.x + 4, ry, rw - 8, rh)
+        if r.collidepoint(mx, my):
+            pygame.draw.rect(surface, (48, 48, 64), r, border_radius=3)
+        state = _desk_menu_state(key)
+        txt = label
+        tcol = (225, 225, 235)
+        if state is not None:
+            txt = ("[x] " if state else "[  ] ") + label
+            tcol = (140, 225, 160) if state else (185, 185, 200)
+        elif key == "close":
+            tcol = (235, 150, 150)
+        try:
+            surface.blit(_desk_menu_font.render(txt, True, tcol),
+                         (r.x + 8, r.y + 4))
+        except Exception:
+            pass
+        _desk_menu_rects.append((r, key))
+        ry += rh
+
+
+def _desk_menu_click(pos):
+    """Handle a press on the gear or its menu. True if consumed."""
+    global _desk_menu_open
+    if not _desk_enabled():
+        return False
+    if _desk_gear_rect is not None and _desk_gear_rect.collidepoint(pos):
+        _desk_menu_open = not _desk_menu_open
+        return True
+    if not _desk_menu_open:
+        return False
+    for r, key in _desk_menu_rects:
+        if not r.collidepoint(pos):
+            continue
+        if key == "fullscreen":
+            _desk_set_fullscreen(not _desk_fullscreen_on())
+        elif key == "transparent":
+            settings["desk_transparent"] = not bool(
+                setting("desk_transparent"))
+            save_settings()
+            _apply_transparent_background(
+                bool(setting("desk_transparent")), "desk")
+        elif key == "ontop":
+            settings["desk_on_top"] = not bool(setting("desk_on_top"))
+            save_settings()
+            _apply_always_on_top(bool(setting("desk_on_top")), "desk")
+        elif key == "close":
+            settings["second_window"] = False
+            save_settings()
+            _close_desk_window()
+        return True
+    # A click elsewhere IN THE DESK WINDOW closes the menu and is
+    # swallowed so it cannot also land on a panel underneath. A click in
+    # the main window must NOT be swallowed -- the menu is not modal and
+    # the two windows are often not even on the same screen.
+    if _viewport_containing(pos[0], pos[1]) != "desk":
+        return False
+    _desk_menu_open = False
+    return True
+
+
+def draw_ow_desk_resize_grip(surface):
+    """The desk window's grip, in ITS viewport's bottom-right corner."""
+    global _ow_desk_grip_rect
+    _ow_desk_grip_rect = None
+    if not _desk_enabled() or display_hidden:
+        return
+    vp = _VIEWPORTS.get("desk")
+    if not vp:
+        return
+    if _desk_fullscreen_on():
+        return
+    hot = (_ow_window_resize is not None
+           and _ow_window_resize.get("win") == "desk")
+    _ow_desk_grip_rect = _draw_grip_at(surface, vp[0] + vp[2],
+                                       vp[1] + vp[3], hot)
+
+
 def draw_ow_resize_grip(surface):
     """Draw the windowed-box resize grip in the bottom-right corner (only
     while windowed — hidden in fullscreen or when the display is hidden).
@@ -13372,7 +14903,7 @@ def draw_ow_resize_grip(surface):
     g = max(12, round(15 * _menu_g()))
     gx, gy = WIDTH, HEIGHT
     _ow_window_grip_rect = pygame.Rect(gx - g, gy - g, g, g)
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     hov = (_ow_window_grip_rect.collidepoint(mx, my)
            or _ow_window_resize is not None)
     if hov:
@@ -13499,6 +15030,7 @@ def apply_setting_side_effects(key, value):
         # down; by the time any setting can be toggled it exists).
         try:
             _apply_no_activate(bool(value))
+            _apply_no_activate(bool(value), "desk")
         except NameError:
             pass
     # Lua-side notifications: send SETTING|<key>|<value> on port 5005
@@ -13536,6 +15068,15 @@ def apply_setting_side_effects(key, value):
         chat_panel_visible = bool(value)
     elif key == "show_chat_composer":
         chat_composer_visible = bool(value)
+    elif key == "desk_transparent":
+        _apply_transparent_background(bool(value), "desk")
+    elif key == "desk_on_top":
+        _apply_always_on_top(bool(value), "desk")
+    elif key == "second_window":
+        if bool(value):
+            _open_desk_window()
+        else:
+            _close_desk_window()
     elif key == "always_on_top":
         _apply_always_on_top(bool(value))
     elif key == "window_opacity":
@@ -14216,6 +15757,729 @@ def _find_icon_dir():
     return fallback
 
 ICON_DIR = _find_icon_dir()
+
+# A SECOND, WRITABLE icon directory.
+#
+# A default Windower install puts the addon under Program Files, which
+# Windows makes read-only for normal processes. Every write there fails
+# silently-ish: the extractor cannot add a missing icon, and a bad one
+# cannot be replaced — which looks like "some icons are wrong and
+# nothing fixes them". Icons are therefore READ from both places, the
+# writable one first so a fresh extraction shadows a stale file, and
+# WRITTEN only here.
+ICON_DIR_RW = os.path.join(USER_DIR, "icons", "equipment")
+try:
+    os.makedirs(ICON_DIR_RW, exist_ok=True)
+except OSError as e:
+    print(f"[OmniWatch] could not create {ICON_DIR_RW}: {e!r}")
+
+
+def _purge_bad_extracted_icons():
+    """Delete the icons my own DAT decode wrote.
+
+    Every one of them is suspect, and because the writable folder is
+    read FIRST they shadow the addon's correct copies — so a bad file
+    here breaks an icon that was previously fine. Runs once at startup
+    and says how many it removed.
+    """
+    try:
+        if not os.path.isdir(ICON_DIR_RW):
+            return 0
+        gone = 0
+        for f in os.listdir(ICON_DIR_RW):
+            if not f.lower().endswith(".bmp"):
+                continue
+            try:
+                os.remove(os.path.join(ICON_DIR_RW, f))
+                gone += 1
+            except OSError:
+                pass
+        if gone:
+            print(f"[OmniWatch] removed {gone} icon(s) written by the "
+                  f"built-in DAT decode; the addon's own copies are "
+                  f"authoritative again")
+        return gone
+    except Exception as e:
+        print(f"[OmniWatch] icon purge: {e!r}")
+        return 0
+
+
+def _icon_dir_writable():
+    """Is the addon's own icon folder writable by this process?"""
+    cached = globals().get("_icon_dir_rw_cache")
+    if cached is not None:
+        return cached
+    ok = os.access(ICON_DIR, os.W_OK)
+    globals()["_icon_dir_rw_cache"] = ok
+    if not ok:
+        print(f"[OmniWatch] {ICON_DIR} is not writable — new and "
+              f"re-extracted icons will go to {ICON_DIR_RW} instead")
+        _vs = globals().get("ICON_DIR_VS")
+        if _vs and os.path.isdir(_vs):
+            try:
+                _n = len([f for f in os.listdir(_vs)
+                          if f.lower().endswith(".bmp")])
+            except OSError:
+                _n = -1
+            print(f"[OmniWatch] Windows redirected the extractor's "
+                  f"writes to {_vs} ({_n} .bmp) — reading those too")
+    return ok
+
+
+import struct
+
+# ── Reading item icons straight from the client DATs ────────────────
+# A port of the item path in Rubenator's icon_extractor.lua, which ships
+# in the addon folder. Nothing here is guessed: the id-to-DAT table, the
+# 0xC00 record stride, the 0x2BD offset, the palette rotation and the
+# 122-byte BITMAPV4 header are all taken from that file.
+#
+# Why do it here as well as in the lua: the lua writes its .bmp into the
+# addon folder. Under a Program Files install this overlay — a
+# manifested 64-bit process — cannot write there and does not see what
+# the game's 32-bit process wrote. Reading the DATs ourselves skips the
+# file hand-off entirely and puts the icon where we can always write.
+
+# RECORD SIZE. Rubenator's extractor uses 0xC00, and so did every port
+# of it; a client patch changed it to 0x1400 and everything that reads
+# these DATs has been decoding the wrong region since. Confirmed against
+# eight items whose names were located by search: dividing the true byte
+# offset by 0x1400 reproduces the id-to-DAT table's record number for
+# all eight, and by 0xC00 for none of them.
+ITEM_RECORD = 0x1400
+# Icon block within the record. CONFIRMED 0x2BD — unchanged from the
+# 2021 layout. Only the record STRIDE moved (0xC00 to 0x1400), which is
+# why every icon came out wrong while the offset inside the record was
+# right all along. The rest are kept as fallbacks, and anything not
+# listed is found by searching the record.
+ICON_CANDIDATES = (0x2BD, 0xABD, 0xCBD, 0x8BD, 0x6BD)
+
+ITEM_DAT_MAP = (
+    (0x0001, 0x0FFF, "118/106", -1),   # General Items
+    (0x1000, 0x1FFF, "118/107", 0),    # Usable Items
+    (0x2000, 0x21FF, "118/110", 0),    # Automaton Items
+    (0x2200, 0x27FF, "301/115", 0),    # General Items 2
+    (0x2800, 0x3FFF, "118/109", 0),    # Armor Items
+    (0x4000, 0x59FF, "118/108", 0),    # Weapon Items
+    (0x5A00, 0x6FFF, "286/73", 0),     # Armor Items 2
+    (0x7000, 0x73FF, "217/21", 0),     # Maze / Basic Items
+    (0x7400, 0x77FF, "288/80", 0),     # Instinct Items
+    (0xF000, 0xF1FF, "288/67", 0),     # Monipulator Items
+    (0xFFFF, 0xFFFF, "174/48", 0),     # Gil
+)
+
+_DEC = bytes(((i % 0x20) * 0x8 + i // 0x20) for i in range(256))
+_DEC_A = bytes(min(0xFF, (((i % 0x20) * 0x8 + i // 0x20) * 2)) for i in range(256))
+_ENC_FOR_DEC = [0] * 256
+for _i in range(256):
+    _ENC_FOR_DEC[_DEC[_i]] = _i
+
+def _header():
+    h = b"BM"
+    h += struct.pack("<I", 0x107A)      # file size
+    h += b"\x00\x00" + b"\x00\x00"      # reserved
+    h += struct.pack("<I", 122)         # pixel data offset
+    h += struct.pack("<I", 108)         # BITMAPV4HEADER
+    h += struct.pack("<i", 32) + struct.pack("<i", 32)
+    h += struct.pack("<H", 1) + struct.pack("<H", 32)
+    h += struct.pack("<I", 3)           # BI_BITFIELDS
+    h += struct.pack("<I", 0x1000)      # image size
+    h += b"\x00" * 16                   # resolutions, colours used/important
+    h += b"\x00\x00\xff\x00"            # red mask
+    h += b"\x00\xff\x00\x00"            # green
+    h += b"\xff\x00\x00\x00"            # blue
+    h += b"\x00\x00\x00\xff"            # alpha
+    h += b"sRGB"
+    h += b"\x00" * 36                   # endpoints
+    h += b"\x00" * 12                   # gammas
+    return h
+
+HEADER = _header()
+
+# The format byte, at 0x281 within the record. icon_extractor.lua reads
+# exactly this for STATUS icons — `byte(data, 0x282)`, one-based — and
+# branches three ways on it, but its item path assumes palette-indexed
+# for everything. Items use the same three formats, which is why a
+# minority of them decoded into speckled noise: a 32-bit uncompressed
+# image being read as palette indices.
+ICON_FMT_OFF = 0x281
+ICON_FMT_UNCOMPRESSED = 16
+ICON_FMT_PALETTE = 8
+ICON_FMT_XIVIEW = 4
+
+
+def decode_item_icon_uncompressed(pixels):
+    """A 32-bit image stored directly, no palette.
+
+    The alpha bytes are 0 or 0x80; the client treats 0x80 as opaque, so
+    lift it to 0xFF exactly as the addon does for status icons.
+    """
+    if len(pixels) < 0x1000:
+        return None
+    out = bytearray(pixels[:0x1000])
+    for i in range(3, 0x1000, 4):
+        if out[i] == 0x80:
+            out[i] = 0xFF
+    return HEADER + bytes(out)
+
+
+def decode_item_icon(data):
+    """`data` is the 0x800 bytes read at the icon offset in a record."""
+    if len(data) < 0x800:
+        return None
+    pal_raw = data[:0x400]
+    # groups of four: three colour bytes rotated, alpha rotated AND doubled
+    pal = bytearray(0x400)
+    for i in range(0, 0x400, 4):
+        pal[i]     = _DEC[pal_raw[i]]
+        pal[i + 1] = _DEC[pal_raw[i + 1]]
+        pal[i + 2] = _DEC[pal_raw[i + 2]]
+        pal[i + 3] = _DEC_A[pal_raw[i + 3]]
+    # index the palette by the ENCODED byte, exactly as the lua does
+    rgba_for_encoded = [b""] * 256
+    for i in range(256):
+        rgba_for_encoded[_ENC_FOR_DEC[i]] = bytes(pal[i * 4:i * 4 + 4])
+    out = bytearray()
+    for b in data[0x400:0x800]:
+        out += rgba_for_encoded[b]
+    return HEADER + bytes(out)
+
+def dat_for_item(item_id):
+    for lo, hi, path, off in ITEM_DAT_MAP:
+        if lo <= item_id <= hi:
+            return path, lo + off
+    return None, None
+
+def seek_for_item(item_id):
+    path, base = dat_for_item(item_id)
+    if path is None:
+        return None, None
+    return path, (item_id - base) * ITEM_RECORD
+
+
+def _ffxi_root():
+    """Where FINAL FANTASY XI is installed, or None."""
+    cached = globals().get("_ffxi_root_cache", 0)
+    if cached != 0:
+        return cached
+    found = None
+    env = os.environ.get("OMNIWATCH_FFXI_PATH")
+    if env and os.path.isdir(env):
+        found = env
+    if not found and sys.platform == "win32":
+        try:
+            import winreg
+            for hive, key in (
+                (winreg.HKEY_LOCAL_MACHINE,
+                 r"SOFTWARE\WOW6432Node\PlayOnlineUS\InstallFolder"),
+                (winreg.HKEY_LOCAL_MACHINE,
+                 r"SOFTWARE\PlayOnlineUS\InstallFolder"),
+            ):
+                if found:
+                    break
+                try:
+                    with winreg.OpenKey(hive, key) as k:
+                        for name in ("0001", "1000", "0002"):
+                            try:
+                                v, _ = winreg.QueryValueEx(k, name)
+                            except OSError:
+                                continue
+                            if v and os.path.isdir(os.path.join(v, "ROM")):
+                                found = v
+                                break
+                except OSError:
+                    pass
+        except Exception as e:
+            print(f"[OmniWatch] FFXI path lookup: {e!r}")
+    globals()["_ffxi_root_cache"] = found
+    print(f"[OmniWatch] FFXI install for icon extraction: {found!r}")
+    return found
+
+
+def _compare_icon_against_addon(item_id):
+    """Check MY decode against Rubenator's, on a real item.
+
+    The addon folder holds icons his extractor wrote. If a copy exists
+    for this id, decoding the same record here and comparing byte for
+    byte says whether the port is faithful — and if it is not, WHERE it
+    diverges. That is worth far more than another theory: his file is
+    known-good output for the same input.
+    """
+    try:
+        ref_path = os.path.join(ICON_DIR, f"{int(item_id)}.bmp")
+        if not os.path.isfile(ref_path):
+            print(f"[OmniWatch][cmp] no reference copy of {item_id} in the "
+                  "addon folder to compare against")
+            return
+        with open(ref_path, "rb") as fh:
+            ref = fh.read()
+        root = _ffxi_root()
+        rel, seek = seek_for_item(int(item_id))
+        if not root or rel is None:
+            return
+        dat = os.path.join(root, "ROM", *rel.split("/")) + ".DAT"
+        with open(dat, "rb") as fh:
+            fh.seek(seek)
+            raw = fh.read(0x800)
+        mine = decode_item_icon(raw)
+        if not mine:
+            print(f"[OmniWatch][cmp] {item_id}: my decode produced nothing")
+            return
+        if mine == ref:
+            print(f"[OmniWatch][cmp] {item_id}: IDENTICAL to the addon's "
+                  f"copy ({len(ref)} bytes) — the port is faithful and "
+                  "the picture on screen is the correct icon for this id")
+            return
+        first = next((i for i in range(min(len(mine), len(ref)))
+                      if mine[i] != ref[i]), None)
+        print(f"[OmniWatch][cmp] {item_id}: DIFFERS. mine {len(mine)}B, "
+              f"addon {len(ref)}B, first difference at byte "
+              f"{first} ({'header' if first is not None and first < 122 else 'pixels'})")
+        if first is not None:
+            a = mine[max(0, first - 4):first + 12].hex()
+            b = ref[max(0, first - 4):first + 12].hex()
+            print(f"[OmniWatch][cmp]   mine : {a}")
+            print(f"[OmniWatch][cmp]   addon: {b}")
+    except Exception as e:
+        print(f"[OmniWatch][cmp] {item_id}: {e!r}")
+
+
+def _palette_purity(data):
+    """How palette-like the first 1024 bytes of `data` are, 0.0 to 1.0.
+
+    A real palette holds 256 RGBA entries whose alpha, after the
+    client's doubling, is essentially always fully clear or fully
+    opaque. Arbitrary bytes from elsewhere in the record produce alphas
+    spread across the whole range. This is the discriminator the pixel
+    heuristic lacked: a junk offset can accidentally look colourful,
+    but it cannot accidentally have 256 clean alpha values.
+    """
+    if len(data) < 0x400:
+        return 0.0
+    # The RAW decoded alpha, before the doubling. Stored alphas are 0x00
+    # or 0x80 and nothing else — two values out of 256. Testing the
+    # DOUBLED value instead scores random bytes at 0.5, because the
+    # clamp turns everything above 0x7F into 0xFF, and the gate then
+    # lets junk through.
+    clean = 0
+    for i in range(3, 0x400, 4):
+        a = _DEC[data[i]]
+        if a == 0x00 or a == 0x80:
+            clean += 1
+    return clean / 256.0
+
+
+def _icon_score(blob):
+    """How much a decoded blob looks like an item icon.
+
+    Used to choose between candidate offsets instead of hard-coding one.
+    A real icon has a transparent margin and a spread of colours; the
+    wrong offset gives either near-uniform bytes or noise with no
+    transparency at all.
+    """
+    if not blob or len(blob) < 122 + 0x1000:
+        return -1.0
+    px = blob[122:122 + 0x1000]
+    clear = sum(1 for i in range(3, len(px), 4) if px[i] == 0)
+    frac_clear = clear / 1024.0
+    colours = len({px[i:i + 4] for i in range(0, len(px), 4)})
+    if colours < 4:
+        return -1.0
+    # Icons are mostly drawn inside a transparent border: somewhere
+    # between a tenth and four fifths of the pixels are fully clear.
+    if not (0.05 <= frac_clear <= 0.85):
+        return 0.0
+    return frac_clear * min(colours, 128) / 128.0
+
+
+def _record_item_id(fh, index):
+    """The item id stored in record `index`, or None.
+
+    Every record begins with its own item id, obfuscated with the same
+    rotation as the rest. Reading it back is what lets an extraction
+    CHECK itself instead of trusting a table.
+    """
+    try:
+        fh.seek(index * 0xC00)
+        head = fh.read(4)
+        if len(head) < 4:
+            return None
+        dec = bytes(_DEC[b] for b in head)
+        return struct.unpack("<I", dec)[0]
+    except (OSError, struct.error):
+        return None
+
+
+def _locate_record(fh, item_id, guess):
+    """Find the record that really holds `item_id`.
+
+    The id-to-DAT table in icon_extractor.lua is from 2021 and the game
+    has had four years of new gear since. An id that falls inside a
+    stale range lands on somebody else's record — which decodes into a
+    perfectly valid picture of the wrong item, or into noise. That is
+    the whole bug: the decoding was never wrong, the addressing was.
+
+    Records are laid out in id order, so if the guess lands on id X and
+    we want Y, the answer is `guess + (Y - X)`. One correction, then
+    verify. Falls back to a bounded scan if the file is not contiguous.
+    """
+    got = _record_item_id(fh, guess)
+    if got == item_id:
+        return guess
+    if got:
+        fixed = guess + (item_id - got)
+        if fixed >= 0 and _record_item_id(fh, fixed) == item_id:
+            print(f"[OmniWatch] icon {item_id}: record {guess} holds "
+                  f"{got}; corrected to {fixed}")
+            return fixed
+    try:
+        total = os.fstat(fh.fileno()).st_size // 0xC00
+    except OSError:
+        return None
+    for cand in range(max(0, guess - 64), min(total, guess + 64)):
+        if _record_item_id(fh, cand) == item_id:
+            print(f"[OmniWatch] icon {item_id}: found at record {cand} "
+                  f"(table said {guess})")
+            return cand
+    return None
+
+
+def _encode_bytes(raw):
+    """Apply the client's rotation, turning plain bytes into DAT bytes."""
+    return bytes(_ENC_FOR_DEC[b] for b in raw)
+
+
+def _locate_record_by_name(fh, name):
+    """Find the record whose text contains `name`.
+
+    The id-to-DAT table and the record stride both come from a 2021
+    addon, and the client has been patched many times since. Rather
+    than trust either, search the file for the item's NAME — which we
+    already know from the item resources — encoded with the same
+    rotation the rest of the record uses. Wherever that lands, the
+    record containing it is the right one.
+
+    Returns (record_index, byte_offset) or (None, None).
+    """
+    if not name or len(name) < 4:
+        return (None, None)
+    try:
+        needle = _encode_bytes(name.encode("ascii", "ignore"))
+    except Exception:
+        return (None, None)
+    if not needle:
+        return (None, None)
+    try:
+        fh.seek(0)
+        blob = fh.read()
+    except OSError:
+        return (None, None)
+    at = blob.find(needle)
+    if at < 0:
+        return (None, None)
+    return (at // 0xC00, at)
+
+
+def diagnose_icon_record(item_id, name):
+    """Say where an item's record REALLY is, versus where the table says.
+
+    Prints the delta. Run it over a few pieces and the pattern shows
+    whether the whole table needs shifting, whether the stride changed,
+    or whether the item has moved to a different DAT entirely.
+    """
+    root = _ffxi_root()
+    rel, seek = seek_for_item(int(item_id))
+    if not root or rel is None:
+        print(f"[OmniWatch][dat] {item_id}: not covered by the table")
+        return None
+    dat = os.path.join(root, "ROM", *rel.split("/")) + ".DAT"
+    guess = (seek - 0x2BD) // 0xC00
+    try:
+        with open(dat, "rb") as fh:
+            idx, at = _locate_record_by_name(fh, name)
+            size = os.fstat(fh.fileno()).st_size
+    except OSError as e:
+        print(f"[OmniWatch][dat] {item_id}: {e!r}")
+        return None
+    if idx is None:
+        print(f"[OmniWatch][dat] {item_id} {name!r}: NOT FOUND in "
+              f"{os.path.basename(dat)} ({size // 0xC00} records) — "
+              f"wrong DAT for this item")
+        return None
+    print(f"[OmniWatch][dat] {item_id} {name!r}: table says record "
+          f"{guess}, name found in record {idx} at byte 0x{at:X} "
+          f"(offset within record 0x{at % 0xC00:X}), delta {idx - guess}")
+    return idx
+
+
+def compare_icon_to_reference(item_id):
+    """Decode from the DAT and diff against the addon's own .bmp.
+
+    The extractor that ships with the addon has written hundreds of
+    these correctly. If mine disagrees with one of those for the same
+    id, mine is wrong — and WHERE the two diverge says which part:
+    inside the first 122 bytes is the header, a difference confined to
+    every fourth byte is the alpha, and a difference that starts at the
+    pixels means the palette lookup.
+    """
+    ref = os.path.join(ICON_DIR, f"{int(item_id)}.bmp")
+    if not os.path.isfile(ref):
+        print(f"[OmniWatch][cmp] no reference copy for {item_id} in "
+              f"{ICON_DIR}")
+        return None
+    root = _ffxi_root()
+    rel, seek = seek_for_item(int(item_id))
+    if not root or rel is None:
+        return None
+    dat = os.path.join(root, "ROM", *rel.split("/")) + ".DAT"
+    try:
+        with open(dat, "rb") as fh:
+            fh.seek(seek)
+            raw = fh.read(0x800)
+        with open(ref, "rb") as fh:
+            good = fh.read()
+    except OSError as e:
+        print(f"[OmniWatch][cmp] read failed: {e!r}")
+        return None
+    mine = decode_item_icon(raw)
+    if not mine:
+        print(f"[OmniWatch][cmp] {item_id}: my decode produced nothing")
+        return None
+    print(f"[OmniWatch][cmp] {item_id}: reference {len(good)} bytes, "
+          f"mine {len(mine)} bytes")
+    if mine == good:
+        print(f"[OmniWatch][cmp] {item_id}: IDENTICAL — the port is "
+              "correct and the problem is elsewhere")
+        return True
+    n = min(len(good), len(mine))
+    first = next((i for i in range(n) if good[i] != mine[i]), n)
+    diffs = sum(1 for i in range(n) if good[i] != mine[i])
+    print(f"[OmniWatch][cmp] {item_id}: first difference at byte "
+          f"{first} (0x{first:X}), {diffs} of {n} bytes differ")
+    if first < 122:
+        print(f"[OmniWatch][cmp]   header differs. ref={good[:32].hex()}")
+        print(f"[OmniWatch][cmp]                   mine={mine[:32].hex()}")
+    else:
+        px = first - 122
+        print(f"[OmniWatch][cmp]   pixel {px // 4}, channel {px % 4} "
+              f"(0=B 1=G 2=R 3=A)")
+        off = 122 + (px // 4) * 4
+        print(f"[OmniWatch][cmp]   ref  {good[off:off + 16].hex()}")
+        print(f"[OmniWatch][cmp]   mine {mine[off:off + 16].hex()}")
+        # Which channels differ overall — a fault confined to one
+        # channel is a different bug from one that hits all four.
+        per = [0, 0, 0, 0]
+        for i in range(122, n):
+            if good[i] != mine[i]:
+                per[(i - 122) % 4] += 1
+        print(f"[OmniWatch][cmp]   differing by channel B/G/R/A: {per}")
+    return False
+
+
+def extract_item_icon(item_id):
+    """Pull one item icon out of the DATs and write it where we can.
+
+    Returns the path written, or None. Never raises.
+    """
+    try:
+        item_id = int(item_id)
+    except (TypeError, ValueError):
+        return None
+    root = _ffxi_root()
+    if not root:
+        return None
+    rel, seek = seek_for_item(item_id)
+    if rel is None:
+        return None
+    dat = os.path.join(root, "ROM", *rel.split("/")) + ".DAT"
+    # What FORMAT does this record say its icon is in?
+    fmt = None
+    try:
+        with open(dat, "rb") as fh:
+            fh.seek(seek + ICON_FMT_OFF)
+            b = fh.read(1)
+            if b:
+                fmt = _DEC[b[0]]
+    except OSError:
+        pass
+    if fmt in (ICON_FMT_UNCOMPRESSED, ICON_FMT_XIVIEW):
+        try:
+            with open(dat, "rb") as fh:
+                fh.seek(seek + ICON_CANDIDATES[0])
+                px = fh.read(0x1000)
+        except OSError:
+            px = b""
+        blob = (decode_item_icon_uncompressed(px)
+                if fmt == ICON_FMT_UNCOMPRESSED
+                else (HEADER + px if len(px) >= 0x1000 else None))
+        if blob:
+            print(f"[OmniWatch] icon {item_id}: format {fmt} "
+                  f"({'uncompressed' if fmt == ICON_FMT_UNCOMPRESSED else 'XIVIEW'})")
+            out = os.path.join(ICON_DIR_RW, f"{item_id}.bmp")
+            try:
+                os.makedirs(ICON_DIR_RW, exist_ok=True)
+                with open(out, "wb") as fh:
+                    fh.write(blob)
+                return out
+            except OSError as e:
+                print(f"[OmniWatch] could not write {out}: {e!r}")
+                return None
+
+    best, best_at, best_score = None, None, 0.0
+    _learned = globals().get("_icon_offset_by_dat", {})
+    _try = list(ICON_CANDIDATES)
+    if rel in _learned:
+        _try.insert(0, _learned[rel])
+    try:
+        with open(dat, "rb") as fh:
+            for off in _try:
+                fh.seek(seek + off)
+                data = fh.read(0x800)
+                if len(data) < 0x800:
+                    continue
+                # Purity FIRST. Without it a colourful patch of the
+                # record's header scored higher than the real icon and
+                # was chosen — which is how 0x9C, inside the string
+                # table, won over 0x2BD.
+                if _palette_purity(data) < 0.90:
+                    continue
+                cand = decode_item_icon(data)
+                sc = _icon_score(cand)
+                if sc < 0:
+                    # Degenerate — an all-zero block passes the purity
+                    # test perfectly and decodes to nothing at all.
+                    continue
+                sc = max(sc, 0.001)
+                if sc > best_score:
+                    best, best_at, best_score = cand, off, sc
+    except OSError as e:
+        print(f"[OmniWatch] icon DAT read {dat}: {e!r}")
+        return None
+    if best is None:
+        # Search the record. The name hunt proved the record index is
+        # right, so the icon IS in there — just not at an offset we know
+        # yet. Step 4, since these structures are word-aligned. Costs
+        # about a second, once, and the answer is remembered for the
+        # whole DAT so the next item is instant.
+        try:
+            with open(dat, "rb") as fh:
+                fh.seek(seek)
+                rec = fh.read(ITEM_RECORD)
+        except OSError:
+            rec = b""
+        for off in range(0, max(0, len(rec) - 0x800), 4):
+            block = rec[off:off + 0x800]
+            if _palette_purity(block) < 0.95:
+                continue
+            cand = decode_item_icon(block)
+            sc = _icon_score(cand)
+            if sc < 0:
+                continue
+            sc = max(sc, 0.001)
+            if sc > best_score:
+                best, best_at, best_score = cand, off, sc
+        if best is not None:
+            print(f"[OmniWatch] icon {item_id}: found by searching the "
+                  f"record — icon lives at 0x{best_at:X}")
+            _learned = globals().setdefault("_icon_offset_by_dat", {})
+            _learned[rel] = best_at
+    if best is None:
+        # Last resort: take the best-looking decode even if it fails the
+        # transparency test. Some icons fill their frame edge to edge —
+        # a ring or a cape — and a rule tuned on icons with a margin
+        # rejects them. A plausible picture beats a blank slot, and the
+        # log says it was a guess.
+        try:
+            with open(dat, "rb") as fh:
+                fh.seek(seek)
+                rec = fh.read(ITEM_RECORD)
+        except OSError:
+            rec = b""
+        loose_at, loose_n = None, 0
+        for off in range(0, max(0, len(rec) - 0x800), 4):
+            cand = decode_item_icon(rec[off:off + 0x800])
+            if not cand:
+                continue
+            px = cand[122:122 + 0x1000]
+            n = len({px[i:i + 4] for i in range(0, len(px), 4)})
+            if n > loose_n:
+                loose_at, loose_n, best = off, n, cand
+        if best is not None:
+            print(f"[OmniWatch] icon {item_id}: no offset passed the "
+                  f"icon test; using 0x{loose_at:X} ({loose_n} distinct "
+                  f"colours) — check this one by eye")
+        else:
+            print(f"[OmniWatch] icon {item_id}: nothing anywhere in the "
+                  f"record of {os.path.basename(dat)} decodes at all")
+            return None
+    if best_at != ICON_CANDIDATES[0]:
+        print(f"[OmniWatch] icon {item_id}: icon found at 0x{best_at:X}, "
+              f"not the expected 0x{ICON_CANDIDATES[0]:X}")
+    blob = best
+    out = os.path.join(ICON_DIR_RW, f"{item_id}.bmp")
+    try:
+        os.makedirs(ICON_DIR_RW, exist_ok=True)
+        with open(out, "wb") as fh:
+            fh.write(blob)
+    except OSError as e:
+        print(f"[OmniWatch] could not write {out}: {e!r}")
+        return None
+    return out
+
+
+def _virtualstore_dir(real_dir):
+    """Where Windows actually put a write to `real_dir`, if it redirected it.
+
+    UAC FILE VIRTUALIZATION. A 32-bit process with no modern manifest —
+    Windower and the game — is not refused when it writes under Program
+    Files. Windows silently redirects the write to a per-user copy under
+    %LOCALAPPDATA%\\VirtualStore. The extractor therefore believes it
+    wrote the icon and it really did; it just isn't in the folder we are
+    reading. OmniWatch.exe is manifested, gets no virtualization, reads
+    the real folder, sees nothing new, and is refused outright when it
+    tries to delete. Every symptom of "icons are wrong and nothing fixes
+    them" falls out of that one difference.
+    """
+    try:
+        if sys.platform != "win32":
+            return None
+        local = os.environ.get("LOCALAPPDATA")
+        # ntpath explicitly: os.path is POSIX off Windows and would leave
+        # the drive letter in the tail, producing a nonsense path that
+        # silently never matches anything.
+        import ntpath
+        drive, tail = ntpath.splitdrive(ntpath.abspath(real_dir))
+        if not local or not tail:
+            return None
+        return ntpath.join(local, "VirtualStore", tail.lstrip("\\/"))
+    except Exception:
+        return None
+
+
+ICON_DIR_VS = _virtualstore_dir(ICON_DIR)
+# One-off: everything written before extraction verified its record is
+# suspect, and these shadow the addon's copies.
+_purge_bad_extracted_icons()
+
+
+def _icon_paths(item_id):
+    """Every place an icon for `item_id` might be, newest home first.
+
+    Our own writable folder, then the VirtualStore copy the extractor
+    may have been redirected into, then the addon folder itself.
+    """
+    out = [os.path.join(ICON_DIR_RW, f"{int(item_id)}.bmp")]
+    if ICON_DIR_VS:
+        out.append(os.path.join(ICON_DIR_VS, f"{int(item_id)}.bmp"))
+    out.append(os.path.join(ICON_DIR, f"{int(item_id)}.bmp"))
+    return tuple(out)
+
+
+def _icon_path_existing(item_id):
+    for _p in _icon_paths(item_id):
+        if os.path.isfile(_p):
+            return _p
+    return None
 
 # Sanity-check the resolved ICON_DIR at startup. Counting .bmp files
 # turns a "wrong folder" or "empty folder" misconfiguration into a
@@ -23777,6 +26041,20 @@ active_profile_name = ""
 # The files a profile is made of. Each entry is the LIVE filename inside the
 # character folder; its saved copy gets "_<sanitized profile>" before the
 # extension. Order is irrelevant — every operation walks the whole tuple.
+# The two parts that are JOB CONTENT rather than setup: what is on your
+# hotbars, and which stat cells you show. An explicit save — one profile
+# or all of them — leaves these alone in a profile that already has
+# them, so "save my setup everywhere" cannot write a BRD bar set over
+# your WHM one. They still follow you normally: while a profile is
+# active, editing either mirrors straight into it.
+#
+# A profile being created for the FIRST time does take a copy, so a new
+# profile is self-contained rather than inheriting whatever is live.
+_PROFILE_JOB_PARTS = (
+    "omniwatch_buttons.json",
+    "omniwatch_stats_layout.json",
+)
+
 _PROFILE_PARTS = (
     "omniwatch_layout.json",      # anchors, scales, window size + position
     "omniwatch_settings.json",    # every schema value, incl. panel visibility
@@ -23961,6 +26239,12 @@ def _profile_mirror(live_path):
     try:
         dst = _profile_part_path(part, active_profile_name)
         if os.path.abspath(dst) != os.path.abspath(live_path):
+            # Keep a generation of the PROFILE copy before replacing it.
+            # The live file has had this since a hotbar was lost; the
+            # profile copies never did, so a mirror could quietly write
+            # one job's bars over another profile's with nothing to fall
+            # back on. Same one-generation .bak, same never-raises rule.
+            _backup_before_write(dst)
             shutil.copy2(live_path, dst)
     except Exception as e:
         print(f"[OmniWatch] profile mirror {part} -> "
@@ -23979,7 +26263,6 @@ def push_layout_to_all_profiles():
     Returns the number of profiles written, or -1 if the live layout
     could not be read.
     """
-    part = os.path.basename(LAYOUT_FILE)
     # Flush what is on screen first: the live file may be a drag or
     # two behind, and copying a stale layout into every profile at
     # once is not something the user can undo.
@@ -23989,18 +26272,59 @@ def push_layout_to_all_profiles():
         print(f"[OmniWatch] push layout: could not save live: {e!r}")
     if not os.path.exists(LAYOUT_FILE):
         return -1
+    # EVERYTHING except the two job parts. Layout and settings both, as
+    # whole files: positions, which window each panel is in, what is
+    # shown, what is off, transparency, always-on-top, stacking. Hotbar
+    # contents and stat cells are the exception and are never written by
+    # a push — those are the parts that must differ between jobs.
     n = 0
+    _parts = [p for p in _PROFILE_PARTS if p not in _PROFILE_JOB_PARTS]
     for name in list_profiles():
-        try:
-            dst = _profile_part_path(part, name)
-            if os.path.abspath(dst) == os.path.abspath(LAYOUT_FILE):
+        _wrote = []
+        for _p in _parts:
+            src = _profile_part_path(_p, "")
+            if not os.path.exists(src):
                 continue
-            shutil.copy2(LAYOUT_FILE, dst)
+            try:
+                dst = _profile_part_path(_p, name)
+                if os.path.abspath(dst) == os.path.abspath(src):
+                    continue
+                _backup_before_write(dst)
+                shutil.copy2(src, dst)
+                _wrote.append(_p)
+            except Exception as e:
+                print(f"[OmniWatch] push -> {name!r} {_p}: {e!r}")
+        if _wrote:
             n += 1
-        except Exception as e:
-            print(f"[OmniWatch] push layout -> {name!r}: {e!r}")
-    print(f"[OmniWatch] pushed panel layout to {n} profile(s)")
+    print(f"[OmniWatch] pushed {len(_parts)} part(s) to {n} profile(s); "
+          "hotbar contents and stat cells left alone")
     return n
+
+_PROFILE_ARRANGE_SUFFIXES = ("_anchor", "_anchors", "_pos", "_scale",
+                             "_scales", "_w", "_h", "_size")
+# The sub-target card fits no rule: "_st" cannot be a suffix because
+# target_scale_st sits beside target_anchor_st and is not a position.
+_PROFILE_ARRANGE_EXTRA = {"target_anchor_st", "target_scale_st",
+                          # Whether the second window exists at all —
+                          # without it "@desk" anchors have nothing to
+                          # resolve against.
+                          "ow_desk_on", "ow_desk_fs"}
+# Only where the WINDOWS SIT ON THE DESKTOP stays per profile. Their
+# sizes and the second window's state do travel, because those define
+# the viewports the anchors resolve against: a panel anchored "br@desk"
+# lands in the right place only if the other profile also HAS a desk
+# window, at the same size. Leaving those behind meant "share my
+# positions" quietly dropped every second-window panel back into the
+# main window.
+_PROFILE_ARRANGE_EXCLUDE = {"ow_window_pos", "ow_desk_pos"}
+
+
+def _is_arrangement_key(key):
+    if key in _PROFILE_ARRANGE_EXCLUDE:
+        return False
+    if key in _PROFILE_ARRANGE_EXTRA:
+        return True
+    return any(key.endswith(sfx) for sfx in _PROFILE_ARRANGE_SUFFIXES)
 
 
 def save_profile_as(name):
@@ -24038,6 +26362,17 @@ def save_profile_as(name):
         # missing part leaves the live file alone rather than blanking it.
         if not os.path.exists(src):
             continue
+        if (any(os.path.abspath(dst)
+                == os.path.abspath(_profile_part_path(_p, name))
+                for _p in _PROFILE_JOB_PARTS)
+                and os.path.exists(dst)):
+            # Job content the profile already has. Built through
+            # _profile_part_path rather than by reassembling the
+            # filename, so a profile name that gets sanitised still
+            # matches.
+            print(f"[OmniWatch] profile {name!r}: kept its own "
+                  f"{os.path.basename(dst)}")
+            continue
         try:
             shutil.copy2(src, dst)
             copied += 1
@@ -24049,7 +26384,7 @@ def save_profile_as(name):
     # uncomfortable for the one action whose whole job is not losing
     # your setup.
     try:
-        _mx, _my = pygame.mouse.get_pos()
+        _mx, _my = _mouse_pos()
         globals()["_hb_action_note"] = {
             "text": f"Saved as {name}",
             "until": time.time() + 3.0,
@@ -24093,9 +26428,21 @@ def switch_to_profile(name):
 
     for src, dst in _profile_paths(name):
         if not os.path.exists(dst):
+            # A part the profile never saved is LEFT ALONE, which means
+            # the live one carries over. Say so: "my hotbars did not
+            # change" is exactly what a missing part looks like.
+            print(f"[OmniWatch] profile {name!r}: no saved "
+                  f"{os.path.basename(dst)} — keeping the current one")
             continue
         try:
+            # And a generation of the LIVE file before the profile
+            # lands on top of it, so switching away from an arrangement
+            # you had not saved is recoverable too.
+            _backup_before_write(src)
             shutil.copy2(dst, src)
+            print(f"[OmniWatch] profile {name!r}: "
+                  f"{os.path.basename(dst)} -> live "
+                  f"({os.path.getsize(dst)} bytes)")
         except Exception as e:
             print(f"[OmniWatch] switch_to_profile {name!r}: {e!r}")
 
@@ -24135,6 +26482,28 @@ def switch_to_profile(name):
     # and returns the active page's buttons.
     try:
         buttons_config = load_buttons_config()
+        # What LOADED, and separately what each bar is actually about to
+        # draw. Those can disagree — the loaded pages come from the
+        # buttons file, but which page a bar shows is a layout value, and
+        # the drawn TITLE is looked up from whatever list the panel
+        # holds. Printing both side by side is the only way to tell a
+        # stale panel from a stale file.
+        try:
+            _pn = [str((pg or {}).get("name", "?"))
+                   for pg in (hotbar_pages or [])[:5]]
+            print(f"[OmniWatch] profile {name!r}: loaded "
+                  f"{len(hotbar_pages or [])} pages, first five {_pn}")
+            _shown = []
+            for _i, _pg in sorted((hotbar_panel_pages or {}).items()):
+                try:
+                    _t = str((hotbar_pages[_pg] or {}).get("name", "?"))
+                except Exception:
+                    _t = "<out of range>"
+                _shown.append(f"bar{_i + 1}=page{_pg + 1}:{_t!r}")
+            print(f"[OmniWatch] profile {name!r}: bars showing "
+                  + ", ".join(_shown))
+        except Exception as e:
+            print(f"[OmniWatch] profile {name!r}: page report: {e!r}")
     except Exception as e:
         print(f"[OmniWatch] switch_to_profile: buttons reload: {e!r}")
 
@@ -24156,6 +26525,17 @@ def switch_to_profile(name):
         _apply_window_geometry()
     except Exception as e:
         print(f"[OmniWatch] switch_to_profile: window geometry: {e!r}")
+
+    # And the desk window itself, after the settings reload so the
+    # layout has the final say on whether it exists.
+    #
+    # It comes back WINDOWED, always. Restoring full screen across a
+    # switch is what produced the doubled display: the new window came
+    # up full screen over the old one and both were visible until the
+    # new one was shrunk. Windowed matches how both windows start, and
+    # full screen is one click on the gear when you want it.
+    globals()["_desk_fs_pending"] = False
+    _apply_desk_pending()
 
     print(f"[OmniWatch] Now using profile {name!r}")
 
@@ -24280,6 +26660,28 @@ def save_layout():
             "loadouts_pos": (list(globals().get("_loadouts_pos"))
                              if globals().get("_loadouts_pos") else None),
             "ow_window_size": list(_windowed_size),
+            # The desk window's own frame, like ow_window_pos/size, is
+            # deliberately NOT part of a panel arrangement: it says which
+            # monitor to reopen on, not where anything sits.
+            # The window's existence travels with the arrangement, the
+            # same as its position and size. "Save layout to all
+            # profiles" copies this file wholesale, so this is what
+            # makes a pushed layout keep its second window.
+            "tag_panel_pos": (list(tag_panel_pos) if tag_panel_pos
+                              else None),
+            "tag_panel_scale": float(tag_panel_scale),
+            "ow_desk_on": bool(_desk_on),
+            # Whether the desk window was FULL SCREEN. Without this a
+            # profile switch reopens it at its windowed size, and every
+            # @desk anchor resolves against a 640x760 viewport instead
+            # of a monitor — which reads as "the second window's panels
+            # did not keep their positions" even though the anchors were
+            # restored perfectly.
+            "ow_desk_fs": bool(_desk_fs_rect is not None),
+            "ow_desk_size": list(_desk_fs_rect[2:] if _desk_fs_rect
+                                 else _desk_size),
+            "ow_desk_pos": list(_desk_fs_rect[:2] if _desk_fs_rect
+                                else (_desk_window_pos() or _desk_pos)),
             # Where the window is right now, so a profile built for a second
             # monitor reopens there. Read live from the OS; if that fails
             # (non-Windows, or no HWND yet) keep whatever we last loaded
@@ -24572,6 +26974,41 @@ def load_layout():
         if isinstance(_lp, list) and len(_lp) == 2:
             try:
                 globals()["_loadouts_pos_loaded"] = [int(_lp[0]), int(_lp[1])]
+            except (TypeError, ValueError):
+                pass
+        _tps = data.get("tag_panel_scale")
+        if _tps:
+            try:
+                globals()["tag_panel_scale"] = max(
+                    MIN_SCALE, min(MAX_SCALE, float(_tps)))
+            except (TypeError, ValueError):
+                pass
+        _tpp = data.get("tag_panel_pos")
+        if isinstance(_tpp, (list, tuple)) and len(_tpp) == 2:
+            try:
+                # Assigned through globals(): tag_panel_pos is defined
+                # well below load_layout, and touching it directly raises
+                # a NameError that aborts the rest of the load silently.
+                globals()["tag_panel_pos"] = [int(_tpp[0]), int(_tpp[1])]
+            except (TypeError, ValueError):
+                pass
+        # ow_desk_fs is still WRITTEN, for anyone reading the file, but
+        # never applied: neither a launch nor a profile switch puts a
+        # window into full screen on your behalf.
+        if "ow_desk_on" in data:
+            globals()["_desk_pending"] = bool(data.get("ow_desk_on"))
+        dsz = data.get("ow_desk_size")
+        if isinstance(dsz, (list, tuple)) and len(dsz) == 2:
+            try:
+                _desk_size[0] = max(OW_DESK_MIN_W, int(dsz[0]))
+                _desk_size[1] = max(OW_DESK_MIN_H, int(dsz[1]))
+            except (TypeError, ValueError):
+                pass
+        dps = data.get("ow_desk_pos")
+        if isinstance(dps, (list, tuple)) and len(dps) == 2:
+            try:
+                _desk_pos[0] = None if dps[0] is None else int(dps[0])
+                _desk_pos[1] = None if dps[1] is None else int(dps[1])
             except (TypeError, ValueError):
                 pass
         ows = data.get("ow_window_size")
@@ -24977,6 +27414,42 @@ COL_TP_MID    = (140, 210, 110)
 COL_TP_HI     = ( 70, 180,  70)
 COL_TP_MAX    = ( 40, 230,  80)
 COL_TP        = COL_TP_LOW   # legacy alias (unused after tp_color())
+# Notch colour for the TP thresholds. Dark rather than light: it reads as
+# a groove cut into the fill at any TP colour, where a light line would
+# vanish against COL_TP_MAX.
+COL_BAR_TICK  = ( 24,  26,  30)
+# The pet's HP strip above its name. Orange on purpose: it must not be
+# mistaken for the owner's own HP bar two lines below it.
+COL_PET_BAR   = (222, 138,  52)
+COL_BAR_TROUGH = ( 20,  22,  27)
+COL_BAR_LIP    = ( 12,  13,  17)
+
+
+COL_TIMER_TEXT = (246, 246, 250)
+
+
+def timer_label(font, text, dim=False):
+    """White timer text with a dark shadow baked in.
+
+    Picking white or dark by the bar's luminance was worse than either
+    on its own: a pale bar got black text and a dark one white, so the
+    panel flipped colour row to row and nothing read as a set. White
+    everywhere, and a one-pixel dark shadow does the work on the pale
+    bars — legible on a yellow fill and invisible on a dark one.
+
+    `dim` is the "someone else's buff" shade, applied to the text rather
+    than by tinting it toward the bar.
+    """
+    col = tuple(int(c * 0.72) for c in COL_TIMER_TEXT) if dim \
+        else COL_TIMER_TEXT
+    base = font.render(text, True, col)
+    out = pygame.Surface((base.get_width() + 1, base.get_height() + 1),
+                         pygame.SRCALPHA)
+    out.blit(font.render(text, True, (8, 8, 12)), (1, 1))
+    out.blit(base, (0, 0))
+    return out
+# TP notches sit at 1000 and 2000 of a 3000 bar.
+TP_TICKS      = (1.0 / 3.0, 2.0 / 3.0)
 COL_BAR_BG    = ( 35,  35,  45)
 COL_BUFF      = ( 60, 200,  90)
 COL_DEBUFF    = (220,  70,  70)
@@ -25083,7 +27556,7 @@ def _update_header_reveal():
     if settings_menu_open:
         _header_revealed = True
         return
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     if _header_revealed:
         _header_revealed = header_rect().collidepoint(mx, my)
     else:
@@ -25130,15 +27603,45 @@ PANEL_X      = 20
 # 24px nub plus a small gap.
 HEADER_RIGHT_BUFFER = 30
 ROW_PAD      = 8
+# Rows sit tighter when they are a list rather than six separate panels:
+# the gap exists to keep independently placed rows from looking joined,
+# and a stacked list wants the opposite.
+PARTY_STACK_PAD = 0
+# Icon rows a party row must have room for: two for buffs, two for
+# debuffs. The row is sized from this as well as from its text and bars,
+# so neither half has to be scrolled in the middle of a fight.
+PARTY_ICON_ROWS = 2
+# Corner radius for a party / alliance row at scale 1.0. Scaled at use,
+# so a resized row keeps the same proportion of curve rather than a
+# fixed 4px that looks square once the row grows.
+PARTY_CORNER = 10
+
+
+def _party_row_gap():
+    return PARTY_STACK_PAD if setting("party_stacked") else ROW_PAD
 START_Y      = HEADER_H + 12   # rows start below header
 BAR_W        = 240
 BAR_H        = 12
 BAR_GAP      = 16
 NAME_W       = 120
+# Anchor/position key for the whole party when rows are stacked.
+# Deliberately not a slot name: it has to coexist with p0..p5 in
+# panel_anchors so switching the mode off restores them untouched.
+PARTY_LIST_KEY = "party_list"
+# One per alliance group, same idea and the same non-collision rule.
+ALLY_LIST_KEYS = ("a1_list", "a2_list")
+# Side of the square job plate at scale 1.0.
+JOB_PLATE    = 34
 BARS_X_OFF   = NAME_W + 12
 BUFF_X_OFF   = BARS_X_OFF + BAR_W + 16
-BUFF_COL_W   = 110
-DEBUFF_COL_W = 110
+BUFF_COL_W   = 128
+DEBUFF_COL_W = 128
+# Status icon size at scale 1.0, and the gap between cells. Used BOTH by
+# the packer that draws the grid and by the row-height calculation that
+# has to leave room for it — they were two copies of 16 and 2, which is
+# how you end up with a row that fits three rows of a four-row grid.
+PARTY_ICON_PX  = 20
+PARTY_ICON_GAP = 2
 DEBUFF_X_OFF = BUFF_X_OFF + BUFF_COL_W + 12
 BUFF_LINE_H  = 15
 ROW_MIN_H    = 96
@@ -25236,12 +27739,52 @@ def tp_color(tp):
         return COL_TP_MID
     return COL_TP_LOW
 
-def draw_bar(surface, x, y, w, h, percent, color, label=None, label_font=None):
-    pygame.draw.rect(surface, COL_BAR_BG, (x, y, w, h))
+def draw_bar(surface, x, y, w, h, percent, color, label=None,
+             label_font=None, ticks=None):
+    """Draw a value bar.
+
+    `ticks` is a list of fractions (0..1) to notch across the bar. TP uses
+    it for the 1000/2000 weaponskill thresholds — the thing you actually
+    read a TP bar for, and which a plain fill cannot tell you.
+    """
+    # Rounded ends, scaled to the bar so a 6px TP bar and a 20px HP bar
+    # both look intentional rather than one being a pill and the other a
+    # rectangle with nicked corners.
+    _r = max(1, min(5, h // 2))
+    # The empty part of a bar is a CHANNEL, not a slab: darker than the
+    # panel it sits in, with a dark line along its top lip. The fill then
+    # reads as sitting inside it rather than painted on top, which is
+    # what the highlight on the fill has been half-implying all along.
+    pygame.draw.rect(surface, COL_BAR_TROUGH, (x, y, w, h),
+                     border_radius=_r)
+    pygame.draw.line(surface, COL_BAR_LIP, (x + _r, y), (x + w - _r, y))
     fill_w = max(0, int(w * min(percent, 1.0)))
     if fill_w > 0:
-        pygame.draw.rect(surface, color, (x, y, fill_w, h))
-    pygame.draw.rect(surface, COL_BORDER, (x, y, w, h), 1)
+        # The LEFT end is always rounded; the right end only once the
+        # fill actually reaches it. A partial bar with both ends rounded
+        # reads as a floating pill rather than a level.
+        _full = fill_w >= w - 1
+        pygame.draw.rect(
+            surface, color, (x, y, fill_w, h),
+            border_top_left_radius=_r, border_bottom_left_radius=_r,
+            border_top_right_radius=_r if _full else 0,
+            border_bottom_right_radius=_r if _full else 0)
+        # One-pixel lighter line along the top of the fill, inset past
+        # the curve so it does not stick out of the corner.
+        if h >= 8:
+            hi = tuple(min(255, c + 45) for c in color[:3])
+            _hx0 = x + _r
+            _hx1 = x + fill_w - 1 - (_r if _full else 0)
+            if _hx1 > _hx0:
+                pygame.draw.line(surface, hi, (_hx0, y), (_hx1, y))
+    if ticks:
+        for frac in ticks:
+            tx = x + int(w * frac)
+            if x < tx < x + w:
+                pygame.draw.line(surface, COL_BAR_TICK,
+                                 (tx, y + 1), (tx, y + h - 2))
+    # No outline. A row already carries five nested borders without it,
+    # and that grid of lines is most of what reads as a debug overlay.
     if label:
         lf = label_font or font_label
         # Draw a 1-pixel dark outline behind the label for readability
@@ -25331,50 +27874,134 @@ def scaled_panel_dims(scale):
     bar_w        = int(BAR_W        * s)
     bar_h        = max(4, int(BAR_H * s))
     bar_gap      = max(6, int(BAR_GAP * s))
-    name_w       = int(NAME_W       * s)
-    bars_x_off   = name_w + int(12 * s)
+    _f_job       = get_font("Consolas", 13 * s)
+    # The name moved above the bars, so the left gutter only has to hold
+    # the job plate — the column that used to carry name + job is gone,
+    # and the row loses that whole width.
+    job_plate    = max(20, int(JOB_PLATE * s))
+    name_w       = job_plate
+    bars_x_off   = name_w + int(12 * s)   # may be moved right below
     buff_col_w   = int(BUFF_COL_W   * s)
     debuff_col_w = int(DEBUFF_COL_W * s)
-    buff_x_off   = bars_x_off + bar_w + int(16 * s)
-    debuff_x_off = buff_x_off + buff_col_w + int(12 * s)
-    # Buff/debuff column lines: smaller than the main panel text so more
-    # entries fit per row when the user enables 'specific_buff_names'
-    # (Honor March vs March is longer, so we win some space back). The
-    # line height is paired with the font so they scale together.
-    # User-configurable size via party_buff_font_size: Small for higher
-    # density, Large for at-a-glance readability. The multiplier is
-    # applied on top of the per-panel scale `s` so manual panel scale
-    # and font-size preference compose cleanly.
+    # Status left or right of the bars.
+    #
+    # Left means the ICONS are outermost and the job plate stays beside
+    # the bars, so the row reads icons | plate | name+bars. The icons
+    # pack right-aligned in that case (see _render_column_grid's `rtl`)
+    # so the first one sits against the plate and the block grows away
+    # from it as more arrive.
+    #
+    # THE WIDTH IS COMPUTED ONCE, from the right-hand arrangement, and
+    # the left one lays itself out backwards inside it. Deriving the two
+    # independently left the row a few pixels wider one way than the
+    # other however carefully the gaps were mirrored, because the two
+    # orders do not round the same.
+    panel_w      = (name_w + int(12 * s) + bar_w + int(16 * s)
+                    + buff_col_w + int(12 * s) + debuff_col_w
+                    + int(20 * s))
+    if setting("party_status_left"):
+        bars_x_off   = panel_w - int(20 * s) - bar_w
+        plate_x_off  = bars_x_off - int(12 * s) - name_w
+        debuff_x_off = plate_x_off - int(16 * s) - debuff_col_w
+        buff_x_off   = debuff_x_off - int(12 * s) - buff_col_w
+    else:
+        plate_x_off  = int(6 * s)
+        buff_x_off   = bars_x_off + bar_w + int(16 * s)
+        debuff_x_off = buff_x_off + buff_col_w + int(12 * s)
+
     _buff_size_pref = (setting("party_buff_font_size")
                        if "party_buff_font_size" in SETTINGS_BY_KEY
                        else "medium")
     _buff_size_mult = {"small": 0.85, "medium": 1.0, "large": 1.20}.get(
         _buff_size_pref, 1.0)
     # Sizing: the base px below sets Medium; Small/Large stay proportional
-    # via _buff_size_mult. Base was 8 (Medium~8px); bumped to 9 for
-    # slightly more readable text at the default. Lifts all three by the
-    # same ratio: Small~7.65px, Medium 9px, Large~10.8px. Line height base
-    # nudged from -5 to -4 so rows keep pace with the taller glyphs.
+    # via _buff_size_mult.
     buff_font_px = max(7, int(9 * s * _buff_size_mult))
     buff_line_h  = max(7, int((BUFF_LINE_H - 4) * s * _buff_size_mult))
-    row_min_h    = int(ROW_MIN_H * s)
     row_pad_v    = int(ROW_PAD_V * s)
-    panel_w      = bars_x_off + bar_w + int(16 * s) + buff_col_w + int(12 * s) + debuff_col_w + int(20 * s)
+    # Name line, then the bars under it. Taller than the side-by-side
+    # layout on purpose: the height is what gives the status icon grid
+    # room to breathe, and it is bought with width the row no longer
+    # needs. Measured, never a constant.
+    _bars_h      = _party_bar_metrics(bar_h, bar_gap)[2]
+    _name_h      = get_font("Consolas", 17 * s, bold=True).get_height()
+    # The status grid gets a vote too: ICON_PX + GAP_PX per row, matching
+    # what the grid packer uses, so "two rows each" is guaranteed rather
+    # than whatever happens to be left over.
+    _icon_cell   = (max(12, int(PARTY_ICON_PX * s))
+                    + max(1, int(PARTY_ICON_GAP * s)))
+    row_min_h    = max(_name_h + int(3 * s) + _bars_h,
+                       job_plate,
+                       PARTY_ICON_ROWS * _icon_cell) + row_pad_v
+
+    # Measured from whichever block actually ends furthest right, so the
+    # row is the same width with the status icons on either side. The old
+    # formula assumed the status section always came after the bars and
+    # made the row ~250px wider once they swapped.
+
     return {
         "s": s,
         "bar_w": bar_w, "bar_h": bar_h, "bar_gap": bar_gap,
         "name_w": name_w, "bars_x_off": bars_x_off,
         "buff_col_w": buff_col_w, "debuff_col_w": debuff_col_w,
         "buff_x_off": buff_x_off, "debuff_x_off": debuff_x_off,
+        "plate_x_off": plate_x_off,
         "buff_line_h": buff_line_h,
         "row_min_h": row_min_h, "row_pad_v": row_pad_v,
         "panel_w": panel_w,
-        "f_name":      get_font("Consolas", 17 * s, bold=True),
+        "f_name":      get_ui_font(16 * s, bold=True),
         "f_small":     get_font("Consolas", 14 * s),
         "f_buff":      get_font("Consolas", buff_font_px),
-        "f_label":     get_font("Consolas", 13 * s),
+        "f_label":     _f_job,
+        "job_plate":   job_plate,
         "f_bar_label": get_font("Consolas", 13 * s, bold=True),
+        "f_bar_label_sm": get_font("Consolas", 11 * s, bold=True),
     }
+
+def _party_bar_metrics(bar_h, bar_gap):
+    """(hp height, sub height, block height) for a party row's bars.
+
+    Shared by scaled_panel_dims (which sizes the row from it) and
+    party_bar_rows (which places them). Two callers deriving the same
+    numbers separately is how a row ends up either clipping its bars or
+    carrying dead space under them.
+    """
+    sp = max(2, bar_gap - bar_h)
+    grow = max(2, int(round(bar_h * 0.34)))
+    h_hp = bar_h + grow
+    h_sub = max(7, bar_h)
+    return h_hp, h_sub, h_hp + sp + h_sub
+
+
+def party_bar_rows(d, by):
+    """(x_off, y, w, h, font) for the HP, MP and TP bars of a party row.
+
+    TWO LINES, NOT THREE. HP takes the full width and the height, because
+    it is the one you act on; MP and TP share the line beneath it, because
+    you read them and rarely act on them. That is where the row's smaller
+    footprint comes from — the bar block loses a whole line.
+
+    x_off is relative to the bars' left edge so the caller stays in charge
+    of where the block sits.
+    """
+    bar_h = d["bar_h"]
+    bar_w = d["bar_w"]
+    sp = max(2, d["bar_gap"] - bar_h)
+    h_hp, h_sub, _blk = _party_bar_metrics(bar_h, d["bar_gap"])
+    f_sub = d.get("f_bar_label_sm") or d["f_bar_label"]
+    gap = max(3, int(sp))
+    half = (bar_w - gap) // 2
+    y_sub = by + h_hp + sp
+    return ((0, by, bar_w, h_hp, d["f_bar_label"]),
+            (0, y_sub, half, h_sub, f_sub),
+            (bar_w - half, y_sub, half, h_sub, f_sub))
+
+
+def party_bars_block_h(d):
+    """Height of the whole HP/MP/TP block, for centring and row sizing."""
+    rows = party_bar_rows(d, 0)
+    return rows[2][1] + rows[2][3]
+
 
 def row_height(member, scale=1.0):
     """Panel height for a given member.
@@ -25395,24 +28022,35 @@ def scaled_ally_dims(scale):
     height since there's less to display. Used for alliance party 1 and
     alliance party 2 (a10..a15, a20..a25).
     """
+    # Same SHAPE as a party row — job plate, name above the bars, HP full
+    # width with MP and TP under it — just smaller. An alliance member is
+    # the same kind of thing as a party member and reading two different
+    # layouts side by side costs more than the space it saves.
     s = _eff(scale)
-    bar_w        = int(160 * s)        # narrower bars than main party
-    bar_h        = max(3, int(8 * s))  # thinner too
-    bar_gap      = max(4, int(11 * s))
-    name_w       = int(110 * s)
-    bars_x_off   = name_w + int(10 * s)
-    row_min_h    = int(56 * s)
+    bar_w        = int(200 * s)
+    bar_h        = max(4, int(10 * s))
+    bar_gap      = max(5, int(13 * s))
+    job_plate    = max(18, int(26 * s))
+    plate_x_off  = int(5 * s)
+    name_w       = job_plate
+    bars_x_off   = plate_x_off + job_plate + int(8 * s)
     row_pad_v    = int(8 * s)
-    panel_w      = bars_x_off + bar_w + int(14 * s)
+    _bars_h      = _party_bar_metrics(bar_h, bar_gap)[2]
+    _f_name      = get_ui_font(12.5 * s, bold=True)
+    row_min_h    = max(_f_name.get_height() + int(2 * s) + _bars_h,
+                       job_plate) + row_pad_v
+    panel_w      = bars_x_off + bar_w + int(10 * s)
     return {
         "s": s,
         "bar_w": bar_w, "bar_h": bar_h, "bar_gap": bar_gap,
         "name_w": name_w, "bars_x_off": bars_x_off,
+        "job_plate": job_plate, "plate_x_off": plate_x_off,
         "row_min_h": row_min_h, "row_pad_v": row_pad_v,
         "panel_w": panel_w,
-        "f_name":  get_font("Consolas", 13 * s, bold=True),
-        "f_label": get_font("Consolas", 10 * s),
+        "f_name":  _f_name,
+        "f_label": get_font("Consolas", 9 * s),
         "f_bar_label": get_font("Consolas", 9 * s),
+        "f_bar_label_sm": get_font("Consolas", 8 * s),
     }
 
 
@@ -25420,7 +28058,8 @@ def ally_row_height(scale=1.0):
     return scaled_ally_dims(scale)["row_min_h"]
 
 
-def draw_ally_panel(surface, x, y, member, scale=1.0):
+def draw_ally_panel(surface, x, y, member, scale=1.0,
+                    corners=(True, True)):
     """Render a single alliance member panel.
 
     Smaller than the main party panel. Layout: name + job/sub line on the
@@ -25433,49 +28072,60 @@ def draw_ally_panel(surface, x, y, member, scale=1.0):
     pw = d["panel_w"]
     _es = _eff(scale)   # effective scale for raw positioning offsets
 
-    pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, rh), border_radius=4)
-    pygame.draw.rect(surface, COL_BORDER, (x, y, pw, rh), 1, border_radius=4)
-    draw_accent_stripe(surface, x, y, rh, ACCENT_ALLY)
+    # `corners` is (round the top, round the bottom). A stacked group
+    # passes (first, last) so only the ends of the LIST are rounded and
+    # the seams stay square; the border is drawn once around the whole
+    # group by the caller in that case.
+    _ctop, _cbot = corners
+    _r = max(3, int(PARTY_CORNER * (d["s"] if "s" in d else 1.0)))
+    pygame.draw.rect(
+        surface, COL_PANEL, (x, y, pw, rh),
+        border_top_left_radius=_r if _ctop else 0,
+        border_top_right_radius=_r if _ctop else 0,
+        border_bottom_left_radius=_r if _cbot else 0,
+        border_bottom_right_radius=_r if _cbot else 0)
+    if _ctop and _cbot:
+        pygame.draw.rect(surface, COL_BORDER, (x, y, pw, rh), 1,
+                         border_radius=_r)
+    elif not _ctop:
+        pygame.draw.line(surface, COL_DIVIDER, (x + 1, y), (x + pw - 2, y))
+    # No accent stripe: the party rows dropped theirs and two panels of
+    # the same kind should not disagree about their own styling.
 
-    # Name + job/sub stacked on the left.
-    name_surf = d["f_name"].render(member.get("name", "?"), True, COL_NAME)
-    mj  = member.get("main_job", "")
-    mjl = member.get("main_lvl", 0)
-    sj  = member.get("sub_job",  "")
-    sjl = member.get("sub_lvl",  0)
-    job_str = ""
-    if mj:
-        job_str = f"{mj}{mjl}" if mjl else mj
-        if sj:
-            job_str += f" / {sj}{sjl}" if sjl else f" / {sj}"
-    job_surf = d["f_label"].render(job_str, True, COL_LABEL_DIM) if job_str else None
+    # Job plate, same as a party row, with the subjob under the main.
+    _pj_main, _pj_sub = party_job_abbrev(member)
+    _plate = d["job_plate"]
+    draw_job_plate(surface, x + d["plate_x_off"],
+                   y + (rh - _plate) // 2, _plate,
+                   _pj_main, d["f_label"], sub_job=_pj_sub)
 
-    block_h = name_surf.get_height() + (job_surf.get_height() + 2 if job_surf else 0)
-    block_y = y + (rh - block_h) // 2
-    surface.blit(name_surf, (x + int(8 * _es), block_y))
-    if job_surf:
-        surface.blit(job_surf, (x + int(8 * _es),
-                                block_y + name_surf.get_height() + 2))
-
-    # Three bars on the right, vertically centered.
     bx = x + d["bars_x_off"]
-    bars_block_h = d["bar_h"] * 3 + d["bar_gap"] * 2
-    by = y + (rh - bars_block_h) // 2
+    name_surf = d["f_name"].render(member.get("name", "?"), True, COL_NAME)
+    _blk_h = name_surf.get_height() + int(2 * _es) + party_bars_block_h(d)
+    block_y = y + (rh - _blk_h) // 2
+
+    # Name clipped to the bar width so a long one cannot run past the row.
+    _oc = surface.get_clip()
+    surface.set_clip(pygame.Rect(bx, block_y, d["bar_w"],
+                                 name_surf.get_height()))
+    surface.blit(name_surf, (bx, block_y))
+    surface.set_clip(_oc)
 
     hpp = member.get("hpp", 0)
     hp  = member.get("hp",  0)
     mp  = member.get("mp",  0)
     tp  = member.get("tp",  0)
-    hc = hp_color(hpp, flash) if 'flash' in globals() else (200, 80, 80)
-    draw_bar(surface, bx, by,
-             d["bar_w"], d["bar_h"], hpp / 100.0, hc,
-             f"HP {hp} ({hpp}%)", d["f_bar_label"])
-    draw_bar(surface, bx, by + d["bar_gap"],
-             d["bar_w"], d["bar_h"], _mp_fill(member), COL_MP,
-             f"MP {mp}", d["f_bar_label"])
-    draw_bar(surface, bx, by + d["bar_gap"] * 2,
-             d["bar_w"], d["bar_h"], min(tp / 3000, 1.0), tp_color(tp),
-             f"TP {tp}", d["f_bar_label"])
+    hc = hp_color(hpp, False)
+    by = block_y + name_surf.get_height() + int(2 * _es)
+    _rhp, _rmp, _rtp = party_bar_rows(d, by)
+    draw_bar(surface, bx + _rhp[0], _rhp[1], _rhp[2], _rhp[3], hpp / 100.0,
+             hc, f"HP {hp} ({hpp}%)", _rhp[4])
+    draw_bar(surface, bx + _rmp[0], _rmp[1], _rmp[2], _rmp[3],
+             _mp_fill(member), COL_MP, f"MP {mp}", _rmp[4])
+    draw_bar(surface, bx + _rtp[0], _rtp[1], _rtp[2], _rtp[3],
+             min(tp / 3000, 1.0),
+             tp_flash_color(member.get("name", ""), tp, tp_color(tp)),
+             f"TP {tp}", _rtp[4], ticks=TP_TICKS)
 
 
 # ── Recast panel ──────────────────────────────────────────────────────────
@@ -25648,8 +28298,8 @@ def draw_recast_panel(surface, x, y, entries, scale=1.0, locked=False):
             pygame.draw.rect(surface, COL_BORDER,
                               (bx, by, bar_w, bar_h), 1, border_radius=3)
             # Text overlays.
-            name_surf = d["f_entry"].render(name, True, col)
-            time_surf = d["f_entry"].render("READY", True, col)
+            name_surf = timer_label(d["f_entry"], name)
+            time_surf = timer_label(d["f_entry"], "READY")
             text_y    = by + (bar_h - name_surf.get_height()) // 2
             surface.blit(name_surf, (bx + 4, text_y))
             surface.blit(time_surf, (bx + bar_w - time_surf.get_width() - 4,
@@ -25679,8 +28329,8 @@ def draw_recast_panel(surface, x, y, entries, scale=1.0, locked=False):
 
             # Text overlays: name on left, countdown on right.
             time_str  = _format_recast_time(secs)
-            name_surf = d["f_entry"].render(name, True, col)
-            time_surf = d["f_entry"].render(time_str, True, col)
+            name_surf = timer_label(d["f_entry"], name)
+            time_surf = timer_label(d["f_entry"], time_str)
             text_y    = by + (bar_h - name_surf.get_height()) // 2
             surface.blit(name_surf, (bx + 4, text_y))
             surface.blit(time_surf, (bx + bar_w - time_surf.get_width() - 4,
@@ -25851,8 +28501,8 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
                               (bx, by, bar_w, bar_h), border_radius=3)
             pygame.draw.rect(surface, COL_BORDER,
                               (bx, by, bar_w, bar_h), 1, border_radius=3)
-            name_surf = d["f_entry"].render(name, True, col)
-            time_surf = d["f_entry"].render("WORE OFF", True, col)
+            name_surf = timer_label(d["f_entry"], name)
+            time_surf = timer_label(d["f_entry"], "WORE OFF")
             text_y = by + (bar_h - name_surf.get_height()) // 2
             surface.blit(name_surf, (bx + 4, text_y))
             surface.blit(time_surf,
@@ -25880,14 +28530,13 @@ def draw_buff_panel(surface, x, y, entries, scale=1.0, locked=False):
             pygame.draw.rect(surface, COL_BORDER,
                               (bx, by, bar_w, bar_h), 1, border_radius=3)
 
-            # Other-player buffs render dimmer to visually distinguish.
-            text_col = col
-            if is_other:
-                text_col = tuple(int(c * 0.7) for c in col)
-
+            # Readable against the fill rather than tinted like it. The
+            # dimming that marked another player's buff moves to the
+            # TEXT's own brightness, so it still reads as secondary
+            # without going back to coloured-on-coloured.
             time_str = _format_buff_time(secs)
-            name_surf = d["f_entry"].render(name, True, text_col)
-            time_surf = d["f_entry"].render(time_str, True, text_col)
+            name_surf = timer_label(d["f_entry"], name, is_other)
+            time_surf = timer_label(d["f_entry"], time_str, is_other)
             text_y = by + (bar_h - name_surf.get_height()) // 2
             surface.blit(name_surf, (bx + 4, text_y))
             surface.blit(time_surf,
@@ -26733,7 +29382,7 @@ def _blusets_show():
 def _blusets_draw_button_row(surface, label, x, y, w, h, danger=False,
                              accent=False):
     r = pygame.Rect(x, y, w, h)
-    hov = r.collidepoint(pygame.mouse.get_pos())
+    hov = r.collidepoint(_mouse_pos())
     if danger:
         bg = (88, 38, 42) if hov else (62, 30, 34)
         bd = (170, 80, 90)
@@ -27631,9 +30280,9 @@ def draw_pupatt_window(surface):
     h = title_h + pad + body + pad + 18
 
     if _pupatt_win_pos is None:
-        _pupatt_win_pos = [(surface.get_width() - w) // 2, 110]
-    x = max(0, min(int(_pupatt_win_pos[0]), surface.get_width() - w))
-    y = max(0, min(int(_pupatt_win_pos[1]), surface.get_height() - h))
+        _pupatt_win_pos = [max(0, (WIDTH - w) // 2), 110]
+    x = _clamp_win_x(_pupatt_win_pos[0], w)
+    y = _clamp_win_y(_pupatt_win_pos[1], h, x)
     _pupatt_win_pos[0], _pupatt_win_pos[1] = x, y
 
     panel = pygame.Rect(x, y, w, h)
@@ -27786,7 +30435,7 @@ def _pupatt_handle_event(event):
         return True
 
     if event.type == pygame.MOUSEWHEEL:
-        mx, my = pygame.mouse.get_pos()
+        mx, my = _mouse_pos()
         if _pupatt_win_rect and _pupatt_win_rect.collidepoint(mx, my):
             if _pupatt_active_slot is not None:
                 _pupatt_pick_scroll = max(0, _pupatt_pick_scroll - event.y)
@@ -28256,9 +30905,9 @@ def draw_brdset_window(surface):
     h = title_h + pad + body + pad + 18
 
     if _brdset_win_pos is None:
-        _brdset_win_pos = [(surface.get_width() - w) // 2, 110]
-    x = max(0, min(int(_brdset_win_pos[0]), surface.get_width() - w))
-    y = max(0, min(int(_brdset_win_pos[1]), surface.get_height() - h))
+        _brdset_win_pos = [max(0, (WIDTH - w) // 2), 110]
+    x = _clamp_win_x(_brdset_win_pos[0], w)
+    y = _clamp_win_y(_brdset_win_pos[1], h, x)
     _brdset_win_pos[0], _brdset_win_pos[1] = x, y
 
     panel = pygame.Rect(x, y, w, h)
@@ -28513,7 +31162,7 @@ def _brdset_handle_event(event):
         return True
 
     if event.type == pygame.MOUSEWHEEL:
-        mx, my = pygame.mouse.get_pos()
+        mx, my = _mouse_pos()
         if _brdset_win_rect and _brdset_win_rect.collidepoint(mx, my):
             if _brdset_pick_for is not None:
                 _brdset_pick_scroll = max(0, _brdset_pick_scroll - event.y)
@@ -28884,7 +31533,7 @@ def draw_blusets_window(surface):
     surface.blit(f_t.render(ttl, True, (200, 210, 230)), (x0 + 10, y0 + 5))
     # close [×]
     _blusets_close_rect = pygame.Rect(x0 + W - 22, y0 + 5, 16, 16)
-    hov = _blusets_close_rect.collidepoint(pygame.mouse.get_pos())
+    hov = _blusets_close_rect.collidepoint(_mouse_pos())
     pygame.draw.rect(surface, (90, 40, 44) if hov else (50, 36, 40),
                      _blusets_close_rect, border_radius=3)
     xs = f_s.render("✕", True, (220, 180, 184))
@@ -28963,7 +31612,7 @@ def draw_blusets_window(surface):
             tw = f_tab.size(tab)[0] + 18
             tr = pygame.Rect(tx, ty + 2, tw, 20)
             active = (tab == _blusets_edit_tab)
-            hov = tr.collidepoint(pygame.mouse.get_pos())
+            hov = tr.collidepoint(_mouse_pos())
             if active:
                 pygame.draw.rect(surface, (38, 52, 66), tr,
                                  border_radius=3)
@@ -29044,7 +31693,7 @@ def draw_blusets_window(surface):
                 if body.y - 20 < cy < body.bottom:
                     r = pygame.Rect(x0 + 14, cy + 2, left_w - 18, 18)
                     sel = nm.lower() in _blusets_edit_sel
-                    hov = r.collidepoint(pygame.mouse.get_pos())
+                    hov = r.collidepoint(_mouse_pos())
                     if hov:
                         pygame.draw.rect(surface, (34, 38, 52), r,
                                          border_radius=3)
@@ -29064,7 +31713,7 @@ def draw_blusets_window(surface):
                     surface.blit(ns, (r.x + 22, r.y + 1))
                     nrect = pygame.Rect(r.x + 22, r.y + 1,
                                         ns.get_width(), 15)
-                    if nrect.collidepoint(pygame.mouse.get_pos()):
+                    if nrect.collidepoint(_mouse_pos()):
                         # underline on hover: the name is a wiki link
                         pygame.draw.line(
                             surface, col,
@@ -29162,7 +31811,7 @@ def draw_blusets_window(surface):
         bar_x = (x0 + 350) if _blusets_view == "edit" else (x0 + W - 7)
         knob = pygame.Rect(bar_x, bar_y, 5, bar_h)
         hot = _blusets_sb_drag is not None or knob.inflate(
-            10, 0).collidepoint(pygame.mouse.get_pos())
+            10, 0).collidepoint(_mouse_pos())
         pygame.draw.rect(surface, (110, 120, 150) if hot else (70, 76, 96),
                          knob, border_radius=2)
         _blusets_sb_rect = knob.inflate(10, 4)
@@ -29198,7 +31847,7 @@ def draw_blusets_window(surface):
     # user-supplied PNGs in data\bludata\icons; rows without one show
     # no tooltip). Drawn last so it sits above the window. ──
     if _blusets_view == "edit" and setting("blusets_tooltips"):
-        _mxy = pygame.mouse.get_pos()
+        _mxy = _mouse_pos()
         _hover_nm = None
         # Only rows visibly inside the scroll body (rects exist for
         # clipped rows too; the body rect excludes header + footer).
@@ -29207,10 +31856,13 @@ def draw_blusets_window(surface):
                 _hover_nm = _nm
                 break
         if _hover_nm:
-            _sw_, _sh_ = surface.get_size()
+            # Follows the window it was opened from. _ui_screen() is the main
+            # window by definition, so clamping to it dragged anything opened
+            # on the second screen back to the first.
+            _vx, _vy, _vw, _vh = _ui_view_at(globals().get("_blusets_win_pos"))
             draw_item_tooltip(surface, _mxy[0], _mxy[1],
                               _blusets_spell_tooltip_info(_hover_nm),
-                              _sw_, _sh_)
+                              _vx + _vw, _vy + _vh)
 
 
 def _blusets_open_editor(orig_name=None):
@@ -29313,7 +31965,7 @@ def _blusets_handle_event(event):
 
     if event.type == pygame.MOUSEWHEEL:
         if (_blusets_open and _blusets_win_rect is not None
-                and _blusets_win_rect.collidepoint(pygame.mouse.get_pos())):
+                and _blusets_win_rect.collidepoint(_mouse_pos())):
             _blusets_scroll = max(0, _blusets_scroll - event.y * 30)
             return True
         return False
@@ -29830,7 +32482,7 @@ def draw_trustsets_window(surface):
         "EDIT SET" if _trustsets_edit_orig else "NEW SET")
     surface.blit(f_t.render(ttl, True, (200, 210, 230)), (x0 + 10, y0 + 5))
     _trustsets_close_rect = pygame.Rect(x0 + W - 22, y0 + 5, 16, 16)
-    hov = _trustsets_close_rect.collidepoint(pygame.mouse.get_pos())
+    hov = _trustsets_close_rect.collidepoint(_mouse_pos())
     pygame.draw.rect(surface, (90, 40, 44) if hov else (50, 36, 40),
                      _trustsets_close_rect, border_radius=3)
     xs = f_s.render("\u2715", True, (220, 180, 184))
@@ -29945,7 +32597,7 @@ def draw_trustsets_window(surface):
             if body.y - 20 < cy < body.bottom:
                 r = pygame.Rect(x0 + 14, cy + 2, left_w - 18, 18)
                 sel = disp.lower() in _trustsets_edit_order
-                hov = r.collidepoint(pygame.mouse.get_pos())
+                hov = r.collidepoint(_mouse_pos())
                 if hov:
                     pygame.draw.rect(surface, (34, 38, 52), r,
                                      border_radius=3)
@@ -29962,7 +32614,7 @@ def draw_trustsets_window(surface):
                 ns = _blusets_font(11, bold=True).render(disp, True, col)
                 surface.blit(ns, (r.x + 22, r.y + 1))
                 nrect = pygame.Rect(r.x + 22, r.y + 1, ns.get_width(), 15)
-                if nrect.collidepoint(pygame.mouse.get_pos()):
+                if nrect.collidepoint(_mouse_pos()):
                     pygame.draw.line(surface, col, (nrect.x, nrect.bottom),
                                      (nrect.x + nrect.w, nrect.bottom))
                 job = (rec.get("job") if rec else "") or ""
@@ -29995,7 +32647,7 @@ def draw_trustsets_window(surface):
                                     (130, 138, 156)), (rp.x, oy + 2))
         case_o = {d.lower(): d for d, _ in _trustsets_owned()}
         f_o = _blusets_font(11, bold=True)
-        mpos = pygame.mouse.get_pos()
+        mpos = _mouse_pos()
         for i, key in enumerate(_trustsets_edit_order):
             if oy > rp.bottom - 18:
                 break
@@ -30045,7 +32697,7 @@ def draw_trustsets_window(surface):
         bar_x = (x0 + 350) if _trustsets_view == "edit" else (x0 + W - 7)
         knob = pygame.Rect(bar_x, bar_y, 5, bar_h)
         hot = _trustsets_sb_drag is not None or knob.inflate(
-            10, 0).collidepoint(pygame.mouse.get_pos())
+            10, 0).collidepoint(_mouse_pos())
         pygame.draw.rect(surface, (110, 120, 150) if hot else (70, 76, 96),
                          knob, border_radius=2)
         _trustsets_sb_rect = knob.inflate(10, 4)
@@ -30103,16 +32755,20 @@ def draw_trustsets_window(surface):
 
     # ── Hover tooltip (edit view): job + abilities/traits ──
     if _trustsets_view == "edit" and setting("blusets_tooltips"):
-        _mxy = pygame.mouse.get_pos()
+        _mxy = _mouse_pos()
         _hover = None
         for _r, _nr, _nm in _trustsets_trust_rects:
             if _r.collidepoint(_mxy) and body.collidepoint(_mxy):
                 _hover = _nm
                 break
         if _hover:
-            _sw_, _sh_ = surface.get_size()
+            # Follows the window it was opened from. _ui_screen() is the main
+            # window by definition, so clamping to it dragged anything opened
+            # on the second screen back to the first.
+            _vx, _vy, _vw, _vh = _ui_view_at(globals().get("_trustsets_win_pos"))
             draw_item_tooltip(surface, _mxy[0], _mxy[1],
-                              _trustsets_tooltip_info(_hover), _sw_, _sh_)
+                              _trustsets_tooltip_info(_hover),
+                              _vx + _vw, _vy + _vh)
 
 
 def _trustsets_handle_event(event):
@@ -30125,7 +32781,7 @@ def _trustsets_handle_event(event):
     if event.type == pygame.MOUSEWHEEL:
         if (_trustsets_open and _trustsets_win_rect is not None
                 and _trustsets_win_rect.collidepoint(
-                    pygame.mouse.get_pos())):
+                    _mouse_pos())):
             _trustsets_scroll = max(0, _trustsets_scroll - event.y * 30)
             return True
         return False
@@ -30332,7 +32988,10 @@ def draw_cheatsheet_button(surface):
     lh = f.get_height()
     bw = max(l1.get_width(), l2.get_width()) + pad * 2
     bh = lh * 2 + padv * 2
-    sw, shh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view_at(globals().get("cheatsheet_button_pos"))
     if cheatsheet_button_pos is None:
         cheatsheet_button_pos = [PANEL_X, layout_top() + 4]
     # Clamp for DISPLAY only — keep the button on-screen and clickable, but
@@ -30344,11 +33003,11 @@ def draw_cheatsheet_button(surface):
     # after a reload. Preserving the stored value lets it reappear intact
     # once the window grows. _cs_btn_draw_pos records where it's actually
     # drawn so a drag grabs from the visible spot (no jump when clamped).
-    x = max(0, min(int(cheatsheet_button_pos[0]), max(0, sw - bw)))
-    y = max(0, min(int(cheatsheet_button_pos[1]), max(0, shh - bh)))
+    x = max(_vx, min(int(cheatsheet_button_pos[0]), max(_vx, _vx + _vw - bw)))
+    y = max(_vy, min(int(cheatsheet_button_pos[1]), max(_vy, _vy + _vh - bh)))
     _cs_btn_draw_pos = [x, y]
     cheatsheet_button_rect = pygame.Rect(x, y, bw, bh)
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     hov = cheatsheet_button_rect.collidepoint(mx, my)
     bg  = (62, 62, 78) if (hov or cheatsheet_window_open) else (44, 44, 54)
     bdr = (180, 180, 200) if cheatsheet_window_open else (100, 100, 115)
@@ -30426,15 +33085,18 @@ def draw_calltrust_button(surface):
     lh = f.get_height()
     bw = max(l1.get_width(), l2.get_width()) + pad * 2
     bh = lh * 2 + padv * 2
-    sw, shh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view_at(globals().get("calltrust_button_pos"))
     if calltrust_button_pos is None:
         calltrust_button_pos = [PANEL_X, layout_top() + 64]
     # Clamp for DISPLAY only (same reasoning as the Cheat Sheet button).
-    x = max(0, min(int(calltrust_button_pos[0]), max(0, sw - bw)))
-    y = max(0, min(int(calltrust_button_pos[1]), max(0, shh - bh)))
+    x = max(_vx, min(int(calltrust_button_pos[0]), max(_vx, _vx + _vw - bw)))
+    y = max(_vy, min(int(calltrust_button_pos[1]), max(_vy, _vy + _vh - bh)))
     _ct_btn_draw_pos = [x, y]
     calltrust_button_rect = pygame.Rect(x, y, bw, bh)
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     hov = calltrust_button_rect.collidepoint(mx, my)
     bg = (50, 64, 54) if hov else (40, 50, 44)
     bdr = (120, 190, 140) if has_active else (90, 100, 96)
@@ -30458,8 +33120,8 @@ def draw_calltrust_button(surface):
         if time.time() < _ct_msg[1]:
             fn = get_font("Consolas", _bs(11))
             ns = fn.render(_ct_msg[0], True, (180, 200, 170))
-            nx = max(0, min(x, sw - ns.get_width()))
-            ny = min(y + bh + 2, shh - ns.get_height())
+            nx = max(0, min(x, _vx + _vw - ns.get_width()))
+            ny = min(y + bh + 2, _vy + _vh - ns.get_height())
             bgr = pygame.Rect(nx - 2, ny - 1, ns.get_width() + 4,
                               ns.get_height() + 2)
             pygame.draw.rect(surface, (20, 26, 22), bgr, border_radius=3)
@@ -30537,14 +33199,17 @@ def draw_sing_button(surface):
     lh = f.get_height()
     bw = max(l1.get_width(), l2.get_width()) + pad * 2
     bh = lh * 2 + padv * 2
-    sw, shh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view_at(globals().get("sing_button_pos"))
     if sing_button_pos is None:
         sing_button_pos = [PANEL_X, layout_top() + 140]
-    x = max(0, min(int(sing_button_pos[0]), max(0, sw - bw)))
-    y = max(0, min(int(sing_button_pos[1]), max(0, shh - bh)))
+    x = max(_vx, min(int(sing_button_pos[0]), max(_vx, _vx + _vw - bw)))
+    y = max(_vy, min(int(sing_button_pos[1]), max(_vy, _vy + _vh - bh)))
     _sing_btn_draw_pos = [x, y]
     sing_button_rect = pygame.Rect(x, y, bw, bh)
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     hov = sing_button_rect.collidepoint(mx, my)
     if singing:
         bg = (74, 50, 50) if hov else (60, 40, 40)
@@ -30575,8 +33240,8 @@ def draw_sing_button(surface):
         if time.time() < _sing_msg[1]:
             fn = get_font("Consolas", _bs(11))
             ns = fn.render(_sing_msg[0], True, (200, 200, 180))
-            nx = max(0, min(x, sw - ns.get_width()))
-            ny = min(y + bh + 2, shh - ns.get_height())
+            nx = max(0, min(x, _vx + _vw - ns.get_width()))
+            ny = min(y + bh + 2, _vy + _vh - ns.get_height())
             bgr = pygame.Rect(nx - 2, ny - 1, ns.get_width() + 4,
                               ns.get_height() + 2)
             pygame.draw.rect(surface, (24, 22, 20), bgr, border_radius=3)
@@ -31223,8 +33888,8 @@ def draw_synergy_window(surface):
     h = title_h + tab_h + body_h
     _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
     h = max(h, title_h + 8 + 18 + max(_cs_n, 1) * 14 + pad)
-    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - full_w))
-    y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(craftsyn_pos[0], full_w)
+    y = _clamp_win_y(craftsyn_pos[1], h, x)
     craftsyn_pos[0], craftsyn_pos[1] = x, y
 
     panel_r = pygame.Rect(x, y, full_w, h)
@@ -31621,8 +34286,8 @@ def draw_skillup_window(surface):
                 + _sk_max * _sk_row_h + pad)
     h = max(h, _right_h)
     full_w = w + right_w
-    x = max(0, min(int(skillup_panel_pos[0]), surface.get_width() - full_w))
-    y = max(0, min(int(skillup_panel_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(skillup_panel_pos[0], full_w)
+    y = _clamp_win_y(skillup_panel_pos[1], h, x)
     skillup_panel_pos[0], skillup_panel_pos[1] = x, y
 
     panel_r = pygame.Rect(x, y, full_w, h)
@@ -33887,13 +36552,17 @@ def _ah_draw_tooltip(surface, mx, my, lines, fnt, fnt_b, fnt_s):
         th += f.get_height()
     tw += pad * 2
     x, y = mx + 14, my + 16
-    sw, sh = surface.get_width(), surface.get_height()
+    # Keep the card inside the viewport the CURSOR is in, not the whole
+    # canvas -- otherwise a tooltip near the main window's right edge
+    # spills across the boundary into the desk window.
+    _vpb = _view_bounds_at(mx, my)
+    sw, sh = _vpb[0] + _vpb[2], _vpb[1] + _vpb[3]
     if x + tw > sw:
         x = mx - tw - 10
     if y + th > sh:
         y = sh - th - 4
-    x = max(2, x)
-    y = max(2, y)
+    x = max(_vpb[0] + 2, x)
+    y = max(_vpb[1] + 2, y)
     box = pygame.Rect(x, y, tw, th)
     pygame.draw.rect(surface, (12, 14, 20), box, border_radius=4)
     pygame.draw.rect(surface, (96, 104, 126), box, 1, border_radius=4)
@@ -33926,8 +36595,8 @@ def draw_ah_window(surface):
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
-    x = max(0, min(int(ah_panel_pos[0]), surface.get_width() - w))
-    y = max(0, min(int(ah_panel_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(ah_panel_pos[0], w)
+    y = _clamp_win_y(ah_panel_pos[1], h, x)
     ah_panel_pos[0], ah_panel_pos[1] = x, y
 
     panel_r = pygame.Rect(x, y, w, h)
@@ -34043,7 +36712,7 @@ def draw_ah_window(surface):
         _ah_draw_buy(surface, content, fnt, fnt_b, fnt_s, btn, field)
 
     # ── item hover tooltip (what am I buying / selling) ──
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     _hover_id = None
     for _rr, _iid in _ah_item_tip_rects:
         if _rr.collidepoint(mx, my):
@@ -34732,8 +37401,8 @@ def draw_craft_window(surface):
          + 3 * row_h + pad)                                     # log
     _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
     h = max(h, title_h + tab_h + pad + max(_cs_n, 1) * _cs_row_h + 18 + pad)
-    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - full_w))
-    y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(craftsyn_pos[0], full_w)
+    y = _clamp_win_y(craftsyn_pos[1], h, x)
     craftsyn_pos[0], craftsyn_pos[1] = x, y
 
     panel_r = pygame.Rect(x, y, full_w, h)
@@ -35041,7 +37710,7 @@ def _craft_handle_event(event):
         return True
 
     if event.type == pygame.MOUSEWHEEL:
-        mx, my = pygame.mouse.get_pos()
+        mx, my = _mouse_pos()
         pr = r.get("panel")
         if pr and pr.collidepoint(mx, my):
             craft_scroll = max(0, craft_scroll - event.y)
@@ -35260,7 +37929,7 @@ pool_auto_pass   = set()
 _pool_auto_done  = {}
 
 
-def _send_cure(cure, target_name):
+def _send_cure(cure, target_name, verb="ma"):
     """Ask the lua to cast `cure` on `target_name`.
 
     Always a spell: the things that cure a status without being one --
@@ -35278,7 +37947,9 @@ def _send_cure(cure, target_name):
     if "|" in cure or "|" in target_name:
         return False               # would split the wire line
     try:
-        payload = f"CUREACT|{cure}|{target_name}"
+        # Verb appended as a THIRD field. An older lua ignores it and
+        # keeps casting with /ma, which is what it did before.
+        payload = f"CUREACT|{cure}|{target_name}|{verb}"
         sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
         print(f"[OmniWatch] cure helper: {cure} -> {target_name}")
         return True
@@ -35475,8 +38146,8 @@ def draw_pool_window(surface):
     h = title_h + pad + max(len(rows), 1) * row_h + pad + 24 + pad
     # Clamp for DRAWING ONLY -- pool_pos is never written back to from
     # here. See the note on _pool_draw_pos.
-    x = max(0, min(int(pool_pos[0]), surface.get_width() - w))
-    y = max(0, min(int(pool_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(pool_pos[0], w)
+    y = _clamp_win_y(pool_pos[1], h, x)
     _pool_draw_pos[0], _pool_draw_pos[1] = x, y
 
     panel_r = pygame.Rect(x, y, w, h)
@@ -36398,12 +39069,19 @@ def _select_or_target_player(name, mob_index, player_id, mx=None, my=None):
     lose by retargeting.
     """
     global selected_player_name, _hb_action_note
-    selected_player_name = name
+    # Clicking whoever is already selected RELEASES them. No second
+    # gesture to learn: another member takes the selection, the same
+    # member gives it back, and <pc> goes back to refusing rather than
+    # firing at someone you stopped thinking about ten minutes ago.
+    _release = bool(name) and name == selected_player_name
+    selected_player_name = "" if _release else name
     if _player_engaged():
         if mx is not None and my is not None:
-            _hb_action_note = {"text": f"selected: {name}",
-                               "until": time.time() + 1.5, "x": mx, "y": my}
-        print(f"[OmniWatch] selected player {name!r} (target untouched)")
+            _hb_action_note = {
+                "text": ("released" if _release else f"selected: {name}"),
+                "until": time.time() + 1.5, "x": mx, "y": my}
+        print(f"[OmniWatch] {'released' if _release else 'selected'} "
+              f"player {name!r} (target untouched)")
         return
     print(f"[OmniWatch] click-to-target: {name} (mob index {mob_index})")
     _send_target(mob_index, name, player_id)
@@ -36580,15 +39258,18 @@ def draw_alert_box(surface):
                 else _alert_preview_hits())
         preview = bool(hits)
 
-    sw, sh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view_at(globals().get("alert_box_pos"))
     col_w = ALERT_BOX_W
     # Column count is measured from the whole screen rather than from the
     # box's own left edge: the panel simply gets wider, and the clamp
     # below slides it left when it meets the edge -- the same thing that
     # already happens when it gets taller.
     max_cols = max(1, min(ALERT_MAX_COLS,
-                          (sw + ALERT_COL_GAP) // (col_w + ALERT_COL_GAP)))
-    budget = max(row_h * 6, int(sh * ALERT_COL_MAX_FRAC))
+                          (_vw + ALERT_COL_GAP) // (col_w + ALERT_COL_GAP)))
+    budget = max(row_h * 6, int(_vh * ALERT_COL_MAX_FRAC))
     cols, dropped = _alert_pack_columns(hits, budget, max_cols, hdr_h, row_h)
     heights = [sum(hdr_h + len(r) * row_h for _s, r in c) for c in cols]
     if dropped:
@@ -36609,8 +39290,13 @@ def draw_alert_box(surface):
     # every session started higher than the last. Remembering the request
     # and clamping the drawing keeps both: it renders on screen now, and
     # it returns to where it was put as soon as there is room again.
-    x = max(0, min(int(alert_box_pos[0]), sw - w))
-    y = max(0, min(int(alert_box_pos[1]), sh - h))
+    x = max(_vx, min(int(alert_box_pos[0]), _vx + _vw - w))
+    # The VIEWPORT, and only a sliver has to stay on screen rather
+    # than the whole box. `sh` here was the main window's height — the
+    # sweep renamed sw and shh and missed it — so the box could be
+    # dragged sideways freely but stopped dead partway down.
+    y = max(_vy - h + GRIP_VISIBLE,
+            min(int(alert_box_pos[1]), _vy + _vh - GRIP_VISIBLE))
     _alert_draw_pos[0], _alert_draw_pos[1] = x, y
     _alert_flush_pos()
 
@@ -36672,7 +39358,7 @@ def draw_alert_box(surface):
                      (x + pad, top))
         return
 
-    mpos = pygame.mouse.get_pos()
+    mpos = _mouse_pos()
     for ci, col in enumerate(cols):
         cx0 = x + ci * (col_w + ALERT_COL_GAP)
         if ci:
@@ -36792,7 +39478,7 @@ def _alert_handle_event(event):
         # Wheel over a cure steps through that section's spells. Only
         # consumed when the pointer is actually on one, so the wheel
         # still belongs to whatever is underneath everywhere else.
-        _mp = pygame.mouse.get_pos()
+        _mp = _mouse_pos()
         for _k, _v in list(_alert_rects.items()):
             if not _k.startswith("cure:"):
                 continue
@@ -36886,9 +39572,12 @@ def _alert_editor_geometry(surface):
     agree about it exactly -- including which rows are scrolled off, which
     is the thing that silently breaks if the two ever compute it apart.
     """
-    sw, sh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view()
     pad, row_h = 12, 26
-    mw = min(ALERT_EDITOR_W, sw - 40)
+    mw = min(ALERT_EDITOR_W, _vx + _vw - 40)
     # Measured, not a fixed 96: the help text wraps to a different number
     # of lines depending on how wide the panel ended up, and a guess that
     # was right at one width drew the column headers straight through the
@@ -36899,9 +39588,12 @@ def _alert_editor_geometry(surface):
     head_h = pad + ALERT_EDIT_TAB_H + 20 + len(help_lines) * 13 + 4 + 14
     foot_h = 40          # add / done
     want = head_h + len(_alert_edit_list()) * row_h + foot_h
-    mh = min(want, sh - 40)
+    mh = min(want, _vh - 40)
     rows_fit = max(1, (mh - head_h - foot_h) // row_h)
-    mx, my = (sw - mw) // 2, (sh - mh) // 2
+    # Centred in the VIEWPORT. The x half was converted and the y half
+    # was not, so the editor sat centred horizontally in the window it
+    # belonged to and vertically in the main one.
+    mx, my = _vx + (_vw - mw) // 2, _vy + (_vh - mh) // 2
     # Column widths, left to right: name, cure, match, hp, then the two
     # move buttons and delete. Match takes whatever is left so the panel
     # can widen on a big screen.
@@ -36989,7 +39681,10 @@ def draw_alert_editor(surface):
         return
     _alert_load()
     global _alert_editor_scroll
-    sw, sh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view()
     fnt   = get_font("Consolas", 12)
     fnt_b = get_font("Consolas", 13, bold=True)
     fnt_s = get_font("Consolas", 11)
@@ -37000,10 +39695,13 @@ def draw_alert_editor(surface):
                                       _alert_editor_max_scroll(g)))
 
     if not setting("transparent_background"):
-        backdrop = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        backdrop = pygame.Surface((_vw, _vh), pygame.SRCALPHA)
         backdrop.fill((0, 0, 0, 150))
-        surface.blit(backdrop, (0, 0))
-    _alert_rects["ed:backdrop"] = pygame.Rect(0, 0, sw, sh)
+        # At the VIEWPORT's origin. Blitting at (0, 0) dimmed the
+        # main window while the editor sat on the second one, and
+        # left the window you were looking at undimmed.
+        surface.blit(backdrop, (_vx, _vy))
+    _alert_rects["ed:backdrop"] = pygame.Rect(_vx, _vy, _vw, _vh)
     panel = pygame.Rect(mx, my, mw, mh)
     pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
@@ -37192,7 +39890,7 @@ def _alert_editor_handle_event(event):
         # Measure with the surface the DRAW used, not whatever the display
         # happens to be: the two have to agree about rows_fit or a reorder
         # near the fold scrolls to the wrong place.
-        _surf = _alert_last_surface or pygame.display.get_surface()
+        _surf = _alert_last_surface or _canvas()
         _geo = _alert_editor_geometry(_surf) if _surf else None
         _rf = _geo["rows_fit"] if _geo else None
         _g_cols = _geo["cols"] if _geo else ()
@@ -37295,8 +39993,8 @@ def draw_fisher_window(surface):
     h = title_h + tab_h + pad + n * (fld_h + 4) + pad
     _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
     h = max(h, title_h + 8 + 18 + max(_cs_n, 1) * 14 + pad)
-    x = max(0, min(int(craftsyn_pos[0]), surface.get_width() - full_w))
-    y = max(0, min(int(craftsyn_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(craftsyn_pos[0], full_w)
+    y = _clamp_win_y(craftsyn_pos[1], h, x)
     craftsyn_pos[0], craftsyn_pos[1] = x, y
 
     panel_r = pygame.Rect(x, y, full_w, h)
@@ -38534,10 +41232,11 @@ def draw_scanzone_window(surface):
     _nyzul = (_secmode != "")          # any mode -> widen + show the section
     rs_gap = pad
     rs_w   = 345 if _nyzul else 0
-    w = min(w0 + (rs_w + rs_gap if _nyzul else 0), surface.get_width())
+    w = min(w0 + (rs_w + rs_gap if _nyzul else 0),
+            _view_bounds_at(int(scanzone_panel_pos[0]) + 1, 1)[2])
     bw = w - (rs_w + rs_gap if _nyzul else 0)
-    x = max(0, min(int(scanzone_panel_pos[0]), surface.get_width() - w))
-    y = max(0, min(int(scanzone_panel_pos[1]), surface.get_height() - h))
+    x = _clamp_win_x(scanzone_panel_pos[0], w)
+    y = _clamp_win_y(scanzone_panel_pos[1], h, x)
     scanzone_panel_pos[0], scanzone_panel_pos[1] = x, y
     maxc = max(20, (bw - 2 * pad) // 6)
 
@@ -38702,7 +41401,7 @@ def draw_scanzone_window(surface):
     _sz_rects["results"] = area_r
     roster_r = pygame.Rect(area_r.right + pad, cy,
                            (x + bw - pad) - (area_r.right + pad), area_h)
-    mpos = pygame.mouse.get_pos()
+    mpos = _mouse_pos()
     hits = []                       # [(rect, index)] for click -> live scan
     hover_info = None               # entity readout shown in bottom row
 
@@ -39648,8 +42347,8 @@ def draw_scanzone_window(surface):
         items = _sz_ctx.get("items", [])
         cw = 116
         chh = 18 * len(items) + 4
-        cxm = min(int(_sz_ctx["x"]), surface.get_width() - cw - 2)
-        cym = min(int(_sz_ctx["y"]), surface.get_height() - chh - 2)
+        cxm = _clamp_win_x(_sz_ctx["x"], cw + 2)
+        cym = _clamp_win_y(_sz_ctx["y"], chh + 2, cxm)
         pygame.draw.rect(surface, (30, 32, 40), (cxm, cym, cw, chh),
                          border_radius=3)
         pygame.draw.rect(surface, (110, 120, 140), (cxm, cym, cw, chh), 1,
@@ -40051,7 +42750,7 @@ def _scanzone_handle_event(event):
             return True
 
     if event.type == pygame.MOUSEWHEEL:
-        mx, my = pygame.mouse.get_pos()
+        mx, my = _mouse_pos()
         rr = _sz_rects.get("results")
         if rr and rr.collidepoint(mx, my):
             if scanzone_view == "radar":
@@ -40131,7 +42830,10 @@ def draw_cheatsheet_window(surface):
     cw, ch = _cheatsheet_content_size()
     margin = d["pad"]
     title_h = d["f_title"].get_height() + max(6, int(9 * d["s"]))
-    sw, shh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view_at(globals().get("cheatsheet_pos"))
     eg = max(6, int(7 * d["s"]))                 # edge grip thickness
     cg = max(12, int(RESIZE_GRIP * d["s"]))      # corner grip size
     sbw = max(4, int(6 * d["s"]))                # scrollbar width
@@ -40142,15 +42844,15 @@ def draw_cheatsheet_window(surface):
     if cheatsheet_w is None or cheatsheet_h is None:
         cheatsheet_w = cw + margin * 2 + sbw + 2
         cheatsheet_h = title_h + ch + margin * 2
-    cheatsheet_w = max(MINW, min(int(cheatsheet_w), sw))
-    cheatsheet_h = max(MINH, min(int(cheatsheet_h), shh))
+    cheatsheet_w = max(MINW, min(int(cheatsheet_w), _vw))
+    cheatsheet_h = max(MINH, min(int(cheatsheet_h), _vh))
     win_w = cheatsheet_w
     win_h = cheatsheet_h
 
     if cheatsheet_pos is None:
-        cheatsheet_pos = [max(0, (sw - win_w) // 2), max(0, (shh - win_h) // 2)]
-    x = max(0, min(int(cheatsheet_pos[0]), sw - win_w))
-    y = max(0, min(int(cheatsheet_pos[1]), shh - win_h))
+        cheatsheet_pos = [max(0, (_vx + _vw - win_w) // 2), max(0, (_vy + _vh - win_h) // 2)]
+    x = max(_vx, min(int(cheatsheet_pos[0]), _vx + _vw - win_w))
+    y = max(_vy, min(int(cheatsheet_pos[1]), _vy + _vh - win_h))
     cheatsheet_pos[0], cheatsheet_pos[1] = x, y
 
     pygame.draw.rect(surface, COL_PANEL,  (x, y, win_w, win_h), border_radius=5)
@@ -40171,7 +42873,7 @@ def draw_cheatsheet_window(surface):
     cx0 = x + win_w - close_sz - margin // 2
     cy0 = y + (title_h - close_sz) // 2
     cheatsheet_close_rect = pygame.Rect(cx0, cy0, close_sz, close_sz)
-    hov = cheatsheet_close_rect.collidepoint(pygame.mouse.get_pos())
+    hov = cheatsheet_close_rect.collidepoint(_mouse_pos())
     pygame.draw.rect(surface, (120, 64, 64) if hov else (58, 50, 56),
                      cheatsheet_close_rect, border_radius=3)
     pygame.draw.rect(surface, (175, 125, 125), cheatsheet_close_rect, 1,
@@ -40189,7 +42891,7 @@ def draw_cheatsheet_window(surface):
     ex0 = cx0 - ew - margin // 2
     ey0 = cy0
     cheatsheet_edit_button_rect = pygame.Rect(ex0, ey0, ew, close_sz)
-    ehov = cheatsheet_edit_button_rect.collidepoint(pygame.mouse.get_pos())
+    ehov = cheatsheet_edit_button_rect.collidepoint(_mouse_pos())
     ebg = ((70, 84, 58) if cheatsheet_edit_mode
            else ((58, 58, 72) if ehov else (44, 44, 54)))
     pygame.draw.rect(surface, ebg, cheatsheet_edit_button_rect, border_radius=3)
@@ -40239,7 +42941,7 @@ def draw_cheatsheet_window(surface):
             pygame.draw.line(surface, COL_SLOT_TEXT,
                              (gx - off, gy - 1), (gx - 1, gy - off))
     # Edge hover hints (subtle), so the draggable borders are discoverable.
-    mxh, myh = pygame.mouse.get_pos()
+    mxh, myh = _mouse_pos()
     if cheatsheet_resize_e_rect.collidepoint(mxh, myh):
         pygame.draw.rect(surface, ACCENT_CHEATSHEET, cheatsheet_resize_e_rect)
     if cheatsheet_resize_s_rect.collidepoint(mxh, myh):
@@ -40272,7 +42974,7 @@ def draw_cheatsheet_ctx_menu(surface):
     item = "Delete category" if m["kind"] == "group" else "Delete row"
     w = max(f.size(head)[0], f.size(item)[0]) + pad * 2
     h = line_h * 2 + pad
-    sw, shh = surface.get_size()
+    sw, shh = _ui_edge()
     mx0 = max(0, min(int(m["x"]), sw - w))
     my0 = max(0, min(int(m["y"]), shh - h))
     globals()["_cs_ctx_rect"] = pygame.Rect(mx0, my0, w, h)
@@ -40287,7 +42989,7 @@ def draw_cheatsheet_ctx_menu(surface):
     # Delete item (hover highlight).
     item_rect = pygame.Rect(mx0 + 2, my0 + line_h + pad // 2,
                             w - 4, line_h)
-    hov = item_rect.collidepoint(pygame.mouse.get_pos())
+    hov = item_rect.collidepoint(_mouse_pos())
     if hov:
         pygame.draw.rect(surface, (90, 48, 48), item_rect, border_radius=3)
     surface.blit(f.render(item, True, (235, 170, 170)),
@@ -40840,6 +43542,10 @@ def _warp_toggle_menu():
     _warp_menu_anchor = None
     warp_menu_open = not warp_menu_open
     if warp_menu_open:
+        # The window the menu belongs to, captured at open. Asking every
+        # frame instead made it hop windows the moment the cursor left
+        # it — which looks exactly like the menu blinking out and back.
+        globals()["_warp_menu_win"] = globals().get("_MOUSE_WINDOW")
         warp_menu_scroll = 0
         # Open collapsed. Groups left expanded from the last visit made
         # the menu open long and pre-scrolled, so the thing you wanted
@@ -40881,16 +43587,19 @@ def draw_warp_button(surface):
     lh = f.get_height()
     bw = max(label_top.get_width(), label_bot.get_width()) + pad * 2
     bh = lh * 2 + padv * 2
-    sw, shh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view_at(globals().get("warp_button_pos"))
     if warp_button_pos is None:
         # Default: just below the cheat sheet button's default spot.
         warp_button_pos = [PANEL_X, layout_top() + 4 + bh + 6]
     # Clamp for display only (same rationale as the [CS] button).
-    x = max(0, min(int(warp_button_pos[0]), max(0, sw - bw)))
-    y = max(0, min(int(warp_button_pos[1]), max(0, shh - bh)))
+    x = max(_vx, min(int(warp_button_pos[0]), max(_vx, _vx + _vw - bw)))
+    y = max(_vy, min(int(warp_button_pos[1]), max(_vy, _vy + _vh - bh)))
     _warp_btn_draw_pos = [x, y]
     warp_button_rect = pygame.Rect(x, y, bw, bh)
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     hov = warp_button_rect.collidepoint(mx, my)
     near = any(_warp_is_near().values())
 
@@ -41017,7 +43726,11 @@ def draw_warp_menu(surface):
     w = max(w, 180)
     h = pad + scroll_h + sep_h + pinned_h + foot_blk + pad
 
-    sw, shh = surface.get_size()
+    # The menu opens in the WINDOW IT WAS OPENED FROM. _ui_screen() is
+    # the main window by definition — right for a modal, wrong for a
+    # popover hung off a button that can sit on either screen, which is
+    # why pressing warp on the second monitor put the menu on the first.
+    _vx, _vy, _vw, _vh = _ui_view(globals().get("_warp_menu_win"))
     # Anchor priority: whatever opened the menu this time (a hotbar slot
     # sets _warp_menu_anchor to the cursor), then the floating button's
     # drawn position, then the panel edge.
@@ -41029,17 +43742,17 @@ def draw_warp_menu(surface):
         ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
     bh = warp_button_rect.height if warp_button_rect else 24
     my0 = ay + bh + 4
-    if my0 + h > shh:
+    if my0 + h > _vy + _vh:
         my0 = ay - h - 4
-    mx0 = max(0, min(int(ax), sw - w))
-    my0 = max(0, min(int(my0), shh - h))
+    mx0 = max(_vx, min(int(ax), _vx + _vw - w))
+    my0 = max(_vy, min(int(my0), _vy + _vh - h))
 
     # A position the user dragged to wins outright — no anchoring, no
     # dodging. Still clamped, so a menu parked near an edge survives a
     # resolution change instead of stranding off screen.
     if warp_menu_pos is not None:
-        mx0 = max(0, min(int(warp_menu_pos[0]), sw - w))
-        my0 = max(0, min(int(warp_menu_pos[1]), shh - h))
+        mx0 = max(_vx, min(int(warp_menu_pos[0]), _vx + _vw - w))
+        my0 = max(_vy, min(int(warp_menu_pos[1]), _vy + _vh - h))
         warp_menu_rect = pygame.Rect(mx0, my0, w, h)
         _skip_autoplace = True
     else:
@@ -41063,10 +43776,10 @@ def draw_warp_menu(surface):
             for _cx, _cy in ((int(ax) - w, my0),          # left of anchor
                              (int(ax) + 4, ay - h - 4),   # above it
                              (int(ax) - w, ay - h - 4),   # above-left
-                             (sw - w, my0),               # flush right
+                             (_vx + _vw - w, my0),        # flush right
                              (0, my0)):                   # flush left
-                _cx = max(0, min(int(_cx), sw - w))
-                _cy = max(0, min(int(_cy), shh - h))
+                _cx = max(_vx, min(int(_cx), _vx + _vw - w))
+                _cy = max(_vy, min(int(_cy), _vy + _vh - h))
                 _sc = _covered(_cx, _cy)
                 if _sc < _best[0]:
                     _best = (_sc, _cx, _cy)
@@ -41092,7 +43805,7 @@ def draw_warp_menu(surface):
         surface.blit(ss, (mx0 + w - ss.get_width() - pad - sb_w,
                           cy + (hdr_h - ss.get_height()) // 2))
 
-    mxp, myp = pygame.mouse.get_pos()
+    mxp, myp = _mouse_pos()
     rw = w - 4 - sb_w
     cy = my0 + pad
     for e in visible:
@@ -41202,7 +43915,10 @@ def draw_warp_confirm(surface):
     h = pad + title_font.get_height() + 4 + sub_font.get_height() + 10 \
         + btn_h + pad
 
-    sw, shh = surface.get_size()
+    # Follows the window it was opened from. _ui_screen() is the main
+    # window by definition, so clamping to it dragged anything opened
+    # on the second screen back to the first.
+    _vx, _vy, _vw, _vh = _ui_view(globals().get("_warp_menu_win"))
     # Anchor priority: whatever opened the menu this time (a hotbar slot
     # sets _warp_menu_anchor to the cursor), then the floating button's
     # drawn position, then the panel edge.
@@ -41214,15 +43930,15 @@ def draw_warp_confirm(surface):
         ay = (_warp_btn_draw_pos[1] if _warp_btn_draw_pos else layout_top())
     bh = warp_button_rect.height if warp_button_rect else 24
     y0 = ay + bh + 4
-    if y0 + h > shh:
+    if y0 + h > _vy + _vh:
         y0 = ay - h - 4
     # A dragged position wins, clamped so it can't strand off screen.
     if warp_confirm_pos is not None:
-        x0 = max(0, min(int(warp_confirm_pos[0]), sw - w))
-        y0 = max(0, min(int(warp_confirm_pos[1]), shh - h))
+        x0 = max(_vx, min(int(warp_confirm_pos[0]), _vx + _vw - w))
+        y0 = max(_vy, min(int(warp_confirm_pos[1]), _vy + _vh - h))
     else:
-        x0 = max(0, min(int(ax), sw - w))
-        y0 = max(0, min(int(y0), shh - h))
+        x0 = max(_vx, min(int(ax), _vx + _vw - w))
+        y0 = max(_vy, min(int(y0), _vy + _vh - h))
     warp_confirm_rect = pygame.Rect(x0, y0, w, h)
 
     pygame.draw.rect(surface, (30, 30, 40), (x0, y0, w, h), border_radius=6)
@@ -41234,7 +43950,7 @@ def draw_warp_confirm(surface):
                  (x0 + pad, y0 + pad + title_font.get_height() + 4))
 
     by = y0 + h - pad - btn_h
-    mxp, myp = pygame.mouse.get_pos()
+    mxp, myp = _mouse_pos()
     # Warp (accent) on the left, Cancel on the right.
     warp_rect = pygame.Rect(x0 + pad, by, bw_warp, btn_h)
     cancel_rect = pygame.Rect(x0 + pad + bw_warp + 8, by, bw_cancel, btn_h)
@@ -41297,7 +44013,7 @@ def draw_header(surface, w):
     gy = hy0 + (hh - gear_size) // 2
     settings_button_rect = pygame.Rect(gx, gy, gear_size, gear_size)
     # Hover / open feedback.
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
     is_hover = settings_button_rect.collidepoint(mx, my)
     btn_bg = (62, 62, 78) if (is_hover or settings_menu_open) else (44, 44, 54)
     btn_bdr = (180, 180, 200) if settings_menu_open else (100, 100, 115)
@@ -41967,7 +44683,7 @@ def draw_header(surface, w):
         if z_surf:
             zrect = pygame.Rect(draw_x, y_mid, z_surf.get_width(), z_surf.get_height())
             # Hover: brighten + underline.
-            is_hover = zrect.collidepoint(pygame.mouse.get_pos())
+            is_hover = zrect.collidepoint(_mouse_pos())
             color = (255, 255, 180) if is_hover else COL_CLOCK
             z_surf = font_moon.render(zname, True, color)
             surface.blit(z_surf, (draw_x, y_mid))
@@ -42444,7 +45160,7 @@ def draw_char_view_dropdown(surface):
 
     # Top row: "Follow live character"
     follow_rect = pygame.Rect(panel_x + 2, cy, panel_w - 4, row_h)
-    is_hover = follow_rect.collidepoint(pygame.mouse.get_pos())
+    is_hover = follow_rect.collidepoint(_mouse_pos())
     if is_hover:
         pygame.draw.rect(surface, (40, 40, 52), follow_rect)
     is_following = (active_view_char == current_char_name) and bool(current_char_name)
@@ -42464,7 +45180,7 @@ def draw_char_view_dropdown(surface):
     # Per-character rows.
     for name in chars:
         row_rect = pygame.Rect(panel_x + 2, cy, panel_w - 4, row_h)
-        is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
+        is_hover = row_rect.collidepoint(_mouse_pos())
         if is_hover:
             pygame.draw.rect(surface, (40, 40, 52), row_rect)
         is_active = (name == active_view_char)
@@ -42511,7 +45227,7 @@ def draw_char_view_dropdown(surface):
 
     for prof in profiles:
         prow_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
-        ph = prow_rect.collidepoint(pygame.mouse.get_pos())
+        ph = prow_rect.collidepoint(_mouse_pos())
         if ph:
             pygame.draw.rect(surface, (38, 42, 56), prow_rect)
         # Filled dot = the profile in use. Nothing filled means the live
@@ -42575,7 +45291,7 @@ def draw_char_view_dropdown(surface):
     # on screen right now into a new profile (or over an existing one of
     # the same name) and starts using it.
     new_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
-    nh = new_rect.collidepoint(pygame.mouse.get_pos())
+    nh = new_rect.collidepoint(_mouse_pos())
     if nh:
         pygame.draw.rect(surface, (45, 55, 80), new_rect)
     ns = f_profile.render("+ Save current setup as\u2026", True,
@@ -42590,7 +45306,7 @@ def draw_char_view_dropdown(surface):
     # when there is more than nothing to write to.
     if profiles:
         all_rect = pygame.Rect(panel_x + 12, cy, panel_w - 16, 18)
-        ah = all_rect.collidepoint(pygame.mouse.get_pos())
+        ah = all_rect.collidepoint(_mouse_pos())
         if ah:
             pygame.draw.rect(surface, (45, 55, 80), all_rect)
         _fresh = (_profile_push_msg
@@ -42846,7 +45562,7 @@ def draw_inventory_dropdown(surface):
         # Header: back button + slip name + count. Mirrors View B.
         back_w = 28
         back_rect = pygame.Rect(panel_x + 2, cy, back_w, row_h)
-        if back_rect.collidepoint(pygame.mouse.get_pos()):
+        if back_rect.collidepoint(_mouse_pos()):
             pygame.draw.rect(surface, (40, 40, 52), back_rect)
         back_surf = title_font.render("‹", True, (220, 220, 230))
         if back_surf.get_width() < 4:
@@ -42896,7 +45612,7 @@ def draw_inventory_dropdown(surface):
             nm = it.get("name", "") or f"#{it.get('id', 0)}"
             row_rect = pygame.Rect(panel_x + 2, cy,
                                    panel_w - 4, row_h)
-            is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
+            is_hover = row_rect.collidepoint(_mouse_pos())
             if is_hover:
                 pygame.draw.rect(surface, (40, 40, 52), row_rect)
 
@@ -42980,7 +45696,7 @@ def draw_inventory_dropdown(surface):
         # Header.
         back_w = 28
         back_rect = pygame.Rect(panel_x + 2, cy, back_w, row_h)
-        if back_rect.collidepoint(pygame.mouse.get_pos()):
+        if back_rect.collidepoint(_mouse_pos()):
             pygame.draw.rect(surface, (40, 40, 52), back_rect)
         back_surf = title_font.render("‹", True, (220, 220, 230))
         if back_surf.get_width() < 4:
@@ -43016,7 +45732,7 @@ def draw_inventory_dropdown(surface):
             stored_items = slip.get("items") or []
             row_rect = pygame.Rect(panel_x + 2, cy,
                                    panel_w - 4, row_h)
-            if row_rect.collidepoint(pygame.mouse.get_pos()):
+            if row_rect.collidepoint(_mouse_pos()):
                 pygame.draw.rect(surface, (40, 40, 52), row_rect)
 
             nick = slip_nicks.get(slip_id, "").strip()
@@ -43192,7 +45908,7 @@ def draw_inventory_dropdown(surface):
                 cnt = it.get("count", 1)
                 row_rect = pygame.Rect(panel_x + 2, cy,
                                        panel_w - 4, row_h)
-                is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
+                is_hover = row_rect.collidepoint(_mouse_pos())
                 if is_hover:
                     pygame.draw.rect(surface, (40, 40, 52), row_rect)
 
@@ -43307,7 +46023,7 @@ def draw_inventory_dropdown(surface):
         for bag_key, bag_label in _inventory_visible_bags():
             row_rect = pygame.Rect(panel_x + 2, cy,
                                    panel_w - 4, row_h)
-            if row_rect.collidepoint(pygame.mouse.get_pos()):
+            if row_rect.collidepoint(_mouse_pos()):
                 pygame.draw.rect(surface, (40, 40, 52), row_rect)
             items_here = inventory_state.get(bag_key, [])
             count_str, count_col = inventory_bag_fill(bag_key,
@@ -43342,7 +46058,7 @@ def draw_inventory_dropdown(surface):
         # in inventory.
         row_rect = pygame.Rect(panel_x + 2, cy,
                                panel_w - 4, row_h)
-        if row_rect.collidepoint(pygame.mouse.get_pos()):
+        if row_rect.collidepoint(_mouse_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect)
         label_surf = label_font.render(
             "Porter Slips", True, (220, 220, 230))
@@ -43378,7 +46094,7 @@ def draw_inventory_dropdown(surface):
             cy += INVENTORY_SEPARATOR_H
         for bag_key, bag_label in after_rows:
             row_rect = pygame.Rect(panel_x + 2, cy, panel_w - 4, row_h)
-            if row_rect.collidepoint(pygame.mouse.get_pos()):
+            if row_rect.collidepoint(_mouse_pos()):
                 pygame.draw.rect(surface, (40, 40, 52), row_rect)
             items_here = inventory_state.get(bag_key, [])
             count_str, count_col = inventory_bag_fill(bag_key,
@@ -43424,7 +46140,7 @@ def draw_inventory_dropdown(surface):
     # Header: back button + bag name + count.
     back_w = 28
     back_rect = pygame.Rect(panel_x + 2, cy, back_w, row_h)
-    if back_rect.collidepoint(pygame.mouse.get_pos()):
+    if back_rect.collidepoint(_mouse_pos()):
         pygame.draw.rect(surface, (40, 40, 52), back_rect)
     back_surf = title_font.render("‹", True, (220, 220, 230))
     if back_surf.get_width() < 4:
@@ -43492,7 +46208,7 @@ def draw_inventory_dropdown(surface):
             (track_rect.h - thumb_h) * scroll / max_scroll)
         thumb_rect = pygame.Rect(track_rect.x, thumb_y, sb_w, thumb_h)
         is_dragging = _inv_scroll_drag is not None
-        is_hover = thumb_rect.collidepoint(pygame.mouse.get_pos())
+        is_hover = thumb_rect.collidepoint(_mouse_pos())
         pygame.draw.rect(surface,
                          (180, 200, 230) if (is_dragging or is_hover)
                          else (110, 130, 170),
@@ -43508,7 +46224,7 @@ def draw_inventory_dropdown(surface):
         cnt = it.get("count", 1)
         row_rect = pygame.Rect(panel_x + 2, cy, row_w, row_h)
         # Hover highlight + reserve as click target.
-        is_hover = row_rect.collidepoint(pygame.mouse.get_pos())
+        is_hover = row_rect.collidepoint(_mouse_pos())
         if is_hover:
             pygame.draw.rect(surface, (40, 40, 52), row_rect)
 
@@ -44001,7 +46717,7 @@ def draw_inventory_move_popup(surface):
     rows = (len(bags) + cols - 1) // cols
     w = 24 + cols * bw_ + (cols - 1) * gap
     h = 44 + rows * (bh_ + gap) + 8 + 22
-    sw, shh = surface.get_size()
+    sw, shh = _ui_edge()
     x = (sw - w) // 2
     y = (shh - h) // 2
     pygame.draw.rect(surface, (28, 28, 36), (x, y, w, h), border_radius=5)
@@ -44042,7 +46758,7 @@ def draw_inventory_bazaar_popup(surface):
     tf = pygame.font.SysFont("Consolas", 12, bold=True)
     f  = pygame.font.SysFont("Consolas", 12)
     w, h = 250, 118
-    sw, shh = surface.get_size()
+    sw, shh = _ui_edge()
     x = (sw - w) // 2
     y = (shh - h) // 2
     pygame.draw.rect(surface, (28, 28, 36), (x, y, w, h), border_radius=5)
@@ -44142,7 +46858,7 @@ def draw_inventory_item_ctx_menu(surface):
     w += pad * 2
     h = line_h * (len(actions) + 1) + pad
 
-    sw, shh = surface.get_size()
+    sw, shh = _ui_edge()
     mx0 = max(0, min(int(m["x"]), sw - w))
     my0 = max(0, min(int(m["y"]), shh - h))
 
@@ -44159,7 +46875,7 @@ def draw_inventory_item_ctx_menu(surface):
 
     # Action rows.
     row_y = my0 + line_h + pad // 2
-    mxp, myp = pygame.mouse.get_pos()
+    mxp, myp = _mouse_pos()
     for action_str, label, color in actions:
         item_rect = pygame.Rect(mx0 + 2, row_y, w - 4, line_h)
         if item_rect.collidepoint(mxp, myp):
@@ -45281,7 +47997,7 @@ def draw_sim_import_modal(surface):
     if not sim_import_open:
         return
 
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(520, sw - 40)
     # Taller when a failure is showing: the message names the gear file,
     # the line number and the source line, which needs up to three
@@ -45442,7 +48158,7 @@ def draw_currency_settings_modal(surface):
     def _ms(v):
         return max(1, round(v * g))
     ctrl_h = _ms(22)
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(_ms(420), sw - 40)
     # Compute height from the actual currency-row count instead of
     # hardcoding 280px. With 6 currencies the old 280 had headroom;
@@ -45576,7 +48292,7 @@ def draw_currency_settings_modal(surface):
     for key, name, setting_key in CURRENCY_CYCLE_KEYS:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, ctrl_h)
         # Hover highlight.
-        if row_rect.collidepoint(pygame.mouse.get_pos()):
+        if row_rect.collidepoint(_mouse_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect,
                              border_radius=2)
 
@@ -45704,6 +48420,9 @@ _PARTY_MODAL_ROWS = [
     ("party_show_buffs",      "Show buffs",              "bool"),
     ("party_show_debuffs",    "Show debuffs",            "bool"),
     ("party_buff_font_size",  "Buff/debuff font size",   "enum"),
+    ("party_stacked",         "Stack rows as one list",  "bool"),
+    ("party_status_clear",    "Clear behind status icons", "bool"),
+    ("party_status_left",     "Status icons on the left", "bool"),
     ("party_buff_icon_grid",  "Compact icon grid",       "bool"),
     ("specific_buff_names",   "Specific buff names (self)", "bool"),
     ("edit_buff_blacklist",   "Edit buffs / debuffs",    "button"),
@@ -45732,7 +48451,7 @@ def draw_party_settings_modal(surface):
     g = _menu_g()
     def _ms(v):
         return max(1, round(v * g))
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     # Generous width for label + control on the right.
     mw = min(_ms(500), sw - 40)
     # Height grows with row count: title block + N*row_h + close
@@ -45788,7 +48507,7 @@ def draw_party_settings_modal(surface):
     for setting_key, display_label, kind in _PARTY_MODAL_ROWS:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         # Hover highlight (mirrors currency modal).
-        if row_rect.collidepoint(pygame.mouse.get_pos()):
+        if row_rect.collidepoint(_mouse_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect,
                              border_radius=2)
 
@@ -46034,7 +48753,7 @@ def draw_display_settings_modal(surface):
     def _ms(v):
         return max(1, round(v * g))
     ctrl_h = _ms(22)
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(_ms(520), sw - 40)
     title_block_h = _ms(50)
     row_h         = _ms(28)      # slightly taller than party (spinners need it)
@@ -46080,7 +48799,7 @@ def draw_display_settings_modal(surface):
 
     for setting_key, display_label, kind in _DISPLAY_MODAL_ROWS:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
-        if row_rect.collidepoint(pygame.mouse.get_pos()):
+        if row_rect.collidepoint(_mouse_pos()):
             pygame.draw.rect(surface, (40, 40, 52), row_rect,
                              border_radius=2)
 
@@ -46629,7 +49348,7 @@ def draw_header_settings_modal(surface):
     g = _menu_g()
     def _ms(v):
         return max(1, round(v * g))
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(_ms(520), sw - 40)
     title_block_h = _ms(50)
     row_h = _ms(28)
@@ -46669,7 +49388,7 @@ def draw_header_settings_modal(surface):
     surface.blit(sub_surf, (mx + pad, cy_y))
     cy_y += sub_surf.get_height() + _ms(10)
 
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
     for key, label, kind in _HEADER_MODAL_ROWS:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
@@ -46734,7 +49453,7 @@ def draw_inventory_settings_modal(surface):
     g = _menu_g()
     def _ms(v):
         return max(1, round(v * g))
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(_ms(520), sw - 40)
     title_block_h = _ms(50)
     row_h = _ms(28)
@@ -46772,7 +49491,7 @@ def draw_inventory_settings_modal(surface):
     surface.blit(sub_surf, (mx + pad, cy_y))
     cy_y += sub_surf.get_height() + _ms(10)
 
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
     for key, label, kind in _INVENTORY_MODAL_ROWS:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
@@ -46863,7 +49582,7 @@ def draw_statistics_settings_modal(surface):
     g = _menu_g()
     def _ms(v):
         return max(1, round(v * g))
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(_ms(520), sw - 40)
     title_block_h = _ms(50)
     row_h         = _ms(28)
@@ -46910,7 +49629,7 @@ def draw_statistics_settings_modal(surface):
     surface.blit(sub_surf, (mx + pad, cy_y))
     cy_y += sub_surf.get_height() + _ms(10)
 
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
     for key, label, kind in _STATISTICS_MODAL_ROWS:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
@@ -47079,7 +49798,7 @@ def draw_clock_modal(surface):
     # Tick countdown first so the displayed values reflect this frame.
     _tick_countdown()
 
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(440, sw - 40)
     mh = 320
     mx = (sw - mw) // 2
@@ -47377,7 +50096,7 @@ def draw_profile_name_modal(surface):
     if not profile_name_modal_open:
         return
 
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(380, sw - 40)
     pad = 14
 
@@ -47878,7 +50597,7 @@ def _draw_subdialog(surface, state_key):
     g = _menu_g()
     def _ms(v):
         return max(1, round(v * g))
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(_ms(520), sw - 40)
     title_block_h = _ms(50)
     row_h         = _ms(28)
@@ -47923,7 +50642,7 @@ def _draw_subdialog(surface, state_key):
     else:
         cy_y += _ms(10)
 
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
     for key, label, kind in rows:
         row_rect = pygame.Rect(mx + pad, cy_y, mw - 2 * pad, row_h - _ms(2))
         _draw_modal_row(surface, row_rect, kind, key, label,
@@ -48048,7 +50767,7 @@ def draw_checklist_modal(surface):
     rows = cat["row_iter"]()
     is_checked = cat["is_checked"]
 
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(460, sw - 60)
     mh = min(520, sh - 60)
     mx = (sw - mw) // 2
@@ -48096,7 +50815,7 @@ def draw_checklist_modal(surface):
     pygame.draw.line(surface, (60, 72, 92),
                      (mx, my + tab_h), (mx + mw, my + tab_h))
     tab_font = pygame.font.SysFont("Consolas", 12, bold=True)
-    mpos_tabs = pygame.mouse.get_pos()
+    mpos_tabs = _mouse_pos()
 
     # ── Measure every tab first ────────────────────────────────────
     # We need the total width up front to know whether the strip
@@ -48260,7 +50979,7 @@ def draw_checklist_modal(surface):
     # Left arrow.
     arr_w = 28
     larrow_rect = pygame.Rect(mx + 6, hdr_top + 6, arr_w, header_h - 12)
-    is_l_hover = larrow_rect.collidepoint(pygame.mouse.get_pos())
+    is_l_hover = larrow_rect.collidepoint(_mouse_pos())
     arr_col = (220, 230, 250) if is_l_hover else (160, 180, 210)
     pygame.draw.polygon(
         surface, arr_col,
@@ -48273,7 +50992,7 @@ def draw_checklist_modal(surface):
     # Right arrow.
     rarrow_rect = pygame.Rect(mx + mw - arr_w - 6, hdr_top + 6,
                               arr_w, header_h - 12)
-    is_r_hover = rarrow_rect.collidepoint(pygame.mouse.get_pos())
+    is_r_hover = rarrow_rect.collidepoint(_mouse_pos())
     arr_col = (220, 230, 250) if is_r_hover else (160, 180, 210)
     pygame.draw.polygon(
         surface, arr_col,
@@ -48346,7 +51065,7 @@ def draw_checklist_modal(surface):
     surface.set_clip(list_clip)
 
     # Draw each row.
-    mpos = pygame.mouse.get_pos()
+    mpos = _mouse_pos()
     for i, (item_key, disp) in enumerate(rows):
         ry = list_top + list_top_pad + i * row_h - checklist_scroll
         if ry + row_h < list_top - row_h:
@@ -48508,7 +51227,7 @@ def draw_checklist_modal(surface):
         _checklist_scrollbar_thumb_rect = thumb_rect
         # Hover/drag affordance: lighter thumb color while engaged.
         is_dragging = _checklist_scroll_drag is not None
-        mouse_p = pygame.mouse.get_pos()
+        mouse_p = _mouse_pos()
         is_hover = thumb_rect.collidepoint(mouse_p)
         thumb_col = ((180, 200, 230) if (is_dragging or is_hover)
                      else (110, 130, 170))
@@ -48546,7 +51265,7 @@ def draw_achievement_banner(surface):
     now = time.time()
     if now >= _achievement_banner_until_ts:
         return
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     # Banner is a centered horizontal band. Width ≈ 90% of screen,
     # height ≈ 110px, two stacked text rows (title + subtitle).
     bw = min(sw - 40, 720)
@@ -48769,7 +51488,7 @@ def draw_campaigns_modal(surface):
     _di_maybe_refresh()
     _nm_maybe_refresh()
 
-    sw, sh = surface.get_size()
+    sw, sh = _ui_screen()
     mw = min(540, sw - 60)
     mh = min(702, sh - 60)   # +62 (one banner row) for the guild/NM middle row
     mx = (sw - mw) // 2
@@ -50138,7 +52857,7 @@ def draw_settings_menu(surface):
     # added below use these (already-scrolled) coords so hit-testing
     # stays correct.
     cy = my + pad - settings_menu_scroll
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
 
     for section in _secs:
         # Sections whose name begins with an underscore render an
@@ -50474,7 +53193,7 @@ def _settings_menu_wheel_consume(event):
     # handled further down the chain and swallow the wheel themselves.
     if sim_import_open or checklist_modal_open or campaigns_modal_open:
         return False
-    if not settings_menu_panel_rect.collidepoint(pygame.mouse.get_pos()):
+    if not settings_menu_panel_rect.collidepoint(_mouse_pos()):
         return False
     # event.y > 0 = wheel up = show earlier rows. One row (24px) per click,
     # scaled by the global UI factor. The upper bound is clamped during
@@ -50672,7 +53391,7 @@ def draw_cfgwiz(surface):
     if not cfgwiz_visible:
         return
 
-    win_w, win_h = surface.get_size()
+    win_w, win_h = _ui_screen()
     mw = CFGWIZ_MODAL_W
 
     # Compute height dynamically. Base layout (title + desc + bards
@@ -52311,7 +55030,7 @@ def _chat_draw_name_context_menu(surface):
 
     # Anchor; clamp to surface bounds.
     ax, ay = menu.get("anchor", (0, 0))
-    sw, sh = surface.get_size()
+    sw, sh = _ui_edge()
     mx = min(ax, sw - menu_w - 2)
     my = min(ay, sh - menu_h - 2)
     if mx < 0:
@@ -52341,7 +55060,7 @@ def _chat_draw_name_context_menu(surface):
     # `gap_before` get extra vertical space plus a thin separator
     # line inserted above them — the misclick-safety affordance for
     # destructive actions like Blacklist.
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
     for i, it in enumerate(items):
         if it.get("gap_before"):
             # Inject the gap, with a separator centered vertically
@@ -53107,7 +55826,7 @@ def draw_chat_tab_rclick_popup(surface):
     panel_w   = max(hdr_w, btn_w) + pad * 2 + 6
     panel_h   = row_h * 2 + pad
     # Keep the popup on-screen — clamp to surface bounds.
-    sw, sh = surface.get_size()
+    sw, sh = _ui_edge()
     px = min(max(0, ax), sw - panel_w)
     py = min(max(0, ay), sh - panel_h)
 
@@ -53128,7 +55847,7 @@ def draw_chat_tab_rclick_popup(surface):
     # "Hide tab" button.
     btn_rect = pygame.Rect(px + pad - 2, py + row_h + 2,
                             panel_w - (pad - 2) * 2, row_h - 2)
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
     is_hov   = btn_rect.collidepoint(mouse_pos)
     bg = (90, 50, 60) if is_hov else (55, 40, 48)
     pygame.draw.rect(surface, bg, btn_rect, border_radius=2)
@@ -53239,7 +55958,7 @@ def draw_chat_panel(surface, x, y, locked=False):
     # handler via the rect stored in _chat_settings_button_rect.
     global _chat_settings_button_rect
     global _chat_clear_tab_button_rect, _chat_clear_all_button_rect
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = _mouse_pos()
 
     gear_w = 56
     gear_h = hdr_h - 2
@@ -54122,7 +56841,7 @@ def draw_chat_panel(surface, x, y, locked=False):
         _chat_scrollbar_thumb_rect = cb_thumb
         # Hover/drag affordance.
         is_dragging = _chat_scroll_drag is not None
-        mouse_p = pygame.mouse.get_pos()
+        mouse_p = _mouse_pos()
         is_hover = cb_thumb.collidepoint(mouse_p)
         thumb_col = ((180, 200, 230) if (is_dragging or is_hover)
                      else (110, 130, 170))
@@ -54362,10 +57081,16 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     pygame.draw.rect(surface, COL_BORDER, (x, y, pw, ph), 1, border_radius=4)
     draw_accent_stripe(surface, x, y, ph, ACCENT_BUTTONS)
 
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
 
     # font_moon is ~12px which fits BTN_H=36 nicely with single-line labels.
     label_font = font_moon
+    # The PAGE NAME is the one thing in the header worth reading at a
+    # glance — which bar you are looking at. Bold at the same size, so
+    # nothing reflows: the arrows, the Bar N and the page indicator all
+    # measure off label_font and stay exactly where they were.
+    title_font = get_font("Consolas", label_font.get_height() - 2,
+                          bold=True)
 
     if not _is_pad:
         # ── Header row: page name (left) + page arrows + page indicator (right) ──
@@ -54382,12 +57107,12 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
         page_name = (page_dict and page_dict.get("name")) or f"Page {eff_page_idx + 1}"
         # Page name on the LEFT. Truncate so it doesn't overflow the arrows.
         name_max_w = pw - pad * 2 - 80   # reserve right edge for nav (≈80px)
-        name_surf  = label_font.render(page_name, True, (220, 220, 230))
+        name_surf  = title_font.render(page_name, True, (228, 228, 238))
         if name_surf.get_width() > name_max_w:
             cut = page_name
-            while cut and label_font.render(cut + "…", True, (220, 220, 230)).get_width() > name_max_w:
+            while cut and title_font.render(cut + "…", True, (228, 228, 238)).get_width() > name_max_w:
                 cut = cut[:-1]
-            name_surf = label_font.render((cut + "…") if cut else page_name[:1],
+            name_surf = title_font.render((cut + "…") if cut else page_name[:1],
                                            True, (220, 220, 230))
         name_x = x + pad
         surface.blit(name_surf, (name_x,
@@ -54906,8 +57631,12 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
         # Clamped for drawing only, and every click target below is built
         # from this same rect, so the form is hit exactly where it is
         # drawn even when the clamp moves it.
-        _fx = max(0, min(int(hotbar_editor_pos[0]), WIDTH - form_w))
-        fy = max(0, min(int(hotbar_editor_pos[1]), HEIGHT - form_h))
+        #
+        # Clamped to the VIEWPORT it is in, not to the main window. The
+        # old max(0, min(x, WIDTH - w)) pinned it at the main window's
+        # right edge, so it could never be dragged into the second one.
+        _fx = _clamp_win_x(hotbar_editor_pos[0], form_w)
+        fy = _clamp_win_y(hotbar_editor_pos[1], form_h, _fx)
     form_rect = pygame.Rect(_fx, fy, form_w, form_h)
     globals()["_hb_editor_rect"] = form_rect
 
@@ -55597,8 +58326,13 @@ def dispatch_hotbar_editor_click(mx, my):
                            if (hotbar_edit_page is not None
                                and 0 <= hotbar_edit_page < len(hotbar_pages))
                            else hotbar_current_page)
-                    new_name = (hotbar_edit_draft.get("label", "") or "").strip()
-                    if not new_name:
+                    # Trailing whitespace only. Leading spaces are
+                    # KEPT: indenting a page name is how you line the
+                    # titles up across several bars, and .strip() threw
+                    # that away every time the name was saved.
+                    new_name = (hotbar_edit_draft.get("label", "")
+                                or "").rstrip()
+                    if not new_name.strip():
                         new_name = f"Page {_pg + 1}"
                     if hotbar_pages:
                         hotbar_pages[_pg]["name"] = new_name
@@ -56004,7 +58738,7 @@ def draw_hotbar_drag_overlay(surface):
         dim.fill((10, 10, 14, 170))
         surface.blit(dim, (clipped.x, clipped.y))
 
-    mx, my = pygame.mouse.get_pos()
+    mx, my = _mouse_pos()
 
     # 3. Page-flip dwell: if the cursor is over a nav arrow, start a
     #    dwell timer. When the timer crosses HOTBAR_DRAG_DWELL_SEC,
@@ -56541,22 +59275,807 @@ if ICON_DIR:
         print(f"[OmniWatch] Could not create status icon dir: {e}")
         _status_icon_dir = None
 
+_job_icon_dir = os.path.join(_icon_root, "jobs") if ICON_DIR else None
+_job_icon_cache = {}         # (job, size) -> Surface | None
+
+# Plate colour by role. MY grouping, not gospel — RDM and BLU in
+# particular sit between two of these. One dict to edit.
+JOB_ROLE_COLOUR = {
+    "WAR": (150, 70, 60), "MNK": (150, 70, 60), "THF": (150, 70, 60),
+    "DRK": (150, 70, 60), "BST": (150, 70, 60), "SAM": (150, 70, 60),
+    "DRG": (150, 70, 60), "PUP": (150, 70, 60), "DNC": (150, 70, 60),
+    "PLD": (70, 105, 165), "NIN": (70, 105, 165), "RUN": (70, 105, 165),
+    "WHM": (140, 106, 165), "SCH": (140, 106, 165), "RDM": (140, 106, 165),
+    "BLM": (95, 90, 170), "SMN": (95, 90, 170), "BLU": (95, 90, 170),
+    "GEO": (95, 90, 170),
+    "BRD": (70, 140, 130), "RNG": (70, 140, 130), "COR": (70, 140, 130),
+}
+JOB_ROLE_DEFAULT = (90, 96, 110)
+
+
+def get_job_icon_scaled(job, size):
+    """<job>.png from icons/jobs/, scaled and cached. None if absent.
+
+    Same load-scale-cache shape as the status icons, so dropping a set of
+    files into that folder is all it takes — nothing else changes, and
+    the lettered plate below is what shows until they arrive.
+    """
+    if not job or not _job_icon_dir or size <= 0:
+        return None
+    key = (job, int(size))
+    if key in _job_icon_cache:
+        return _job_icon_cache[key]
+    surf = None
+    for ext in (".png", ".bmp"):
+        path = os.path.join(_job_icon_dir, f"{job}{ext}")
+        if os.path.isfile(path):
+            try:
+                raw = pygame.image.load(path).convert_alpha()
+                surf = pygame.transform.smoothscale(raw, (int(size),
+                                                          int(size)))
+            except Exception as e:
+                print(f"[OmniWatch] Bad job icon {job}{ext}: {e}")
+                surf = None
+            break
+    _job_icon_cache[key] = surf
+    return surf
+
+
+# ── Tagged mobs ─────────────────────────────────────────────────────
+# Tag a mob from the target card and it keeps a row in a small panel
+# after your cursor moves on, so you can watch a puller's mob or the
+# next link without holding it targeted. Clicking a row targets it again.
+#
+# Ids only live for as long as the entity does, so nothing here is
+# persisted: a tag list restored next session would point at whatever
+# happens to hold those ids now, which is worse than an empty panel.
+TAG_MAX = 8
+tagged_mobs = []            # [{"id", "index", "name", "hpp", "dist", "valid"}]
+# load_layout() runs at line ~25849, LONG BEFORE this line executes, so a
+# plain `= None` here silently throws away the position it just restored.
+# The codebase's existing idiom for a late-defined global that the layout
+# seeds: take whatever is already there, default only if nothing is.
+tag_panel_pos = globals().get("tag_panel_pos")   # None = default placement
+# Seeded by load_layout the same way, for the same reason.
+tag_panel_scale = globals().get("tag_panel_scale") or 1.0
+_tag_resize = None
+_tag_rects = {}             # "panel" / "row:<id>" / "del:<id>" -> Rect
+_tag_drag = None
+_tag_draw_pos = [0, 0]
+
+
+def _tag_find(mob_id):
+    for t in tagged_mobs:
+        if t["id"] == mob_id:
+            return t
+    return None
+
+
+def _tag_send_list():
+    """Tell the lua which ids to poll. Empty string clears it."""
+    try:
+        ids = ",".join(str(t["id"]) for t in tagged_mobs)
+        sock_cmd_out.sendto(f"TAGSET|{ids}".encode("utf-8"), _cmd_addr())
+    except Exception as e:
+        print(f"[OmniWatch] TAGSET failed: {e!r}")
+
+
+def tag_toggle(mob_id, index, name):
+    """Add or remove a tag. Returns True if it is now tagged."""
+    try:
+        mob_id = int(mob_id or 0)
+    except (TypeError, ValueError):
+        return False
+    if mob_id <= 0:
+        return False
+    hit = _tag_find(mob_id)
+    if hit is not None:
+        tagged_mobs.remove(hit)
+        _tag_send_list()
+        return False
+    if len(tagged_mobs) >= TAG_MAX:
+        # Drop the oldest rather than refusing: the button has to do
+        # something visible every time it is pressed.
+        tagged_mobs.pop(0)
+    tagged_mobs.append({
+        "id": mob_id, "index": int(index or 0), "name": str(name or ""),
+        "hpp": -1, "dist": -1.0, "valid": 1, "seen": time.time(),
+    })
+    _tag_send_list()
+    return True
+
+
+def _tag_parse(raw):
+    """TAGS|<id>~<name>~<hpp>~<dist>~<valid>;... from the lua poller."""
+    for ent in raw.split("|", 1)[1].split(";"):
+        if not ent:
+            continue
+        f = ent.split("~")
+        if len(f) < 5:
+            continue
+        try:
+            t = _tag_find(int(f[0]))
+        except ValueError:
+            continue
+        if t is None:
+            continue
+        # A name only ever arrives when the entity is readable, so an
+        # empty one means out of range — keep the name we tagged with.
+        if f[1]:
+            t["name"] = f[1]
+        try:
+            t["hpp"] = int(f[2])
+        except ValueError:
+            t["hpp"] = -1
+        try:
+            t["dist"] = float(f[3])
+        except ValueError:
+            t["dist"] = -1.0
+        t["valid"] = 1 if f[4] == "1" else 0
+        if t["hpp"] >= 0:
+            t["seen"] = time.time()
+    _tag_prune()
+
+
+# A mob killed while you can still read it hits 0 and the row goes. One
+# killed after it left render range never reports anything again, so the
+# row would sit there forever — hence the second rule. Long enough that
+# walking round a corner doesn't drop a tag you still want.
+TAG_STALE_SECS = 90
+
+
+def _tag_prune():
+    """Drop tags whose mob is dead or long gone. Returns how many went."""
+    now = time.time()
+    keep = [t for t in tagged_mobs
+            if t.get("hpp", -1) != 0
+            and (now - t.get("seen", now)) < TAG_STALE_SECS]
+    gone = len(tagged_mobs) - len(keep)
+    if gone:
+        tagged_mobs[:] = keep
+        _tag_send_list()
+    return gone
+
+
+usable_spell_ids = set()     # castable by the CURRENT job/level
+usable_jas       = {}        # lowercased name -> ability id
+
+
+def _canuse_parse(raw):
+    """CANUSE|<spell id,...>|<ja id:Name,...> from the lua."""
+    global usable_spell_ids, usable_jas
+    try:
+        _, sp, ja = raw.split("|", 2)
+    except ValueError:
+        return
+    ids = set()
+    for tok in sp.split(","):
+        tok = tok.strip()
+        if tok.isdigit():
+            ids.add(int(tok))
+    jas = {}
+    for tok in ja.split(","):
+        if ":" not in tok:
+            continue
+        aid, _, nm = tok.partition(":")
+        nm = nm.strip()
+        if nm and aid.strip().isdigit():
+            jas[nm.lower()] = int(aid)
+    usable_spell_ids = ids
+    usable_jas = jas
+
+
+def _spell_id_by_name(name):
+    low = str(name or "").strip().lower()
+    if not low:
+        return None
+    for sid, rec in (_spells_by_id or {}).items():
+        if str(rec.get("name", "")).lower() == low:
+            return sid
+    return None
+
+
+def _on_recast(kind, ident):
+    """True while `ident` is still cooling down."""
+    rec = recast_state.get((kind, ident))
+    if not rec:
+        return False
+    left = rec.get("secs", 0) - (time.time() - rec.get("updated_at", 0))
+    return left > 0.5
+
+
+def _inv_has_item(name):
+    """Is `name` sitting in a bag right now?"""
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+
+    def walk(node):
+        if isinstance(node, dict):
+            nm = node.get("name")
+            if isinstance(nm, str) and nm.lower() == low:
+                return True
+            return any(walk(v) for v in node.values())
+        if isinstance(node, (list, tuple)):
+            return any(walk(v) for v in node)
+        return False
+
+    try:
+        return walk(inventory_state)
+    except Exception:
+        return False
+
+
+def _cure_action(name, is_self):
+    """('ma'|'ja'|'item', name) for `name`, or None if unusable now.
+
+    Checked in the order the game would let you act: a spell you can
+    actually cast on this job at this level, then a job ability your
+    current job grants, then an item -- and an item ONLY on yourself,
+    because FFXI will not let you use one on another party member.
+    Anything still cooling down is skipped so the fall-through moves on
+    to the next option rather than stalling on it.
+    """
+    sid = _spell_id_by_name(name)
+    if sid is not None and not _on_recast("ma", sid):
+        # NO FEED, NO GATE. usable_spell_ids is filled by the lua's
+        # CANUSE report; until that arrives it is empty, and treating
+        # empty as "you can cast nothing" meant clicking a debuff icon
+        # silently did nothing while the Support Helper's own button —
+        # which never consults it — worked fine. An absent answer is
+        # not a "no": cast it and let the game refuse if it must.
+        if not usable_spell_ids:
+            if not globals().get("_canuse_warned"):
+                globals()["_canuse_warned"] = True
+                print("[OmniWatch] no CANUSE report from the lua yet — "
+                      "casting without the job/level check. Reload the "
+                      "addon in game if this persists.")
+            return ("ma", name)
+        if sid in usable_spell_ids:
+            return ("ma", name)
+    aid = usable_jas.get(str(name or "").strip().lower())
+    if aid is not None and not _on_recast("ja", aid):
+        return ("ja", name)
+    if is_self and _inv_has_item(name):
+        return ("item", name)
+    return None
+
+
+def _debuff_remedy(label):
+    """The spell that clears `label`, from YOUR Support Helper sections.
+
+    Deliberately not a table of my own: you already keep a curated list
+    of statuses and what cures each one, you have corrected it before,
+    and a second copy would drift from it. First matching section wins,
+    matched the same case-insensitive substring way the panel matches —
+    so "Blind" finds Blindness — and the FIRST spell in that section's
+    list is the one cast.
+    """
+    if not label:
+        return ""
+    low = str(label).lower()
+    for sec in (alert_sections or []):
+        pats = [p.strip().lower() for p in
+                str(sec.get("match", "")).split(",") if p.strip()]
+        if not any(p in low for p in pats):
+            continue
+        cures = _alert_cure_list(sec)
+        if cures:
+            return cures[0]
+    return ""
+
+
+def _debuff_remedies(label):
+    """Every option listed for `label`, in your own order.
+
+    The party panel labels its icons with display_name(), which swaps in
+    YOUR alias — so an icon can read "Para" while the Support Helper
+    section matches on "Paralysis". A one-way substring test then fails
+    for exactly the statuses you took the trouble to shorten, which is
+    why the Support Helper's own button cured something the icon would
+    not. Un-alias first, and fall back to matching either way round.
+    """
+    if not label:
+        return []
+    names = {str(label).lower()}
+    # The alias table maps real name -> alias; walk it backwards to
+    # recover every real name that displays as this label.
+    try:
+        for _real, _alias in (_buff_aliases or {}).items():
+            if str(_alias).lower() == str(label).lower():
+                names.add(str(_real).lower())
+    except Exception:
+        pass
+    for sec in (alert_sections or []):
+        pats = [p.strip().lower() for p in
+                str(sec.get("match", "")).split(",") if p.strip()]
+        if not pats:
+            continue
+        hit = any(p in n or n in p for p in pats for n in names)
+        if not hit:
+            continue
+        return _alert_cure_list(sec)
+    return []
+
+
+def _party_debuff_click(pos):
+    """Cast the remedy for the debuff icon under `pos`. True if handled.
+
+    Debuff icons only. A buff icon is not something you fix, and making
+    the whole grid castable would turn a mis-click while reading someone
+    else's songs into a wasted cast.
+    """
+    if setup_mode or display_hidden:
+        return False
+    for ent in _party_buff_icon_rects:
+        if len(ent) < 8 or not ent[7]:
+            continue
+        if not ent[0].collidepoint(pos):
+            continue
+        label, member = ent[1], ent[6]
+        options = _debuff_remedies(label)
+        if not options:
+            print(f"[OmniWatch] no cure listed for {label!r} — add it in "
+                  "Settings > Support Helper")
+            return True
+        if not member:
+            return True
+        _is_self = bool(member) and member == player_self_name
+        for _opt in options:
+            act = _cure_action(_opt, _is_self)
+            if act is None:
+                continue
+            _send_cure(act[1], member, verb=act[0])
+            print(f"[OmniWatch] {act[0]} {act[1]} -> {member} "
+                  f"(from {label})")
+            return True
+        print(f"[OmniWatch] nothing usable for {label!r} right now "
+              f"(tried {', '.join(options)}; "
+              f"{len(usable_spell_ids)} spells and "
+f"{len(usable_jas)} abilities reported usable)")
+        return True
+    return False
+
+
+def _party_status_time(pid, bid, label, is_self, occ=0):
+    """Second tooltip line for a party status, or "".
+
+    Three different questions, three different answers, and the game
+    only really answers the first:
+
+    * your own buffs are timed for real, from the server timestamps the
+      buff panel already tracks;
+    * a buff YOU put on someone else is counted down from the spell's
+      base duration, so gear, merits and Composure all make it read
+      short — hence the "~";
+    * anything else on anyone else has no duration anywhere, so what is
+      shown is how long OmniWatch has SEEN it, which is a floor, not a
+      remaining time.
+
+    Nothing is invented: a status with none of the three gets no line.
+    """
+    now = time.time()
+    if is_self:
+        # buff_state is keyed by SLOT, which is what lets the buff timer
+        # panel show two Marches with two different times. Gather every
+        # slot carrying this id, order them the way the game does, and
+        # take the one matching this icon's position among its
+        # duplicates. Matching on id alone gave both copies the first
+        # record's timer.
+        recs = [r for r in buff_state.values() if r.get("buff_id") == bid]
+        if not recs:
+            return ""
+        recs.sort(key=lambda r: (r.get("slot") is None, r.get("slot") or 0))
+        rec = recs[occ] if 0 <= occ < len(recs) else recs[0]
+        eu = rec.get("expires_at_unix")
+        if eu:
+            left = max(0, int(eu - now))
+            return f"{left // 60}:{left % 60:02d} left"
+        return ""
+    rec = support_buffs.get((pid, bid))
+    if rec:
+        dur = rec.get("dur") or 0
+        if dur:
+            left = max(0, int(dur - (now - rec["at"])))
+            return f"~{left // 60}:{left % 60:02d} left"
+    seen = _alert_seen.get((pid, label))
+    if seen:
+        up = int(now - seen[0])
+        # seen[1] is False when the status was ALREADY there the first
+        # time we saw this member, so the elapsed time is a minimum.
+        pre = "" if seen[1] else "~"
+        return f"{pre}{up // 60}:{up % 60:02d} up"
+    return ""
+
+
+_tp_seen  = {}      # member name -> last TP we drew
+_tp_crossed = {}    # member name -> when it last crossed 1000 upward
+TP_FLASH_SECS = 0.45
+
+
+def tp_flash_color(name, tp, base):
+    """`base`, brightened briefly as TP crosses 1000 going up.
+
+    1000 is the moment you can act, and a bar that simply keeps filling
+    gives you nothing to notice. Only an UPWARD crossing flashes —
+    spending TP back below 1000 is not news, and would otherwise flash
+    every weaponskill twice.
+    """
+    try:
+        tp = int(tp)
+    except (TypeError, ValueError):
+        return base
+    prev = _tp_seen.get(name)
+    _tp_seen[name] = tp
+    if prev is not None and prev < 1000 <= tp:
+        _tp_crossed[name] = time.time()
+    at = _tp_crossed.get(name)
+    if not at:
+        return base
+    age = time.time() - at
+    if age >= TP_FLASH_SECS:
+        _tp_crossed.pop(name, None)
+        return base
+    k = 1.0 - (age / TP_FLASH_SECS)
+    return tuple(min(255, int(c + (255 - c) * k)) for c in base[:3])
+
+
+def _party_selected_name():
+    """Name of the member the party panel currently considers selected.
+
+    Reads whatever the panel already tracks rather than introducing a
+    second notion of selection — and returns None if that global is not
+    present, so the plate simply never highlights instead of raising.
+    """
+    # selected_player_name is the one. The earlier guesses were names I
+    # invented, which is why the plate highlight never once lit up.
+    v = globals().get("selected_player_name")
+    return v if isinstance(v, str) and v else None
+
+
+_target_tag_btn_rect = None
+_target_tag_btn_info = None
+
+
+def _draw_target_tag_button(surface, x, y, card_w, mob_id, index, name):
+    """A TAG toggle centred in the target card's title strip."""
+    global _target_tag_btn_rect, _target_tag_btn_info
+    _target_tag_btn_rect = None
+    _target_tag_btn_info = None
+    try:
+        mob_id = int(mob_id or 0)
+    except (TypeError, ValueError):
+        return
+    if mob_id <= 0 or display_hidden or setup_mode:
+        return
+    on = _tag_find(mob_id) is not None
+    f = get_font("Consolas", 9, bold=True)
+    label = "TAGGED" if on else "TAG"
+    tw = f.size(label)[0]
+    w, h = tw + 12, 13
+    bx = x + (card_w - w) // 2
+    by = y + 2
+    rect = pygame.Rect(bx, by, w, h)
+    hot = rect.collidepoint(_mouse_pos())
+    body = (58, 46, 24) if on else ((44, 46, 56) if hot else (30, 32, 40))
+    edge = ACCENT_PARTY if on else (78, 84, 98)
+    pygame.draw.rect(surface, body, rect, border_radius=3)
+    pygame.draw.rect(surface, edge, rect, 1, border_radius=3)
+    surface.blit(f.render(label, True,
+                          (232, 206, 140) if on else (176, 182, 194)),
+                 (bx + 6, by + 2))
+    _target_tag_btn_rect = rect
+    _target_tag_btn_info = (mob_id, index, name)
+
+
+def _target_card_tag_click(pos):
+    """True when the press landed on the card's TAG button."""
+    if _target_tag_btn_rect is None or _target_tag_btn_info is None:
+        return False
+    if not _target_tag_btn_rect.collidepoint(pos):
+        return False
+    tag_toggle(*_target_tag_btn_info)
+    return True
+
+
+def draw_tag_panel(surface):
+    """The tagged-mob watch list. One row per tag: name, id, HP bar."""
+    global _tag_rects, _tag_draw_pos
+    _tag_rects = {}
+    if display_hidden:
+        return
+    # In setup mode the panel shows stand-in rows so it can be placed
+    # before anything is tagged — the same rule the Support Helper and
+    # the treasure pool use. Real tags always win.
+    #
+    # THREE of them, not one: you are positioning the panel at the size
+    # it will actually be in use, and a one-row box lands somewhere that
+    # turns out to be wrong once it fills. The names are deliberately
+    # not FFXI-ish so a mock row can never be mistaken for a real tag,
+    # and the last is long enough to show where a name truncates.
+    rows = tagged_mobs
+    if setup_mode and not rows:
+        rows = [
+            {"id": 0, "name": "example mob", "hpp": 100, "valid": 1},
+            {"id": 0, "name": "example mob 2", "hpp": 64, "valid": 1},
+            {"id": 0, "name": "example mob three", "hpp": 21, "valid": 0},
+        ]
+    elif not rows:
+        return
+    _ts = max(MIN_SCALE, min(MAX_SCALE, tag_panel_scale))
+    f_name = get_font("Consolas", 14 * _ts, bold=True)
+    f_small = get_font("Consolas", 11 * _ts)
+    row_h = max(16, int(30 * _ts))
+    w = max(120, int(200 * _ts))
+    h = int(20 * _ts) + row_h * len(rows) + 6
+    if tag_panel_pos is None:
+        px = max(8, WIDTH - w - 16)
+        py = max(8, HEIGHT // 3)
+    else:
+        px, py = int(tag_panel_pos[0]), int(tag_panel_pos[1])
+    px = _clamp_win_x(px, w)
+    py = _clamp_win_y(py, h, px)
+    _tag_draw_pos = [px, py]
+    pygame.draw.rect(surface, COL_PANEL, (px, py, w, h), border_radius=4)
+    pygame.draw.rect(surface, COL_BORDER, (px, py, w, h), 1, border_radius=4)
+    draw_accent_stripe(surface, px, py, h, ACCENT_PARTY)
+    surface.blit(f_small.render("TAGGED" + (" — example" if setup_mode
+                                            and not tagged_mobs else ""),
+                                True, COL_LABEL_DIM), (px + 10, py + 5))
+    _tag_rects["panel"] = pygame.Rect(px, py, w, h)
+    ry = py + 20
+    for t in rows:
+        # A tag ends when the mob does, so nothing here is ever a
+        # corpse — dim only means "cannot read it from here".
+        dim = not t.get("valid")
+        col = COL_LABEL_DIM if dim else (232, 234, 237)
+        idt = f"{t['id']:08X}"
+        _idw = f_small.size(idt)[0]
+        surface.blit(f_small.render(idt, True, COL_LABEL_DIM),
+                     (px + w - 12 - _idw, ry + 2))
+        # Clip the name to whatever the id leaves. A fixed character
+        # count cannot do this: the id column is a measured width, and
+        # 16 characters of Consolas lands right on top of it.
+        nm = t.get("name") or "?"
+        _n_surf = f_name.render(nm, True, col)
+        _n_avail = max(0, (w - 12 - _idw) - 10 - 6)
+        _old_clip = surface.get_clip()
+        surface.set_clip(pygame.Rect(px + 10, ry, _n_avail,
+                                     _n_surf.get_height()))
+        surface.blit(_n_surf, (px + 10, ry))
+        surface.set_clip(_old_clip)
+        hpp = t.get("hpp", -1)
+        bar_y = ry + 16
+        if hpp is None or hpp < 0:
+            pygame.draw.rect(surface, COL_BAR_BG,
+                             (px + 10, bar_y, w - 34, 6))
+        else:
+            draw_bar(surface, px + 10, bar_y, w - 34, 6, hpp / 100.0,
+                     hp_color(hpp, False) if not dim else COL_LABEL_DIM)
+        if not setup_mode:
+            # In setup mode every pixel drags instead, so no row or
+            # delete target is registered — placing the panel must never
+            # retarget something or drop a tag.
+            # The WHOLE row targets, full width and full height. It
+            # used to stop 22px short to leave room for the x, which
+            # left a dead strip beside every row where a click fell
+            # through to dragging the panel instead. The delete rect is
+            # tested first, so the x still deletes.
+            _tag_rects[f"row:{t['id']}"] = pygame.Rect(px, ry, w, row_h)
+            _tag_rects[f"del:{t['id']}"] = pygame.Rect(px + w - 20,
+                                                       ry + 14, 14, 14)
+            surface.blit(f_small.render("x", True, (200, 120, 120)),
+                         (px + w - 17, ry + 14))
+        ry += row_h
+    draw_resize_grip(surface, px + w, py + h)
+
+
+def _tag_handle_event(event):
+    """True when the tag panel consumed the event."""
+    global _tag_drag, tag_panel_pos, tag_panel_scale, _tag_resize
+    if display_hidden or (not tagged_mobs and not setup_mode):
+        return False
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        panel = _tag_rects.get("panel")
+        if panel is None or not panel.collidepoint(event.pos):
+            return False
+        if (panel.right - RESIZE_GRIP) <= event.pos[0] < panel.right and \
+           (panel.bottom - RESIZE_GRIP) <= event.pos[1] < panel.bottom:
+            # Corner first: it overlaps the last row, and a row would
+            # otherwise eat the press and retarget instead of resizing.
+            _tag_resize = (panel.x, panel.width, tag_panel_scale)
+            return True
+        for key, rect in _tag_rects.items():
+            if key.startswith("del:") and rect.collidepoint(event.pos):
+                hit = _tag_find(int(key[4:]))
+                if hit:
+                    tagged_mobs.remove(hit)
+                    _tag_send_list()
+                return True
+        for key, rect in _tag_rects.items():
+            if key.startswith("row:") and rect.collidepoint(event.pos):
+                t = _tag_find(int(key[4:]))
+                if t:
+                    # Same route the party panel uses: an injected
+                    # incoming 0x058, addressed by entity id.
+                    #
+                    # Id ONLY — no index, no name. The lua re-resolves a
+                    # live entity from whichever of those it is given and
+                    # then overwrites the id with what it found, which
+                    # for "Huge Wasp" with three of them around means
+                    # targeting the wrong one. We tagged a specific
+                    # entity; its id is the whole point.
+                    _send_target(0, "", t["id"])
+                return True
+        # Anywhere else on the panel is a handle — the header strip in
+        # normal use, every pixel of it in setup mode, since the rows
+        # register no targets there. Adopt the DRAWN position first or a
+        # clamped panel jumps on the first pixel.
+        tag_panel_pos = list(_tag_draw_pos)
+        _tag_drag = (event.pos[0] - tag_panel_pos[0],
+                     event.pos[1] - tag_panel_pos[1])
+        return True
+    if event.type == pygame.MOUSEMOTION and _tag_resize is not None:
+        _rx, _rw, _rs = _tag_resize
+        tag_panel_scale = max(MIN_SCALE, min(
+            MAX_SCALE, _resize_scale(_rs, _rw, max(60, event.pos[0] - _rx))))
+        return True
+    if event.type == pygame.MOUSEBUTTONUP and _tag_resize is not None:
+        _tag_resize = None
+        try:
+            save_layout()
+        except Exception as e:
+            print(f"[OmniWatch] tag panel size save: {e!r}")
+        return True
+    if event.type == pygame.MOUSEMOTION and _tag_drag is not None:
+        tag_panel_pos = [event.pos[0] - _tag_drag[0],
+                         event.pos[1] - _tag_drag[1]]
+        return True
+    if event.type == pygame.MOUSEBUTTONUP and _tag_drag is not None:
+        _tag_drag = None
+        # Write it out now rather than waiting for the next save: a
+        # position you dragged and then crashed out of is exactly the one
+        # you wanted kept.
+        try:
+            save_layout()
+        except Exception as e:
+            print(f"[OmniWatch] tag panel save: {e!r}")
+        return True
+    return False
+
+
+_party_job_cache = {}        # member name -> (main, sub) abbrevs
+
+# Jobs whose first three letters are not the abbreviation anyone uses.
+# Trust-only jobs mostly; add to it rather than special-casing callers.
+JOB_ABBREV_FIX = {
+    "CHEMIST": "CHM", "MONSTER": "MON", "AUTOMATON": "PUP",
+}
+
+
+def _job_letters(raw):
+    """A three-letter job code from whatever the data actually holds.
+
+    The trust table is scraped, so a job arrives as anything from "BRD"
+    to "Bard" to 'BRD/WHM' to a quoted string. Two things went wrong on
+    screen because of it: Monberaux drew `"CH` because the quote counted
+    as a character, and a trust whose job read BRD/WHM fell out of the
+    role colour map while still LOOKING like a plain BRD.
+    """
+    txt = str(raw or "")
+    for cut in ("/", "\\", ","):
+        if cut in txt:
+            txt = txt.split(cut, 1)[0]
+    txt = "".join(ch for ch in txt if ch.isalpha()).upper()
+    if not txt:
+        return ""
+    return JOB_ABBREV_FIX.get(txt, txt[:3])
+
+
+def party_job_abbrev(member):
+    """(main, sub) job letters for a party row's plate.
+
+    The game reports a job for players but not for trusts, which is why
+    their plates came up blank. trusts.json knows it — the target card
+    has been reading the same field all along — so fall back to that,
+    resolved through lookup_trust so Windower's display names ("Apururu
+    (UC)", "Trust: Apururu") all land on the same record.
+
+    Cached per name: the lookup walks the trust table, and a party row
+    redraws every frame.
+    """
+    m = member or {}
+    job = _job_letters(m.get("main_job"))
+    sub_j = _job_letters(m.get("sub_job"))
+    if job:
+        return job, sub_j
+    name = str(m.get("name") or "").strip()
+    if not name:
+        return "", ""
+    hit = _party_job_cache.get(name)
+    if hit is not None:
+        return hit
+    out = ("", "")
+    try:
+        rec = lookup_trust(name)
+        if isinstance(rec, dict):
+            # A scraped record may carry the sub under either key, or
+            # fold it into the main as "RDM/WHM".
+            _raw = str(rec.get("job") or "")
+            _main = _job_letters(_raw)
+            _sub = _job_letters(rec.get("sub_job") or rec.get("job_sub"))
+            if not _sub and "/" in _raw:
+                _sub = _job_letters(_raw.split("/", 1)[1])
+            out = (_main, _sub)
+    except Exception as e:
+        print(f"[OmniWatch] trust job lookup {name!r}: {e!r}")
+    _party_job_cache[name] = out
+    return out
+
+
+def draw_job_plate(surface, x, y, size, job, font, selected=False,
+                   sub_job=""):
+    """The job's square at the left of a party row."""
+    icon = get_job_icon_scaled(job, size)
+    rect = pygame.Rect(int(x), int(y), int(size), int(size))
+    if icon is not None:
+        surface.blit(icon, rect.topleft)
+    else:
+        col = JOB_ROLE_COLOUR.get((job or "").upper(), JOB_ROLE_DEFAULT)
+        body = tuple(max(0, c // 3) for c in col)
+        pygame.draw.rect(surface, body, rect, border_radius=4)
+        if job:
+            _fm = get_font("Consolas", max(8, int(size * 0.30)), bold=True)
+            lbl = _fm.render(job, True,
+                             tuple(min(255, c + 90) for c in col))
+            if sub_job:
+                _fs = get_font("Consolas", max(7, int(size * 0.24)))
+                sl = _fs.render(sub_job, True,
+                                tuple(min(210, c + 40) for c in col))
+                _th = lbl.get_height() + sl.get_height()
+                _ty = rect.centery - _th // 2
+                surface.blit(lbl, (rect.centerx - lbl.get_width() // 2,
+                                   _ty))
+                surface.blit(sl, (rect.centerx - sl.get_width() // 2,
+                                  _ty + lbl.get_height()))
+            else:
+                surface.blit(lbl, (rect.centerx - lbl.get_width() // 2,
+                                   rect.centery - lbl.get_height() // 2))
+    edge = COL_ALERT_CURE if selected else JOB_ROLE_COLOUR.get(
+        (job or "").upper(), JOB_ROLE_DEFAULT)
+    pygame.draw.rect(surface, edge, rect, 2 if selected else 1,
+                     border_radius=4)
+    return rect
+
+
+# PNG first, then the .bmp the lua extractor writes. Order matters: a
+# replacement icon set is what someone deliberately dropped in, and it
+# has to win over whatever the extractor put there. Community song and
+# roll icon packs ship as PNG, which is why only finding .bmp meant a
+# freshly installed set drew nothing but the two-letter fallback badges.
+_STATUS_ICON_EXTS = (".png", ".bmp")
+
+
 def _status_icon_load_raw(buff_id):
-    """Load <buff_id>.bmp from disk. Returns Surface or None."""
+    """Load <buff_id>.png or .bmp from disk. Returns Surface or None."""
     if not _status_icon_dir:
         return None
-    path = os.path.join(_status_icon_dir, f"{int(buff_id)}.bmp")
-    if not os.path.isfile(path):
-        return None
-    try:
-        return pygame.image.load(path).convert_alpha()
-    except Exception as e:
-        # Likely a partial-write from a recent extraction. Remove so the
-        # next ensure_status_icon retry can write fresh bytes.
-        print(f"[OmniWatch] Bad status icon {buff_id}.bmp: {e} — removing.")
-        try: os.remove(path)
-        except OSError: pass
-        return None
+    for ext in _STATUS_ICON_EXTS:
+        path = os.path.join(_status_icon_dir, f"{int(buff_id)}{ext}")
+        if not os.path.isfile(path):
+            continue
+        try:
+            return pygame.image.load(path).convert_alpha()
+        except Exception as e:
+            # Likely a partial write from a recent extraction. Remove so
+            # the next ensure_status_icon retry can write fresh bytes.
+            # Only the file that actually failed — a broken .bmp must not
+            # take a good .png with it.
+            print(f"[OmniWatch] Bad status icon {buff_id}{ext}: {e}"
+                  " — removing.")
+            try: os.remove(path)
+            except OSError: pass
+    return None
 
 def get_status_icon_scaled(buff_id, size):
     """Return a scaled status icon surface, or None if unavailable.
@@ -57387,7 +60906,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     # coords translate by (x, y).
     screen_rect = pygame.Rect(x + name_x, y + name_y,
                               nm_surf.get_width(), nm_surf.get_height())
-    is_hover = (alpha > 128) and screen_rect.collidepoint(pygame.mouse.get_pos())
+    is_hover = (alpha > 128) and screen_rect.collidepoint(_mouse_pos())
     if is_hover:
         nm_surf = f_name.render(name if name == name_full else (name + "…"),
                                 True, (255, 255, 180))
@@ -58295,6 +61814,12 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     # that the card is on top here.
     globals()["_target_card_rect"] = pygame.Rect(x, y, card.get_width(),
                                                  card.get_height())
+    # TAG button, drawn ON TOP of the finished card rather than inside
+    # it: the card is composed at its own scale into its own surface, and
+    # reaching into that layout to find a gap is how a button ends up
+    # overlapping the distance readout at some other scale.
+    _draw_target_tag_button(surface, x, y, card.get_width(), tid,
+                            info.get("index", 0), name_full)
 
 
 def equip_panel_size(scale):
@@ -59337,7 +62862,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
         _tray_h0 = max(20, int(28 * scale))
         _save_btn_h0 = max(18, int(22 * scale))
         _setup_extra = gap + _tray_h0 + gap + _save_btn_h0 + pad
-        if y + panel_h > surface.get_height():
+        if y + panel_h > _ui_screen()[1]:
             _setup_flip = True
     bg_y = (y - _setup_extra) if _setup_flip else y
 
@@ -59795,7 +63320,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
             dd_y = btn_y + btn_h + 2
             # Clamp dd_y to stay on screen — if it goes off bottom,
             # show ABOVE the button instead.
-            screen_h = surface.get_height()
+            screen_h = _ui_screen()[1]
             if dd_y + dd_h > screen_h - 4:
                 dd_y = btn_y - dd_h - 2
             pygame.draw.rect(surface, (25, 30, 38),
@@ -60027,6 +63552,15 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
         # don't spam if the user toggles the viewer on/off, but we DO
         # capture which ids are missing so BalladOfWorms can debug from the
         # user's session log.
+        # The badge is a BUTTON: click it to throw away the .bmp for
+        # everything worn and have the extractor write them again. A file
+        # that was written badly — valid bmp, wrong pixels — passes every
+        # check there is, and re-extracting is the only cure.
+        # Same rect the hover tooltip already uses (bx, by) — inventing
+        # a second pair of coordinates for the same badge is how the
+        # click target drifts away from the thing you can see.
+        globals()["_icon_badge_rect"] = pygame.Rect(
+            bx, by, badge_surf.get_width(), badge_surf.get_height())
         if not _icon_missing_logged:
             _icon_missing_logged = True
             sample = sorted(_icon_missing_ids)[:10]
@@ -60039,6 +63573,9 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
                   f"or set PARTYWATCH_ICON_DIR env var to the correct "
                   f"OmniWatch addon root if your icons folder is "
                   f"elsewhere on disk.")
+            print("[OmniWatch]   Or CLICK THE BADGE on the equipment "
+                  "viewer to delete and re-extract the icons for "
+                  "everything you are wearing.")
 
     pygame.draw.line(surface, COL_SLOT_BDR,
                      (x + 1, y + title_h),
@@ -60159,9 +63696,9 @@ def draw_help_tooltip(surface, mx, my, lines, screen_w, screen_h):
     tx = mx + 14
     ty = my + 14
     if tx + total_w > screen_w:
-        tx = max(0, mx - total_w - 14)
+        tx = max(_ui_view()[0], mx - total_w - 14)
     if ty + total_h > screen_h:
-        ty = max(0, screen_h - total_h - 2)
+        ty = max(_ui_view()[1], screen_h - total_h - 2)
 
     shadow = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
     shadow.fill((0, 0, 0, 220))
@@ -60483,9 +64020,9 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     tx = mx + 14
     ty = my + 14
     if tx + total_w > screen_w:
-        tx = max(0, mx - total_w - 14)
+        tx = max(_ui_view()[0], mx - total_w - 14)
     if ty + total_h > screen_h:
-        ty = max(0, screen_h - total_h - 2)
+        ty = max(_ui_view()[1], screen_h - total_h - 2)
 
     panel = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
     panel.fill((0, 0, 0, 215))
@@ -60648,9 +64185,9 @@ def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
     tx = mx + 14
     ty = my + 14
     if tx + total_w > screen_w:
-        tx = max(0, mx - total_w - 14)
+        tx = max(_ui_view()[0], mx - total_w - 14)
     if ty + total_h > screen_h:
-        ty = max(0, screen_h - total_h - 2)
+        ty = max(_ui_view()[1], screen_h - total_h - 2)
 
     shadow = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
     shadow.fill((0, 0, 0, 215))
@@ -60734,8 +64271,7 @@ def _get_hwnd():
     if sys.platform != "win32":
         return None
     try:
-        info = pygame.display.get_wm_info()
-        return info.get("window") or info.get("hwnd")
+        return _ow_hwnd() or None
     except Exception:
         return None
 
@@ -60754,15 +64290,15 @@ def _get_hwnd():
 _prev_foreground_hwnd = None     # window to give focus back to
 
 
-def _apply_no_activate(enabled):
-    """Set/clear WS_EX_NOACTIVATE (+APPWINDOW) on the overlay window."""
+def _apply_no_activate(enabled, name="main"):
+    """Set/clear WS_EX_NOACTIVATE (+APPWINDOW) on a named window."""
     if sys.platform != "win32" \
             or os.environ.get("SDL_VIDEODRIVER") == "dummy":
         return
     try:
         import ctypes
         from ctypes import wintypes
-        hwnd = _get_hwnd()
+        hwnd = _ow_hwnd(name) or (_get_hwnd() if name == "main" else 0)
         if not hwnd:
             return
         u32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -60788,12 +64324,20 @@ def _apply_no_activate(enabled):
         print(f"[OmniWatch] keep-game-focus failed: {e!r}")
 
 
-def _take_keyboard_focus():
-    """Composer field clicked: remember the game window, then activate
+def _take_keyboard_focus(which=None):
+    """A field was clicked: remember the game window, then activate
     ourselves so SDL receives key/TEXTINPUT events. Explicit
     SetForegroundWindow is allowed despite WS_EX_NOACTIVATE (the style
     only suppresses mouse/system activation), and succeeds here because
-    our process just received the click."""
+    our process just received the click.
+
+    ACTIVATES THE WINDOW YOU CLICKED IN, not always the main one. This
+    used to hand focus to the main window whatever you were doing, so
+    clicking a hotbar slot in the second window yanked the screen back
+    to the first — the editor stayed put and you had to travel back to
+    it. `which` names a window; by default it is wherever the cursor
+    last was.
+    """
     global _prev_foreground_hwnd
     if sys.platform != "win32" \
             or os.environ.get("SDL_VIDEODRIVER") == "dummy":
@@ -60802,7 +64346,14 @@ def _take_keyboard_focus():
         import ctypes
         from ctypes import wintypes
         u32 = ctypes.WinDLL("user32", use_last_error=True)
-        ours = _get_hwnd()
+        _w = which or globals().get("_MOUSE_WINDOW") or "main"
+        ours = None
+        if _w != "main":
+            try:
+                ours = _ow_hwnd(_w) or None
+            except Exception:
+                ours = None
+        ours = ours or _get_hwnd()
         cur = u32.GetForegroundWindow()
         if cur and cur != ours:
             _prev_foreground_hwnd = cur
@@ -61231,6 +64782,16 @@ _atexit.register(_stop_global_typing_hook)
 _start_global_typing_hook()
 
 _apply_no_activate(bool(setting("no_focus_steal")))
+# The layout is the authority; the setting is only the fallback for a
+# layout written before the second window existed.
+if _desk_pending is None:
+    _desk_pending = bool(setting("second_window"))
+# BOTH WINDOWS START WINDOWED. The main one always has — its full-screen
+# state was never persisted — and now the desk one matches it. The saved
+# ow_desk_fs is still used, but only to carry the state across a profile
+# switch mid-session, which is where losing it moved every @desk panel.
+_desk_fs_pending = False
+_apply_desk_pending()
 _gt_capturing_active = False   # hook-driven type-anywhere session
 _composer_focus_prev = False   # keep-game-focus edge tracker
 
@@ -61246,6 +64807,7 @@ while running:
     # stops drawing stops claiming the wheel.
     _tc_scroll_rect.clear()
     _party_buff_icon_rects.clear()
+    _scale_wheel_rects.clear()
     # Reset hotbar editor anchor — set during the buttons panel render
     # if it happens this frame; if not, the editor is skipped at draw
     # time so we don't reuse stale geometry from last frame.
@@ -61439,7 +65001,7 @@ while running:
             edata, _ = sock_equip.recvfrom(4096)
             # Multibox: skip equip packets from a non-locked character so
             # the equipment panel doesn't flip between two logged-in chars.
-            _eq_ok, _eq_raw = _mb_gate(edata.decode())
+            _eq_ok, _eq_raw = _mb_gate(edata.decode(), stream="equip")
             if not _eq_ok:
                 continue
             parts    = _eq_raw.split("|")
@@ -61463,7 +65025,7 @@ while running:
         while True:
             rdata, _ = sock_equip_rich.recvfrom(4096)
             raw = rdata.decode(errors="replace")
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="equip_rich")
             if not _ok:
                 continue
             rparts = raw.split("|")
@@ -61534,7 +65096,7 @@ while running:
         while True:
             sdata, _ = sock_stats.recvfrom(65536)
             raw = sdata.decode(errors="replace")
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="stats")
             if not _ok:
                 continue
             if not raw.startswith("BEGIN"):
@@ -61614,7 +65176,7 @@ while running:
         while True:
             tdata, _ = sock_target.recvfrom(1024)
             raw = tdata.decode()
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="target")
             if not _ok:
                 continue
             # Split main vs sub. '||' is used because neither field will
@@ -61739,7 +65301,7 @@ while running:
         while True:
             zdata, _ = sock_zone.recvfrom(1024)
             raw = zdata.decode()
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="zone")
             if not _ok:
                 continue
             if raw == "":
@@ -61880,7 +65442,7 @@ while running:
             # name; strip it (and drop a non-locked character's GIL). Other
             # gs payloads (SET/STATE/SETUP/LOCK) are untagged and pass
             # through unchanged.
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="gs")
             if not _ok:
                 continue
             parts = raw.split("|", 1)
@@ -62687,7 +66249,7 @@ while running:
         while True:
             tdata, _ = sock_timers.recvfrom(8192)
             raw = tdata.decode(errors="replace")
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="timers")
             if not _ok:
                 continue
             if not raw:
@@ -62909,7 +66471,7 @@ while running:
             # tagged with the sending character; drop a non-locked char's so
             # the inventory panels don't jitter between two logged-in chars.
             # SIM_INV packets are intentionally untagged and pass through.
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="inv")
             if not _ok:
                 continue
             if raw.startswith("INV_BAG|"):
@@ -62970,6 +66532,12 @@ while running:
                         }
                     except ValueError:
                         pass
+            elif raw.startswith("CANUSE|"):
+                _canuse_parse(raw)
+
+            elif raw.startswith("TAGS|"):
+                _tag_parse(raw)
+
             elif raw.startswith("POOL|"):
                 # Treasure pool snapshot, rebuilt by the lua from the
                 # live pool every second. Format per entry:
@@ -63961,7 +67529,7 @@ while running:
         while True:
             ddata, _ = sock_dps.recvfrom(16384)
             raw = ddata.decode(errors="replace")
-            _ok, raw = _mb_gate(raw)
+            _ok, raw = _mb_gate(raw, stream="dps")
             if not _ok:
                 continue
             if not raw:
@@ -64588,6 +68156,68 @@ while running:
             return nm  # local player keeps name-based key
         return "p%d" % slot_idx
     default_y = layout_top() + 12
+
+    # ── Stacked list ────────────────────────────────────────────────
+    # One anchor for the whole party instead of one per row. The list is
+    # measured FIRST, so resolving it against a bottom corner keeps the
+    # bottom edge fixed and the list collapses downward as members
+    # leave — which is the whole point, and comes free from the anchor
+    # system rather than needing a direction setting.
+    _party_stack = bool(setting("party_stacked")) and bool(party_data)
+    _stack_x = _stack_y = 0
+    if _party_stack:
+        _stk_scale = _party_scale_get("p0")
+        _stk_d = scaled_panel_dims(_stk_scale)
+        _stk_w = _stk_d["panel_w"]
+        _stk_h = 0
+        _gap = _party_row_gap()
+        for _mm in party_data:
+            _stk_h += row_height(_mm, _stk_scale) + _gap
+        _stk_h = max(1, _stk_h - _gap)
+        if panel_anchors.get(PARTY_LIST_KEY) is None:
+            # Seed from wherever slot 0 already sits, so switching the
+            # mode on does not fling the party across the screen.
+            _seed = panel_anchors.get("p0") or panel_anchors.get(
+                party_data[0].get("name", ""))
+            panel_anchors[PARTY_LIST_KEY] = (
+                list(_seed) if _seed else ["tl", PANEL_X, default_y])
+        if dragging_key == PARTY_LIST_KEY:
+            _stack_x, _stack_y = panel_positions.get(
+                PARTY_LIST_KEY, [PANEL_X, default_y])
+        else:
+            _stack_x, _stack_y = resolve_anchor(
+                panel_anchors[PARTY_LIST_KEY], _stk_w, _stk_h,
+                WIDTH, HEIGHT)
+            panel_positions[PARTY_LIST_KEY] = [_stack_x, _stack_y]
+    _stack_y0 = _stack_y
+    _stack_h = _stk_h if _party_stack else 0
+
+    # The stacked list's background, drawn HERE — before any row, once,
+    # under everything. Painting it from inside the row loop meant it
+    # depended on which row drew first, and rows are drawn in
+    # panel_order rather than slot order, so it was landing on top of
+    # rows that had already drawn or not landing at all.
+    #
+    # The span leaves the status section clear when that option is on,
+    # which is the point: the icons show the game through, the players
+    # get something solid behind them.
+    if _party_stack and _stack_h > 0 and not display_hidden:
+        _lr = max(3, int(PARTY_CORNER * _stk_scale))
+        _lgap = int(6 * _stk_scale)
+        if not setting("party_status_clear"):
+            _lx0, _lx1 = 0, _stk_w
+        elif setting("party_status_left"):
+            _lx0, _lx1 = max(0, _stk_d["plate_x_off"] - _lgap), _stk_w
+        else:
+            _lx0, _lx1 = 0, max(40, _stk_d["buff_x_off"] - _lgap)
+        pygame.draw.rect(
+            screen, tuple(min(255, c + 6) for c in COL_PANEL),
+            (_stack_x + _lx0, _stack_y0, max(1, _lx1 - _lx0), _stack_h),
+            border_radius=_lr)
+        pygame.draw.rect(
+            screen, COL_BORDER,
+            (_stack_x + _lx0, _stack_y0, max(1, _lx1 - _lx0), _stack_h),
+            1, border_radius=_lr)
     # Hide entire main party panel when "show_party" setting is off.
     # We skip the iteration entirely rather than render and clip — saves
     # the work of resolving anchors, building panels, and drawing for
@@ -64657,7 +68287,15 @@ while running:
         # currently being dragged: the drag handler writes positions
         # directly, and overwriting them here would cancel the drag
         # mid-motion (you'd see the cursor move but the panel snap back).
-        if dragging_key != nm:
+        if _party_stack:
+            # Stacked: every row's position comes from the ONE list
+            # anchor, resolved against the height of the members
+            # actually present. Nothing is written to the per-row
+            # anchors, so switching the mode off restores exactly the
+            # arrangement you had.
+            panel_positions[nm] = [_stack_x, _stack_y]
+            _stack_y += rh + _party_row_gap()
+        elif dragging_key != nm:
             x, y = resolve_anchor(panel_anchors[nm], pw, rh, WIDTH, HEIGHT)
             panel_positions[nm] = [x, y]
 
@@ -64789,11 +68427,20 @@ while running:
     GRIP_VISIBLE = 40
     for nm, pos in panel_positions.items():
         sc = _party_scale_get(nm)
-        pw = scaled_panel_dims(sc)["panel_w"]
-        pos[0] = max(GRIP_VISIBLE - pw, min(pos[0], WIDTH  - GRIP_VISIBLE))
-        pos[1] = max(layout_top(), min(pos[1], layout_bottom() - GRIP_VISIBLE))
-    equip_pos[0] = max(GRIP_VISIBLE - ew, min(equip_pos[0], WIDTH  - GRIP_VISIBLE))
-    equip_pos[1] = max(layout_top(), min(equip_pos[1], layout_bottom() - GRIP_VISIBLE))
+        # THE PANEL'S OWN WIDTH. This used the party width for every
+        # entry, including the alliance rows and lists, which are far
+        # narrower — so the clamp reserved a few hundred pixels that do
+        # not exist and dragged an alliance list leftwards the moment it
+        # passed (viewport right - party width). Party rows never showed
+        # it because for them the width was right.
+        if nm in ALLY_LIST_KEYS or nm.startswith(("a1_", "a2_")):
+            pw = scaled_ally_dims(sc)["panel_w"]
+        else:
+            pw = scaled_panel_dims(sc)["panel_w"]
+        pos[0] = _view_keep_x(pos[0], pw)
+        pos[1] = _view_keep_y(pos[1], 0, pos[0])
+    equip_pos[0] = _view_keep_x(equip_pos[0], ew)
+    equip_pos[1] = _view_keep_y(equip_pos[1], eh, equip_pos[0])
 
     # Build a lookup so we can access member data by name in the draw loop.
     members_by_name = {m["name"]: m for m in party_data}
@@ -64833,20 +68480,117 @@ while running:
         rh     = row_height(m, scale)
         pw     = d["panel_w"]
 
-        pygame.draw.rect(screen, COL_PANEL,  (px, py, pw, rh), border_radius=4)
-        pygame.draw.rect(screen, COL_BORDER, (px, py, pw, rh), 1, border_radius=4)
-        draw_accent_stripe(screen, px, py, rh, ACCENT_PARTY)
+        # Which parts of the row get a painted background. With the
+        # status area left clear the game shows through behind the
+        # icons; the plate and the bars still need something to sit on.
+        # With the icons in the MIDDLE that leaves two painted pieces
+        # rather than one, so this is a list of spans.
+        _gap = int(6 * escale)
+        _sec_end = (d["debuff_x_off"] + d["debuff_col_w"]
+                    if setting("party_status_left") else pw)
+        if not setting("party_status_clear"):
+            _bg_spans = [(0, pw)]
+        elif setting("party_status_left"):
+            # Icons outermost, so the painted part is one piece from the
+            # job plate rightwards.
+            _bg_spans = [(max(0, d["plate_x_off"] - _gap), pw)]
+        else:
+            _bg_spans = [(0, max(40, d["buff_x_off"] - _gap))]
+        _bg_w = _bg_spans[-1][1]
+        _first = slot_idx == 0
+        _last = slot_idx == len(party_data) - 1
+
+        def _row_bg(x0, x1, rounded_l, rounded_r):
+            """Paint one span of the row background.
+
+            A FLAT fill drawn straight by pygame with per-corner radii.
+            The gradient version had to be masked to those corners, and
+            masking an opaque surface zeroed its RGB rather than its
+            alpha — which painted black squares exactly where the
+            rounding belonged. Nothing here can do that: the rounding is
+            the draw call, not a post-process.
+
+            Your own row stays a touch lighter, which was the only part
+            of the gradient worth keeping.
+            """
+            _r = max(3, int(PARTY_CORNER * escale))
+            # Every row a little lighter than the old panel colour. The
+            # self-row tint is gone — picking yourself out by shade only
+            # worked while nothing else was tinted, and it made one row
+            # look like it had a state the others did not.
+            _base = tuple(min(255, c + 6) for c in COL_PANEL)
+            pygame.draw.rect(
+                screen, _base, (px + x0, py, max(1, x1 - x0), rh),
+                border_top_left_radius=(_r if (_first or not _party_stack)
+                                        and rounded_l else 0),
+                border_top_right_radius=(_r if (_first or not _party_stack)
+                                         and rounded_r else 0),
+                border_bottom_left_radius=(_r if (_last or not _party_stack)
+                                           and rounded_l else 0),
+                border_bottom_right_radius=(_r if (_last or not _party_stack)
+                                            and rounded_r else 0))
+
+        if _party_stack:
+            # One list, not six cards: square where rows meet, rounded
+            # only where the LIST begins and ends, so the whole block
+            # reads as a single card. The outline is drawn once around
+            # the whole list on the final row rather than per row, or
+            # every seam would carry a border line.
+            _r = max(3, int(PARTY_CORNER * escale))
+            # A span's OUTER edges are the ones that round, whether or
+            # not they sit at the row's own edge. Testing `_x0 <= 0`
+            # meant that with the status area cleared — where the paint
+            # starts partway across — the left never rounded at all, and
+            # only the bottom-right corner of the list came out curved.
+            if slot_idx > 0:
+                for _x0, _x1 in _bg_spans:
+                    pygame.draw.line(screen, COL_DIVIDER,
+                                     (px + _x0 + 1, py),
+                                     (px + _x1 - 2, py))
+        else:
+            for _si, (_x0, _x1) in enumerate(_bg_spans):
+                _row_bg(_x0, _x1, _si == 0, _si == len(_bg_spans) - 1)
+        if setting("party_status_clear") and setup_mode:
+            # The cleared area is invisible with nothing on it, so give
+            # it an outline while panels are being positioned.
+            _cx0 = d["buff_x_off"] - int(2 * escale)
+            pygame.draw.rect(screen, COL_DIVIDER,
+                             (px + _cx0, py,
+                              max(2, _sec_end - _cx0 + int(2 * escale)),
+                              rh), 1)
+        # No accent stripe: with the status area empty it was a lone
+        # coloured mark on a wide row rather than an edge on anything.
 
         bx = px + d["bars_x_off"]
-        by = py + int(10 * escale)
+        by = py + int(10 * escale)   # replaced below once the name is measured
 
         # Click-to-target: the name column, i.e. everything left of the
         # bars. Deliberately not the whole row - the bars carry their own
         # readouts and a stray click while reading HP shouldn't retarget.
+        # Click-to-target: the job plate, plus the name line above the
+        # bars. The bars themselves stay untouchable so reading someone's
+        # HP can never retarget.
+        # The JOB PLATE. Its own rect rather than "everything left of the
+        # bars": with the status icons on the left that span covers the
+        # whole icon block, which would make a click on a buff icon — or
+        # on empty space beside one — retarget the member.
+        _plate_pad = int(4 * escale)
+        # Click-to-target: EVERYTHING except the status section — the
+        # plate, the name and all three bars. One rect rather than
+        # three, so the target no longer drops out over the MP and TP
+        # bars the way it did when only the name line and the HP bar
+        # were live. The status side stays out of it so clicking an icon
+        # cures rather than retargets.
+        _hit_x0, _hit_x1 = ((d["plate_x_off"] - _gap, pw)
+                            if setting("party_status_left")
+                            else (0, d["buff_x_off"] - _gap))
+        _hit_x0 = max(0, _hit_x0)
         party_name_click_rects.append(
-            (pygame.Rect(px, py, max(1, bx - px), rh),
+            (pygame.Rect(px + _hit_x0, py, max(1, _hit_x1 - _hit_x0), rh),
              m.get("mob_index", 0), name, m.get("player_id", 0)))
         party_panel_rects.append(pygame.Rect(px, py, pw, rh))
+        _scale_wheel_rects.append(
+            (pygame.Rect(px, py, pw, rh), _party_scale_key(_skey)))
 
         # Name + job/level stacked vertically, centred in the name column.
         # Pulse red if any current target (main or sub) is locked onto OR
@@ -64877,6 +68621,16 @@ while running:
         else:
             name_color = COL_NAME
         name_surf = d["f_name"].render(m["name"], True, name_color)
+        if name and name == _party_selected_name():
+            # Pulsed rather than a static colour: the selection is a
+            # MODE you are in, and a mode that does not move is one you
+            # forget you left on. ~1.4 Hz, the same rate the TP bar
+            # pulses at 3000, so the panel has one idea of "attention".
+            _sel_k = 0.5 + 0.5 * math.sin(time.time() * 8.8)
+            _sel_c = tuple(int(a + (b - a) * _sel_k)
+                           for a, b in zip((236, 238, 242),
+                                           COL_ALERT_CURE[:3]))
+            name_surf = d["f_name"].render(m["name"], True, _sel_c)
 
         # Build "WAR75 / DNC37" (or just "WAR75" if no sub).
         mj, mjl = m.get("main_job", ""), m.get("main_lvl", 0)
@@ -64920,25 +68674,77 @@ while running:
                 pet_surfs.append(d["f_label"].render(tp_text, True, tp_color_))
 
         pet_h = max((s.get_height() for s in pet_surfs), default=0)
-        total_h = (name_surf.get_height()
-                   + (job_surf.get_height() + 2 if job_surf else 0)
-                   + (pet_h + 2 if pet_surfs else 0))
-        block_y = py + (rh - total_h) // 2
-        screen.blit(name_surf, (px + int(8 * escale), block_y))
-        cur_y = block_y + name_surf.get_height() + 2
-        if job_surf:
-            screen.blit(job_surf, (px + int(8 * escale), cur_y))
-            cur_y += job_surf.get_height() + 2
+        # Job plate down the left, vertically centred in the row.
+        _plate = d["job_plate"]
+        _pj_main, _pj_sub = party_job_abbrev(m)
+        draw_job_plate(screen, px + d["plate_x_off"],
+                       py + (rh - _plate) // 2, _plate,
+                       _pj_main, d["f_label"],
+                       selected=bool(name and name == _party_selected_name()),
+                       sub_job=_pj_sub)
+
+        # Name on its own line ABOVE the bars, which is what lets the
+        # bars run the full width of the row.
+        _blk_h = name_surf.get_height() + int(3 * escale) + \
+            _party_bar_metrics(d["bar_h"], d["bar_gap"])[2]
+        block_y = py + (rh - _blk_h) // 2
+        by = block_y + name_surf.get_height() + int(3 * escale)
+
+        # The name line shares its width with the pet block beside it, so
+        # both get clipped rather than allowed to run into the status
+        # section. The pet keeps its own width first — it is the shorter
+        # of the two and losing half a pet name tells you nothing —
+        # and the player name takes what is left.
+        _line_w = d["bar_w"]
+        _pet_w = sum(ps.get_width() for ps in pet_surfs) if pet_surfs else 0
+        _pet_gap = int(10 * escale) if pet_surfs else 0
+        _pet_w = min(_pet_w, max(0, _line_w // 2))
+        _name_avail = max(0, _line_w - _pet_w - _pet_gap)
+
+        _oc = screen.get_clip()
+        screen.set_clip(pygame.Rect(bx, block_y, _name_avail,
+                                    name_surf.get_height()))
+        screen.blit(name_surf, (bx, block_y))
+        screen.set_clip(_oc)
+
         if pet_surfs:
-            ix = px + int(8 * escale)
+            # Beside the name rather than under it — the row has no spare
+            # line any more and a pet is secondary to its owner.
+            ix = bx + _line_w - _pet_w
+            _pet_y = block_y + name_surf.get_height()
+            # A thin HP bar over the pet's name. The pet line already
+            # carries the number; this makes it readable without reading.
+            _pb_h = max(2, int(3 * escale))
+            _pb_y = max(block_y, _pet_y - max((ps.get_height()
+                                               for ps in pet_surfs),
+                                              default=0) - _pb_h - 1)
+            pygame.draw.rect(screen, COL_BAR_BG,
+                             (ix, _pb_y, max(1, _pet_w), _pb_h),
+                             border_radius=1)
+            _pf = max(0, min(100, int(m.get("pet_hpp", 0) or 0))) / 100.0
+            if _pf > 0:
+                pygame.draw.rect(
+                    screen, COL_PET_BAR,
+                    (ix, _pb_y, max(1, int(_pet_w * _pf)), _pb_h),
+                    border_radius=1)
+            screen.set_clip(pygame.Rect(ix, block_y, _pet_w,
+                                        name_surf.get_height() + 2))
             for ps in pet_surfs:
-                screen.blit(ps, (ix, cur_y))
+                screen.blit(ps, (ix, _pet_y - ps.get_height()))
                 ix += ps.get_width()
+            screen.set_clip(_oc)
 
         hc = hp_color(m["hpp"], flash)
-        draw_bar(screen, bx, by,                          d["bar_w"], d["bar_h"], m["hpp"] / 100.0,         hc,     f"HP {m['hp']} ({m['hpp']}%)", d["f_bar_label"])
-        draw_bar(screen, bx, by + d["bar_gap"],           d["bar_w"], d["bar_h"], _mp_fill(m), COL_MP, f"MP {m['mp']}",                d["f_bar_label"])
-        draw_bar(screen, bx, by + d["bar_gap"] * 2,       d["bar_w"], d["bar_h"], min(m["tp"] / 3000, 1.0), tp_color(m["tp"]), f"TP {m['tp']}",                d["f_bar_label"])
+        _rhp, _rmp, _rtp = party_bar_rows(d, by)
+        draw_bar(screen, bx + _rhp[0], _rhp[1], _rhp[2], _rhp[3],
+                 m["hpp"] / 100.0, hc,
+                 f"HP {m['hp']} ({m['hpp']}%)", _rhp[4])
+        draw_bar(screen, bx + _rmp[0], _rmp[1], _rmp[2], _rmp[3],
+                 _mp_fill(m), COL_MP, f"MP {m['mp']}", _rmp[4])
+        draw_bar(screen, bx + _rtp[0], _rtp[1], _rtp[2], _rtp[3],
+                 min(m["tp"] / 3000, 1.0),
+                 tp_flash_color(name, m["tp"], tp_color(m["tp"])),
+                 f"TP {m['tp']}", _rtp[4], ticks=TP_TICKS)
 
         # When 'specific_buff_names' is on AND this is the player's own
         # row, rebuild the buff name list so each instance shows its
@@ -65021,8 +68827,8 @@ while running:
         # ICON_PX is the rendered icon size. GAP_PX is between cells in
         # both axes. Both scale with the panel scale so grid mode keeps
         # working at zoomed-up panels too.
-        ICON_PX = max(12, int(16 * escale))
-        GAP_PX  = max(1,  int(2  * escale))
+        ICON_PX = max(12, int(PARTY_ICON_PX * escale))
+        GAP_PX  = max(1,  int(PARTY_ICON_GAP * escale))
 
         def _render_column_text(items, col_key, col_x, text_color):
             """Original text rendering with scroll + '+N more' overflow."""
@@ -65066,8 +68872,16 @@ while running:
                                 (col_x, py + d["row_pad_v"] // 2
                                  + (max_lines - 1) * d["buff_line_h"]))
 
-        def _render_column_grid(items, ids, col_key, col_x, col_w, text_color):
+        def _render_column_grid(items, ids, col_key, col_x, col_w,
+                                text_color, row_off=0, rows_max=None,
+                                rtl=False):
             """Pack ICON_PX squares row-by-row into the column width.
+
+            `row_off` starts the pack that many icon-rows down, and
+            `rows_max` caps how many rows it may use. Together they let
+            buffs and debuffs share ONE full-width section — buffs on the
+            top line, debuffs beneath — instead of standing in two narrow
+            columns that each wasted the other's width.
 
             Buffs whose icon hasn't been extracted yet (or whose id is
             None / out of range) fall back to a tiny 2-3 letter text
@@ -65080,7 +68894,9 @@ while running:
             cell      = ICON_PX + GAP_PX
             per_row   = max(1, col_w // cell)
             usable_h_ = rh - d["row_pad_v"]
-            max_rows  = max(1, usable_h_ // cell)
+            max_rows  = max(1, (usable_h_ // cell) - row_off)
+            if rows_max is not None:
+                max_rows = max(1, min(max_rows, rows_max))
             capacity  = per_row * max_rows
             # Scroll: paged in row-units (one click of scroll = per_row entries).
             scroll = buff_scroll.get((name, col_key), 0)
@@ -65096,13 +68912,20 @@ while running:
                 idx = scroll + k
                 row = k // per_row
                 col = k %  per_row
-                cx  = col_x + col * cell
-                cy  = base_y + row * cell
-                # Background slot: dim filled square so the cell is
-                # visible even when the icon hasn't loaded yet.
-                pygame.draw.rect(screen, (32, 32, 38),
-                                 (cx, cy, ICON_PX, ICON_PX))
+                # Grow away from the bars when the section is on the
+                # left: first icon hard against its right edge, the rest
+                # extending leftwards as more arrive.
+                cx  = (col_x + col_w - cell - col * cell) if rtl \
+                    else (col_x + col * cell)
+                cy  = base_y + (row_off + row) * cell
                 bid = ids[idx] if (ids and idx < len(ids)) else None
+                # Flat slot so the cell is visible before the icon has
+                # loaded. No outline and no recolouring — whatever is in
+                # icons/status/<id>.bmp is what gets drawn, so swapping
+                # those files is the only thing that changes the look.
+                pygame.draw.rect(screen, (32, 32, 38),
+                                 (cx, cy, ICON_PX, ICON_PX),
+                                 border_radius=2)
                 surf = get_status_icon_scaled(bid, ICON_PX) if bid else None
                 if surf is not None:
                     screen.blit(surf, (cx, cy))
@@ -65114,20 +68937,27 @@ while running:
                     screen.blit(bsurf,
                         (cx + (ICON_PX - bsurf.get_width()) // 2,
                          cy + (ICON_PX - bsurf.get_height()) // 2))
-                # Subtle border for separation against panel bg.
-                pygame.draw.rect(screen, (16, 16, 20),
-                                 (cx, cy, ICON_PX, ICON_PX), 1)
                 # Record this cell's rect for end-of-frame hover tooltip.
                 # The buff name (already alias-resolved by classify) is
                 # stored alongside so we can show it without further lookup.
+                # Which copy of this status this icon is. Two Marches
+                # are two slots with two different timers, and without
+                # this both icons report whichever one was found first.
+                _occ = 0
+                if ids and bid is not None:
+                    _occ = ids[:idx].count(bid)
                 _party_buff_icon_rects.append(
-                    (pygame.Rect(cx, cy, ICON_PX, ICON_PX), items[idx]))
+                    (pygame.Rect(cx, cy, ICON_PX, ICON_PX), items[idx],
+                     m.get("player_id", 0), bid,
+                     name == player_self_name, _occ,
+                     name, col_key == "debuff"))
             # Overflow indicator: tint the bottom-right cell slightly
             # if there are more items than fit. Cheap, no extra row.
             if scroll + visible_n < n:
                 last_row = (visible_n - 1) // per_row
                 last_col = (visible_n - 1) %  per_row
-                cx = col_x + last_col * cell
+                cx = ((col_x + col_w - cell - last_col * cell) if rtl
+                      else (col_x + last_col * cell))
                 cy = base_y + last_row * cell
                 # Small "+" pip in the bottom-right corner of the last cell.
                 pip_size = max(4, ICON_PX // 4)
@@ -65144,19 +68974,50 @@ while running:
                 _render_column_text(items, col_key, col_x, text_color)
 
         bfx = px + d["buff_x_off"]
-        if setting("party_show_buffs"):
-            _render_column(buffs, buff_ids_b, "buff", bfx,
-                           d["buff_col_w"], COL_BUFF)
+        if icon_grid:
+            # ONE section spanning what used to be both columns. Buffs
+            # take the top line; debuffs take everything under it, so a
+            # taller row gives its extra space to the debuffs — which are
+            # the ones you have to act on.
+            _sec_w = (d["buff_col_w"] + int(12 * scale) + d["debuff_col_w"])
+            _show_b = setting("party_show_buffs") and buffs
+            _show_d = setting("party_show_debuffs") and debuffs
+            # Buffs take the top line and debuffs the rest — but only
+            # while both have something to show. With no debuffs the
+            # buffs use the whole section instead of hiding the overflow
+            # behind a scroll, and with no buffs the debuffs start at the
+            # top rather than leaving an empty line above them.
+            _half = max(1, PARTY_ICON_ROWS // 2)
+            _rtl = bool(setting("party_status_left"))
+            if _show_b:
+                _render_column_grid(buffs, buff_ids_b, "buff", bfx,
+                                    _sec_w, COL_BUFF, 0,
+                                    _half if _show_d else None, _rtl)
+            if _show_d:
+                _render_column_grid(debuffs, buff_ids_d, "debuff", bfx,
+                                    _sec_w, COL_DEBUFF,
+                                    _half if _show_b else 0, None, _rtl)
+        else:
+            # Text mode keeps its two columns and the divider between
+            # them — names need the width far more than icons do.
+            if setting("party_show_buffs"):
+                _render_column(buffs, buff_ids_b, "buff", bfx,
+                               d["buff_col_w"], COL_BUFF)
 
-        dbx    = px + d["debuff_x_off"]
-        div2_x = dbx - int(6 * scale)
-        if setting("party_show_debuffs"):
-            pygame.draw.line(screen, COL_DIVIDER, (div2_x, py + 8), (div2_x, py + rh - 8))
-            _render_column(debuffs, buff_ids_d, "debuff", dbx,
-                           d["debuff_col_w"], COL_DEBUFF)
+            dbx    = px + d["debuff_x_off"]
+            div2_x = dbx - int(6 * scale)
+            if setting("party_show_debuffs"):
+                pygame.draw.line(screen, COL_DIVIDER,
+                                 (div2_x, py + 8), (div2_x, py + rh - 8))
+                _render_column(debuffs, buff_ids_d, "debuff", dbx,
+                               d["debuff_col_w"], COL_DEBUFF)
 
-        # Resize grip in the bottom-right corner.
-        draw_resize_grip(screen, px + pw, py + rh)
+        # Resize grip in the bottom-right corner. One for the whole
+        # list when stacked — six of them down a joined block are six
+        # overlapping targets, and only the last one is reachable
+        # anyway.
+        if not _party_stack or slot_idx == len(party_data) - 1:
+            draw_resize_grip(screen, px + pw, py + rh)
 
     # ── Alliance party 1 + 2 panels ─────────────────────────────────────────
     # Each alliance member gets a slot-keyed anchor (a1_0..a1_5, a2_0..a2_5).
@@ -65166,11 +69027,40 @@ while running:
     # Toggleable via the "Show alliance" setting.
     if setting("show_alliance"):
         for ally_list, group_id in ((ally1_data, 1), (ally2_data, 2)):
+            _a_stack = bool(setting("party_stacked")) and bool(ally_list)
+            _a_key = ALLY_LIST_KEYS[group_id - 1]
+            _ax0 = _ay0 = 0
+            if _a_stack:
+                _a_sc = max(MIN_SCALE, min(MAX_SCALE,
+                                           _party_scale_get(_a_key)))
+                panel_scales[_a_key] = _a_sc
+                _a_d = scaled_ally_dims(_a_sc)
+                _a_gap = _party_row_gap()
+                _a_h = max(1, len(ally_list) * (_a_d["row_min_h"] + _a_gap)
+                           - _a_gap)
+                if panel_anchors.get(_a_key) is None:
+                    _a_seed = panel_anchors.get("a%d_0" % group_id)
+                    panel_anchors[_a_key] = (
+                        list(_a_seed) if _a_seed
+                        else ["tr", PANEL_X, layout_top() + 12])
+                if dragging_key == _a_key:
+                    _ax0, _ay0 = panel_positions.get(
+                        _a_key, [PANEL_X, layout_top() + 12])
+                else:
+                    _ax0, _ay0 = resolve_anchor(
+                        panel_anchors[_a_key], _a_d["panel_w"], _a_h,
+                        WIDTH, HEIGHT)
+                    panel_positions[_a_key] = [_ax0, _ay0]
+            _ay0_top = _ay0
             for slot_idx, m in enumerate(ally_list):
                 akey = f"a{group_id}_{slot_idx}"
-                scale = panel_scales.get(akey, 1.0)
-                scale = max(MIN_SCALE, min(MAX_SCALE, scale))
-                panel_scales[akey] = scale
+                # One size for the whole group while stacked. Read
+                # through the same canonical-key helper the WRITES use,
+                # or a resize lands under one name and the draw reads
+                # another and the grip appears to do nothing.
+                scale = max(MIN_SCALE, min(MAX_SCALE,
+                                           _party_scale_get(akey)))
+                panel_scales[_party_scale_key(akey)] = scale
                 d_ally = scaled_ally_dims(scale)
                 rh_ally = d_ally["row_min_h"]
                 pw_ally = d_ally["panel_w"]
@@ -65184,7 +69074,10 @@ while running:
                     panel_anchors[akey] = ["tr", PANEL_X, default_y_ally]
 
                 # Resolve anchor → position. Skip when this panel is being dragged.
-                if dragging_key != akey:
+                if _a_stack:
+                    panel_positions[akey] = [_ax0, _ay0]
+                    _ay0 += rh_ally + _party_row_gap()
+                elif dragging_key != akey:
                     ax, ay = resolve_anchor(panel_anchors[akey], pw_ally, rh_ally,
                                             WIDTH, HEIGHT)
                     panel_positions[akey] = [ax, ay]
@@ -65194,8 +69087,23 @@ while running:
                                                                  WIDTH, HEIGHT))
 
                 ax, ay = panel_positions[akey]
-                draw_ally_panel(screen, ax, ay, m, scale)
-                draw_resize_grip(screen, ax + pw_ally, ay + rh_ally)
+                _scale_wheel_rects.append(
+                    (pygame.Rect(ax, ay, pw_ally, rh_ally),
+                     _party_scale_key(akey)))
+                _a_first = slot_idx == 0
+                _a_last = slot_idx == len(ally_list) - 1
+                draw_ally_panel(screen, ax, ay, m, scale,
+                                (_a_first or not _a_stack,
+                                 _a_last or not _a_stack))
+                if _a_stack and _a_last:
+                    pygame.draw.rect(
+                        screen, COL_BORDER,
+                        (ax, _ay0_top, pw_ally, (ay + rh_ally) - _ay0_top),
+                        1, border_radius=4)
+                # One grip for the list, on its last row, or six grips
+                # stack up down the right edge of a joined block.
+                if not _a_stack or slot_idx == len(ally_list) - 1:
+                    draw_resize_grip(screen, ax + pw_ally, ay + rh_ally)
 
     # ── Equip viewer (draggable + resizable) ─────────────────────────────────
     if setting("show_equipment"):
@@ -65585,6 +69493,8 @@ while running:
 
         draw_skillchain_panel(screen, skillchain_pos[0], skillchain_pos[1],
                               skillchain_scale, panels_locked)
+        draw_resize_grip(screen, skillchain_pos[0] + sc_w,
+                         skillchain_pos[1] + sc_h)
 
     # ── Chat panel ──────────────────────────────────────────────────────
     # Floating chat log. Default anchor is bottom-left, mirroring FFXI's
@@ -66064,10 +69974,11 @@ while running:
                         for f, segs in _tt_lines) + _tt_pad * 2
             _tt_h = sum(f.get_height() + 2 for f, _ in _tt_lines) \
                 + _tt_pad * 2 - 2
-            _tmx, _tmy = pygame.mouse.get_pos()
-            _tt_x = min(max(0, _tmx + 14), WIDTH - _tt_w)
+            _tmx, _tmy = _mouse_pos()
+            _vpx, _vpy, _vpw, _vph = _ui_view()
+            _tt_x = min(max(_vpx, _tmx + 14), _vpx + _vpw - _tt_w)
             _tt_y = _tmy + 18
-            if _tt_y + _tt_h > HEIGHT:
+            if _tt_y + _tt_h > _vpy + _vph:
                 _tt_y = _tmy - _tt_h - 8
             _tt_rect = pygame.Rect(_tt_x, _tt_y, _tt_w, _tt_h)
             pygame.draw.rect(screen, (22, 24, 32), _tt_rect,
@@ -66088,7 +69999,7 @@ while running:
     _achievement_periodic_check()
 
     # ── Cursor: show a hand when hovering over a hyperlink ──────────────────
-    mpos = pygame.mouse.get_pos()
+    mpos = _mouse_pos()
     on_link = any(rect.collidepoint(mpos) for rect, _ in click_targets)
     try:
         pygame.mouse.set_cursor(
@@ -66185,7 +70096,7 @@ while running:
                     _stinfo = _sim_item_tooltip_info(_stentry)
                     if _stinfo:
                         draw_item_tooltip(screen, mpos[0], mpos[1],
-                                          _stinfo, WIDTH, HEIGHT)
+                                          _stinfo, *_ui_edge())
                     break
             else:
                 # No item-row hit — try the food picker rows.
@@ -66194,7 +70105,7 @@ while running:
                         _ftinfo = _sim_food_tooltip_info(_ftfid)
                         if _ftinfo:
                             draw_item_tooltip(screen, mpos[0], mpos[1],
-                                              _ftinfo, WIDTH, HEIGHT)
+                                              _ftinfo, *_ui_edge())
                         break
     if not _suppress_tooltip:
         for _sidx, _srect in equip_slot_rects.items():
@@ -66223,7 +70134,8 @@ while running:
                     if setting("show_equip_tooltips"):
                         _tt_info = equip_rich_view.get(_sidx)
                         if _tt_info:
-                            draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info, WIDTH, HEIGHT)
+                            draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info,
+                              *_ui_edge())
                 break
 
     # ── Tooltip: if the cursor is over a mob ability name, show its data. ───
@@ -66231,7 +70143,7 @@ while running:
         for _abrect, _abentry in _mob_ability_rects:
             if _abrect.collidepoint(mpos):
                 draw_ability_tooltip(screen, mpos[0], mpos[1],
-                                     _abentry, WIDTH, HEIGHT)
+                                     _abentry, *_ui_edge())
                 break
 
     # ── Tooltip: party-row buff/debuff icon hover ─────────────────────────
@@ -66240,13 +70152,26 @@ while running:
     # and shows the FIRST hit so overlapping cells (shouldn't happen but
     # defensive) don't double-draw.
     if not _suppress_tooltip and _party_buff_icon_rects:
-        for _brect, _bname in _party_buff_icon_rects:
+        for _bent in _party_buff_icon_rects:
+            _brect, _bname = _bent[0], _bent[1]
             if _brect.collidepoint(mpos):
                 _bf = get_font("Consolas", 12)
                 _bs = _bf.render(_bname, True, (235, 235, 245))
+                _bt = ""
+                if len(_bent) >= 5:
+                    try:
+                        _bt = _party_status_time(
+                            _bent[2], _bent[3], _bname, _bent[4],
+                            _bent[5] if len(_bent) > 5 else 0)
+                    except Exception:
+                        _bt = ""
+                _bs2 = (get_font("Consolas", 11).render(
+                    _bt, True, (170, 180, 200)) if _bt else None)
                 _pad = 4
-                _tw = _bs.get_width() + _pad * 2
-                _th = _bs.get_height() + _pad * 2
+                _tw = max(_bs.get_width(),
+                          _bs2.get_width() if _bs2 else 0) + _pad * 2
+                _th = (_bs.get_height()
+                       + (_bs2.get_height() + 2 if _bs2 else 0)) + _pad * 2
                 # Anchor below-right of cursor; flip if it would clip.
                 _tx = mpos[0] + 14
                 _ty = mpos[1] + 14
@@ -66257,6 +70182,9 @@ while running:
                 pygame.draw.rect(screen, (90, 90, 110),
                                  (_tx, _ty, _tw, _th), 1, border_radius=3)
                 screen.blit(_bs, (_tx + _pad, _ty + _pad))
+                if _bs2 is not None:
+                    screen.blit(_bs2, (_tx + _pad,
+                                       _ty + _pad + _bs.get_height() + 2))
                 break
 
     # ── Hotbar action note ───────────────────────────────────────────────
@@ -66317,9 +70245,14 @@ while running:
 
     # Windowed-box resize grip (bottom-right corner). Drawn last so it's
     # always grabbable; hidden while fullscreen or display-hidden.
+    draw_tag_panel(screen)
     draw_ow_resize_grip(screen)
+    draw_ow_desk_resize_grip(screen)
+    draw_desk_settings_button(screen)
 
-    pygame.display.flip()
+    if setup_mode and _desk_enabled():
+        _draw_viewport_seam(screen)
+    _present()
     clock.tick(60)
 
     # Persist buff state snapshot to disk (throttled to 5s and only
@@ -66369,12 +70302,72 @@ while running:
                       and not _gt_capturing_active)
     if setting("no_focus_steal"):
         if _focus_now and not _composer_focus_prev:
-            _take_keyboard_focus()
+            # Focus follows the window the click landed in.
+            _take_keyboard_focus(globals().get("_MOUSE_WINDOW"))
         elif _composer_focus_prev and not _focus_now:
             _return_keyboard_focus()
     _composer_focus_prev = _focus_now
 
     for event in pygame.event.get():
+        # Canvas-space from here down. Identity today; the second
+        # window's offset is applied inside this one call.
+        event = _event_to_canvas(event)
+
+        # A drag is in flight but no mouse button is held, so the
+        # button-up never reached us -- switching virtual desktops
+        # mid-click does exactly that, since the release lands on
+        # whatever the switch made foreground. Whatever was being
+        # dragged is still stuck to the cursor when you come back, and
+        # the first mouse move teleports it.
+        #
+        # Finish it properly rather than dropping the state: posting the
+        # release runs the SAME commit path a real one would, so a panel
+        # keeps where it actually is and its anchor is written. Dropping
+        # the state would leave position and anchor disagreeing and the
+        # panel would jump somewhere else on the next frame.
+        #
+        # Ahead of everything, because each kind of drag has its own
+        # MOUSEMOTION branch and they would each act on the motion first.
+        if (event.type == pygame.MOUSEMOTION
+                and not _real_mouse_down(event)
+                and _drag_in_flight()):
+            pygame.event.post(pygame.event.Event(
+                pygame.MOUSEBUTTONUP, {"pos": event.pos, "button": 1}))
+            continue
+
+        # The tag panel draws last, so it is asked first — and it is
+        # asked for the WHOLE gesture. The release used to sit in an
+        # elif further down the chain, behind branches that claim
+        # MOUSEBUTTONUP for other drags, so the drag never ended and the
+        # panel followed the cursor for the rest of the session.
+        if _tag_handle_event(event):
+            continue
+
+        # RIGHT-CLICK (or TAB) while dragging a panel sends it to the
+        # other window. Deliberately ahead of the whole chain: a drag in
+        # flight owns the gesture.
+        #
+        # Right-click is the primary because TAB CANNOT WORK with "keep
+        # game focus" on: WS_EX_NOACTIVATE means neither window ever
+        # holds keyboard focus, so SDL is never handed a KEYDOWN at all.
+        # Mouse messages arrive regardless of activation, which is the
+        # whole reason clicking works in the first place. TAB is kept
+        # for anyone running with that setting off.
+        if (dragging_key is not None and drag_mode == "move"
+                and _desk_enabled()
+                and ((event.type == pygame.MOUSEBUTTONDOWN
+                      and event.button == 3)
+                     or (event.type == pygame.KEYDOWN
+                         and event.key == pygame.K_TAB))):
+            _drag_toggle_window()
+            continue
+
+        # ...and swallow its release, or it lands on whatever is under
+        # the cursor when you let go.
+        if (event.type == pygame.MOUSEBUTTONUP and event.button == 3
+                and dragging_key is not None):
+            continue
+
         if event.type == pygame.QUIT:
             running = False
         # Alert section editor: a modal, so it takes the event whole
@@ -66382,17 +70375,43 @@ while running:
         elif alert_editor_open and _alert_editor_handle_event(event):
             continue
 
+        elif (getattr(pygame, "WINDOWRESIZED", None) is not None
+              and event.type == pygame.WINDOWRESIZED
+              and _ow_windows.get("desk") is not None
+              and getattr(event, "window", None) is _ow_windows["desk"]):
+            # Same rule as VIDEORESIZE above: the desk window is
+            # borderless too, so its size only ever changes because the
+            # grip or the full-screen toggle changed it, and both of
+            # those update _desk_size directly. Re-assert rather than
+            # adopt -- this is the event a desktop switch fires, and
+            # adopting it resized the desk viewport and moved every
+            # panel anchored inside it.
+            _desk_reassert_size()
+
+        elif (getattr(pygame, "WINDOWCLOSE", None) is not None
+              and event.type == pygame.WINDOWCLOSE
+              and _ow_windows.get("desk") is not None
+              and getattr(event, "window", None) is _ow_windows["desk"]):
+            # Closing it from its own titlebar is a real answer, so make
+            # the setting agree rather than reopening it next frame.
+            settings["second_window"] = False
+            save_settings()
+            _close_desk_window()
+
         elif event.type == pygame.VIDEORESIZE:
-            WIDTH, HEIGHT = event.w, event.h
-            # Preserve NOFRAME — without it, a programmatic resize
-            # (via SetWindowPos) would re-add the OS title bar.
-            # VIDEORESIZE is rarely triggered in v1.3.0+ (no resize
-            # handles on a borderless window) but we handle it
-            # defensively so anything that drives the window through
-            # the WM still keeps it decorationless.
-            screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.NOFRAME)
-            # Anchors handle repositioning automatically on the next frame.
-            # No save needed — nothing on disk changes.
+            # DO NOT ADOPT event.w / event.h. The window is borderless,
+            # so nothing outside OmniWatch can legitimately resize it --
+            # the grip, the geometry restore and the full-screen toggle
+            # all set the size themselves and then tell us. Anything
+            # arriving here is the OS reporting something we did not ask
+            # for, and a virtual-desktop switch is a reliable source of
+            # exactly that: adopting it changed WIDTH, which re-resolved
+            # every right- and bottom-anchored panel against a width
+            # that was never real.
+            #
+            # Re-assert the size we believe in instead, which also
+            # repairs the window if the OS genuinely did change it.
+            screen = _set_display_mode(WIDTH, HEIGHT)
 
         elif _inventory_move_popup_event(event):
             pass
@@ -66457,8 +70476,25 @@ while running:
             # including its Ctrl+Shift+G toggle combo.
             pass
 
+        elif (event.type == pygame.MOUSEWHEEL and setup_mode
+              and _scale_wheel_rects
+              and any(r.collidepoint(_mouse_pos())
+                      for r, _k in _scale_wheel_rects)):
+            # Wheel over a party or alliance row in position mode steps
+            # its size by one percent a notch. Precise, needs no grip,
+            # and immune to the row moving out from under the cursor.
+            _wm = _mouse_pos()
+            for _wr, _wk in _scale_wheel_rects:
+                if _wr.collidepoint(_wm):
+                    _party_scale_apply(
+                        _wk,
+                        round(_party_scale_get(_wk)
+                              + 0.01 * (1 if event.y > 0 else -1), 2))
+                    save_layout()
+                    break
+
         elif event.type == pygame.MOUSEWHEEL:
-            mx, my = pygame.mouse.get_pos()
+            mx, my = _mouse_pos()
 
             # Import modal is on top of everything — swallow the wheel so
             # it doesn't scroll panels behind the modal.
@@ -66970,7 +71006,7 @@ while running:
                         _off = _anchor - _hotbar_clip_origin
                     else:
                         _off = 0
-                        _mx, _my = pygame.mouse.get_pos()
+                        _mx, _my = _mouse_pos()
                         _pg = _hotbar_page_at_pos(_mx, _my)
                         if _pg is None:
                             _pg = (hotbar_edit_page
@@ -67091,7 +71127,9 @@ while running:
                     inventory_slip_nickname_editor = None
                     continue
 
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        elif (event.type == pygame.MOUSEBUTTONDOWN
+              and (event.button == 1
+                   or (event.button == 2 and _desk_enabled()))):
             mx, my = event.pos
 
             # Tab right-click popup — highest priority for LMB so a
@@ -67150,6 +71188,32 @@ while running:
             # Begin resizing the whole OmniWatch window. Captures the
             # window's screen-coords so the top-left stays pinned while
             # the corner follows the cursor. Only active while windowed.
+            # Desk gear/menu first: it draws above everything in that
+            # viewport, so it has to be asked before the grip or any
+            # panel underneath it.
+            if _desk_menu_click((mx, my)):
+                continue
+
+            if (event.button == 1
+                    and globals().get("_icon_badge_rect") is not None
+                    and _icon_badge_rect.collidepoint(mx, my)):
+                reextract_equipped_icons()
+                continue
+
+            if event.button == 1 and _party_debuff_click((mx, my)):
+                continue
+
+            if _target_card_tag_click((mx, my)):
+                continue
+
+            if (_ow_desk_grip_rect is not None
+                    and _ow_desk_grip_rect.collidepoint(mx, my)):
+                # The desk window resizes its VIEWPORT, not the main
+                # window, so it has no hwnd/top-left pinning to do.
+                _ow_window_resize = {"hwnd": 0, "win_x": 0, "win_y": 0,
+                                     "win": "desk"}
+                continue
+
             if (_fullscreen_saved_rect is None
                     and _ow_window_grip_rect is not None
                     and _ow_window_grip_rect.collidepoint(mx, my)):
@@ -67158,8 +71222,7 @@ while running:
                     try:
                         import ctypes
                         from ctypes import wintypes
-                        info = pygame.display.get_wm_info()
-                        hwnd = info.get("window") or info.get("hwnd") or 0
+                        hwnd = _ow_hwnd()
                         if hwnd:
                             rect = wintypes.RECT()
                             ctypes.windll.user32.GetWindowRect(
@@ -67187,8 +71250,7 @@ while running:
                 try:
                     import ctypes
                     from ctypes import wintypes
-                    info = pygame.display.get_wm_info()
-                    hwnd = info.get("window") or info.get("hwnd") or 0
+                    hwnd = _ow_hwnd(_MOUSE_WINDOW)
                     if hwnd:
                         # Cursor pos in screen coords (NOT window coords —
                         # we need to track the cursor as the window moves
@@ -67478,6 +71540,7 @@ while running:
                 # where you were rather than at the top.
                 warp_confirm = None
                 warp_menu_open = True
+                globals()["_warp_menu_win"] = globals().get("_MOUSE_WINDOW")
                 continue
 
             # Warp travel menu (when open) takes priority: clicking a
@@ -68512,7 +72575,11 @@ while running:
                     and skillchain_pos is not None:
                 sxp, syp = skillchain_pos
                 _scw, _sch = skillchain_panel_size(skillchain_scale)
-                if sxp <= mx < sxp + _scw and syp <= my < syp + _sch:
+                if (sxp + _scw - RESIZE_GRIP) <= mx < (sxp + _scw) and \
+                   (syp + _sch - RESIZE_GRIP) <= my < (syp + _sch):
+                    hit = ("skillchain", "__skillchain__", sxp, syp,
+                           "resize", _scw, _sch, skillchain_scale)
+                elif sxp <= mx < sxp + _scw and syp <= my < syp + _sch:
                     hit = ("skillchain", "__skillchain__", sxp, syp, "move",
                            _scw, _sch, skillchain_scale)
 
@@ -68589,7 +72656,13 @@ while running:
                         if _akey not in panel_positions:
                             continue
                         _ax, _ay = panel_positions[_akey]
-                        _scale = panel_scales.get(_akey, 1.0)
+                        # THROUGH THE CANONICAL KEY, like the party hit
+                        # test and like the draw. Reading panel_scales
+                        # raw gave the per-slot size while the row was
+                        # drawn at the group's, so the hit rectangle was
+                        # a different size from the row on screen and a
+                        # click inside the row landed outside it.
+                        _scale = _party_scale_get(_akey)
                         _d_a = scaled_ally_dims(_scale)
                         _rh_a = _d_a["row_min_h"]
                         _pw_a = _d_a["panel_w"]
@@ -68629,15 +72702,78 @@ while running:
                         hit = ("party", name, px, py, "move", pw, rh, scale)
                         break
 
+            if (event.button == 2 and _desk_enabled()
+                    and _hb_editor_rect is not None
+                    and _hb_editor_rect.collidepoint(mx, my)):
+                # The editor is not part of the panel hit test — it owns
+                # its own drag — so it needs its own send. Without this
+                # the only way across is dragging it, which needs both
+                # windows on screen at once.
+                _vpd = _VIEWPORTS.get("desk")
+                if _vpd:
+                    _mvp = _VIEWPORTS.get("main") or [0, 0, WIDTH, HEIGHT]
+                    _here = _viewport_containing(
+                        _hb_editor_rect.centerx, _hb_editor_rect.y + 1)
+                    _dx = ((_vpd[0] - _mvp[0]) if _here == "main"
+                           else (_mvp[0] - _vpd[0]))
+                    hotbar_editor_pos = [_hb_editor_rect.x + _dx,
+                                         _hb_editor_rect.y]
+                    _raise_window("desk" if _here == "main" else "main")
+                    save_layout()
+                continue
+
+            if hit and event.button == 2:
+                # MIDDLE-CLICK SENDS A PANEL ACROSS. Dragging it there
+                # only works when both windows are on screen together,
+                # and the grab-and-right-click gesture needs a drag held
+                # while you press a second button. This needs neither:
+                # point at the panel, press the wheel, it is on the other
+                # screen in the same place it was on this one.
+                _send_panel_to_other_window(hit)
+                continue
+
             if hit:
                 kind, key, px, py, mode, pw, ph, scale = hit
+                # NOTE THE KIND: alliance rows report "ally", not
+                # "party". Gating this on "party" meant the remap never
+                # fired, the drag started on a1_0, and the stacked
+                # placement overwrote its position on the next frame —
+                # so the group looked frozen.
+                if (kind == "ally" and mode == "move"
+                        and setting("party_stacked")
+                        and (key.startswith("a1_") or key.startswith("a2_"))):
+                    _grp = ALLY_LIST_KEYS[0 if key.startswith("a1_") else 1]
+                    _lp = panel_positions.get(_grp)
+                    if _lp:
+                        key, px, py = _grp, _lp[0], _lp[1]
+                elif (kind == "party" and mode == "move"
+                        and setting("party_stacked")):
+                    # Stacked: grabbing any row grabs the list. The
+                    # offset is measured from the LIST's own origin, not
+                    # the row's, or the whole party jumps by the distance
+                    # between them on the first pixel of the drag.
+                    _lp = panel_positions.get(PARTY_LIST_KEY)
+                    if _lp:
+                        key, px, py = PARTY_LIST_KEY, _lp[0], _lp[1]
                 dragging_key     = key
                 drag_mode        = mode
+                _drag_view_shift = 0
+                # The viewport this panel STARTED in. Every clamp below
+                # is relative to it, so a panel in the second window is
+                # bounded by that window rather than by the main one.
+                globals()["_drag_home_view"] = _viewport_containing(
+                    px + max(1, int(pw)) // 2, py + 1)
+                if mode == "move":
+                    print(f"[OmniWatch][drag] start {key!r} at ({px},{py}) "
+                          f"size {(pw, ph)} home="
+                          f"{globals()['_drag_home_view']!r} "
+                          f"vp={_VIEWPORTS.get(globals()['_drag_home_view'])} "
+                          f"clamp x {_drag_left_for(pw)}..{_drag_edge_for(pw)}")
                 drag_offset      = (mx - px, my - py)
                 drag_start_scale = scale
                 drag_start_size  = (pw, ph)
                 # Raise party panels to the top of the draw order.
-                if kind == "party":
+                if kind == "party" and key in panel_order:
                     panel_order.remove(key)
                     panel_order.append(key)
 
@@ -68651,6 +72787,64 @@ while running:
             # to act on). Gate matches the left-click / draw safety.
             if display_hidden and setting("show_hide_nub"):
                 continue
+
+            # RIGHT-CLICK AN EQUIPMENT SLOT → re-extract that icon.
+            #
+            # The "icons missing" badge can do this for everything worn,
+            # but only appears when a .bmp is ABSENT. An icon that is
+            # present and WRONG — the extractor wrote a valid file with
+            # garbage in it — leaves no badge to click, which is exactly
+            # the case that needs fixing. Per slot, so you can fix the
+            # one that looks wrong and watch it come back.
+            if equip_slot_rects and not setup_mode:
+                _hit_slot = None
+                for _si, _sr in equip_slot_rects.items():
+                    if _si >= 0 and _sr.collidepoint(mx, my):
+                        _hit_slot = _si
+                        break
+                if _hit_slot is not None:
+                    _iid = (equip_data[_hit_slot]
+                            if _hit_slot < len(equip_data) else 0)
+                    # EVERYTHING KNOWN ABOUT THIS SLOT, in one line. The
+                    # id drives the picture; the rich record drives the
+                    # tooltip and the wiki link. When those two disagree
+                    # on screen, exactly one of them is stale, and this
+                    # says which.
+                    _rich = None
+                    try:
+                        _rich = (equip_rich or {}).get(_hit_slot)
+                    except Exception:
+                        pass
+                    _rname = ""
+                    if isinstance(_rich, dict):
+                        _rname = str(_rich.get("name", ""))
+                        _rid = _rich.get("id")
+                    else:
+                        _rid = None
+                    _src = _icon_path_existing(_iid) if _iid else None
+                    print(f"[OmniWatch][slot] {_hit_slot}: "
+                          f"equip_data id={_iid} | "
+                          f"rich id={_rid} name={_rname!r} | "
+                          f"icon file={_src!r}")
+                    if _iid:
+                        _compare_icon_against_addon(_iid)
+                    if _iid:
+                        # Diff against the addon's own copy FIRST, while
+                        # it is still on disk to compare with.
+                        compare_icon_to_reference(_iid)
+                        # Where does this item's record ACTUALLY live?
+                        # The rich record is the only place a name is
+                        # available. Without one the search has nothing
+                        # to look for, so say so rather than guessing.
+                        if _rname:
+                            diagnose_icon_record(_iid, _rname)
+                        else:
+                            print(f"[OmniWatch][dat] {_iid}: no item name "
+                                  "known for this slot — hover it first "
+                                  "so the tooltip data arrives, then "
+                                  "right-click again")
+                        reextract_icon(_iid)
+                    continue
 
             # Right-click the Warp button → open its Configure subdialog
             # (show button + Send All toggle). Convenience alongside the
@@ -69270,7 +73464,13 @@ while running:
                     # rows in a table together -- was scrapped because
                     # it was unreliable across the multiple keying
                     # conventions panel_anchors uses.)
-                    if dragging_key.startswith("a1_") or dragging_key.startswith("a2_"):
+                    if (dragging_key not in ALLY_LIST_KEYS
+                            and (dragging_key.startswith("a1_")
+                                 or dragging_key.startswith("a2_"))):
+                        # NOT the list keys: "a1_list" starts with "a1_"
+                        # too, so without this exclusion the stacked
+                        # list was re-anchored using ONE row's height
+                        # and jumped on release.
                         scale = _party_scale_get(dragging_key)
                         d_a   = scaled_ally_dims(scale)
                         if dragging_key in panel_positions:
@@ -69279,6 +73479,41 @@ while running:
                                 pos[0], pos[1], d_a["panel_w"], d_a["row_min_h"],
                                 WIDTH, HEIGHT)
                             panel_anchors[dragging_key] = new_anchor
+                    elif dragging_key in ALLY_LIST_KEYS:
+                        print(f"[OmniWatch][drag] release {dragging_key!r} "
+                              f"pos={panel_positions.get(dragging_key)} "
+                              f"WIDTH={WIDTH} HEIGHT={HEIGHT}")
+                        _grp_n = 1 if dragging_key == ALLY_LIST_KEYS[0] else 2
+                        _lst = ally1_data if _grp_n == 1 else ally2_data
+                        _asc = _party_scale_get(dragging_key)
+                        _ad = scaled_ally_dims(_asc)
+                        _g = _party_row_gap()
+                        _ah = max(1, len(_lst) * (_ad["row_min_h"] + _g) - _g)
+                        _lp = panel_positions.get(dragging_key)
+                        if _lp:
+                            panel_anchors[dragging_key] = anchor_for_pos(
+                                _lp[0], _lp[1], _ad["panel_w"], _ah,
+                                WIDTH, HEIGHT)
+                            print(f"[OmniWatch][drag]   -> anchor "
+                                  f"{panel_anchors[dragging_key]!r} "
+                                  f"(pw={_ad['panel_w']} h={_ah}) "
+                                  f"resolves to "
+                                  f"{resolve_anchor(panel_anchors[dragging_key], _ad['panel_w'], _ah, WIDTH, HEIGHT)}")
+                    elif dragging_key == PARTY_LIST_KEY:
+                        # One anchor for the whole list, measured
+                        # against the height of everyone present so a
+                        # bottom corner keeps the bottom edge fixed.
+                        _sc = _party_scale_get("p0")
+                        _lw = scaled_panel_dims(_sc)["panel_w"]
+                        _lh = 0
+                        _g = _party_row_gap()
+                        for _mm in party_data:
+                            _lh += row_height(_mm, _sc) + _g
+                        _lh = max(1, _lh - _g)
+                        _lp = panel_positions.get(PARTY_LIST_KEY)
+                        if _lp:
+                            panel_anchors[PARTY_LIST_KEY] = anchor_for_pos(
+                                _lp[0], _lp[1], _lw, _lh, WIDTH, HEIGHT)
                     else:
                         m = members_by_name.get(dragging_key)
                         if m is not None:
@@ -69423,7 +73658,7 @@ while running:
             # HOTBAR_DRAG_THRESHOLD_PX from the mouse-down anchor,
             # promote the drag to active. Once active, every subsequent
             # frame's draw will show the ghost button at the current
-            # cursor pos (read from pygame.mouse.get_pos() in
+            # cursor pos (read from _mouse_pos() in
             # draw_hotbar_drag_overlay below), so we don't need to
             # store cur_x/cur_y here — just trigger the active flip.
             if not hotbar_drag["active"]:
@@ -69462,13 +73697,27 @@ while running:
             # set_mode recreates the surface we pin the top-left (Windows)
             # so the box grows from its origin, and re-apply window flags.
             mx, my = event.pos
+            if _ow_window_resize.get("win") == "desk":
+                vp = _VIEWPORTS.get("desk")
+                if vp:
+                    dw = max(OW_DESK_MIN_W, mx - vp[0])
+                    dh = max(OW_DESK_MIN_H, my - vp[1])
+                    if [dw, dh] != list(_desk_size):
+                        _desk_size[0], _desk_size[1] = dw, dh
+                        win = _ow_windows.get("desk")
+                        if win is not None:
+                            try:
+                                win.size = (dw, dh)
+                            except Exception:
+                                pass
+                        _rebuild_canvas()
+                continue
             new_w = max(OW_MIN_W, mx)
             new_h = max(OW_MIN_H, my)
             if new_w != WIDTH or new_h != HEIGHT:
                 WIDTH, HEIGHT = new_w, new_h
                 _windowed_size = [WIDTH, HEIGHT]
-                screen = pygame.display.set_mode((WIDTH, HEIGHT),
-                                                 pygame.NOFRAME)
+                screen = _set_display_mode(WIDTH, HEIGHT)
                 if (sys.platform == "win32"
                         and _ow_window_resize.get("hwnd")):
                     try:
@@ -69736,6 +73985,9 @@ while running:
             mx, my = event.pos
 
             if drag_mode == "move":
+                # TAB during a drag adds the desk viewport's origin, so
+                # the panel is over there while the cursor stays here.
+                mx += _drag_view_shift
                 new_x = mx - drag_offset[0]
                 new_y = my - drag_offset[1]
                 GRIP_VISIBLE = 40
@@ -69748,52 +74000,52 @@ while running:
                 # cursor-poll rate.
                 pw, ph = drag_start_size
                 if dragging_key == "__equip__":
-                    new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                    new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                     new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                     equip_pos[0], equip_pos[1] = new_x, new_y
                 elif dragging_key == "__stats__":
                     if stats_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         stats_pos[0], stats_pos[1] = new_x, new_y
                 elif dragging_key == "__target__":
                     if target_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         target_pos[0], target_pos[1] = new_x, new_y
                 elif dragging_key == "__target_st__":
                     if target_pos_st is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         target_pos_st[0], target_pos_st[1] = new_x, new_y
                 elif dragging_key == "__recast__":
                     if recast_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         recast_pos[0], recast_pos[1] = new_x, new_y
                 elif dragging_key == "__buff__":
                     if buff_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         buff_pos[0], buff_pos[1] = new_x, new_y
                 elif dragging_key == "__dps__":
                     if dps_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         dps_pos[0], dps_pos[1] = new_x, new_y
                 elif dragging_key == "__skillchain__":
                     if skillchain_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         skillchain_pos[0], skillchain_pos[1] = new_x, new_y
                 elif dragging_key == "__chat__":
                     if chat_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         chat_pos[0], chat_pos[1] = new_x, new_y
                 elif dragging_key == "__buttons__":
                     if buttons_pos is not None:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         buttons_pos[0], buttons_pos[1] = new_x, new_y
                 elif dragging_key.startswith("__buttons_") and dragging_key.endswith("__"):
@@ -69803,17 +74055,41 @@ while running:
                     except ValueError:
                         _pi = None
                     if _pi is not None and _pi in buttons_panel_positions:
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         buttons_panel_positions[_pi][0] = new_x
                         buttons_panel_positions[_pi][1] = new_y
                 else:
                     # Could be a main-party member (keyed by name) or an
                     # alliance slot (keyed a1_0..a2_5).
-                    if dragging_key.startswith("a1_") or dragging_key.startswith("a2_"):
+                    if dragging_key in ALLY_LIST_KEYS:
+                        _asc = _party_scale_get(dragging_key)
+                        pw = scaled_ally_dims(_asc)["panel_w"]
+                        new_x = max(GRIP_VISIBLE - pw,
+                                    min(new_x, _drag_edge_for(pw)))
+                        new_y = max(layout_top(),
+                                    min(new_y,
+                                        layout_bottom() - GRIP_VISIBLE))
+                        panel_positions[dragging_key] = [new_x, new_y]
+                    elif dragging_key == PARTY_LIST_KEY:
+                        # The stacked list. It has no entry in
+                        # members_by_name, so without this branch the
+                        # generic member path below found nothing and the
+                        # drag did nothing at all — the list looked
+                        # frozen in setup mode.
+                        _lsc = _party_scale_get("p0")
+                        pw = scaled_panel_dims(_lsc)["panel_w"]
+                        new_x = max(GRIP_VISIBLE - pw,
+                                    min(new_x, _drag_edge_for(pw)))
+                        new_y = max(layout_top(),
+                                    min(new_y,
+                                        layout_bottom() - GRIP_VISIBLE))
+                        panel_positions[PARTY_LIST_KEY] = [new_x, new_y]
+                    elif dragging_key.startswith("a1_") or dragging_key.startswith("a2_"):
                         scale = _party_scale_get(dragging_key)
                         pw    = scaled_ally_dims(scale)["panel_w"]
-                        new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                        new_x = max(GRIP_VISIBLE - pw,
+                                    min(new_x, _drag_edge_for(pw)))
                         new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                         if dragging_key in panel_positions:
                             panel_positions[dragging_key][0] = new_x
@@ -69824,7 +74100,7 @@ while running:
                             scale = _party_scale_get(dragging_key)
                             d     = scaled_panel_dims(scale)
                             pw    = d["panel_w"]
-                            new_x = max(GRIP_VISIBLE - pw, min(new_x, WIDTH  - GRIP_VISIBLE))
+                            new_x = max(_drag_left_for(pw), min(new_x, _drag_edge_for(pw)))
                             new_y = max(layout_top(), min(new_y, layout_bottom() - GRIP_VISIBLE))
                             panel_positions[dragging_key][0] = new_x
                             panel_positions[dragging_key][1] = new_y
@@ -69836,49 +74112,58 @@ while running:
                     ex, ey       = equip_pos
                     start_w, _   = drag_start_size
                     target_w     = max(40, mx - ex)
-                    new_scale    = drag_start_scale * (target_w / max(1, start_w))
+                    new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                     equip_scale  = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key == "__stats__":
                     if stats_pos is not None:
                         sx2, sy2   = stats_pos
                         start_w, _ = drag_start_size
                         target_w   = max(60, mx - sx2)
-                        new_scale  = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         stats_scale = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key == "__target__":
                     if target_pos is not None:
                         txp, typ    = target_pos
                         start_w, _  = drag_start_size
                         target_w    = max(60, mx - txp)
-                        new_scale   = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         target_scale = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key == "__target_st__":
                     if target_pos_st is not None:
                         txp, typ    = target_pos_st
                         start_w, _  = drag_start_size
                         target_w    = max(60, mx - txp)
-                        new_scale   = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         target_scale_st = max(MIN_SCALE, min(MAX_SCALE, new_scale))
+                elif dragging_key == "__skillchain__":
+                    if skillchain_pos is not None:
+                        sxp, syp   = skillchain_pos
+                        start_w, _ = drag_start_size
+                        target_w   = max(60, mx - sxp)
+                        skillchain_scale = max(MIN_SCALE, min(
+                            MAX_SCALE,
+                            _resize_scale(drag_start_scale, start_w,
+                                          target_w)))
                 elif dragging_key == "__recast__":
                     if recast_pos is not None:
                         rxp, ryp    = recast_pos
                         start_w, _  = drag_start_size
                         target_w    = max(60, mx - rxp)
-                        new_scale   = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         recast_scale = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key == "__buff__":
                     if buff_pos is not None:
                         bxp, byp    = buff_pos
                         start_w, _  = drag_start_size
                         target_w    = max(60, mx - bxp)
-                        new_scale   = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         buff_scale  = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key == "__dps__":
                     if dps_pos is not None:
                         dxp, dyp    = dps_pos
                         start_w, _  = drag_start_size
                         target_w    = max(60, mx - dxp)
-                        new_scale   = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         dps_scale   = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key == "__chat__":
                     # Chat resizes in PIXELS (both width and height
@@ -69899,7 +74184,7 @@ while running:
                         bxp, byp       = buttons_pos
                         start_w, _     = drag_start_size
                         target_w       = max(60, mx - bxp)
-                        new_scale      = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         buttons_scale  = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                 elif dragging_key.startswith("__buttons_") and dragging_key.endswith("__"):
                     # Multi-mode hotbar resize. The bars share buttons_scale
@@ -69913,7 +74198,7 @@ while running:
                         bxp, byp       = buttons_panel_positions[_pi]
                         start_w, _     = drag_start_size
                         target_w       = max(60, mx - bxp)
-                        new_scale      = drag_start_scale * (target_w / max(1, start_w))
+                        new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         new_scale      = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                         if _pi == HOTBAR_PAD_PANEL:
                             hotbar_pad_scale = new_scale
@@ -69923,7 +74208,7 @@ while running:
                     px, py     = panel_positions[dragging_key]
                     start_w, _ = drag_start_size
                     target_w   = max(40, mx - px)
-                    new_scale  = drag_start_scale * (target_w / max(1, start_w))
+                    new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                     # Party and alliance rows can share one size, the way
                     # the hotbar panels do. Every other panel is its own.
                     _party_scale_apply(dragging_key, new_scale)

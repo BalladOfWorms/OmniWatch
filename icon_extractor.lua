@@ -22,7 +22,7 @@
         (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
         SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ]]
--- icon_extractor v1.1.2
+-- icon_extractor v1.1.3 (item record size updated to 0x1400)
 -- Written by Rubenator of Leviathan
 -- Base Extraction Code graciously provided by Trv of Windower discord
 local icon_extractor = {}
@@ -85,10 +85,15 @@ for i = 0x000, 0x0FF do
 end
 
 --[[
-3072 bytes per icon
+5120 bytes per item record (was 3072 before a client patch)
 640 bytes for stats, string table, etc.
-2432 bytes for pixel data
+2432 bytes for pixel data, starting 0x2BD into the record
 --]]
+
+-- Bytes per item record. Was 0xC00; a client patch changed it to
+-- 0x1400. If icons break again after a future update, this is the
+-- first thing to check.
+ITEM_RECORD_SIZE = 0x1400
 
 local item_dat_map = {
     [1]={min=0x0001, max=0x0FFF, dat_path='118/106', offset=-1}, -- General Items
@@ -109,7 +114,16 @@ local item_by_id = function (id, output_path)
     local icon_file = open_dat(dat_stats)
     
     local id_offset = dat_stats.min + dat_stats.offset
-    icon_file:seek('set', (id - id_offset) * 0xC00 + 0x2BD)
+    -- RECORD SIZE 0x1400, not 0xC00. A client patch grew the item
+    -- record; the icon is still at 0x2BD WITHIN the record, so only
+    -- the stride was wrong. Everything built on 0xC00 has been
+    -- reading the wrong region since that patch, which shows up as
+    -- scrambled or mismatched icons for anything extracted after it.
+    -- Verified against eight items located by searching the DATs for
+    -- their names: dividing each true byte offset by 0x1400 gives
+    -- back the id_offset arithmetic below for all eight, and by
+    -- 0xC00 for none of them.
+    icon_file:seek('set', (id - id_offset) * ITEM_RECORD_SIZE + 0x2BD)
     local data = icon_file:read(0x800)
 
     bmp = convert_item_icon_to_bmp(data)

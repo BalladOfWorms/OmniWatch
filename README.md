@@ -8,13 +8,15 @@ The Windower addon collects events from the game and sends them over local UDP t
 - **Discord:** https://discord.gg/9ac5cjgGz7
 - **Issues / bug reports:** https://github.com/BalladOfWorms/OmniWatch/issues
 
-**OmniWatch is feature-complete and in maintenance mode.** The feature set below is what it does; work from here is fixes, accuracy and data updates rather than new panels. It is used daily on retail and is stable, but rough edges will still turn up — please report bugs and odd behaviour on Discord or via GitHub Issues. Community pull requests are welcome.
+**OmniWatch is mature and mostly settled.** It went into maintenance mode at 1.12.0 and the bulk of the work since has been fixes, accuracy and data; 1.13.0 is the exception, adding a second window so panels can live on another screen. Treat the feature set below as what it does — new panels are rare. It is used daily on retail and is stable, but rough edges will still turn up — please report bugs and odd behaviour on Discord or via GitHub Issues. Community pull requests are welcome.
 
 ## What it does
 
 OmniWatch puts the live state of your character and party in one place:
 
+- **Second window** — open a second OmniWatch window and drag panels into it, so the ones you watch constantly sit over the game while the ones you use occasionally live on another monitor, or another virtual desktop entirely
 - **Party panel** — every party member's HP/MP/TP, jobs, buffs and debuffs, pet HP/TP, with optional alliance support
+- **Tagged mobs** — tag anything from the target card and it keeps a row with a live HP bar after you target something else; click the row to target it again
 - **Target / sub-target cards** — full enemy info: family, abilities used, resists, susceptibilities, element, jobs, buffs/debuffs, with art from BG-wiki when available. PCs show a race + sex icon (Hume Male, Tarutaru Female, Mithra, Galka, etc.)
 - **Equipment viewer** — all 16 gear slots with extracted icons, hover tooltips with full item descriptions, augments, set bonuses, and Unity / Master Trial gear awareness
 - **Recast tracker** — magic and ability recasts with timer bars, custom aliases, and auto-hide when nothing's recasting
@@ -157,6 +159,20 @@ Inside you'll find:
 
 The settings menu's "Edit ..." entries (e.g. "Edit buff blacklist") open the right file in your default text editor.
 
+## Second window
+
+Turn on **Settings ▸ General ▸ Second window** and OmniWatch opens a second borderless window showing a different part of the same layout. The panels you want over the game — equipment, statistics, your hotbars — stay in the main window, while the ones you reach for less often — the auction house, crafting, scan zone, chat — can sit on another monitor, or on another virtual desktop entirely.
+
+Nothing moves when you switch it on. To send a panel across, **middle-click it** — it lands in the same place on the other screen and that window is raised. That works whichever window is full screen or hidden, which dragging does not: two windows on separate virtual desktops are never on screen together, so the cursor physically cannot cross between them. You can still drag a panel over when both are visible, or grab one and **right-click** to send it while dragging. The hotbar editor moves the same way.
+
+Turn on **Position mode** to see where the boundary falls: it is drawn as a marked seam with each side labelled. Panels only cross it when you take the cursor over there or right-click, so a panel nudged against the right edge stays put.
+
+The second window carries its own settings button in its top-right corner with the handful of things that only make sense one window at a time — **Full screen**, **Transparent**, **Always on top** and **Close this window**. It can be a solid panel on a spare monitor or a transparent overlay in its own right, whatever the main window is doing, and either window can be full screen on its own monitor. Both windows take clicks without pulling focus off FFXI, exactly as the main window always has.
+
+Move it by holding **Shift** and dragging anywhere in it, resize it from the grip in its bottom-right corner. Its position, size and whether it is open at all are saved with your layout, so a profile made for a second monitor reopens the way you left it — and "Save to all profiles" carries the second window along with the panels in it.
+
+**Both windows always start windowed**, whatever they were when you closed. Full screen is one click on the gear when you want it. Menus and popovers open in the window you called them from, and keyboard focus follows you there rather than pulling you back to the first window.
+
 ## Panels
 
 Every panel is independently toggleable from the settings dropdown. To move the **whole overlay**, **hold Shift and drag** anywhere on it (the window is borderless, so Shift is what tells it you mean to move rather than click through). To reposition or resize **individual panels**, enter setup mode (`//ow setup`) — then drag a panel to move it and drag its bottom-right corner to resize.
@@ -165,20 +181,41 @@ Every panel is independently toggleable from the settings dropdown. To move the 
 
 Shows your main party (slots p0-p5) with optional alliance party 1 and 2. Per member:
 
-- Name + main/sub job and levels
-- HP / MP / TP bars (HP color-coded by %)
-- Pet name, pet HP%, and pet TP — colored independently (pet HP% in HP-band color, pet TP in TP-band color). Toggle "Show pets" to control visibility.
-- Buffs column on the left, debuffs column on the right, divided by a thin divider line
+- A **job plate** at the left of the row, in place of the old job / subjob text
+- Name on its own line above the bars, so the bars run the full width of the row
+- **HP** across the full width with the number and percentage in it, **MP and TP sharing the line beneath** — HP is the one you act on, so it gets the height and the other two step back. TP is notched at 1000 and 2000, and **flashes as it crosses 1000** so a weaponskill coming up is something you catch rather than a number you read.
+- Pet name, pet HP%, and pet TP beside the owner's name, with a **thin orange strip above them tracking the pet's health**. Long character and pet names are trimmed to their space rather than running into the icons. Toggle "Show pets" to control visibility.
+- Buffs and debuffs in one full-width section: **buffs along the top line, debuffs underneath**
+
+Clicking the job plate or the name line targets that member; the bars are deliberately not clickable, so reading someone's HP can never retarget them.
+
+**Job plates.** Drop your own icons into `icons/jobs/` named `WHM.png`, `BRD.png` and so on (`.bmp` works too) and they replace the lettered plates. Without them you get the job's three letters on a plate tinted by role, with the **subjob underneath** when there is one. **Trusts get their job too**, read from the trust database rather than from the game, which does not report one for them.
 
 **Buff/debuff display modes**:
-- **Text mode** (default) — vertical stack of buff name labels, scrollable when overflowing
-- **Compact icon grid** — packed grid of ~16px status icons. Hover any icon for the buff name as a tooltip. Toggle via "Compact icon grid" in the settings menu under Party.
+- **Text mode** (default) — two columns of buff name labels, scrollable when overflowing
+- **Compact icon grid** — packed grid of ~16px status icons across the merged section. Hover any icon for the buff name as a tooltip. Toggle via "Compact icon grid" in the settings menu under Party.
+
+**Replacement status icons.** The grid draws whatever is in `icons/status/<buff id>.png` (or `.bmp`), so a community icon set drops straight in — worth doing, since the game itself gives every bard song and every Corsair roll the same shared image and the icon packs colour them apart. Files you supply win over the ones the addon extracts from the game.
 
 **Customization**:
 - "Edit buff blacklist" / "Edit debuff blacklist" — open `omniwatch_buffs.json` to hide buffs you don't care about (per-context: a name can be hidden in the buff column but still shown in the debuff column, or vice versa)
 - "Edit buff aliases" — shorten long buff names (e.g. "Tactician's Roll" → "TAC")
 
-**Alliance**: toggle "Show alliance" to display alliance parties 1 and 2 as compact strips along the right side of the screen. Slots can be repositioned individually.
+**Clicking a row targets that member** — anywhere on it except the status icons, so the plate, the name and all three bars are live. While you are **engaged with a mob it selects without retargeting**: the name pulses to show who is selected, `<pc>` in a hotbar button fires at them, and your mob is untouched. Click the same member again to release them, or another to switch.
+
+**Clicking a debuff icon casts the cure for it** on the member whose row it is in — click the Doom icon on someone and Cursna goes out, no targeting and no macro. The spell comes from **your own Support Helper debuff sections**, so it is the list you already keep. It works down the section's list until it finds something you can actually use: the spell, then a job ability your current job grants, then an item — items only on your own row, since FFXI will not let you use one on another player. Anything on recast is skipped rather than stalled on. Buff icons are deliberately not castable.
+
+**Hovering a status icon** shows its name and, underneath, a time: your own buffs count down for real and two of the same song each get their own timer; a buff you cast on someone else counts down from the spell's base duration with a `~`; anything else shows how long it has been up. A status with none of those gets no second line rather than a guess.
+
+**Party panel options** (Settings ▸ Party Panel ▸ CONFIGURE):
+
+- **Stack rows as one list** — position the whole party once instead of row by row. It grows from whichever corner you drag it nearest, so a bottom corner keeps its bottom edge fixed and the list collapses downward as members leave. Rows share one size while it is on, and alliance groups stack the same way. Your per-row positions and sizes are kept and come back when you switch it off.
+- **Status icons on the left** — put the icons outermost, with the job plate beside the bars. They pack right-aligned so the first sits against the plate and the block grows away from it. The row is the same width either way.
+- **Clear behind status icons** — leave that area unpainted so the game shows through behind the icons. Position mode outlines it so it can still be placed.
+
+**Resizing rows**: drag the grip in the bottom-right corner, or **scroll the wheel over a row** in Position mode to step its size one percent at a time. The wheel is the precise one — there is no grip to chase, and it cannot run away from the cursor as the row changes height.
+
+**Alliance**: toggle "Show alliance" to display alliance parties 1 and 2 as compact strips along the right side of the screen. Slots can be repositioned individually, or stacked as lists of their own, and each group sizes independently of the party.
 
 ### Support Helper
 
@@ -224,6 +261,18 @@ The target card adapts to what you're targeting:
 - A race + sex icon (Hume Male, Hume Female, Elvaan Male, Elvaan Female, Tarutaru Male, Tarutaru Female, Mithra, Galka) — drop matching PNGs into `data\mobdata\mobicons\` named e.g. `HumeMale.png`, `Mithra.png`
 
 Sub-target card mirrors the target card with its own toggles for buffs/debuffs.
+
+### Tagged mobs
+
+The target card has a **TAG** button in its title strip. Tag a mob and it keeps a row in a small panel of its own — name, entity id and a live HP bar — that carries on updating after you have targeted something else. Useful for watching a puller's mob, keeping an eye on the next link, or seeing a claimed mob's health without holding it.
+
+**Click a row to target that mob again**, or the **x** to drop it. Retargeting addresses the exact entity you tagged rather than re-finding it by name, so three `Huge Wasp` in a row is not a problem.
+
+A tag disappears when you untag it or when the mob dies, and one whose mob has been out of range for a while is dropped too — nothing here survives a session, because entity ids are reused and a restored list would point at whatever holds those ids now.
+
+Up to eight at once. Drag the panel by its **TAGGED** header to move it, or turn on Position mode where the whole thing is a handle and an example row shows even with nothing tagged. It remembers where you put it, and hides itself when nothing is tagged.
+
+Nothing in the game reports a mob you are not targeting, so the HP comes from a twice-a-second read of the entity table — no packets involved, and no way to see a mob that is out of render range.
 
 ### Equipment viewer
 
@@ -770,6 +819,8 @@ Use them for whatever splits your setups: a compact layout for a laptop screen a
 - **A profile is a workspace, not a snapshot.** Whatever you change is saved as you change it, into whichever profile is in use. Worth knowing: rearranging things while a profile is active changes *that* profile, so if you want a variant, save it under a new name rather than expecting the original to stay put.
 - **Switching** copies the profile over your live files and reloads everything it covers, so the screen redraws into the new arrangement immediately, and the setup it replaced is kept on disk as `*.prev.json` files in your character folder.
 - The pencil renames a profile and the red **✕** deletes it. Deleting the one you're on simply stops tracking it and moves nothing on screen. A profile saved before a given file joined the system doesn't carry that part, and switching to it leaves your current version alone rather than blanking it.
+- **↓ Save to all profiles** pushes your current setup onto every other profile at once — positions, which window each panel is in, what is shown, what is off, transparency, always-on-top, stacking, window sizes. **Your hotbar contents and stat cells are never touched**, in this or in an ordinary save of an existing profile: those are the parts that have to differ between jobs, and they still follow you normally as you edit them. Where each window sits on the desktop stays per profile too, so pushing from a single-monitor setup won't drag a second-monitor profile onto the wrong screen.
+- Every profile file is **backed up to `.bak` before anything overwrites it**, so a push or a switch is recoverable.
 
 Profiles are per character, and live in the same folder as the rest of that character's config with the profile name appended (e.g. `omniwatch_layout_Second Monitor.json`).
 
@@ -960,7 +1011,9 @@ Diagnostic output goes to `omniwatch.log` in `%APPDATA%\OmniWatch\`, not to game
 ├── icons\
 │   ├── equipment\                # auto-extracted on first run
 │   ├── mob\                      # mob family + element icons
-│   ├── status\                   # buff/debuff status icons (auto-extracted)
+│   ├── jobs\                     # job plate icons (yours; WHM.png etc.)
+│   ├── status\                   # buff/debuff status icons (auto-extracted;
+│   │                             #   drop in <id>.png to override)
 │   └── ui\                       # UI icons (custom hotbar buttons)
 ├── simulation\                   # sim-mode supporting data
 └── logs\                         # auto-created per-session
