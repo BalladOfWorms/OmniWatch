@@ -15587,6 +15587,17 @@ local function handle_incoming_action(act)
             -- Bust ends the Double-Up window early. Untrack the
             -- Double-Up Chance buff timer so the panel reflects that
             -- you can't continue rolling.
+            --
+            -- FORWARD REFERENCE: _ow_untrack_buff is defined ~2500 lines
+            -- below and is GLOBAL for exactly this call. It was a local,
+            -- so this raised 'attempt to call global (a nil value)' and
+            -- took the whole branch with it -- including the buff_gain
+            -- emit below, which is what puts the name 'Bust' into the
+            -- timer pipeline. The status still appeared (the 0x063 slot
+            -- poller sees it) with the right icon and the right expiry,
+            -- but with no name of our own the label fell back to
+            -- GearInfo's per-caster Last_Spell attribution -- the roll
+            -- that was just busted. Keep this function global.
             if act.actor_id == my_id then
                 _ow_untrack_buff(308)
             end
@@ -18110,7 +18121,16 @@ end
 -- emits exactly one buff_loss for that buff_id and we want to clear the
 -- specific slot. Without the slot, we conservatively clear all matching;
 -- the 0x063 poll on the next tick will repopulate the surviving one.
-local function _ow_untrack_buff(buff_id)
+--
+-- GLOBAL, NOT LOCAL, AND THAT IS LOAD-BEARING. The action handler calls
+-- this from the Phantom Roll bust branch ~2500 lines ABOVE this point
+-- (~15591). A local is lexically scoped, so up there the name resolved to
+-- a nil global and the call raised, aborting the rest of the bust branch
+-- before it could emit buff_gain for the Bust status. Globals resolve at
+-- call time, which is always after load -- the same reason
+-- _ow_request_icon is global. Also frees a slot against the 200-local cap.
+-- Before making this local again, check every caller is below it.
+function _ow_untrack_buff(buff_id)
     if not buff_id then return end
     for slot, t in pairs(_ow_buff_timers) do
         if t.buff_id == buff_id then

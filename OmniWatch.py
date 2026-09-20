@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.13.0 (2026-09-09)"
+OMNIWATCH_BUILD_STAMP = "v1.13.1 (2026-09-14)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.13.0"
+OMNIWATCH_VERSION = "1.13.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -2446,11 +2446,31 @@ def _apply_desk_pending():
 
 def _apply_window_geometry():
     """Resize and reposition the OS window to the loaded layout's saved
-    values. Called at startup and after a profile switch. Does nothing while
-    full-screen — the restore rect owns the geometry there and stomping it
-    would strand the user in a fullscreen window sized for a profile."""
-    global screen, WIDTH, HEIGHT
-    if globals().get("_fullscreen_saved_rect") is not None:
+    values. Called at startup and after a profile switch.
+
+    FULL SCREEN IS NOT DISTURBED. Launching always starts windowed, but a
+    profile change mid-session is not a launch: if the window is filling a
+    monitor when you change job, it goes on filling it. The monitor owns
+    the geometry while it does, so resizing here would drop us out of full
+    screen in all but name.
+
+    The profile's window box is not thrown away, though — it becomes the
+    rect we restore to, so leaving full screen afterwards gives you the
+    window this profile describes rather than the one you were in before
+    the switch. Without that the geometry half of a profile would simply
+    never arrive."""
+    global screen, WIDTH, HEIGHT, _fullscreen_saved_rect
+    if _fullscreen_saved_rect is not None:
+        _fx, _fy, _fw, _fh = _fullscreen_saved_rect
+        try:
+            if _windowed_size and len(_windowed_size) == 2:
+                _fw = max(OW_MIN_W, int(_windowed_size[0]))
+                _fh = max(OW_MIN_H, int(_windowed_size[1]))
+            if _windowed_pos and len(_windowed_pos) == 2:
+                _fx, _fy = int(_windowed_pos[0]), int(_windowed_pos[1])
+            _fullscreen_saved_rect = (_fx, _fy, _fw, _fh)
+        except (TypeError, ValueError) as e:
+            print(f"[OmniWatch] _apply_window_geometry (restore rect): {e!r}")
         return
     try:
         if (_windowed_size and len(_windowed_size) == 2
@@ -4736,11 +4756,34 @@ _GEARSWAP_STATE_PATTERN_R = _re_routing.compile(
 # {4}: Wormfood, Eyril, ... (No effect)", modes 59/63/101), which carry
 # no signed bonus and continue to route to raw_battle via the arrow
 # check below — hidden, as they were.
+# THE SOLO BUST NAMES NO ROLL, so every alternative above misses it.
+# Measured 2026-09-14 on mode 1:
+#   "Bust! → Wormfood → (0% Movement Speed)"
+#   "Bust! → Wormfood → (-9.76% Attack!)"
+# When more than one member is affected the game lists them and then
+# the roll name, which "^Bust!.*Roll" already catches; when you are the
+# only one affected the roll name is simply absent, so the line fell
+# through to the World branch and was routed as /say. The last
+# alternative below matches on the opening word plus a parenthesised
+# effect, and unlike the ordinary-roll case that effect may be UNSIGNED
+# ("(0% Movement Speed)" is what a busted speed roll leaves you with),
+# hence [-+]? rather than [-+].
 _ROLL_BROADCAST_PATTERN_R = _re_routing.compile(
     r"(Roll[\s\S]*Lucky|Roll[\s\S]*Unlucky|Roll's Lucky #|"
     r"Roll[\s\S]*\(Bust!\)|^Bust!.*Roll|"
-    r"\bRoll\b[^\n]{0,24}\([-+])"
+    r"\bRoll\b[^\n]{0,24}\([-+]|"
+    r"^Bust![^\n]{0,40}\([-+]?\d)"
 )
+
+# A BUST IS A DEBUFF, not a buff. The roll branch below routes a roll
+# that names you as buff_apply so it follows wherever you already send
+# buffs; a bust landing there means a penalty shows up in the same place
+# as the bonuses. The three shapes a bust can take: the solo form opens
+# with it ("Bust! -> Wormfood -> (0% Movement Speed)"), the party-wide
+# form opens with it and then names the roll, and a third puts it in
+# parentheses after the roll name. An ordinary roll line carries the word
+# nowhere, so the test can be this direct.
+_ROLL_BUST_PATTERN_R = _re_routing.compile(r"(^Bust!|\(Bust!\))")
 
 # Cast-start / ready text. FFXI's native incoming_text fires when any
 # entity starts casting or readies an ability:
@@ -5183,6 +5226,8 @@ def _chat_classify_event(ev):
         # only emits chat events for debuffs, so this is the single
         # source for a roll landing.
         if current_char_name and current_char_name in text:
+            if _ROLL_BUST_PATTERN_R.search(text):
+                return ("self", "debuff_apply")
             return ("self", "buff_apply")
         return (actor, "battle")
 
@@ -17316,6 +17361,27 @@ CHECKLIST_CATEGORIES = [
         "url_builder":  None,
     },
     {
+        "key":          "quests_moggarden",
+        "label":        "Mog Garden Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_other",
+        "label":        "Other Areas Quests",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
+        "key":          "quests_coalition",
+        "label":        "Coalition Assignments",
+        "row_iter":     None,    # set after the helper is defined below
+        "is_checked":   None,
+        "url_builder":  None,
+    },
+    {
         "key":          "quests_outlands",
         "label":        "Outlands Quests",
         "row_iter":     None,    # set after the helper is defined below
@@ -17675,6 +17741,9 @@ CHECKLIST_TABS = [
             "quests_mhaura",
             "quests_tavnazia",
             "quests_moghouse",
+            "quests_moggarden",
+            "quests_other",
+            "quests_coalition",
             "quests_outlands",
             "quests_crystalwar",
             "quests_aby_vision",
@@ -17887,12 +17956,6 @@ def _checklist_active_category_key_for_url():
 # inner key = lowercased quest name (matches what _make_quest_rows
 # emits as the row key); value = explicit bg-wiki page slug.
 _QUEST_URL_OVERRIDES = {
-    "quests_selbina": {
-        # Both Chart quests share names with the in-world items used
-        # to start them, so bg-wiki uses "(Quest)" disambig slugs.
-        "brigand's chart": "Brigand's_Chart_(Quest)",
-        "pirate's chart":  "Pirate's_Chart_(Quest)",
-    },
     "quests_tavnazia": {
         # The in-game quest log displays "VW Op. #004" / "#026" with
         # the # sign, but bg-wiki's article slugs drop it — the
@@ -17900,6 +17963,20 @@ _QUEST_URL_OVERRIDES = {
         # links to "VW_Op._004:_..." without the hash.
         "vw op. #004: bibiki bombardment": "VW_Op._004:_Bibiki_Bombardment",
         "vw op. #026: tavnazian terrors":  "VW_Op._026:_Tavnazian_Terrors",
+    },
+    "quests_jeuno": {
+        # Same hash-vs-slug split as the Tavnazia entries above.
+        "vw op. #115: valkurm duster": "VW_Op._115:_Valkurm_Duster",
+        "vw op. #118: buburimu squall": "VW_Op._118:_Buburimu_Squall",
+    },
+    "quests_ahturhgan": {
+        # Same hash-vs-slug split as the Tavnazia entries above.
+        "vw op. #050: aht urhgan assault": "VW_Op._050:_Aht_Urhgan_Assault",
+        "vw op. #068: subterranean skirmish": "VW_Op._068:_Subterranean_Skirmish",
+    },
+    "quests_crystalwar": {
+        # Same hash-vs-slug split as the Tavnazia entries above.
+        "vw op. #126: qufim incursion": "VW_Op._126:_Qufim_Incursion",
     },
     "quests_aby_heroes": {
         # Same pattern as Tavnazia's VW Op entries: the in-game quest
@@ -18167,6 +18244,9 @@ _CHECKLIST_URL_BUILDERS = {
     "quests_aby_vision":    _checklist_url_quest,
     "quests_aby_scars":     _checklist_url_quest,
     "quests_aby_heroes":    _checklist_url_quest,
+    "quests_moggarden":     _checklist_url_quest,
+    "quests_other":         _checklist_url_quest,
+    "quests_coalition":     _checklist_url_quest,
     # Ultimate Weapons: each weapon name maps directly to its bg-wiki
     # article slug (e.g. /ffxi/Excalibur, /ffxi/Idris, /ffxi/Tri-edge).
     # Reuses the weapon-skill URL helper since both work the same way —
@@ -21244,98 +21324,99 @@ for _cat in CHECKLIST_CATEGORIES:
 # packet 0x056 when you open a quest tab) but would require packet
 # research; deferred.
 _BASTOK_QUESTS_MASTER = [
-    "The Siren's Tear",
-    "Beauty and the Galka",
-    "Welcome to Bastok",
-    "Guest of Hauteur",
-    "The Quadav's Curse",
-    "Out of One's Shell",
-    "Hearts of Mythril",
-    "The Eleventh's Hour",
-    "Shady Business",
-    "A Foreman's Best Friend",
-    "Breaking Stones",
-    "The Cold Light of Day",
-    "Gourmet",
-    "The Elvaan Goldsmith",
+    "A Discerning Eye (Bastok)",
     "A Flash in the Pan",
-    "Smoke on the Mountain",
-    "Stamp Hunt",
-    "Forever to Hold",
-    "Till Death Do Us Part",
-    "Fallen Comrades",
-    "Rivals",
-    "Mom, the Adventurer?",
-    "The Signpost Marks the Spot",
-    "Past Perfect",
-    "Stardust",
-    "Mean Machine",
-    "Cid's Secret",
-    "The Usual",
-    "Blade of Darkness",
-    "Father Figure",
-    "The Return of the Adventurer",
-    "Drachenfall",
-    "Vengeful Wrath",
-    "Beadeaux Smog",
-    "The Curse Collector",
-    "Fear of Flying",
-    "The Wisdom of Elders",
-    "Groceries",
-    "The Bare Bones",
-    "Minesweeper",
-    "The Darksmith",
-    "Buckets of Gold",
-    "The Stars of Ifrit",
-    "Love and Ice",
-    "Brygid the Stylist",
-    "The Gustaberg Tour",
-    "Bite the Dust",
-    "Blade of Death",
-    "Silence of the Rams",
-    "Altana's Sorrow",
+    "A Foreman's Best Friend",
     "A Lady's Heart",
-    "Ghosts of the Past",
-    "The First Meeting",
-    "True Strength",
-    "The Doorman",
-    "The Talekeeper's Truth",
-    "The Talekeeper's Gift",
+    "A Proper Burial",
+    "A Question of Faith",
+    "A Test of True Love",
+    "Achieving True Power",
+    "All by Myself",
+    "Altana's Sorrow",
+    "Ayame and Kaede",
+    "Bait and Switch",
+    "Beadeaux Smog",
+    "Beauty and the Galka",
+    "Bite the Dust",
+    "Blade of Darkness",
+    "Blade of Death",
+    "Blade of Evil",
+    "Breaking Stones",
+    "Brygid the Stylist",
+    "Brygid the Stylist Returns",
+    "Buckets of Gold",
+    "Chips",
+    "Cid's Secret",
     "Dark Legacy",
     "Dark Puppet",
-    "Blade of Evil",
-    "Ayame and Kaede",
-    "A Test of True Love",
-    "Lovers in the Dusk",
-    "Wish Upon a Star",
+    "Drachenfall",
     "Eco-Warrior (Bastok)",
-    "The Weight of Your Limits",
-    "Shoot First, Ask Questions Later",
-    "Inheritance",
-    "The Walls of Your Mind",
     "Escort for Hire (Bastok)",
-    "A Discerning Eye (Bastok)",
     "Faded Promises",
-    "Brygid the Stylist Returns",
-    "Out of the Depths",
-    "A Question of Faith",
-    "Return to the Depths",
-    "Teak Me to the Stars",
-    "Hyper Active",
-    "The Naming Game",
-    "All by Myself",
-    "Chips",
-    "Bait and Switch",
-    "Lure of the Wildcat (Bastok)",
-    "Achieving True Power",
-    "Too Many Chefs",
+    "Fallen Comrades",
+    "Father Figure",
+    "Fear of Flying",
+    "Forever to Hold",
     "Fully Mental Alchemist",
+    "Ghosts of the Past",
+    "Gourmet",
+    "Groceries",
+    "Guest of Hauteur",
+    "Hearts of Mythril",
+    "Hyper Active",
+    "Inheritance",
+    "Love and Ice",
+    "Lovers in the Dusk",
+    "Lure of the Wildcat (Bastok)",
+    "Mean Machine",
+    "Minesweeper",
+    "Mom, the Adventurer?",
+    "Out of One's Shell",
+    "Out of the Depths",
+    "Past Perfect",
+    "Return to the Depths",
+    "Rivals",
+    "Shady Business",
+    "Shoot First, Ask Questions Later",
+    "Silence of the Rams",
+    "Smoke on the Mountain",
+    "Stamp Hunt",
+    "Stardust",
     "Synergistic Pursuits",
-    "The Wondrous Whatchamacallit",
     "Synergistic Support",
-    "Trust: Bastok",
-    "Trial Size Trial by Earth",
+    "Teak Me to the Stars",
+    "The Bare Bones",
+    "The Cold Light of Day",
+    "The Curse Collector",
+    "The Darksmith",
+    "The Doorman",
+    "The Eleventh's Hour",
+    "The Elvaan Goldsmith",
+    "The First Meeting",
+    "The Gustaberg Tour",
+    "The Naming Game",
+    "The Quadav's Curse",
+    "The Return of the Adventurer",
+    "The Signpost Marks the Spot",
+    "The Siren's Tear",
+    "The Stars of Ifrit",
+    "The Talekeeper's Gift",
+    "The Talekeeper's Truth",
+    "The Usual",
+    "The Walls of Your Mind",
+    "The Weight of Your Limits",
+    "The Wisdom of Elders",
+    "The Wondrous Whatchamacallit",
+    "Till Death Do Us Part",
+    "Too Many Chefs",
     "Trial by Earth",
+    "Trial Size Trial by Earth",
+    "True Strength",
+    "Trust: Bastok",
+    "Vengeful Wrath",
+    "Welcome to Bastok",
+    "Wish Upon a Star",
 ]
 
 
@@ -21343,177 +21424,183 @@ _BASTOK_QUESTS_MASTER = [
 # Same source / ordering convention as Bastok (HorizonXI's "Completed
 # Quests" table, mirroring the in-game Quest Log).
 _SANDY_QUESTS_MASTER = [
-    "A Sentry's Peril",
-    "Waters of the Cheval",
-    "Rosel the Armorer",
-    "The Pickpocket",
-    "Father and Son",
-    "The Seamstress",
-    "The Dismayed Customer",
-    "The Trader in the Forest",
-    "The Sweetest Things",
-    "The Vicasque's Sermon",
-    "A Squire's Test",
-    "Grave Concerns",
-    "The Brugaire Consortium",
-    "Lizard Skins",
-    "Flyers for Regine",
-    "Gates to Paradise",
-    "A Squire's Test II",
-    "To Cure a Cough",
-    "Tiger's Teeth",
-    "Undying Flames",
-    "A Purchase of Arms",
-    "A Knight's Test",
-    "The Medicine Woman",
-    "Black Tiger Skins",
-    "Growing Flowers",
-    "The General's Secret",
-    "The Rumor",
-    "Her Majesty's Garden",
-    "Introduction To Teamwork",
-    "Intermediate Teamwork",
-    "Advanced Teamwork",
-    "Grimy Signposts",
-    "A Job for the Consortium",
-    "Trouble at the Sluice",
-    "The Merchant's Bidding",
-    "Unexpected Treasure",
-    "Blackmail",
-    "The Setting Sun",
-    "Distant Loyalties",
-    "The Rivalry",
-    "The Competition",
-    "Starting a Flame",
-    "Fear of the Dark",
-    "Warding Vampires",
-    "Sleepless Nights",
-    "Lufet's Lake Salt",
-    "Healing the Land",
-    "Sorcery of the North",
-    "The Crimson Trial",
-    "Enveloped in Darkness",
-    "Peace for the Spirit",
-    "Messenger from Beyond",
-    "Prelude of Black and White",
-    "Pieuje's Decision",
-    "Sharpening the Sword",
     "A Boy's Dream",
-    "Under Oath",
-    "The Holy Crest",
     "A Craftsman's Work",
-    "Chasing Quotas",
-    "Knight Stalker",
-    "Eco-Warrior (San d'Oria)",
-    "Methods Create Madness",
-    "Souls in Shadow",
-    "A Taste For Meat",
-    "Exit the Gambler",
-    "Old Wounds",
-    "Escort for Hire (San d'Oria)",
     "A Discerning Eye (San d'Oria)",
+    "A Job for the Consortium",
+    "A Knight's Test",
+    "A Purchase of Arms",
+    "A Sentry's Peril",
+    "A Squire's Test",
+    "A Squire's Test II",
+    "A Taste For Meat",
     "A Timely Visit",
+    "Advanced Teamwork",
+    "Atelloune's Lament",
+    "Black Tiger Skins",
+    "Blackmail",
+    "Chasing Quotas",
+    "Distant Loyalties",
+    "Eco-Warrior (San d'Oria)",
+    "Enveloped in Darkness",
+    "Escort for Hire (San d'Oria)",
+    "Exit the Gambler",
+    "Father and Son",
+    "Fear of the Dark",
     "Fit for a Prince",
-    "Over the Hills and Far Away",
-    "Signed in Blood",
-    "Tea with a Tonberry?",
-    "Spice Gals",
-    "Thick Shells",
+    "Flyers for Regine",
     "Forest for the Trees",
-    "Trial Size Trial by Ice",
+    "Gates to Paradise",
+    "Grave Concerns",
+    "Grimy Signposts",
+    "Growing Flowers",
+    "Healing the Land",
+    "Her Majesty's Garden",
+    "Intermediate Teamwork",
+    "Introduction To Teamwork",
+    "Knight Stalker",
+    "Lizard Skins",
+    "Lufet's Lake Salt",
+    "Lure of the Wildcat (San d'Oria)",
+    "Messenger from Beyond",
+    "Methods Create Madness",
+    "Old Wounds",
+    "Over the Hills and Far Away",
+    "Peace for the Spirit",
+    "Pieuje's Decision",
+    "Prelude of Black and White",
+    "Rosel the Armorer",
+    "Sharpening the Sword",
+    "Signed in Blood",
+    "Sleepless Nights",
+    "Sorcery of the North",
+    "Souls in Shadow",
+    "Spice Gals",
+    "Starting a Flame",
+    "Tea with a Tonberry?",
+    "The Brugaire Consortium",
+    "The Competition",
+    "The Crimson Trial",
+    "The Dismayed Customer",
+    "The General's Secret",
+    "The Holy Crest",
+    "The Medicine Woman",
+    "The Merchant's Bidding",
+    "The Pickpocket",
+    "The Rivalry",
+    "The Rumor",
+    "The Seamstress",
+    "The Setting Sun",
+    "The Sweetest Things",
+    "The Trader in the Forest",
+    "The Vicasque's Sermon",
+    "Thick Shells",
+    "Tiger's Teeth",
+    "To Cure a Cough",
     "Trial by Ice",
+    "Trial Size Trial by Ice",
+    "Trouble at the Sluice",
+    "Trust: San d'Oria",
+    "Under Oath",
+    "Undying Flames",
+    "Unexpected Treasure",
+    "Warding Vampires",
+    "Waters of the Cheval",
 ]
 
 
 # ── Windurst Quests master list ───────────────────────────────────────
 _WINDY_QUESTS_MASTER = [
-    "In a Pickle",
-    "A Pose by Any Other Name",
-    "Acting in Good Faith",
-    "Say It with Flowers",
-    "Hat in Hand",
-    "A Feather in One's Cap",
-    "Making Headlines",
-    "Scooped!",
-    "Glyph Hanger",
-    "Early Bird Catches the Bookworm",
-    "Chasing Tales",
-    "A Smudge on One's Record",
-    "Food for Thought",
-    "Overnight Delivery",
-    "Water Way to Go",
-    "Blue Ribbon Blues",
-    "Toraimarai Turmoil",
-    "Teacher's Pet",
-    "Reap What You Sow",
-    "Let Sleeping Dogs Lie",
-    "Making the Grade",
     "A Crisis in the Making",
-    "Hoist the Jelly, Roger",
-    "Wondering Minstrel",
-    "Heaven Cent",
-    "The Postman Always K.O.s Twice",
-    "To Bee or Not to Bee?",
+    "A Discerning Eye (Windurst)",
+    "A Feather in One's Cap",
+    "A Greeting Cardian",
+    "A Pose by Any Other Name",
+    "A Smudge on One's Record",
+    "Acting in Good Faith",
+    "All at Sea",
+    "As Thick as Thieves",
+    "Babban Ny Mheillea",
+    "Blast from the Past",
+    "Blood and Glory",
+    "Blue Ribbon Blues",
+    "Can Cardians Cry?",
+    "Carbuncle Debacle",
+    "Catch It If You Can!",
+    "Chasing Tales",
+    "Chocobilious",
+    "Class Reunion",
+    "Creepy Crawlies",
+    "Crying Over Onions",
+    "Curses, Foiled A-Golem!?",
     "Curses, Foiled Again!",
     "Curses, Foiled...Again!?",
-    "Curses, Foiled A-Golem!?",
-    "Mandragora-Mad",
-    "Star Struck",
-    "Blast from the Past",
-    "Nothing Matters",
-    "Something Fishy",
-    "To Catch a Falling Star",
-    "All at Sea",
-    "Truth, Justice, and the Onion Way!",
-    "Know One's Onions",
-    "Inspector's Gadget!",
-    "Onion Rings",
-    "Crying Over Onions",
-    "Wild Card",
-    "The Promise",
-    "Making Amends",
-    "Making Amens!",
-    "Wonder Wands",
-    "Catch It If You Can!",
-    "Creepy Crawlies",
-    "Paying Lip Service",
-    "The Amazin' Scorpio",
-    "Twinstone Bonding",
-    "Chocobilious",
-    "In a Stew",
-    "Mihgo's Amigo",
-    "Rock Racketeer",
-    "The All-New C-2000",
-    "A Greeting Cardian",
-    "Legendary Plan B",
-    "The All-New C-3000",
-    "Can Cardians Cry?",
-    "The Fanged One",
-    "Flower Child",
-    "The Three Magi",
-    "Recollections",
-    "The Root of the Problem",
-    "The Tenshodo Showdown",
-    "As Thick as Thieves",
-    "Hitting the Marquisate",
-    "Sin Hunting",
-    "Fire and Brimstone",
-    "Unbridled Passion",
-    "I Can Hear a Rainbow",
-    "The Puppet Master",
-    "Class Reunion",
-    "Carbuncle Debacle",
-    "The Moonlit Path",
-    "From Saplings Grow",
-    "Orastery Woes",
-    "Blood and Glory",
-    "Tuning In",
-    "Tuning Out",
-    "One Good Deed?",
+    "Early Bird Catches the Bookworm",
     "Eco-Warrior (Windurst)",
     "Escort For Hire (Windurst)",
-    "A Discerning Eye (Windurst)",
+    "Fire and Brimstone",
+    "Flower Child",
+    "Food for Thought",
+    "From Saplings Grow",
+    "Glyph Hanger",
+    "Hat in Hand",
+    "Heaven Cent",
+    "Hitting the Marquisate",
+    "Hoist the Jelly, Roger",
+    "I Can Hear a Rainbow",
+    "In a Pickle",
+    "In a Stew",
+    "Inspector's Gadget!",
+    "Know One's Onions",
+    "Legendary Plan B",
+    "Let Sleeping Dogs Lie",
+    "Lure of the Wildcat (Windurst)",
+    "Making Amends",
+    "Making Amens!",
+    "Making Headlines",
+    "Making the Grade",
+    "Mandragora-Mad",
+    "Mihgo's Amigo",
+    "Nothing Matters",
+    "One Good Deed?",
+    "Onion Rings",
+    "Orastery Woes",
+    "Overnight Delivery",
+    "Paying Lip Service",
+    "Reap What You Sow",
+    "Recollections",
+    "Rock Racketeer",
+    "Say It with Flowers",
+    "Scooped!",
+    "Sin Hunting",
+    "Something Fishy",
+    "Star Struck",
+    "Teacher's Pet",
+    "The All-New C-2000",
+    "The All-New C-3000",
+    "The Amazin' Scorpio",
+    "The Fanged One",
+    "The Moonlit Path",
+    "The Postman Always K.O.s Twice",
+    "The Promise",
+    "The Puppet Master",
+    "The Root of the Problem",
+    "The Tenshodo Showdown",
+    "The Three Magi",
+    "To Bee or Not to Bee?",
+    "To Catch a Falling Star",
+    "Toraimarai Turmoil",
+    "Trust: Windurst",
+    "Truth, Justice, and the Onion Way!",
+    "Tuning In",
+    "Tuning Out",
+    "Twinstone Bonding",
+    "Unbridled Passion",
     "Waking Dreams",
+    "Water Way to Go",
+    "Wild Card",
+    "Wonder Wands",
+    "Wondering Minstrel",
 ]
 
 
@@ -21523,90 +21610,143 @@ _WINDY_QUESTS_MASTER = [
 # Port Jeuno, and Ru'Lude Gardens. Includes the 14 Borghertz's Hands
 # job-AF gauntlet quests which all live under Jeuno in the log.
 _JEUNO_QUESTS_MASTER = [
-    "Crest of Davoi",
-    "Save My Sister",
-    "A Clock Most Delicate",
-    "Save the Clock Tower",
-    "Chocobo's Wounds",
-    "Save My Son",
     "A Candlelight Vigil",
-    "The Wonder Magic Set",
-    "The Kind Cardian",
-    "Your Crystal Ball",
-    "Collect Tarut Cards",
-    "The Old Monument",
+    "A Chocobo's Tale",
+    "A Clock Most Delicate",
+    "A Furious Finale",
     "A Minstrel in Despair",
-    "Rubbish Day",
-    "Never to Return",
+    "A New Dawn",
+    "A Quaternary Trial in Tandem",
+    "A Reputation in Ruins",
+    "A Trial in Tandem",
+    "A Trial in Tandem Revisited",
+    "A Trial in Tandem, Redux",
+    "All in the Cards",
+    "Apocalypse Nigh",
+    "Atop the Highest Mountains",
+    "Axe the Competition",
+    "Beat Around the Bushin",
+    "Beyond Infinity",
+    "Beyond the Stars",
+    "Beyond the Sun",
+    "Blessed Radiance",
+    "Blighted Gloom",
+    "Borghertz's Calling Hands",
+    "Borghertz's Chasing Hands",
+    "Borghertz's Dragon Hands",
+    "Borghertz's Harmonious Hands",
+    "Borghertz's Healing Hands",
+    "Borghertz's Loyal Hands",
+    "Borghertz's Lurking Hands",
+    "Borghertz's Shadowy Hands",
+    "Borghertz's Sneaky Hands",
+    "Borghertz's Sorcerous Hands",
+    "Borghertz's Stalwart Hands",
+    "Borghertz's Striking Hands",
+    "Borghertz's Vermillion Hands",
+    "Borghertz's Warring Hands",
+    "Borghertz's Wild Hands",
+    "Candle-making",
+    "Chameleon Capers",
+    "Child's Play",
+    "Chocobo on the Loose!",
+    "Chocobo's Wounds",
+    "Clash of the Comrades",
+    "Collect Tarut Cards",
+    "Comeback Queen",
     "Community Service",
     "Cook's Pride",
-    "Tenshodo Membership",
-    "The Lost Cardian",
-    "Path of the Beastmaster",
-    "Path of the Bard",
-    "The Clockmaster",
-    "Candle-making",
-    "Child's Play",
-    "Northward",
-    "The Antique Collector",
+    "Crest of Davoi",
     "Deal with Tenshodo",
+    "Dormant Powers Dislodged",
+    "Ducal Hospitality",
+    "Empty Memories",
+    "Expanding Horizons",
+    "Fistful of Fury",
+    "Full Speed Ahead!",
+    "Girl in the Looking Glass",
+    "Hook, Line, and Sinker",
+    "In Defiant Challenge",
+    "In the Mood for Love",
+    "Lakeside Minuet",
+    "Lure of the Wildcat (Jeuno)",
+    "Martial Mastery",
+    "Mirror Images",
+    "Mirror, Mirror",
+    "Mixed Signals",
+    "Mysteries of Beadeaux I",
+    "Mysteries of Beadeaux II",
+    "Never to Return",
+    "New Worlds Await",
+    "Northward",
+    "Painful Memory",
+    "Past Reflections",
+    "Path of the Bard",
+    "Path of the Beastmaster",
+    "Prelude to Puissance",
+    "Pretty Little Things",
+    "Regaining Trust",
+    "Riding on the Clouds",
+    "Rubbish Day",
+    "Save My Sister",
+    "Save My Son",
+    "Save the Clock Tower",
+    "Scattered into Shadow",
+    "Searching for the Right Words",
+    "Shadows of the Departed",
+    "Shattering Stars",
+    "Storms of Fate",
+    "Tenshodo Membership",
+    "The Antique Collector",
+    "The Circle of Time",
+    "The Clockmaster",
     "The Gobbiebag Part I",
     "The Gobbiebag Part II",
     "The Gobbiebag Part III",
     "The Gobbiebag Part IV",
+    "The Gobbiebag Part IX",
     "The Gobbiebag Part V",
     "The Gobbiebag Part VI",
-    "Mysteries of Beadeaux I",
-    "Mysteries of Beadeaux II",
-    "Fistful of Fury",
+    "The Gobbiebag Part VII",
+    "The Gobbiebag Part VIII",
+    "The Gobbiebag Part X",
     "The Goblin Tailor",
-    "Pretty Little Things",
-    "Borghertz's Warring Hands",
-    "Borghertz's Striking Hands",
-    "Borghertz's Healing Hands",
-    "Borghertz's Sorcerous Hands",
-    "Borghertz's Vermillion Hands",
-    "Borghertz's Sneaky Hands",
-    "Borghertz's Stalwart Hands",
-    "Borghertz's Shadowy Hands",
-    "Borghertz's Wild Hands",
-    "Borghertz's Harmonious Hands",
-    "Borghertz's Chasing Hands",
-    "Borghertz's Loyal Hands",
-    "Borghertz's Lurking Hands",
-    "Borghertz's Dragon Hands",
-    "Borghertz's Calling Hands",
-    "Axe the Competition",
-    "Wings of Gold",
-    "Scattered into Shadow",
-    "A New Dawn",
-    "Painful Memory",
+    "The Kind Cardian",
+    "The Lost Cardian",
+    "The Miraculous Dale",
+    "The Old Monument",
     "The Requiem",
-    "The Circle of Time",
-    "Searching for the Right Words",
-    "Beat Around the Bushin",
-    "A Reputation in Ruins",
-    "Ducal Hospitality",
-    "Hook, Line, and Sinker",
-    "In the Mood for Love",
-    "A Chocobo's Tale",
-    "Empty Memories",
-    "Unlisted Qualities",
-    "Chameleon Capers",
-    "Regaining Trust",
-    "Storms of Fate",
-    "Mixed Signals",
-    "Shadows of the Departed",
-    "Apocalypse Nigh",
-    "Chocobo on the Loose!",
-    "In Defiant Challenge",
-    "Atop the Highest Mountains",
-    "Whence Blows the Wind",
-    "Riding on the Clouds",
-    "Shattering Stars",
-    "Beyond the Sun",
-    "Omni Aketon",
     "The Road to Aht Urhgan",
+    "The Road to Divadom",
+    "The Unfinished Waltz",
+    "The Wonder Magic Set",
+    "Unlisted Qualities",
+    "Unlocking a Myth: Bard",
+    "Unlocking a Myth: Beastmaster",
+    "Unlocking a Myth: Black Mage",
+    "Unlocking a Myth: Blue Mage",
+    "Unlocking a Myth: Corsair",
+    "Unlocking a Myth: Dancer",
+    "Unlocking a Myth: Dark Knight",
+    "Unlocking a Myth: Dragoon",
+    "Unlocking a Myth: Monk",
+    "Unlocking a Myth: Ninja",
+    "Unlocking a Myth: Paladin",
+    "Unlocking a Myth: Puppetmaster",
+    "Unlocking a Myth: Ranger",
+    "Unlocking a Myth: Red Mage",
+    "Unlocking a Myth: Samurai",
+    "Unlocking a Myth: Scholar",
+    "Unlocking a Myth: Summoner",
+    "Unlocking a Myth: Thief",
+    "Unlocking a Myth: Warrior",
+    "Unlocking a Myth: White Mage",
+    "VW Op. #115: Valkurm Duster",
+    "VW Op. #118: Buburimu Squall",
+    "Whence Blows the Wind",
+    "Wings of Gold",
+    "Yet Another Trial in Tandem",
+    "Your Crystal Ball",
 ]
 
 
@@ -21648,7 +21788,7 @@ _AHTURHGAN_QUESTS_MASTER = [
     "Keeping Notes",
     "Led Astray",
     "Luck of the Draw",
-    "Lure of the Wildcat",
+    "Lure of the Wildcat (Whitegate)",
     "Moment of Truth",
     "Navigating the Unfriendly Seas",
     "No Strings Attached",
@@ -21690,6 +21830,8 @@ _AHTURHGAN_QUESTS_MASTER = [
     "Two Horn the Savage",
     "Unwavering Resolve",
     "Vanishing Act",
+    "VW Op. #050: Aht Urhgan Assault",
+    "VW Op. #068: Subterranean Skirmish",
     "Waking the Colossus",
     "What Friends Are For",
     "When the Bow Breaks",
@@ -21708,6 +21850,7 @@ _AHTURHGAN_QUESTS_MASTER = [
 # Coalition Assignments (repeatable per-zone tasks) are NOT
 # included — those are a separate Adoulin subsystem.
 _ADOULIN_QUESTS_MASTER = [
+    "\"Always more,\" Quoth the Ravenous",
     "A Barrel of Laughs",
     "A Certain Substitute Patrolman",
     "A Geothermal Expedition",
@@ -21720,48 +21863,44 @@ _ADOULIN_QUESTS_MASTER = [
     "A Thirst for the Ages",
     "A Thirst for the Eons",
     "All the Way to the Bank",
-    "\"Always more,\" Quoth the Ravenous",
     "Boiling Over",
     "Breaking the Ice",
     "Cafe...teria",
-    "Chacharoon's Cheer",
-    "Coastal Chaos",
-    "Courtesy Crustacean",
-    "Cry Not, Caretaker",
+    "Children of the Rune",
+    "Dances with Luopans",
+    "Destiny's Device",
     "Did You Feel That?",
     "Dirt Cheap",
     "Do Not Go Into the Light",
-    "Doctor Chacharoon",
     "Don't Clam Up on Me Now",
     "Don't Ever Leaf Me",
-    "Eastern Waypoints, Ho!",
+    "Elementary, My Dear Sylvie",
     "Empty Nest",
+    "Epiphany",
     "Exotic Delicacies",
     "Eye of the Beholder",
     "F.A.I.L.ure Is Not an Option",
-    "Feeding Frenzy",
     "Fertile Ground",
     "Flavors of Our Lives",
-    "Flotsam Finding",
     "Flower Power",
     "Flowers for Svenja",
-    "Full Fields",
+    "For Whom the Bell Tolls",
+    "Forging New Bonds",
+    "Geomancerrific",
     "Granddaddy Dearest",
-    "Green Groves",
     "Grind to Sawdust",
     "Hide and Go Peak",
     "Hop to It",
     "Hunger Strikes",
-    "Hypnotic Hospitality",
     "Hypocritical Oath",
     "I'm on a Boat",
     "In the Land of the Blind",
     "It Never Goes Out of Style",
     "It Sets My Heart Aflutter",
     "Keep Your Bloomers On, Erisa",
+    "Legacies Lost and Found",
     "Lerene's Lament",
     "Meg-alomaniac",
-    "Mining Missive",
     "Mistress of Ceremonies",
     "No Laughing Matter",
     "No Love Lost",
@@ -21770,16 +21909,17 @@ _ADOULIN_QUESTS_MASTER = [
     "Not-So-Clean Bill",
     "One Good Turn...",
     "Open the Floodgates",
+    "Order Up",
     "Orobon Appetit",
     "Poisoning the Well",
-    "Pond Probing",
     "Raptor Rapture",
-    "Release the Fleece",
-    "Rowing Together",
+    "Rune Fencing the Night Away",
+    "Saved by the Bell",
     "Scaredy-Cats",
-    "Seed Sowing",
     "Sick and Tired",
     "Talk About Wrinkly Skin",
+    "The Bloodline of Zacariah",
+    "The Communion",
     "The Curious Case of Melvien",
     "The Good, the Bad, the Clement",
     "The Longest Way Round...",
@@ -21790,12 +21930,10 @@ _ADOULIN_QUESTS_MASTER = [
     "The Weatherspoon War",
     "The Whole Place Is Abuzz",
     "Thorn in the Side",
-    "Titillating Tomes",
     "To Catch a Predator",
     "To Laugh Is to Love",
     "Transporting",
-    "Trial of the Chacharoon",
-    "Trinket for the Tyrant",
+    "Treasures of the Earth",
     "Twitherym Dust",
     "Unsullied Lands",
     "Vegetable Vegetable Crisis",
@@ -21805,6 +21943,7 @@ _ADOULIN_QUESTS_MASTER = [
     "Velkkovert Operations",
     "Water, Water, Everywhere",
     "Wayward Waypoints",
+    "Wes...Eastern Waypoints, Ho!",
     "Western Waypoints, Ho!",
 ]
 
@@ -21817,14 +21956,14 @@ _ADOULIN_QUESTS_MASTER = [
 # zone in Vana'diel.
 _SELBINA_QUESTS_MASTER = [
     "An Explorer's Footsteps",
-    "Brigand's Chart",
+    "Brigand's Chart (Quest)",
     "Cargo",
     "Donate to Recycling",
     "Elder Memories",
     "Inside the Belly",
     "Only the Best",
     "Picture Perfect",
-    "Pirate's Chart",
+    "Pirate's Chart (Quest)",
     "Test My Mettle",
     "The Gift",
     "The Real Gift",
@@ -21895,8 +22034,8 @@ _TAVNAZIA_QUESTS_MASTER = [
 # than a city.
 _MOGHOUSE_QUESTS_MASTER = [
     "Give a Moogle a Break",
-    "The Moogle's Picnic!",
     "Moogles in the Wild",
+    "The Moogle's Picnic!",
 ]
 
 
@@ -21910,66 +22049,60 @@ _MOGHOUSE_QUESTS_MASTER = [
 # and Eastern Altepa. Includes the Border Crossing voidwatch chain
 # whose entry points are spread across these same outpost zones.
 _OUTLANDS_QUESTS_MASTER = [
-    # ── Kazham (cooking + sub-job + Avatar Trials by Fire) ──
-    "The Firebloom Tree",
-    "Greetings to the Guardian",
-    "A Question of Taste",
-    "Everyone's Grudging",
-    "You Call That a Knife?",
-    "Missionary Man",
-    "Gullible's Travels",
-    "Even More Gullible's Travels",
-    "Personal Hygiene",
-    "The Opo-opo and I",
-    "Cloak and Dagger",
+    "20 in Pirate Years",
     "A Discerning Eye (Kazham)",
-    "Trial-Size Trial by Fire",
-    "Trial by Fire",
-    # ── Norg (Tenshodo pirate hub; Avatar Trials by Water) ──
-    "Forge Your Destiny",
+    "A Question of Taste",
+    "A Thief in Norg!?",
+    "An Undying Pledge",
     "Black Market",
-    "Mama Mia",
-    "Stop Your Whining",
+    "Bugi Soden",
+    "Chasing Dreams",
+    "Cloak and Dagger",
+    "Divine Might",
+    "Don't Forget the Antidote",
+    "Even More Gullible's Travels",
     "Everyone's Grudge",
-    "Secret of the Damp Scroll",
-    "The Sahagin's Stash",
+    "Everyone's Grudging",
+    "Forge Your Destiny",
+    "Greetings to the Guardian",
+    "Gullible's Travels",
+    "I'll Take the Big Box",
+    "Indomitable Spirit",
     "It's Not Your Vault",
     "Like a Shining Subligar",
     "Like Shining Leggings",
-    "The Sacred Katana",
-    "Yomi Okuri",
-    "A Thief in Norg!?",
-    "20 in Pirate Years",
-    "I'll Take the Big Box",
-    "True Will",
-    "The Potential Within",
-    "Bugi Soden",
-    "An Undying Pledge",
-    "Trial-Size Trial by Water",
-    "Trial by Water",
-    # ── Standalone zone quests ──
-    "Wrath of the Opo-opos",       # Yuhtunga Jungle
-    "Wandering Souls",             # Cape Terrigan
-    "Soul Searching",              # Sanctuary of Zi'Tah
-    "Divine Might",                # Shrine of Ru'Avitau
-    "Open Sesame",                 # Eastern Altepa Desert
-    # ── Rabao (Avatar Trials by Wind + Lu Shang chain) ──
-    "Don't Forget the Antidote",
-    "The Missing Piece",
+    "Mama Mia",
+    "Missionary Man",
+    "Open Sesame",
+    "Personal Hygiene",
+    "Secret of the Damp Scroll",
+    "Skyward Ho, Voidwatcher!",
+    "Soul Searching",
+    "Stop Your Whining",
+    "The Firebloom Tree",
+    "The Immortal Lu Shang",
     "The Kuftal Tour",
-    "Chasing Dreams",
+    "The Missing Piece",
+    "The Opo-opo and I",
+    "The Potential Within",
+    "The Sacred Katana",
+    "The Sahagin's Stash",
     "The Search for Goldmane",
-    "Trial-Size Trial by Wind",
+    "Trial by Fire",
+    "Trial by Water",
     "Trial by Wind",
-    # ── Voidwatch Border Crossing chain (spans outpost zones) ──
+    "Trial-Size Trial by Fire",
+    "Trial-Size Trial by Water",
+    "Trial-Size Trial by Wind",
+    "True Will",
     "Voidwatch Ops: Border Crossing",
     "VW Op. 054: Elshimo List",
     "VW Op. 101: Detour to Zepwell",
     "VW Op. 115: Li'Telor Variant",
-    "Skyward Ho, Voidwatcher!",
-    # ── Rabao fishing rod chain ──
-    "Indomitable Spirit",
-    "The Immortal Lu Shang",
+    "Wandering Souls",
+    "Wrath of the Opo-opos",
+    "Yomi Okuri",
+    "You Call That a Knife?",
 ]
 
 
@@ -21982,60 +22115,101 @@ _OUTLANDS_QUESTS_MASTER = [
 # the two WotG-era job-unlock quests (Dancer and Scholar), which
 # were added alongside the expansion.
 _CRYSTAL_WAR_QUESTS_MASTER = [
-    # ── Job unlocks (Upper Jeuno / Eldieme Necropolis) ──
-    "Lakeside Minuet",                  # Dancer unlock
-    "A Little Knowledge",               # Scholar unlock
-    # ── Bastok Markets (S) story arc ──
-    "The Fighting Fourth",              # Bastok initiation
-    "Better Part of Valor",
-    "Fires of Discontent",
-    "Light in the Darkness",
-    "Burden of Suspicion",
-    "Storm on the Horizon",
-    "Fire in the Hole",
-    "Quelling the Storm",
-    "Honor Under Fire",
-    "Beneath the Mask",
-    "What Price Loyalty",
-    "The Truth Lies Hid",
-    "Bonds of Mythril",
-    # ── Bastok (S) "Other Quests" ──
-    "Seeing Spots",
+    "A Cait Calls",
+    "A Farewell to Felines",
+    "A Feast for Gnats",
+    "A Forbidden Reunion",
+    "A Jeweler's Lament",
+    "A Little Knowledge",
+    "A Manifest Problem",
+    "A New Menace",
+    "A World in Flux",
+    "Ad Infinitum",
+    "At Journey's End",
+    "Battle on a New Front",
     "Beans Ahoy!",
     "Beast from the East",
-    # ── Southern San d'Oria (S) story arc ──
-    "Steamed Rams",                     # San d'Oria initiation
-    "Gifts of the Griffon",
-    "Claws of the Griffon",
-    "Boy and the Beast",
-    "Wrath of the Griffon",
-    "Perils of the Griffon",
-    "In a Haze of Glory",
-    "The Price of Valor",
-    "Bonds That Never Die",
-    "Songbirds in a Snowstorm",
+    "Beneath the Mask",
+    "Better Part of Valor",
+    "Between a Rock and Rift",
     "Blood of Heroes",
+    "Bonds of Mythril",
+    "Bonds That Never Die",
+    "Boy and the Beast",
+    "Brace for the Unknown",
+    "Burden of Suspicion",
+    "Champion of the Dawn",
     "Chasing Shadows",
+    "Claws of the Griffon",
+    "Crystal Guardian",
+    "Downward Helix",
+    "Drafted by the Duchy",
+    "Endings and Beginnings",
+    "Evil at the Inlet",
     "Face of the Future",
-    # ── Windurst Waters (S) story arc ──
-    "Snake on the Plains",              # Windurst initiation
+    "Fire in the Hole",
+    "Fires of Discontent",
+    "Gifts of the Griffon",
+    "Glimmer of Hope",
+    "Guardian of the Void",
+    "Hammering Hearts",
+    "Healing Herbs",
+    "Her Memories: Azure Footfalls",
+    "Her Memories: Carnelian Footfalls",
+    "Her Memories: Homecoming Queen",
+    "Her Memories: Of Malign Maladies",
+    "Her Memories: Old Bean",
+    "Her Memories: Operation Cupid",
+    "Her Memories: The Faux Pas",
+    "Her Memories: The Grave Resolve",
+    "Her Memories: Verdure Footfalls",
+    "Honor Under Fire",
+    "Howl from the Heavens",
+    "In a Haze of Glory",
+    "Knot Quite There",
+    "Light in the Darkness",
+    "Lost in Translocation",
+    "Manifest Destiny",
+    "Message on the Wind",
+    "No Rest for the Weary",
+    "On Sabbatical",
+    "Perils of the Griffon",
+    "Provenance",
+    "Quelling the Storm",
+    "Re-Drafted by the Duchy",
+    "Redeeming Rocks",
+    "Requiem for the Departed",
+    "Say It with a Handbag",
+    "Seeing Blood-red",
+    "Seeing Spots",
+    "Sins of the Mothers",
+    "Snake on the Plains",
+    "Son and Father",
+    "Songbirds in a Snowstorm",
+    "Steamed Rams",
+    "Storm on the Horizon",
+    "Succor to the Sidhe",
+    "The Dawn Also Rises",
+    "The Dawn of Delectability",
+    "The Fighting Fourth",
+    "The Flipside of Things",
+    "The Forbidden Path",
+    "The Fumbling Friar",
+    "The Long March North",
+    "The Lost Book",
+    "The Price of Valor",
+    "The Swarm",
     "The Tigress Stirs",
     "The Tigress Strikes",
-    "Knot Quite There",
-    "A Manifest Problem",
+    "The Truth Is Out There",
+    "The Truth Lies Hid",
+    "The Weekly Adventurer",
+    "The Young and the Threadless",
+    "Third Tour of Duchy",
+    "VW Op. #126: Qufim Incursion",
+    "What Price Loyalty",
     "When One Man Is Not Enough",
-    "A Feast for Gnats",
-    "The Long March North",
-    "The Forbidden Path",
-    "Sins of the Mothers",
-    "Howl from the Heavens",
-    "Manifest Destiny",
-    "At Journey's End",
-    # ── Windurst (S) "Other Quests" ──
-    "Healing Herbs",
-    "Redeeming Rocks",
-    "The Dawn of Delectability",
-    "Say It with a Handbag",
+    "Wrath of the Griffon",
 ]
 
 
@@ -22045,48 +22219,49 @@ _CRYSTAL_WAR_QUESTS_MASTER = [
 # repeatable side quests per zone. Display strings include the
 # zone disambig in parentheses where bg-wiki uses it.
 _ABYSSEA_VISION_QUESTS_MASTER = [
-    # Abyssea - Konschtat
-    "To Paste a Peiste",
-    "Hope Blooms on the Battlefield",
-    "Of Malnourished Martellos",
-    "Rose on the Heath",
-    "Full-of-Himself Alchemist",
-    "The Walking Wounded",
-    "Shady Business Redux",
+    "A Goldstruck Gigas",
+    "A Journey Begins",
+    "A Mightier Martello (Konschtat)",
+    "A Mightier Martello (La Theine)",
+    "A Mightier Martello (Tahrongi)",
+    "A Sterling Specimen",
     "Addled Mind, Undying Dreams",
-    "The Soul of The Matter",
-    "Secret Agent Man",
+    "An Eye for Revenge",
+    "Bringing Down the Mountain",
+    "Catering Capers",
+    "Cleansing the Canyon",
+    "Dawn of Death",
+    "Explosive Endeavors",
+    "Fear of the Dark III",
+    "For Love of a Daughter",
+    "Full-of-Himself Alchemist",
+    "Gift of Light",
+    "His Box, His Beloved",
+    "Hope Blooms on the Battlefield",
+    "Lost Memories",
+    "Megadrile Menace",
+    "Of Malnourished Martellos",
+    "Out of Touch",
     "Playing Paparazzi",
     "Refuel and Replenish (Konschtat)",
-    "A Mightier Martello (Konschtat)",
-    # Abyssea - La Theine
-    "A Goldstruck Gigas",
-    "Catering Capers",
-    "Gift of Light",
-    "Fear of the Dark III",
-    "An Eye for Revenge",
-    "Unbreak His Heart",
-    "Explosive Endeavors",
-    "The Angling Armorer",
-    "Water of Life",
-    "Out of Touch",
-    "Lost Memories",
     "Refuel and Replenish (La Theine)",
-    "A Mightier Martello (La Theine)",
-    # Abyssea - Tahrongi
-    "Megadrile Menace",
-    "His Box, His Beloved",
-    "Weapons, Not Worries",
-    "Cleansing the Canyon",
-    "Savory Salvation",
-    "Bringing Down the Mountain",
-    "A Sterling Specimen",
-    "For Love of a Daughter",
-    "Sisters in Crime",
-    "When Good Cardians Go Bad",
-    "Tangling with Tongue-twisters",
     "Refuel and Replenish (Tahrongi)",
-    "A Mightier Martello (Tahrongi)",
+    "Rose on the Heath",
+    "Savory Salvation",
+    "Secret Agent Man",
+    "Shady Business Redux",
+    "Sisters in Crime",
+    "Tangling with Tongue-twisters",
+    "The Angling Armorer",
+    "The Forbidden Frontier",
+    "The Soul of The Matter",
+    "The Truth Beckons",
+    "The Walking Wounded",
+    "To Paste a Peiste",
+    "Unbreak His Heart",
+    "Water of Life",
+    "Weapons, Not Worries",
+    "When Good Cardians Go Bad",
 ]
 
 
@@ -22095,63 +22270,66 @@ _ABYSSEA_VISION_QUESTS_MASTER = [
 # Crimson Carpet repeatable seal quests per zone alongside the zone
 # bosses and mini-arcs.
 _ABYSSEA_SCARS_QUESTS_MASTER = [
-    # Abyssea - Misareaux
     "A Delectable Demon",
-    "Missing in Action",
-    "I Dream of Flowers",
-    "Destiny Odyssey",
-    "Unidentified Research Object",
+    "A Fluttery Fiend",
+    "A Mightier Martello (Attohwa)",
+    "A Mightier Martello (Misareaux)",
+    "A Mightier Martello (Vunkerl)",
+    "A Ward to End All Wards",
+    "An Acrididaen Anodyne",
+    "An Offer You Can't Refuse",
+    "An Officer and a Pirate",
+    "Aqua Pura",
+    "Aqua Puraga",
+    "Bad Communication",
+    "Champions of Abyssea",
     "Cookbook of Hope Restoring",
+    "Crimson Carpet I (Attohwa)",
+    "Crimson Carpet I (Misareaux)",
+    "Crimson Carpet I (Vunkerl)",
+    "Crimson Carpet II (Attohwa)",
+    "Crimson Carpet II (Misareaux)",
+    "Crimson Carpet II (Vunkerl)",
+    "Desert Rain I (Attohwa)",
+    "Desert Rain I (Misareaux)",
+    "Desert Rain I (Vunkerl)",
+    "Desert Rain II (Attohwa)",
+    "Desert Rain II (Misareaux)",
+    "Desert Rain II (Vunkerl)",
+    "Destiny Odyssey",
+    "Dropping The Bomb",
+    "Family Ties",
+    "First Contact",
+    "Flown The Coop",
+    "For Want of a Pot",
+    "Hazy Prospects",
+    "Heart of Madness",
+    "His Bridge, His Beloved",
+    "I Dream of Flowers",
+    "Looking For Lookouts",
+    "Missing in Action",
+    "Refuel and Replenish (Attohwa)",
+    "Refuel and Replenish (Misareaux)",
+    "Refuel and Replenish (Vunkerl)",
+    "Scars of Abyssea",
+    "Scattered Shells, Scattered Mind",
     "Smoke over The Coast",
     "Soil and Green",
-    "Dropping The Bomb",
-    "Wanted: Medical Supplies",
-    "Refuel and Replenish (Misareaux)",
-    "A Mightier Martello (Misareaux)",
-    "Ward Warden I (Misareaux)",
-    "Ward Warden II (Misareaux)",
-    "Desert Rain I (Misareaux)",
-    "Desert Rain II (Misareaux)",
-    "Crimson Carpet I (Misareaux)",
-    "Crimson Carpet II (Misareaux)",
-    # Abyssea - Vunkerl
-    "The Beast of Bastore",
-    "A Ward to End All Wards",
-    "The Boxwatcher's Behest",
-    "His Bridge, His Beloved",
-    "Bad Communication",
-    "Family Ties",
-    "Aqua Pura",
-    "Aqua Puraga",                       # bg-wiki spelling (not "Purpura")
-    "Whither the Whisker",
-    "Scattered Shells, Scattered Mind",
-    "Refuel and Replenish (Vunkerl)",
-    "A Mightier Martello (Vunkerl)",
-    "Ward Warden I (Vunkerl)",
-    "Ward Warden II (Vunkerl)",
-    "Desert Rain I (Vunkerl)",
-    "Desert Rain II (Vunkerl)",
-    "Crimson Carpet I (Vunkerl)",
-    "Crimson Carpet II (Vunkerl)",
-    # Abyssea - Attohwa
-    "A Fluttery Fiend",
-    "Wayward Wares",
-    "Looking For Lookouts",
-    "Flown The Coop",
-    "Threadbare Testimonials",
-    "An Offer You Can't Refuse",
     "Something in the Air",
-    "An Acrididaen Anodyne",             # bg-wiki spelling (double-i)
-    "Hazy Prospects",
-    "For Want of a Pot",
-    "Refuel and Replenish (Attohwa)",
-    "A Mightier Martello (Attohwa)",
+    "Tenuous Existence",
+    "The Beast of Bastore",
+    "The Boxwatcher's Behest",
+    "Threadbare Tribulations",
+    "Unidentified Research Object",
+    "Wanted: Medical Supplies",
     "Ward Warden I (Attohwa)",
+    "Ward Warden I (Misareaux)",
+    "Ward Warden I (Vunkerl)",
     "Ward Warden II (Attohwa)",
-    "Desert Rain I (Attohwa)",
-    "Desert Rain II (Attohwa)",
-    "Crimson Carpet I (Attohwa)",
-    "Crimson Carpet II (Attohwa)",
+    "Ward Warden II (Misareaux)",
+    "Ward Warden II (Vunkerl)",
+    "Wayward Wares",
+    "Whither the Whisker",
 ]
 
 
@@ -22165,90 +22343,95 @@ _ABYSSEA_SCARS_QUESTS_MASTER = [
 # they live at "Dominion_Op_01_(Altepa)" etc. URL overrides for the
 # 42 hashed entries are wired through _QUEST_URL_OVERRIDES below.
 _ABYSSEA_HEROES_QUESTS_MASTER = [
-    # Abyssea - Altepa
     "A Beaked Blusterer",
-    "Classrooms Without Borders",
-    "The Secret Ingredient",
-    "Help Not Wanted",
-    "The Titus Touch",
-    "Slacking Subordinates",
-    "Motherly Love",
-    "Look to the Sky",
-    "The Unmarked Tomb",
-    "Proof of the Lion",
-    "Brygid the Stylist Strikes Back",
-    "Dominion Op #01 (Altepa)",
-    "Dominion Op #02 (Altepa)",
-    "Dominion Op #03 (Altepa)",
-    "Dominion Op #04 (Altepa)",
-    "Dominion Op #05 (Altepa)",
-    "Dominion Op #06 (Altepa)",
-    "Dominion Op #07 (Altepa)",
-    "Dominion Op #08 (Altepa)",
-    "Dominion Op #09 (Altepa)",
-    "Dominion Op #10 (Altepa)",
-    "Dominion Op #11 (Altepa)",
-    "Dominion Op #12 (Altepa)",
-    "Dominion Op #13 (Altepa)",
-    "Dominion Op #14 (Altepa)",
-    "Refuel and Replenish (Altepa)",
-    "A Mightier Martello (Altepa)",
-    # Abyssea - Uleguerand
     "A Man-eating Mite",
-    "Let There Be Light",
-    "Look Out Below",
+    "A Mightier Martello (Altepa)",
+    "A Mightier Martello (Grauberg)",
+    "A Mightier Martello (Uleguerand)",
+    "A Moonlight Requite",
+    "A Sea Dog's Summons",
+    "An Ulcerous Uragnite",
+    "Beneath a Blood-red Sky",
+    "Benevolence Lost",
+    "Boreal Blossoms",
+    "Brothers in Arms",
+    "Brugaire's Ambition",
+    "Brygid the Stylist Strikes Back",
+    "Chocobo Panic",
+    "Classrooms Without Borders",
+    "Death and Rebirth",
+    "Dominion Op #01 (Altepa)",
+    "Dominion Op #01 (Grauberg)",
+    "Dominion Op #01 (Uleguerand)",
+    "Dominion Op #02 (Altepa)",
+    "Dominion Op #02 (Grauberg)",
+    "Dominion Op #02 (Uleguerand)",
+    "Dominion Op #03 (Altepa)",
+    "Dominion Op #03 (Grauberg)",
+    "Dominion Op #03 (Uleguerand)",
+    "Dominion Op #04 (Altepa)",
+    "Dominion Op #04 (Grauberg)",
+    "Dominion Op #04 (Uleguerand)",
+    "Dominion Op #05 (Altepa)",
+    "Dominion Op #05 (Grauberg)",
+    "Dominion Op #05 (Uleguerand)",
+    "Dominion Op #06 (Altepa)",
+    "Dominion Op #06 (Grauberg)",
+    "Dominion Op #06 (Uleguerand)",
+    "Dominion Op #07 (Altepa)",
+    "Dominion Op #07 (Grauberg)",
+    "Dominion Op #07 (Uleguerand)",
+    "Dominion Op #08 (Altepa)",
+    "Dominion Op #08 (Grauberg)",
+    "Dominion Op #08 (Uleguerand)",
+    "Dominion Op #09 (Altepa)",
+    "Dominion Op #09 (Grauberg)",
+    "Dominion Op #09 (Uleguerand)",
+    "Dominion Op #10 (Altepa)",
+    "Dominion Op #10 (Grauberg)",
+    "Dominion Op #10 (Uleguerand)",
+    "Dominion Op #11 (Altepa)",
+    "Dominion Op #11 (Grauberg)",
+    "Dominion Op #11 (Uleguerand)",
+    "Dominion Op #12 (Altepa)",
+    "Dominion Op #12 (Grauberg)",
+    "Dominion Op #12 (Uleguerand)",
+    "Dominion Op #13 (Altepa)",
+    "Dominion Op #13 (Grauberg)",
+    "Dominion Op #13 (Uleguerand)",
+    "Dominion Op #14 (Altepa)",
+    "Dominion Op #14 (Grauberg)",
+    "Dominion Op #14 (Uleguerand)",
+    "Emissaries of God",
+    "Frozen Flame Redux",
+    "Getting Lucky",
+    "Help Not Wanted",
+    "Her Father's Legacy",
+    "Heroes of Abyssea",
     "Home, Home on the Range",
     "Imperial Espionage",
     "Imperial Espionage II",
-    "Boreal Blossoms",
-    "Brothers in Arms",
-    "Scouts Astray",
-    "Frozen Flame Redux",
-    "Slip Slidin' Away",
-    "Dominion Op #01 (Uleguerand)",
-    "Dominion Op #02 (Uleguerand)",
-    "Dominion Op #03 (Uleguerand)",
-    "Dominion Op #04 (Uleguerand)",
-    "Dominion Op #05 (Uleguerand)",
-    "Dominion Op #06 (Uleguerand)",
-    "Dominion Op #07 (Uleguerand)",
-    "Dominion Op #08 (Uleguerand)",
-    "Dominion Op #09 (Uleguerand)",
-    "Dominion Op #10 (Uleguerand)",
-    "Dominion Op #11 (Uleguerand)",
-    "Dominion Op #12 (Uleguerand)",
-    "Dominion Op #13 (Uleguerand)",
-    "Dominion Op #14 (Uleguerand)",
-    "Refuel and Replenish (Uleguerand)",
-    "A Mightier Martello (Uleguerand)",
-    # Abyssea - Grauberg
-    "An Ulcerous Uragnite",
-    "Voices from Beyond",
-    "Benevolence Lost",
-    "Brugaire's Ambition",
-    "Chocobo Panic",
-    "The Egg Enthusiast",
-    "Getting Lucky",
-    "Her Father's Legacy",
-    "The Mysterious Head Patrol",
-    "The Perils of Korons",
+    "Let There Be Light",
+    "Look Out Below",
+    "Look to the Sky",
     "Master Missing, Master Missed",
-    "Dominion Op #01 (Grauberg)",
-    "Dominion Op #02 (Grauberg)",
-    "Dominion Op #03 (Grauberg)",
-    "Dominion Op #04 (Grauberg)",
-    "Dominion Op #05 (Grauberg)",
-    "Dominion Op #06 (Grauberg)",
-    "Dominion Op #07 (Grauberg)",
-    "Dominion Op #08 (Grauberg)",
-    "Dominion Op #09 (Grauberg)",
-    "Dominion Op #10 (Grauberg)",
-    "Dominion Op #11 (Grauberg)",
-    "Dominion Op #12 (Grauberg)",
-    "Dominion Op #13 (Grauberg)",
-    "Dominion Op #14 (Grauberg)",
+    "Meanwhile, Back on Abyssea",
+    "Motherly Love",
+    "Proof of the Lion",
+    "Refuel and Replenish (Altepa)",
     "Refuel and Replenish (Grauberg)",
-    "A Mightier Martello (Grauberg)",
+    "Refuel and Replenish (Uleguerand)",
+    "Scouts Astray",
+    "Slacking Subordinates",
+    "Slip Slidin' Away",
+    "The Egg Enthusiast",
+    "The Mysterious Head Patrol",
+    "The Perils of Kororo",
+    "The Secret Ingredient",
+    "The Titus Touch",
+    "The Unmarked Tomb",
+    "The Wyrm God",
+    "Voices from Beyond",
 ]
 
 
@@ -22257,6 +22440,151 @@ _ABYSSEA_HEROES_QUESTS_MASTER = [
 # alphabetical sort, name-keyed). Build the row_iter / is_checked
 # closures via a factory so each category gets a closure bound to its
 # own master list and storage key.
+# Coalition assignments (Adoulin). One log section in game, so one
+# tab here. Names are '<Verb>: <Zone>', which is both what the log
+# shows and what the wiki titles its pages.
+_COALITION_QUESTS_MASTER = [
+    "Analyze: Cirdas Caverns",
+    "Analyze: Foret de Hennetiel",
+    "Analyze: Kamihr Drifts",
+    "Analyze: Marjami Ravine",
+    "Analyze: Morimar Basalt Fields",
+    "Analyze: Outer Ra'Kaznar",
+    "Analyze: Yorcia Weald",
+    "Boost: Foret de Hennetiel",
+    "Boost: Kamihr Drifts",
+    "Boost: Marjami Ravine",
+    "Clear: Ceizak Battlegrounds",
+    "Clear: Cirdas Caverns",
+    "Clear: Foret de Hennetiel",
+    "Clear: Kamihr Drifts",
+    "Clear: Marjami Ravine",
+    "Clear: Morimar Basalt Fields",
+    "Clear: Outer Ra'Kaznar",
+    "Clear: Yorcia Weald",
+    "Deliver: Foret de Hennetiel",
+    "Deliver: Kamihr Drifts",
+    "Deliver: Marjami Ravine",
+    "Deliver: Morimar Basalt Fields",
+    "Deliver: Yorcia Weald",
+    "Gather: Ceizak Battlegrounds",
+    "Gather: Cirdas Caverns",
+    "Gather: Dho Gates",
+    "Gather: Foret de Hennetiel",
+    "Gather: Kamihr Drifts",
+    "Gather: Marjami Ravine",
+    "Gather: Moh Gates",
+    "Gather: Morimar Basalt Fields",
+    "Gather: Outer Ra'Kaznar",
+    "Gather: Ra'Kaznar Inner Court",
+    "Gather: Rala Waterways",
+    "Gather: Sih Gates",
+    "Gather: Woh Gates",
+    "Gather: Yahse Hunting Grounds",
+    "Gather: Yorcia Weald",
+    "Patrol: Cirdas Caverns",
+    "Patrol: Dho Gates",
+    "Patrol: Moh Gates",
+    "Patrol: Outer Ra'Kaznar",
+    "Patrol: Rala Waterways",
+    "Patrol: Sih Gates",
+    "Patrol: Woh Gates",
+    "Preserve: Ceizak Battlegrounds",
+    "Preserve: Cirdas Caverns",
+    "Preserve: Foret de Hennetiel",
+    "Preserve: Kamihr Drifts",
+    "Preserve: Marjami Ravine",
+    "Preserve: Morimar Basalt Fields",
+    "Preserve: Outer Ra'Kaznar",
+    "Preserve: Yahse Hunting Grounds",
+    "Preserve: Yorcia Weald",
+    "Procure: Ceizak Battlegrounds",
+    "Procure: Cirdas Caverns",
+    "Procure: Foret de Hennetiel",
+    "Procure: Kamihr Drifts",
+    "Procure: Marjami Ravine",
+    "Procure: Morimar Basalt Fields",
+    "Procure: Outer Ra'Kaznar",
+    "Procure: Yorcia Weald",
+    "Provide: Foret de Hennetiel",
+    "Provide: Kamihr Drifts",
+    "Provide: Marjami Ravine",
+    "Provide: Morimar Basalt Fields",
+    "Provide: Yorcia Weald",
+    "Recover: Ceizak Battlegrounds",
+    "Recover: Foret de Hennetiel",
+    "Recover: Kamihr Drifts",
+    "Recover: Marjami Ravine",
+    "Recover: Morimar Basalt Fields",
+    "Recover: Yorcia Weald",
+    "Research: Ceizak Battlegrounds",
+    "Research: Foret de Hennetiel",
+    "Research: Kamihr Drifts",
+    "Research: Marjami Ravine",
+    "Research: Morimar Basalt Fields",
+    "Research: Rala Waterways",
+    "Research: Yorcia Weald",
+    "Support: Ceizak Battlegrounds",
+    "Support: Foret de Hennetiel",
+    "Support: Kamihr Drifts",
+    "Support: Marjami Ravine",
+    "Support: Morimar Basalt Fields",
+    "Support: Yorcia Weald",
+    "Survey: Ceizak Battlegrounds",
+    "Survey: Cirdas Caverns",
+    "Survey: Dho Gates",
+    "Survey: Foret de Hennetiel",
+    "Survey: Kamihr Drifts",
+    "Survey: Marjami Ravine",
+    "Survey: Morimar Basalt Fields",
+    "Survey: Sih Gates",
+    "Survey: Yorcia Weald",
+]
+
+# Mog Garden. Filed under Other Areas in the quest log (confirmed in
+# game), not under Adoulin, which is where these used to sit here.
+_MOG_GARDEN_QUESTS_MASTER = [
+    "Chacharoon's Cheer",
+    "Coastal Chaos",
+    "Courtesy Crustacean",
+    "Cry Not, Caretaker",
+    "Doctor Chacharoon",
+    "Feeding Frenzy",
+    "Flotsam Finding",
+    "Full Fields",
+    "Green Groves",
+    "Hypnotic Hospitality",
+    "Mining Missive",
+    "Pond Probing",
+    "Release the Fleece",
+    "Rowing Together",
+    "Seed Sowing",
+    "Titillating Tomes",
+    "Trial of the Chacharoon",
+    "Trinket for the Tyrant",
+]
+
+# Other Areas quests with no town of their own - avatar prime fights,
+# the limit break quests, the Movalpolos beastman headgear set, and
+# the system unlocks (Monstrosity, Records of Eminence).
+_OTHER_AREAS_QUESTS_MASTER = [
+    "A Generous General?",
+    "A Moral Manifest?",
+    "An Affable Adamantking?",
+    "An Understanding Overlord?",
+    "Better the Demon You Know",
+    "Bombs Away!",
+    "Confessions of a Bellmaker",
+    "For the Birds",
+    "Missionary Moblin",
+    "Mithran Delicacies",
+    "Monstrosity",
+    "Records of Eminence",
+    "Survival of the Wisest",
+    "Waking the Beast",
+]
+
+
 _QUEST_CATEGORY_MASTERS = {
     "quests_bastok":    _BASTOK_QUESTS_MASTER,
     "quests_sandy":     _SANDY_QUESTS_MASTER,
@@ -22273,6 +22601,9 @@ _QUEST_CATEGORY_MASTERS = {
     "quests_aby_vision": _ABYSSEA_VISION_QUESTS_MASTER,
     "quests_aby_scars":  _ABYSSEA_SCARS_QUESTS_MASTER,
     "quests_aby_heroes": _ABYSSEA_HEROES_QUESTS_MASTER,
+    "quests_coalition":  _COALITION_QUESTS_MASTER,
+    "quests_moggarden":  _MOG_GARDEN_QUESTS_MASTER,
+    "quests_other":      _OTHER_AREAS_QUESTS_MASTER,
 }
 
 
@@ -26529,12 +26860,20 @@ def switch_to_profile(name):
     # And the desk window itself, after the settings reload so the
     # layout has the final say on whether it exists.
     #
-    # It comes back WINDOWED, always. Restoring full screen across a
-    # switch is what produced the doubled display: the new window came
-    # up full screen over the old one and both were visible until the
-    # new one was shrunk. Windowed matches how both windows start, and
-    # full screen is one click on the gear when you want it.
-    globals()["_desk_fs_pending"] = False
+    # WHATEVER IS ON SCREEN STAYS ON SCREEN. A window already up and
+    # full screen is left alone (None = don't touch); only a window this
+    # switch has just created opens windowed, matching how both windows
+    # start at launch.
+    #
+    # The distinction is the whole safety argument. The doubled display
+    # came from taking a full-screen state out of the destination
+    # profile and applying it to a window that had just been created —
+    # the one it replaced was still on screen underneath, frozen, until
+    # the new one was shrunk. Carrying forward the state we already have
+    # cannot do that, because a window that did not exist a moment ago
+    # has no state to carry.
+    globals()["_desk_fs_pending"] = (
+        None if _ow_windows.get("desk") is not None else False)
     _apply_desk_pending()
 
     print(f"[OmniWatch] Now using profile {name!r}")
@@ -26590,6 +26929,284 @@ def delete_profile(name):
     if active_profile_name == name:
         active_profile_name = ""
         _persist_active_profile_name()
+
+
+# ── Job-named profiles: the profile follows the job ──────────────────────
+# Name a profile after a job and it loads when you change to that job.
+# "NIN" and "Ninja" both mean the same thing; "NIN/DNC" (stored as
+# "NIN_DNC" — a profile name is a filename, so the slash is sanitized on
+# the way in) means that job PAIR, and beats the main-job-only profile
+# when both exist. Nothing else about a profile changes: a name that
+# isn't a job is an ordinary profile and is never picked automatically.
+#
+# There is no setting for this because there is nothing to tune. A
+# character with no job-named profiles never sees it fire, and a manual
+# switch always wins until the job actually changes again.
+_JOB_FULL_NAMES = {
+    "WAR": ("warrior",),
+    "MNK": ("monk",),
+    "WHM": ("whitemage",),
+    "BLM": ("blackmage",),
+    "RDM": ("redmage",),
+    "THF": ("thief",),
+    "PLD": ("paladin",),
+    "DRK": ("darkknight",),
+    "BST": ("beastmaster",),
+    "BRD": ("bard",),
+    "RNG": ("ranger",),
+    "SAM": ("samurai",),
+    "NIN": ("ninja",),
+    "DRG": ("dragoon",),
+    "SMN": ("summoner",),
+    "BLU": ("bluemage",),
+    "COR": ("corsair",),
+    "PUP": ("puppetmaster", "automaton"),
+    "DNC": ("dancer",),
+    "SCH": ("scholar",),
+    "GEO": ("geomancer",),
+    "RUN": ("runefencer",),
+}
+
+# Every spelling we accept -> the three-letter code. Built once.
+_JOB_ALIASES = {}
+for _jab, _jnames in _JOB_FULL_NAMES.items():
+    _JOB_ALIASES[_jab.lower()] = _jab
+    for _jn in _jnames:
+        _JOB_ALIASES[_jn] = _jab
+
+
+def _job_token(tok):
+    """The job code one piece of a name stands for, or "".
+
+    Case and punctuation are irrelevant — "Rune Fencer", "rune-fencer"
+    and "RUN" all come out RUN. Anything with a digit or a word that
+    isn't a job comes out empty, which is what keeps "Ninja 2" and
+    "NIN solo" from being treated as job profiles.
+    """
+    key = re.sub(r"[^a-z0-9]", "", str(tok or "").lower())
+    if not key:
+        return ""
+    if key in ("non", "none"):
+        return "NON"          # windower's "no subjob"
+    return _JOB_ALIASES.get(key, "")
+
+
+def _profile_job_pair(name):
+    """(main, sub) that a profile name stands for, or None if it isn't a
+    job name at all. `sub` is "" for a main-job-only profile.
+
+    Accepts, in order: the whole name as one job ("Ninja", "WHM"); the
+    name split on a separator ("NIN_DNC", "Ninja/Dancer", "whm blm" —
+    the slash is what the user types, the underscore is what it is
+    stored as); and a bare six-letter run of two codes ("NINDNC").
+    BOTH halves have to be real jobs, so "NIN_experiment" is just a
+    profile called NIN_experiment.
+    """
+    txt = (name or "").strip()
+    if not txt:
+        return None
+    whole = _job_token(txt)
+    if whole and whole != "NON":
+        return (whole, "")
+    halves = []
+    for parts in (re.split(r"[/\\|_+\-]+", txt), txt.split()):
+        parts = [p for p in parts if p.strip()]
+        if len(parts) == 2:
+            halves.append(parts)
+    squashed = re.sub(r"[^a-z]", "", txt.lower())
+    if len(squashed) == 6 and not re.search(r"[0-9]", txt):
+        halves.append([squashed[:3], squashed[3:]])
+    for a, b in halves:
+        ja, jb = _job_token(a), _job_token(b)
+        if ja and ja != "NON" and jb:
+            return (ja, "" if jb == "NON" else jb)
+    return None
+
+
+def profile_for_job(main, sub, names=None):
+    """The profile that should be in use for this job, or None.
+
+    A main+sub profile beats a main-only one; anything else is ignored.
+    When two names mean the same job (you have both "NIN" and "Ninja"),
+    the one already in use wins so a job change can't shuffle you
+    between two equivalent profiles.
+    """
+    if not main:
+        return None
+    names = list_profiles() if names is None else names
+    exact, main_only = [], []
+    for nm in names:
+        pair = _profile_job_pair(nm)
+        if not pair or pair[0] != main:
+            continue
+        if pair[1]:
+            if pair[1] == sub:
+                exact.append(nm)
+        else:
+            main_only.append(nm)
+    for group in (exact, main_only):
+        if not group:
+            continue
+        if active_profile_name in group:
+            return active_profile_name
+        return sorted(group)[0]
+    return None
+
+
+def _job_from_wire(raw):
+    """A job code from a LIVE value, which may carry a level ("NIN99").
+
+    Deliberately more forgiving than _job_token: a profile named
+    "Ninja 2" is not a job profile, but a job arriving off the wire with
+    a level stuck to it certainly is one.
+    """
+    txt = str(raw or "").strip()
+    m = re.match(r"^([A-Za-z]{3,})\s*\d*$", txt)
+    return _job_token(m.group(1) if m else txt)
+
+
+def _player_jobs_now():
+    """(main, sub, source) for the character whose profiles we manage.
+
+    Three sources, best first, because any one of them going quiet is
+    the difference between this feature working and silently doing
+    nothing: the stats stream (the addon force-sends it on every job
+    change, and it is the only one carrying the subjob reliably), the
+    player's own row in the party stream, and the inventory snapshot,
+    which knows the main job only. All three already arrive for other
+    reasons, so this costs three dict reads.
+    """
+    mj = _job_from_wire(globals().get("player_self_mjob"))
+    sj = _job_from_wire(globals().get("player_self_sjob"))
+    if mj and mj != "NON":
+        return mj, ("" if sj == "NON" else sj), "stats"
+    me = (active_view_char or globals().get("current_char_name") or "")
+    try:
+        for row in (globals().get("party_data") or []):
+            if str(row.get("name", "")).lower() != me.lower():
+                continue
+            mj = _job_from_wire(row.get("main_job"))
+            sj = _job_from_wire(row.get("sub_job"))
+            if mj and mj != "NON":
+                return mj, ("" if sj == "NON" else sj), "party"
+            break
+    except Exception:
+        pass
+    try:
+        mj = _job_from_wire(
+            (globals().get("_inv_for_sim") or {}).get("main_job"))
+        if mj and mj != "NON":
+            return mj, "", "inventory"
+    except Exception:
+        pass
+    return "", "", "unknown"
+
+
+# (character, main, sub) the last time we looked, and a switch waiting
+# for a moment when yanking the UI out from under the user would not be
+# rude. Both module-level so the 1 Hz poll can stay a one-liner.
+_job_profile_last = None
+_job_profile_pending = None
+_job_profile_announced = set()
+
+
+def _job_profile_announce(char):
+    """List this character's profiles and how each one reads as a job,
+    once per character per session.
+
+    Worth a line in the log because from the outside "no profile is
+    named for this job", "the job never reached the overlay" and "this
+    build doesn't have the feature" all look identical — nothing
+    happens. This says which one it is before anything else happens.
+    """
+    if not char or char in _job_profile_announced:
+        return
+    _job_profile_announced.add(char)
+    try:
+        names = list_profiles()
+    except Exception as e:
+        print(f"[OmniWatch] job profiles: listing failed: {e!r}")
+        return
+    if not names:
+        print(f"[OmniWatch] job profiles: {char} has no saved profiles")
+        return
+    bits = []
+    for nm in names:
+        pair = _profile_job_pair(nm)
+        if pair:
+            bits.append(f"{nm}={pair[0]}" + (f"/{pair[1]}" if pair[1] else ""))
+        else:
+            bits.append(f"{nm}=(not a job)")
+    print(f"[OmniWatch] job profiles for {char}: " + ", ".join(bits))
+
+
+def _job_profile_busy():
+    """True while a profile switch would interrupt something.
+
+    Switching reloads the layout, the settings, the hotbar pages and the
+    stat cells — fine at any normal moment, not fine in the middle of
+    arranging them. The pending switch is kept and applied as soon as
+    the user is out of these.
+    """
+    return bool(globals().get("setup_mode")
+                or globals().get("hotbar_edit_mode")
+                or globals().get("profile_name_modal_open")
+                or globals().get("dragging_key"))
+
+
+def job_profile_autoswitch():
+    """Follow the player's job with the profile named after it.
+
+    Called once a second from the main loop. Evaluates only when the job
+    pair actually changes, which is what lets a manual profile switch
+    stick: pick any profile you like and it stays until you change job
+    again. If no profile matches the new job, nothing happens at all —
+    the one you are on is left exactly where it is, rather than being
+    dropped for a "no profile" state.
+    """
+    global _job_profile_last, _job_profile_pending
+    char = active_view_char or ""
+    _job_profile_announce(char)
+    main, sub, where = _player_jobs_now()
+    key = (char, main, sub)
+    if key != _job_profile_last:
+        _job_profile_last = key
+        _job_profile_pending = None
+        if main:
+            # One line per job change, whatever the outcome. A switch
+            # that does not happen needs a reason in the log as much as
+            # one that does.
+            label = main + (f"/{sub}" if sub else "")
+            target = profile_for_job(main, sub)
+            if not target:
+                print(f"[OmniWatch] job {label} ({where}): no profile is "
+                      f"named for it — staying on "
+                      f"{active_profile_name or '(none)'}")
+            elif target == active_profile_name:
+                print(f"[OmniWatch] job {label} ({where}): already using "
+                      f"{target!r}")
+            else:
+                _job_profile_pending = target
+                print(f"[OmniWatch] job {label} ({where}) -> "
+                      f"profile {target!r}")
+    if not _job_profile_pending or _job_profile_busy():
+        return
+    target, _job_profile_pending = _job_profile_pending, None
+    if target == active_profile_name or not profile_exists(target):
+        return
+    switch_to_profile(target)
+    # Same little cursor note a manual save gets. The switch is
+    # otherwise silent, and a layout changing on its own with no
+    # explanation reads as a bug.
+    try:
+        _mx, _my = _mouse_pos()
+        globals()["_hb_action_note"] = {
+            "text": f"{target} profile",
+            "until": time.time() + 3.0,
+            "x": _mx, "y": _my,
+        }
+    except Exception:
+        pass
 
 
 def save_layout():
@@ -26686,7 +27303,17 @@ def save_layout():
             # monitor reopens there. Read live from the OS; if that fails
             # (non-Windows, or no HWND yet) keep whatever we last loaded
             # rather than writing nulls over a good saved position.
-            "ow_window_pos": list(_ow_get_window_pos() or _windowed_pos),
+            # While full screen the live position is the MONITOR's
+            # corner, not the window's, so recording it walks the stored
+            # position onto (0, 0) — and a profile switch saves the
+            # layout it is leaving, so changing job full screen would do
+            # it to every profile in turn. Record what we would restore
+            # to instead, which is what the desk window's position has
+            # always done.
+            "ow_window_pos": list(
+                _fullscreen_saved_rect[:2]
+                if _fullscreen_saved_rect is not None
+                else (_ow_get_window_pos() or _windowed_pos)),
             "buff_anchor":     buff_anchor,
             "buff_scale":      buff_scale,
             "dps_anchor":      dps_anchor,
@@ -26997,18 +27624,34 @@ def load_layout():
         # window into full screen on your behalf.
         if "ow_desk_on" in data:
             globals()["_desk_pending"] = bool(data.get("ow_desk_on"))
+        # While the desk window is full screen, _desk_size IS the monitor
+        # and the canvas viewport is built from it, so a profile's
+        # windowed box must not land there — the window and its viewport
+        # would stop being the same size. It goes into the restore rect
+        # instead, which is what leaving full screen reads, so this
+        # profile's window is what you drop back into.
         dsz = data.get("ow_desk_size")
         if isinstance(dsz, (list, tuple)) and len(dsz) == 2:
             try:
-                _desk_size[0] = max(OW_DESK_MIN_W, int(dsz[0]))
-                _desk_size[1] = max(OW_DESK_MIN_H, int(dsz[1]))
+                _dw = max(OW_DESK_MIN_W, int(dsz[0]))
+                _dh = max(OW_DESK_MIN_H, int(dsz[1]))
+                _dfs = globals().get("_desk_fs_rect")
+                if _dfs is None:
+                    _desk_size[0], _desk_size[1] = _dw, _dh
+                else:
+                    globals()["_desk_fs_rect"] = (_dfs[0], _dfs[1], _dw, _dh)
             except (TypeError, ValueError):
                 pass
         dps = data.get("ow_desk_pos")
         if isinstance(dps, (list, tuple)) and len(dps) == 2:
             try:
-                _desk_pos[0] = None if dps[0] is None else int(dps[0])
-                _desk_pos[1] = None if dps[1] is None else int(dps[1])
+                _dx = None if dps[0] is None else int(dps[0])
+                _dy = None if dps[1] is None else int(dps[1])
+                _dfs = globals().get("_desk_fs_rect")
+                if _dfs is None:
+                    _desk_pos[0], _desk_pos[1] = _dx, _dy
+                elif _dx is not None and _dy is not None:
+                    globals()["_desk_fs_rect"] = (_dx, _dy, _dfs[2], _dfs[3])
             except (TypeError, ValueError):
                 pass
         ows = data.get("ow_window_size")
@@ -50123,6 +50766,12 @@ def draw_profile_name_modal(surface):
         _sub = ("Saves layout, settings, hotbar and cheat sheet. "
                 "An existing name is overwritten.")
         _sub_col = (160, 160, 175)
+    if not _renaming and not profile_name_modal_error:
+        # How to get it loaded automatically. Worth the two lines: the
+        # naming convention is the entire interface to job switching,
+        # and this is the one place a profile gets named.
+        _sub += (" Name it for a job (NIN, Ninja, NIN/DNC) and it loads "
+                 "when you change to that job.")
 
     # Wrap the subtitle to the panel, then size the panel to the result.
     # It used to be one blit into a fixed 130px-tall box, so any sentence
@@ -64863,6 +65512,16 @@ while running:
         except Exception as _rt_e:
             print(f"[OmniWatch] routing watch error: {_rt_e!r}")
 
+        # Job-named profiles. Separate from the routing reload above
+        # because it reads the job off the STATS stream
+        # (player_self_mjob/sjob, which the lua re-sends on any job
+        # change) rather than the inventory snapshot, and because it
+        # needs the subjob too.
+        try:
+            job_profile_autoswitch()
+        except Exception as _jp_e:
+            print(f"[OmniWatch] job profile switch: {_jp_e!r}")
+
     # ── Receive UDP data ─────────────────────────────────────────────────────
     try:
         data, _ = sock.recvfrom(8192)
@@ -65426,6 +66085,19 @@ while running:
                         mob_statuses.clear()
                     elif tgt in mob_statuses:
                         del mob_statuses[tgt]
+                    # The mob is dead, so its resonance is over. Lua's
+                    # skillchain tracker times the window out rather
+                    # than watching for a death, so landing the killing
+                    # blow with a weaponskill left the panel offering
+                    # follow-ups on a corpse for the rest of the timer.
+                    # CLEAR is the death message (0x029) the status
+                    # tracker already acts on, and it carries the id, so
+                    # there is nothing new to listen for.
+                    if skillchain_state is not None and (
+                            tgt == 0
+                            or skillchain_state.get("target_id") == tgt):
+                        skillchain_state = None
+                        skillchain_suggestions = []
             except Exception:
                 continue
     except Exception:

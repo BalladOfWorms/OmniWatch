@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.13.1] — 2026-09-14
+
+### Added
+
+- **Profiles follow your job.** Name a profile after a job — `NIN` or `Ninja`, either spelling — and it loads when you change to that job, at login as well as mid-session. Name one for a pair — `NIN/DNC` — and it takes precedence when your subjob matches, with the main-job profile as the fallback. Saving keeps the name as `NIN_DNC`, since a profile name is also a filename, and both spellings are recognised. A profile whose name isn't a job is never chosen automatically, a job with no profile named for it leaves you on the one you are using, and picking a profile by hand holds until you next change job.
+
+- **The quest checklist now covers the whole quest log.** 248 quests added across every region, and three tabs that did not exist: **Coalition Assignments**, holding all 95 Adoulin coalition assignments, which had nowhere to be ticked at all; **Mog Garden**; and **Other Areas** for the quests that belong to no town — the avatar prime fights, the limit break quests, the Movalpolos beastman headgear set, and the Monstrosity and Records of Eminence unlocks. Crystal War nearly doubles, Jeuno gains the Borghertz's Hands set, the Unlocking a Myth line, the Adventuring Fellow chain and the Gobbiebag quests, and Abyssea gains its storyline. Names were checked one at a time against the in-game log rather than expanded from a list, so a scattering of them have changed to match what the game shows you: Mog Garden quests have moved out of Adoulin into their own tab, Lakeside Minuet from Crystal War to Jeuno, and the four Lure of the Wildcat quests now each name their city. The couple of dozen rows whose name or tab changed start unticked.
+
+### Fixed
+
+- **Busted Corsair rolls follow your debuff filter** — a bust is worded differently from a roll that lands, and when you are the only one it catches the roll is not named at all, so busts were going to World while rolls went where you sent them. A bust is a penalty, so one that names you now lands wherever you send debuffs rather than in among your buffs; another party's stays on Battle.
+
+- **A busted roll is named Bust** — the status carried the right icon and counted down correctly, but was labelled with the roll you busted, both in the buff timer and in the party row tooltip.
+
+- **The skillchain panel clears when the mob dies.** Landing the killing blow with a weaponskill left the open window and its follow-up suggestions on screen until the timer ran out.
+
+- **Full screen survives a profile change.** Both windows still open windowed when you launch, but switching profile part way through a session — including when a job change does it for you — no longer pulls the second window out of full screen. Whatever is filling a monitor when the switch happens goes on filling it, and the window size and position the new profile describes are what you drop back into when you leave full screen.
+
 ## [1.13.0] — 2026-09-09
 
 ### Added

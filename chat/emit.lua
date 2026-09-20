@@ -1206,6 +1206,25 @@ function M.emit_chat(mode, sender_name, text)
             at = text:find('Roll', at + 1, true)
         end
     end
+    -- A BUST CARRIES NO ROLL NAME, SO EVERY TEST ABOVE MISSES IT.
+    -- Measured 2026-09-14, both on mode 1:
+    --   Bust! <sep> Wormfood <sep> (0% Movement Speed)
+    --   Bust! <sep> Wormfood <sep> (-9.76% Attack!)
+    -- The party-wide bust DOES name the roll ("Bust! Wormfood, ... .
+    -- Chaos Roll <5> (-9.76% Attack!)") and the loop above catches it,
+    -- but the form you get when you are the only one affected names
+    -- nothing at all. So the line survived only by the own-echo escape
+    -- below (your name inside the first 30 chars), which then made it
+    -- look like a /say and put it in World; a party member's bust was
+    -- dropped outright. Match the shape the wording actually has: the
+    -- line OPENS with "Bust!" and carries a parenthesised numeric
+    -- effect. A bare "Bust!" typed in /say has no such clause and is
+    -- still dropped to the packet path.
+    if not _is_roll and (mode == 1 or mode == 2 or mode == 3)
+            and text:match('^%s*Bust!')
+            and text:find('%([%+%-]?%d') then
+        _is_roll = true
+    end
     if DROPPED_CHAT_MODES[mode] and not _is_skillchain
             and not _is_emote and not _is_roll then
         local is_gearswap = false

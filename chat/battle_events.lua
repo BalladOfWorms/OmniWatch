@@ -9,7 +9,7 @@
 -- The output is structured segments (text + color_class pairs) which
 -- the Python renderer paints with per-segment colors. Each event
 -- carries the same kind/result classification we use in the BattleMod
--- fork's cooper_classifier, so coverage of FFXI's combat surface is
+-- fork's own classifier, so coverage of FFXI's combat surface is
 -- broadly aligned.
 --
 -- Why this approach (not regex parsing the chat text):
@@ -141,7 +141,8 @@ local function _is_status_msg(msg)
 end
 
 -- Physical-action result detection (melee/ranged/WS/TP move).
--- Mirrors the cooper_classifier logic. We classify the IMPACT type
+-- Mirrors the BattleMod fork's classifier logic. We classify the
+-- IMPACT type
 -- (hit/crit/miss/block/parry/guard) from message + reaction; the
 -- caller has already decided the kind (melee/ranged/etc.) from
 -- packet category.
@@ -168,7 +169,7 @@ local function _physical_result(action)
     return 'hit'
 end
 
--- Spell result sets (per cooper_classifier).
+-- Spell result sets (per the BattleMod fork's classifier).
 local SPELL_DAMAGE = T{2, 252, 264, 265, 274, 275}
 local SPELL_HEAL   = T{7, 8, 9, 14, 80, 263, 276}
 local SPELL_MISS   = T{85, 284, 653, 654}
@@ -301,6 +302,50 @@ local function _ja_name(ja_id)
         return res.job_abilities[ja_id].en or '?'
     end
     return '?'
+end
+
+-- COR DOUBLE-UP REPORTS THE ROLL'S ABILITY ID, NOT ITS OWN. A Double-Up
+-- action packet carries act.param = the id of the roll being pushed, so
+-- _ja_name above returns "Chaos Roll" and every Double-Up in a cycle
+-- reads as though the roll were being cast again. FFXI's own chat does
+-- the same thing, so there is nothing in the text to tell them apart
+-- either -- the difference is in the per-target action MESSAGE.
+--
+-- MEASURED 2026-09-14, solo, no trusts, two full cycles (Chaos Roll then
+-- Bolter's Roll), every action targeting the player:
+--   420 -- the opening roll        (only this one gains the buff: the
+--                                   0x063 self-gain fires here alone)
+--   424 -- a Double-Up             (three of them across the two cycles)
+--   426 -- a Double-Up that busted (both cycles ended this way)
+-- An opening roll cannot bust, so 426 is a Double-Up too.
+--
+-- Gated on the ability name ending in " Roll" as well as the message,
+-- because 420/424/426 are general status-application messages that other
+-- abilities share -- the pair together is what identifies a roll push.
+-- Deliberately name-based rather than keyed to PW_PHANTOM_ROLL_IDS: this
+-- module is loaded by OmniChat too, where that table does not exist.
+local _COR_DOUBLEUP_MSGS = { [424] = true, [426] = true }
+local function _cor_roll_action_name(ja_nm, message)
+    if ja_nm and message and _COR_DOUBLEUP_MSGS[message]
+       and ja_nm:sub(-5) == ' Roll' then
+        return 'Double-Up'
+    end
+    return ja_nm
+end
+
+-- First per-target action message in a packet, for the condense path --
+-- which resolves one name for the whole packet, before the target walk.
+-- A roll's targets all carry the same message, so the first is enough.
+local function _first_action_message(act)
+    if not act or not act.targets then return nil end
+    for _, tgt in pairs(act.targets) do
+        if tgt.actions then
+            for _, action in pairs(tgt.actions) do
+                return action.message
+            end
+        end
+    end
+    return nil
 end
 
 local function _ws_name(ws_id)
@@ -930,7 +975,8 @@ function M.process(act)
         -- so the >= 2 guard leaves it as a normal per-target line.
         local spell_name
         if cat == 6 then
-            spell_name = _ja_name(primary_id)
+            spell_name = _cor_roll_action_name(
+                _ja_name(primary_id), _first_action_message(act))
         elseif cat == 11 then
             spell_name = _monster_tp_name(primary_id)
         else
@@ -1098,7 +1144,8 @@ function M.process(act)
                         -- res.job_abilities entry. FFXI's native chat
                         -- renders these as "uses an item" via
                         -- incoming_text — that's the better source.
-                        local ja_nm = _ja_name(primary_id)
+                        local ja_nm = _cor_roll_action_name(
+                            _ja_name(primary_id), action.message)
                         if ja_nm ~= '?' then
                             emit_ability(
                                 actor_id, actor_name, actor_class,
