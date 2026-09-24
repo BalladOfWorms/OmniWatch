@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.13.0'
+_addon.version  = '1.14.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -3125,8 +3125,10 @@ local function _ow_emit_inventory_snapshot()
                     end
                     if nm == '' then nm = '#' .. tostring(it.id) end
                     nm = _ow_sanitize_item_name(nm)
-                    entries[#entries + 1] = string.format('%d,%d,%d,%s',
-                        it.id, cnt, tonumber(it.bazaar) or 0, nm)
+                    -- '#<slot>' lets the overlay ask for THIS copy's
+                    -- augments (AH|aug) when its card is hovered.
+                    entries[#entries + 1] = string.format('%d,%d,%d,#%d,%s',
+                        it.id, cnt, tonumber(it.bazaar) or 0, slot, nm)
                 end
             end
         end
@@ -5869,6 +5871,251 @@ function _ow_calltrust_start(setname, names_str)
     end
 end
 
+-- ── Mage buff sets (Loadouts > Mage) ─────────────────────────────────────
+-- MAGEBUFF|sync -> MAGEBUFF|spells|<name>~<castable 1|0>~<party 1|0>;...
+-- MAGEBUFF|cast|<char>|<set>|<Name@target;...>  casts the set in order;
+--   target is me or p1..p5 (a bare name, from the first version, means me)
+--
+-- The picker lists every LEARNED spell that can target yourself and is a
+-- buff: Enhancing Magic, plus Regen / Reraise (Healing), Endark / Dread
+-- Spikes (Dark) and Indi- (Geomancy). The flag says whether the current
+-- main or sub job can cast it at its level, so a set built on another job
+-- still shows its spells, dimmed.
+--
+-- Casting follows the trust-call pattern: the next spell goes out only when
+-- the previous one's completion arrives on the 'action' event; an
+-- interrupted cast is retried once; a spell the game refuses (no completion
+-- within the stall window) is skipped and the rest carry on. Spells that
+-- can't be cast right now -- not learned, not this job, on recast, not
+-- enough MP -- are skipped up front and named in one line.
+_OW_MAGEBUFF_AFTERCAST = 3.2
+_OW_MAGEBUFF_STALL     = 12.0
+_ow_magebuff_state = nil
+
+_OW_MAGEBUFF_EXTRA = { 'regen', 'reraise', 'endark', 'dread spikes', 'indi-' }
+
+function _ow_magebuff_is_buff(sp)
+    if type(sp) ~= 'table' or sp.type == 'Trust' then return false end
+    local tg = sp.targets
+    local self_ok = type(tg) == 'table' and (tg['Self'] or tg.Self)
+    if not self_ok then return false end
+    if sp.skill == 34 then return true end            -- Enhancing Magic
+    local low = tostring(sp.english or sp.en or ''):lower()
+    for _, pre in ipairs(_OW_MAGEBUFF_EXTRA) do
+        if low:sub(1, #pre) == pre then return true end
+    end
+    return false
+end
+
+-- Can the current main / sub cast this at its level? Job-point gift spells
+-- list a "level" above 99; those count for the main job only.
+function _ow_magebuff_job_ok(sp, p)
+    local lv = type(sp.levels) == 'table' and sp.levels or {}
+    local m = lv[p.main_job_id]
+    if m and (m <= (p.main_job_level or 0) or m > 99) then return true end
+    local s = p.sub_job_id and lv[p.sub_job_id]
+    if s and s <= (p.sub_job_level or 0) then return true end
+    return false
+end
+
+function _ow_magebuff_can_party(sp)
+    local tg = sp and sp.targets
+    return type(tg) == 'table' and (tg['Party'] or tg.Party) and true or false
+end
+
+function _ow_magebuff_emit(payload)
+    pcall(function() udp_inv:send(_OW_MB_TAG(payload)) end)
+end
+
+function _ow_magebuff_sync()
+    local p = windower.ffxi.get_player and windower.ffxi.get_player()
+    local learned = nil
+    pcall(function() learned = windower.ffxi.get_spells() end)
+    local out = {}
+    if p and learned and res and res.spells then
+        for id, sp in pairs(res.spells) do
+            if learned[id] and _ow_magebuff_is_buff(sp) then
+                local nm = tostring(sp.english or sp.en or ''):gsub('[~;|]', ' ')
+                if nm ~= '' then
+                    out[#out + 1] = nm .. '~' .. (_ow_magebuff_job_ok(sp, p) and '1' or '0')
+                        .. '~' .. (_ow_magebuff_can_party(sp) and '1' or '0')
+                end
+            end
+        end
+    end
+    _ow_magebuff_emit('MAGEBUFF|spells|' .. table.concat(out, ';'))
+end
+
+function _ow_magebuff_touch()
+    if _ow_magebuff_state then _ow_magebuff_state.t = os.clock() end
+end
+
+function _ow_magebuff_finish(word)
+    local st = _ow_magebuff_state
+    if st then
+        ow_chat(207, '[OmniWatch] Buff set "' .. tostring(st.name) .. '" '
+            .. (word or 'done') .. '.')
+    end
+    _ow_magebuff_state = nil
+end
+
+function _ow_magebuff_cast()
+    local st = _ow_magebuff_state
+    if not st then return end
+    local q = st.queue
+    if not q or #q == 0 then
+        _ow_magebuff_finish('cast')
+        return
+    end
+    local nm = q[1].english
+    local cast_name = nm
+    if windower.to_shift_jis then
+        local ok, s = pcall(windower.to_shift_jis, nm)
+        if ok and s then cast_name = s end
+    end
+    windower.send_command('input /ma "' .. cast_name .. '" <'
+        .. (q[1].target or 'me') .. '>')
+    _ow_magebuff_touch()
+    coroutine.schedule(_ow_magebuff_watchdog, _OW_MAGEBUFF_STALL + 1)
+end
+
+function _ow_magebuff_watchdog()
+    local st = _ow_magebuff_state
+    if not st or (os.clock() - (st.t or 0)) <= _OW_MAGEBUFF_STALL then return end
+    local q = st.queue
+    if q and #q > 0 then
+        local dropped = table.remove(q, 1)
+        ow_chat(207, '[OmniWatch] No response for "' .. tostring(dropped.english)
+            .. '" - skipping it.')
+        if #q > 0 then
+            _ow_magebuff_touch()
+            _ow_magebuff_cast()
+            return
+        end
+    end
+    _ow_magebuff_finish('done (some skipped)')
+end
+
+function _ow_magebuff_start(setname, names_str)
+    if _ow_magebuff_state then
+        if (os.clock() - (_ow_magebuff_state.t or 0)) > _OW_MAGEBUFF_STALL then
+            _ow_magebuff_state = nil
+        else
+            ow_chat(123, '[OmniWatch] A buff set is already being cast.')
+            return
+        end
+    end
+    local p = windower.ffxi.get_player and windower.ffxi.get_player()
+    if not p then return end
+    local learned, recasts = nil, nil
+    pcall(function() learned = windower.ffxi.get_spells() end)
+    pcall(function() recasts = windower.ffxi.get_spell_recasts() end)
+    local byname = {}
+    for id, sp in pairs(res.spells) do
+        if type(sp) == 'table' and sp.type ~= 'Trust' then
+            local en = sp.english or sp.en
+            if en then byname[en:lower()] = { id = sp.id or id, english = en, sp = sp } end
+        end
+    end
+    local mp = (p.vitals and p.vitals.mp) or 0
+    local party = nil
+    pcall(function() party = windower.ffxi.get_party() end)
+    local queue, skipped = {}, {}
+    for ent in (tostring(names_str) .. ';'):gmatch('([^;]*);') do
+        local nm, tg = ent:match('^%s*(.-)@(%w+)%s*$')
+        if not nm then nm, tg = ent:match('^%s*(.-)%s*$'), 'me' end
+        tg = tostring(tg or 'me'):lower()
+        if tg ~= 'me' and not tg:match('^p[1-5]$') then tg = 'me' end
+        if nm and nm ~= '' then
+            local rec = byname[nm:lower()]
+            if not rec then
+                skipped[#skipped + 1] = nm .. ' (unknown)'
+            elseif learned and not learned[rec.id] then
+                skipped[#skipped + 1] = rec.english .. ' (not learned)'
+            elseif not _ow_magebuff_job_ok(rec.sp, p) then
+                skipped[#skipped + 1] = rec.english .. ' (not this job)'
+            elseif recasts and (recasts[rec.id] or 0) > 0 then
+                skipped[#skipped + 1] = rec.english .. ' ('
+                    .. math.ceil((recasts[rec.id] or 0) / 60) .. 's)'
+            elseif (tonumber(rec.sp.mp_cost) or 0) > mp then
+                skipped[#skipped + 1] = rec.english .. ' (MP)'
+            elseif tg ~= 'me' and not _ow_magebuff_can_party(rec.sp) then
+                skipped[#skipped + 1] = rec.english .. ' (self only)'
+            elseif tg ~= 'me' and not (party and party[tg] and party[tg].name) then
+                skipped[#skipped + 1] = rec.english .. ' (no ' .. tg .. ')'
+            else
+                queue[#queue + 1] = { id = rec.id, english = rec.english, target = tg }
+            end
+        end
+    end
+    if #skipped > 0 then
+        ow_chat(207, '[OmniWatch] Skipped: ' .. table.concat(skipped, ', '))
+    end
+    if #queue == 0 then
+        ow_chat(123, '[OmniWatch] Buff set "' .. tostring(setname)
+            .. '": nothing to cast right now.')
+        return
+    end
+    _ow_magebuff_state = { name = tostring(setname), queue = queue,
+                           t = os.clock(), retried = {} }
+    ow_chat(207, '[OmniWatch] Buff set "' .. tostring(setname) .. '": casting '
+        .. #queue .. ' spell' .. (#queue == 1 and '' or 's') .. '...')
+    coroutine.schedule(_ow_magebuff_cast, 0.1)
+end
+
+function _ow_magebuff_command(rest)
+    local verb, tail = tostring(rest or ''):match('^([^|]*)|?(.*)$')
+    if verb == 'sync' then
+        _ow_magebuff_sync()
+    elseif verb == 'cast' then
+        local who, setnm, names = tail:match('^([^|]*)|([^|]*)|?(.*)$')
+        local me = windower.ffxi.get_player and windower.ffxi.get_player()
+        local myname = me and me.name or ''
+        if who and who ~= '' and myname ~= '' and who ~= myname then
+            return      -- meant for another multibox character
+        end
+        _ow_magebuff_start(setnm or '?', names or '')
+    elseif verb == 'stop' then
+        if _ow_magebuff_state then _ow_magebuff_finish('stopped') end
+    end
+end
+
+windower.register_event('action', function(act)
+    local st = _ow_magebuff_state
+    if not st or not act or not act.actor_id then return end
+    local p = windower.ffxi.get_player and windower.ffxi.get_player()
+    if not p or act.actor_id ~= p.id then return end
+    local q = st.queue
+    if not q or #q == 0 then return end
+    local head = q[1]
+    if act.category == 4 and act.param == head.id then
+        table.remove(q, 1)
+        _ow_magebuff_touch()
+        if #q > 0 then
+            coroutine.schedule(_ow_magebuff_cast, _OW_MAGEBUFF_AFTERCAST)
+        else
+            _ow_magebuff_finish('cast')
+        end
+    elseif act.category == 8 and act.param == 28787
+            and act.targets and act.targets[1]
+            and act.targets[1].actions and act.targets[1].actions[1]
+            and act.targets[1].actions[1].param == head.id then
+        -- Interrupted: one retry, then move on.
+        _ow_magebuff_touch()
+        if st.retried[head.id] then
+            table.remove(q, 1)
+            ow_chat(207, '[OmniWatch] ' .. head.english .. ' interrupted twice - skipping it.')
+        else
+            st.retried[head.id] = true
+        end
+        if #q > 0 then
+            coroutine.schedule(_ow_magebuff_cast, _OW_MAGEBUFF_AFTERCAST)
+        else
+            _ow_magebuff_finish('done (some skipped)')
+        end
+    end
+end)
+
 -- Cast pacing: de-queue a trust only when its cast actually completes, then
 -- schedule the next call. Mirrors the Trusts addon's action conditions
 -- (category 4 + matching spell id = done; category 8 / param 28787 with the
@@ -6668,6 +6915,7 @@ end)
 -- Toggled by SCANZONE|radar|on / off from the overlay (radar view).
 _ow_sz_radar_on   = false
 _ow_sz_radar_last = 0
+_ow_sz_me_last    = 0
 local _OW_SZ_RADAR_HZ      = 5
 local _OW_SZ_RADAR_RANGE   = 10000   -- yalms: effectively the whole zone --
                                      -- report everything the client has loaded
@@ -6697,6 +6945,28 @@ function _ow_scanzone_radar_tick(now)
     end
     if not _ow_sz_radar_on then return end
     if not udp_gs then return end
+    -- Where WE are, far more often than the entity sweep.
+    --
+    -- The full sweep walks the whole mob array and can carry hundreds of
+    -- entities, so it stays at its old rate; but the minimap scrolls the
+    -- map under the player, and at 5 Hz that reads as a stutter rather
+    -- than movement. This is one tiny datagram at 15 Hz carrying just our
+    -- position and heading, which is all the smooth part needs.
+    if (now - (_ow_sz_me_last or 0)) >= (1.0 / 15.0) then
+        _ow_sz_me_last = now
+        local m = windower.ffxi.get_mob_by_target
+                  and windower.ffxi.get_mob_by_target('me')
+        if m and m.x and m.y then
+            -- What we currently have targeted rides along, so the minimap
+            -- can ring that dot. Index, because that is what the entity
+            -- sweep identifies everything by.
+            local tgt = windower.ffxi.get_mob_by_target
+                        and windower.ffxi.get_mob_by_target('t')
+            udp_gs:send(string.format('SZME|%.2f|%.2f|%.2f|%.3f|%d',
+                m.x, m.y, m.z or 0, m.heading or 0,
+                (tgt and tgt.index) or 0))
+        end
+    end
     if (now - _ow_sz_radar_last) < (1.0 / _OW_SZ_RADAR_HZ) then return end
     _ow_sz_radar_last = now
     if not (windower.ffxi and windower.ffxi.get_mob_array) then return end
@@ -6735,8 +7005,11 @@ function _ow_scanzone_radar_tick(now)
             end
         end
     end
-    udp_gs:send(string.format('SZRADAR|%.3f|%d|%s',
-        heading, n, table.concat(parts, ';')))
+    -- The player position this sweep was measured FROM goes with it. Each
+    -- entity is an offset from us, so plotting them against a newer
+    -- position would drag every dot along as we walk.
+    udp_gs:send(string.format('SZRADAR|%.3f|%d|%.2f,%.2f|%s',
+        heading, n, me.x, me.y, table.concat(parts, ';')))
 end
 
 ow_safe_register('prerender', function()
@@ -8715,13 +8988,15 @@ end
 --  spaced by `throttle` to respect the server. A pending-timeout watchdog
 --  keeps it from hanging if the server never answers.
 --
---  Requires being in an Auction House zone (the menu is opened for you via
---  an injected incoming 0x04C). Driven by AH|... (drain) and //ow ah ;
+--  Requires being in an Auction House zone. No counter NPC and no faked
+--  menu-open: the server accepts the AH packets from anywhere in an AH city,
+--  and the old injected incoming 0x04C only popped the game's own AH window,
+--  which nothing ever closed. Driven by AH|... (drain) and //ow ah ;
 --  Buy Status: 0x01 Success | 0x02 Placing(pending) | 0xC5 Failed | 0xE5 Cannot Bid
 -- ════════════════════════════════════════════════════════════════════════
 _ow_ah = {
     running=false, throttle=8.0, queue={}, qi=1,
-    pending=false, pend_time=0, epoch=0, spoof_menu=true,
+    pending=false, pend_time=0, epoch=0,
 }
 
 local function _ow_ah_emit(payload)
@@ -8743,37 +9018,37 @@ local function _ow_ah_in_zone()
     return (z and _OW_AH_ZONES[z.en]) and true or false
 end
 
--- Spoof the AH menu open so bids work without clicking the counter NPC
--- (inject an incoming 0x04C Type 0x02, exactly as AuctionHelper does).
-local function _ow_ah_open_menu()
-    -- Spoof the AH menu-open (inject an incoming 0x04C Type 0x02) so buy/sell
-    -- work without clicking the counter NPC -- you only need to be standing in
-    -- an AH city. GATED to AH-city zones and throttled to once / 3s, exactly
-    -- like Ivaar's Auctioneer: faking the menu OUTSIDE an AH city is what
-    -- desyncs the client ('search failed'); inside one the server accepts the
-    -- AH packets with no NPC. Use OmniWatch's own search (not the game AH
-    -- menu) while this is on. Disable with //ow ah spoofmenu off.
-    if not _ow_ah.spoof_menu then return end
+-- Ask the server for our sale slots WITHOUT opening the AH NPC.
+--
+-- Two steps, because the work check alone is not enough. The WORK_CHECK
+-- (0x04E Cmd 0x0A, AucWorkIndex 0xFF = all slots) returns the boxes as the
+-- server last wrote them, which is why a listing that had since SOLD kept
+-- reading "On auction" until the game's own auction window was opened. The
+-- client follows its work check with a per-slot status request (Cmd 0x0D)
+-- for each occupied slot -- that is the packet that answers with the
+-- current state. We do the same, a beat later, once the work check has said
+-- which slots are in use. Both are read-only.
+-- Throttled so a chatty UI can't spam the server.
+local function _ow_ah_poll_slots()
     if not _ow_ah_in_zone() then return end
-    local now = os.clock()
-    if _ow_ah.menu_t and now - _ow_ah.menu_t < 3 then return end
-    _ow_ah.menu_t = now
-    local o = string.char(0x4C, 0x1E, 0, 0, 0x02, 0, 0x01) .. string.rep('\0', 53)
-    pcall(function() windower.packets.inject_incoming(0x4C, o) end)
+    for slot = 0, 6 do
+        local sl = _ow_ah.sales[slot]
+        if sl and sl.status and sl.status ~= 'Empty' then
+            local req = string.char(0x4E, 0x1E, 0, 0, 0x0D, slot, 0, 0)
+                     .. string.rep('\0', 52)
+            pcall(function() windower.packets.inject_outgoing(0x4E, req) end)
+        end
+    end
 end
 
--- Ask the server for our sale slots WITHOUT opening the AH NPC: spoof the
--- menu, then send the WORK_CHECK (0x04E Cmd 0x0A, AucWorkIndex 0xFF = all
--- slots). The server replies with the 0x04C Cmd 0x0A boxes our existing
--- handler already parses. Throttled so a chatty UI can't spam the server.
 local function _ow_ah_check_sales()
-    if not (_ow_ah.spoof_menu and _ow_ah_in_zone()) then return end
+    if not _ow_ah_in_zone() then return end
     local now = os.clock()
     if _ow_ah.sales_t and now - _ow_ah.sales_t < 1.5 then return end
     _ow_ah.sales_t = now
-    _ow_ah_open_menu()
     local req = string.char(0x4E, 0x1E, 0, 0, 0x0A, 0xFF, 0, 0) .. string.rep('\0', 52)
     pcall(function() windower.packets.inject_outgoing(0x4E, req) end)
+    coroutine.schedule(function() pcall(_ow_ah_poll_slots) end, 0.8)
 end
 
 function _ow_ah_emit_status()
@@ -9005,7 +9280,6 @@ function _ow_ah_buy(throttle, itemstr)
         _ow_ah_emit('AH|result|not in an Auction House city - move to an AH and retry')
         return
     end
-    _ow_ah_open_menu()
     _ow_ah.running = true
     _ow_ah.qi = 1
     _ow_ah.pending = false
@@ -9069,10 +9343,13 @@ local function _ow_ah_emit_sales()
         local s = _ow_ah.sales[slot]
         if s and s.status and s.status ~= 'Empty' then
             local nm = (s.item and res.items[s.item] and res.items[s.item].en) or ''
-            parts[#parts + 1] = string.format('%d~%s~%s~%d~%d~%d',
-                slot, s.status, nm, s.count or 0, s.price or 0, s.ts or 0)
+            -- The item id rides along so the panel can offer the same
+            -- sales-history and item-card lookups as the Buy tab.
+            parts[#parts + 1] = string.format('%d~%s~%s~%d~%d~%d~%d',
+                slot, s.status, nm, s.count or 0, s.price or 0, s.ts or 0,
+                s.item or 0)
         else
-            parts[#parts + 1] = string.format('%d~Empty~~0~0~0', slot)
+            parts[#parts + 1] = string.format('%d~Empty~~0~0~0~0', slot)
         end
     end
     _ow_ah_emit('AH|sales|' .. table.concat(parts, '|'))
@@ -9129,7 +9406,6 @@ function _ow_ah_sell(item_id, single, price)
     if not _ow_ah_in_zone() then
         _ow_ah_emit('AH|result|not in an Auction House city'); return
     end
-    _ow_ah_open_menu()
     local r = res.items[item_id]
     if not r then _ow_ah_emit('AH|result|unknown item'); return end
     local want = (single == 1) and 1 or (r.stack or 1)
@@ -9149,6 +9425,52 @@ function _ow_ah_sell(item_id, single, price)
     pcall(function() windower.packets.inject_outgoing(0x4E, trans) end)
     _ow_ah_emit(string.format('AH|result|listing %s %s at %d gil...',
         single == 1 and 'single' or 'stack', r.en, price))
+end
+
+-- Stop a sale and take the item back.
+--
+-- Two different packets, because the server treats the two states as
+-- different things: a listing still ON AUCTION is delisted with Type 0x0C,
+-- while a slot the auction has already finished with (Not Sold, or Sold and
+-- holding your gil) is emptied with Type 0x10 -- the same thing the game's
+-- own menu does when you pick that row. Either way the slot ends up empty
+-- and whatever was in it comes back to you. The sale list is re-read a beat
+-- later so the panel shows the result rather than what we assumed.
+function _ow_ah_cancel(slot)
+    if not _ow_ah_in_zone() then
+        _ow_ah_emit('AH|result|not in an Auction House city'); return
+    end
+    slot = tonumber(slot)
+    if not (slot and slot >= 0 and slot <= 6) then return end
+    local s = _ow_ah.sales[slot]
+    if not s or not s.status or s.status == 'Empty' then
+        _ow_ah_emit('AH|result|that sale slot is already empty'); return
+    end
+    local onsale = (s.status == 'On auction')
+    local trans = string.char(0x4E, 0x1E, 0, 0)
+              .. string.char(onsale and 0x0C or 0x10, slot)
+              .. string.rep('\0', 54)
+    pcall(function() windower.packets.inject_outgoing(0x4E, trans) end)
+    local nm = (s.item and res.items[s.item] and res.items[s.item].en) or 'item'
+    -- Three different things happen here, so say which one: a live listing
+    -- is pulled and comes straight back, an expired one is posted to the
+    -- delivery box, and a sold one is only being acknowledged -- its gil
+    -- arrives by delivery box too.
+    local msg
+    if onsale then
+        msg = string.format('cancelling the sale of %s (slot %d)...',
+            nm, slot + 1)
+    elseif s.status == 'Sold' then
+        msg = string.format('clearing the sold %s (slot %d)...', nm, slot + 1)
+    else
+        msg = string.format(
+            '%s did not sell - returned to your delivery box (slot %d)',
+            nm, slot + 1)
+    end
+    _ow_ah_emit('AH|result|' .. msg)
+    coroutine.schedule(function()
+        pcall(_ow_ah_check_sales)
+    end, 1.2)
 end
 
 -- confirm a successful sell (0x04E Type 0x0B) into an empty slot
@@ -9204,6 +9526,14 @@ windower.register_event('incoming chunk', function(id, data)
                     -- of via packets.parse: the Windower field names there can
                     -- shift with a lib update, which blanks the sale-slot item
                     -- names. Offsets verified against live 0x04C captures.
+                    if not _OW_AH_SALESTAT[st] then
+                        -- Unknown codes used to pass silently as "On
+                        -- auction", which is the worst way to be wrong
+                        -- about a sale. Logged so the next one is visible.
+                        ow_chat(207, string.format(
+                            '[OW AH] slot %d: unknown sale status 0x%02X',
+                            slot, st or 0))
+                    end
                     _ow_ah.sales[slot] = {
                         status = _OW_AH_SALESTAT[st] or 'On auction',
                         item  = data:byte(0x29) + data:byte(0x2A) * 256,   -- ItemNo @0x28
@@ -9403,6 +9733,104 @@ function _ow_ah_iteminfo(id)
     if (it.stack or 1) > 1 then lines[#lines + 1] = 'Stacks to ' .. it.stack end
     lines[#lines + 1] = 'Item #' .. id
     _ow_ah_emit('AH|info|' .. id .. '|' .. table.concat(lines, '~'))
+end
+
+-- Item card for the overlay's hover card (the game's item help window):
+--   AH|card|<id>|name~flags~stack~level~ilvl~jobs~races~kind~desc
+-- flags holds R (Rare) and/or E (Ex). kind is "(Skill)" for a weapon or
+-- "[Slot]" for other gear, races only alongside it. The description is
+-- sent verbatim -- element icons and column spacing intact -- with its line
+-- breaks as tabs and any '|' swapped for '/', since '|' splits the wire.
+-- An id the resources don't know gets an empty body, so the overlay stops
+-- asking for it.
+function _ow_ah_itemcard(id)
+    id = tonumber(id)
+    local it = id and res.items[id]
+    if not it then
+        _ow_ah_emit('AH|card|' .. tostring(id or 0) .. '|')
+        return
+    end
+    local desc = ''
+    pcall(function()
+        local d = res.item_descriptions and res.item_descriptions[id]
+        if d and d.en then desc = tostring(d.en) end
+    end)
+    desc = desc:gsub('\r', ''):gsub('|', '/'):gsub('\t', ' '):gsub('\n', '\t')
+    local flags = ''
+    if type(it.flags) == 'table' then
+        if it.flags['Rare'] then flags = flags .. 'R' end
+        if it.flags['Exclusive'] then flags = flags .. 'E' end
+    end
+    local kind = ''
+    local sk = it.skill and it.skill > 0 and res.skills and res.skills[it.skill]
+    if sk and sk.en then
+        kind = '(' .. sk.en .. ')'
+    else
+        local sids = _ow_ah_set_ids(it.slots)
+        if #sids > 0 then
+            local sl = res.slots and res.slots[sids[1]]
+            local sn = tostring((sl and (sl.en or sl.ens)) or '')
+            sn = sn:gsub('^Left ', ''):gsub('^Right ', '')
+            if sn ~= '' then kind = '[' .. sn .. ']' end
+        end
+    end
+    local races = ''
+    if kind ~= '' then races = _ow_ah_races_str(it.races) end
+    local jobs = _ow_ah_jobs_str(it.jobs)
+    if jobs ~= 'All Jobs' then jobs = jobs:gsub(' ', '/') end
+    local name = tostring(it.en or ''):gsub('[~|]', ' ')
+    _ow_ah_emit(string.format('AH|card|%d|%s~%s~%d~%d~%d~%s~%s~%s~%s',
+        id, name, flags, tonumber(it.stack) or 1, tonumber(it.level) or 0,
+        tonumber(it.item_level) or 0, jobs, races, kind, desc))
+end
+
+-- One copy's augments for the hover card:
+--   AH|aug|<bag>|<slot>|<id>|<line>\t<line>...
+-- Read with ow_get_item_augments -- the same chain the sim uses, native
+-- rank resolution first -- and opaque "Path: A" lines resolved through the
+-- same tables as the equipment panel. Answers with an empty list when the
+-- slot no longer holds that id, so the overlay can't pin one item's
+-- augments on another after the bag is rearranged.
+function _ow_ah_itemaug(bag_name, slot, want_id)
+    local bname = tostring(bag_name or '')
+    slot, want_id = tonumber(slot), tonumber(want_id)
+    local out = {}
+    local bid = _ow_inv_bag_ids and _ow_inv_bag_ids()[bname:lower()]
+    if bid and slot and slot > 0 and want_id then
+        local ok, it = pcall(windower.ffxi.get_items, bid, slot)
+        if ok and type(it) == 'table' and it.id == want_id then
+            local oka, augs = pcall(ow_get_item_augments, bid, slot)
+            if oka and type(augs) == 'table' then
+                for _, a in ipairs(augs) do
+                    local s = tostring(a):gsub('^[^%w%+%-"]+', '')
+                                         :gsub('^%s+', ''):gsub('%s+$', '')
+                    if s ~= '' and s ~= 'none' then
+                        local lines = { s }
+                        local pkey = s:lower():match('^(path:%s*%a)')
+                        if pkey then
+                            local nkey = pkey:gsub('%s+', ' ')
+                            local r = ow_path_augments[want_id]
+                                      and ow_path_augments[want_id][nkey]
+                            if not r and Unity_rank and Unity_rank[want_id]
+                                    and type(Unity_rank[want_id].augments) == 'table' then
+                                r = Unity_rank[want_id].augments
+                            end
+                            if not r and type(ow_unity_augments[want_id]) == 'table' then
+                                r = ow_unity_augments[want_id]
+                            end
+                            if type(r) == 'table' and #r > 0 then lines = r end
+                        end
+                        for _, ln in ipairs(lines) do
+                            ln = tostring(ln):gsub('[|\t\r\n]', ' ')
+                            if ln ~= '' then out[#out + 1] = ln end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    _ow_ah_emit(string.format('AH|aug|%s|%d|%d|%s', (bname:gsub('|', '')),
+        slot or 0, want_id or 0, table.concat(out, '\t')))
 end
 
 -- ---------------------------------------------------------------------------
@@ -10036,6 +10464,8 @@ function _ow_ah_command(rest)
         _ow_ah_buy(a[2], a[3])
     elseif cmd == 'stop' then
         _ow_ah_stop()
+    elseif cmd == 'cancel' then
+        _ow_ah_cancel(a[2])
     elseif cmd == 'sell' then
         _ow_ah_sell(tonumber(a[2]), tonumber(a[3]) or 1, tonumber(a[4]) or 0)
     elseif cmd == 'inv' then
@@ -10045,6 +10475,20 @@ function _ow_ah_command(rest)
         _ow_ah_emit_sales()    -- send the current cache immediately
     elseif cmd == 'info' then
         _ow_ah_iteminfo(a[2])
+    elseif cmd == 'card' then
+        _ow_ah_itemcard(a[2])
+    elseif cmd == 'aug' then
+        _ow_ah_itemaug(a[2], a[3], a[4])
+    elseif cmd == 'cards' then
+        -- Batch prefetch: AH|cards|id,id,... -> one AH|card reply per id.
+        for id in tostring(a[2] or ''):gmatch('%d+') do
+            _ow_ah_itemcard(id)
+        end
+    elseif cmd == 'augs' then
+        -- Batch prefetch: AH|augs|bag:slot:id,... -> one AH|aug per entry.
+        for bag, slot, id in tostring(a[2] or ''):gmatch('([%w_]+):(%d+):(%d+)') do
+            _ow_ah_itemaug(bag, slot, id)
+        end
     elseif cmd == 'mark' then
         -- Drop a labelled marker into the capture stream so a given action
         -- (e.g. "view price history") ties to the packets it produced.
@@ -10100,10 +10544,6 @@ function _ow_ah_command(rest)
             end
         end
         _ow_ah_emit('AH|result|' .. msg)
-    elseif cmd == 'spoofmenu' then
-        _ow_ah.spoof_menu = ((a[2] or ''):lower() == 'on')
-        _ow_ah_emit('AH|result|menu-open spoof '
-            .. (_ow_ah.spoof_menu and 'ON (risky)' or 'OFF'))
     elseif cmd == 'status' then
         _ow_ah_emit_status()
     end
@@ -10111,6 +10551,1035 @@ end
 
 
 end  -- close SkillUp+AH engine scope (Lua 200-local cap)
+
+
+-- ════════════════════════════════════════════════════════════════════════
+--  Trust buffs and debuffs  —  built from events, because no packet lists
+--  them
+--
+--  0x076 carries every OTHER party member's buff array, and it is simply
+--  never sent for a trust: two probe sessions in August saw 26 distinct
+--  packet ids and no 0x076 at all. Across the whole documented incoming
+--  protocol only three packets carry a buff array and the other two are
+--  self-only, so there is nothing to go looking for. The statuses on your
+--  alter egos are therefore assembled here from the events that put them
+--  there and take them away, all of which were captured live on
+--  2026-09-23 with //ow trustcap:
+--
+--    GAIN, magic      0x028 category 4, message 266, status id in Param
+--                     (six songs on four trusts: param 198 and 214)
+--    GAIN, a roll     0x028 category 6, message 421 -- Param is the NUMBER
+--                     ROLLED, not a status, so the status is looked up
+--                     from the ability (Bolter's Roll -> 330)
+--    LOSS             0x029 message 206 (effect wears off) or 204 (is no
+--                     longer), status id in the first parameter -- the
+--                     same ids that arrived on the gain
+--
+--  The panel needs no changes: encode_member already reads each member's
+--  statuses out of party_buffs by entity id with no special casing for
+--  trusts, so filling that table in is the whole feature.
+--
+--  WHAT THIS CANNOT KNOW, and it is worth being plain about it: only what
+--  you witnessed. Nothing from before the addon loaded, nothing another
+--  player put on your trust while you were elsewhere, and nothing removed
+--  by a route that sends no message. A status that has not been seen again
+--  in a long time is dropped rather than left to sit there forever.
+-- ════════════════════════════════════════════════════════════════════════
+do
+    local TB_STALE = 3600        -- seconds before an unconfirmed status goes
+    local TB_GAIN_MAGIC = { [266] = true, [205] = true, [230] = true }
+    local TB_LOSS = { [206] = true, [204] = true }
+    local TB_ROLL_MSG = 421
+
+    _G._ow_tbuff = { by_id = {}, trusts = {}, roster_t = 0, dirty = {} }
+    -- entity id -> { [i] = song name }, lined up with the status array the
+    -- party encoder reads, so a trust's row can name the actual song.
+    _G._ow_tbuff_pub = {}
+    local TB = _G._ow_tbuff
+
+    -- Which party members are alter egos. Rebuilt on a slow tick: a trust
+    -- called or dismissed mid-fight must not be tracked under a stale id.
+    TB.roster = function(now)
+        if now - TB.roster_t < 3.0 then return end
+        TB.roster_t = now
+        local fresh = {}
+        local party = windower.ffxi.get_party and windower.ffxi.get_party()
+        if party then
+            for _, key in ipairs({'p1', 'p2', 'p3', 'p4', 'p5'}) do
+                local mob = party[key] and party[key].mob
+                if mob and mob.id and (mob.is_npc or mob.spawn_type == 14) then
+                    fresh[mob.id] = true
+                end
+            end
+        end
+        -- Anyone who left takes their statuses with them.
+        for id in pairs(TB.trusts) do
+            if not fresh[id] then
+                TB.by_id[id] = nil
+                if _G._ow_party_buffs_set then
+                    pcall(_G._ow_party_buffs_set, id, nil)
+                end
+            end
+        end
+        TB.trusts = fresh
+    end
+
+    -- Rebuild the flat array the party encoder reads. A status held twice
+    -- (two song slots of the same type) appears twice, which is what the
+    -- panel already expects -- it renders "Madrigal x2" off the repeat.
+    TB.publish = function(id)
+        local held = TB.by_id[id]
+        if not held then
+            _G._ow_tbuff_pub[id] = nil
+            if _G._ow_party_buffs_set then
+                pcall(_G._ow_party_buffs_set, id, nil)
+            end
+            return
+        end
+        local arr, names = {}, {}
+        for _, e in pairs(held) do
+            if e.status then
+                arr[#arr + 1] = e.status
+                names[#arr] = e.sname
+            end
+        end
+        _G._ow_tbuff_pub[id] = names
+        if _G._ow_party_buffs_set then
+            pcall(_G._ow_party_buffs_set, id, arr)
+        end
+    end
+
+    -- KEYED BY WHAT PUT IT THERE, not by the status.
+    --
+    -- Two songs of the same family share one status id -- Valor Minuet and
+    -- Valor Minuet IV both report 198 -- and a Bard can hold both at once
+    -- in separate song slots. But re-casting the SAME song overwrites its
+    -- own slot rather than adding a second copy, which is exactly what a
+    -- dummy song is for. Counting by status got that wrong in both
+    -- directions: three casts of two songs read as "x3" instead of two
+    -- slots. Keyed by the spell, a recast refreshes and the count is right.
+    -- <sname> is the SONG, not the status. Two marches share status 214
+    -- and the game calls both of them "March"; your own timers carry the
+    -- real names, so this is what lets a trust's Honor March be matched to
+    -- your Honor March rather than to whichever march had longer left.
+    TB.gain = function(id, source, status, now, sname)
+        if not (id and status and status > 0 and TB.trusts[id]) then return end
+        local held = TB.by_id[id]
+        if not held then held = {}; TB.by_id[id] = held end
+        held[source or ('s' .. status)] = {
+            status = status, t = now, sname = sname }
+        TB.publish(id)
+    end
+
+    -- A wear-off names the STATUS, not the song, so drop the oldest slot
+    -- holding it -- which is the one the game expired.
+    --
+    -- The server sends a trust's wear-off a beat before your own, so
+    -- removing on the message made their icon vanish about a second before
+    -- yours for a song you both had. When your own copy is still running,
+    -- the removal waits for it, and the two go together.
+    TB.loss = function(id, status, now)
+        local held = id and TB.by_id[id]
+        if not (held and status) then return end
+        local oldest, okey = nil, nil
+        for key, e in pairs(held) do
+            if e.status == status and (oldest == nil or (e.t or 0) < oldest) then
+                oldest, okey = (e.t or 0), key
+            end
+        end
+        if okey == nil then return end
+        local e = held[okey]
+        local mine = TB.player_expiry(status, e.sname)
+        local clock = os.clock()
+        if mine and mine > clock and (mine - clock) <= 5 then
+            e.drop_at = mine
+            return
+        end
+        held[okey] = nil
+        TB.publish(id)
+    end
+
+    -- A status the game removed without telling us -- dispelled while you
+    -- were out of range, or the trust was resummoned -- would otherwise
+    -- stay on the panel for the session. Age it out instead.
+    TB.expire = function(now)
+        for id, held in pairs(TB.by_id) do
+            local changed = false
+            for key, e in pairs(held) do
+                if now - (e.t or 0) > TB_STALE then
+                    held[key] = nil
+                    changed = true
+                end
+            end
+            if changed then TB.publish(id) end
+        end
+    end
+
+    -- WHEN YOU CAST IT, YOU ALREADY KNOW HOW LONG IT LASTS.
+    --
+    -- The server tells us the exact expiry of OUR OWN statuses (0x063
+    -- sub-9, kept in _ow_buff_timers). A song you sing on the party lands
+    -- on you and on your trusts from one cast, so your own expiry is their
+    -- expiry -- no estimating, no duration table. Nothing to borrow when
+    -- somebody else cast it, and then the status simply has no timer.
+    -- PREFER THE SERVER'S NUMBER, AND READ IT LIVE.
+    --
+    -- When a song lands, your own entry for it is still the estimated base
+    -- duration: the exact expiry arrives a beat later in 0x063 sub-9, which
+    -- is the entry marked precise. Snapshotting at the moment of the gain
+    -- therefore froze the base time and never picked up your real one --
+    -- which is why a trust showed 2:00 for a song your gear makes 4:30.
+    -- So this is never cached: the label asks again every time it draws.
+    -- BY SONG FIRST, then by status.
+    --
+    -- Your own timers are keyed by slot and carry the song's name, which
+    -- is the only thing that tells two marches apart: both are status 214.
+    -- Matching on the status alone handed every march the latest-expiring
+    -- one, so a song sung fifteen seconds earlier showed fifteen seconds
+    -- too much on the trusts. The status fallback still covers anything
+    -- whose name we never learned.
+    TB.player_expiry = function(status, sname)
+        local function pick(match)
+            local best, best_precise = nil, false
+            for _, e in pairs(_ow_buff_timers or {}) do
+                if e and e.expires_at and match(e) then
+                    local precise = e.precise and true or false
+                    if best == nil
+                            or (precise and not best_precise)
+                            or (precise == best_precise
+                                and e.expires_at > best) then
+                        best, best_precise = e.expires_at, precise
+                    end
+                end
+            end
+            return best
+        end
+        if sname and sname ~= '' then
+            local want = sname:lower()
+            local by_name = pick(function(e)
+                return e.name and tostring(e.name):lower() == want
+            end)
+            if by_name then return by_name end
+        end
+        return pick(function(e) return e.buff_id == status end)
+    end
+
+    -- What the party encoder asks, per status, as it draws.
+    _G._ow_tbuff_expiry = function(id, status, sname)
+        if not (id and status and TB.by_id[id]) then return nil end
+        return TB.player_expiry(status, sname)
+    end
+
+    -- The status a job ability grants, for the roll case where the packet
+    -- reports the number rolled instead.
+    TB.ability_status = function(abil_id)
+        local ab = res and res.job_abilities and res.job_abilities[abil_id]
+        local st = ab and (ab.status or ab.buff)
+        return tonumber(st)
+    end
+
+    windower.register_event('incoming chunk', function(id, data)
+        local now = os.time()
+        TB.roster(now)
+        if not next(TB.trusts) then return end
+
+        if id == 0x028 then
+            local ok_p, pk = pcall(packets.parse, 'incoming', data)
+            if not (ok_p and type(pk) == 'table') then return end
+            local tcount = tonumber(pk['Target Count']) or 0
+            local cat = tonumber(pk['Category']) or 0
+            local abil = tonumber(pk['Param']) or 0
+            for t = 1, math.min(tcount, 16) do
+                local tid = pk['Target ' .. t .. ' ID']
+                if tid and TB.trusts[tid] then
+                    local acount = tonumber(
+                        pk['Target ' .. t .. ' Action Count']) or 1
+                    for a = 1, math.min(acount, 8) do
+                        local pre = 'Target ' .. t .. ' Action ' .. a .. ' '
+                        local msg = tonumber(pk[pre .. 'Message']) or 0
+                        local par = tonumber(pk[pre .. 'Param']) or 0
+                        if TB_GAIN_MAGIC[msg] then
+                            -- Param IS the status here; the spell is the
+                            -- slot it occupies.
+                            local sp = res and res.spells and res.spells[abil]
+                            TB.gain(tid, 'm' .. abil, par, now,
+                                    sp and (sp.en or sp.english))
+                        elseif msg == TB_ROLL_MSG and cat == 6 then
+                            -- A roll reports the NUMBER rolled, so the
+                            -- status comes from the ability.
+                            local ab = res and res.job_abilities
+                                       and res.job_abilities[abil]
+                            TB.gain(tid, 'a' .. abil, TB.ability_status(abil),
+                                    now, ab and (ab.en or ab.english))
+                        end
+                    end
+                end
+            end
+            return
+        end
+
+        if id == 0x029 and #data >= 0x1A then
+            local tid = data:byte(0x09) + data:byte(0x0A) * 256
+                      + data:byte(0x0B) * 65536 + data:byte(0x0C) * 16777216
+            if not TB.trusts[tid] then return end
+            local p1 = data:byte(0x0D) + data:byte(0x0E) * 256
+                     + data:byte(0x0F) * 65536 + data:byte(0x10) * 16777216
+            local msg = (data:byte(0x19) + data:byte(0x1A) * 256) % 32768
+            if TB_LOSS[msg] then
+                TB.loss(tid, p1, now)
+            elseif TB_GAIN_MAGIC[msg] then
+                TB.gain(tid, 's' .. p1, p1, now)
+            end
+            return
+        end
+
+        -- Zoning drops everything: the entities are gone and their ids will
+        -- be reused by whatever is in the next zone.
+        if id == 0x00A then
+            for tid in pairs(TB.by_id) do
+                if _G._ow_party_buffs_set then
+                    pcall(_G._ow_party_buffs_set, tid, nil)
+                end
+            end
+            TB.by_id = {}
+            TB.trusts = {}
+            TB.roster_t = 0
+        end
+    end)
+
+    ow_safe_register('prerender', function()
+        local clock = os.clock()
+        if clock - (TB.tick_t or 0) < 1.0 then return end
+        TB.tick_t = clock
+        -- Deferred removals: a wear-off we held back so it would leave the
+        -- panel with your own copy rather than a second before it.
+        for id, held in pairs(TB.by_id) do
+            local changed = false
+            for key, e in pairs(held) do
+                if e.drop_at and clock >= e.drop_at then
+                    held[key] = nil
+                    changed = true
+                end
+            end
+            if changed then TB.publish(id) end
+        end
+        -- NO TIMES ARE SENT FOR OTHER PARTY MEMBERS.
+        --
+        -- A trust's remaining time was read off your own copy of the same
+        -- song, which is right in principle and kept coming out wrong in
+        -- practice. His call, and the right one: a number that is wrong is
+        -- worse than no number. Only YOUR statuses are timed now. The
+        -- statuses themselves, their icons and the song names all stay.
+
+        local now = os.time()
+        if now - (TB.exp_t or 0) < 30 then return end
+        TB.exp_t = now
+        pcall(TB.expire, now)
+    end)
+end
+
+-- ════════════════════════════════════════════════════════════════════════
+--  Trust packet capture  —  //ow trustcap [on|off]
+--
+--  A blind full capture is unreadable: tens of thousands of packets a
+--  minute, most of them about nothing we care about. This filters instead.
+--  While it is on we know exactly which entity indexes and ids your alter
+--  egos have, so every incoming packet is scanned for those numbers and
+--  only the ones that MENTION A TRUST are written down -- packet id, where
+--  in the payload the number landed, and the raw bytes.
+--
+--  0x028 and 0x029 (action, and action message) are decoded further when
+--  they name a trust, because that is where the evidence already points:
+--  the chat panel renders "<trust> loses <status>" lines today, and those
+--  are built from these packets' raw fields rather than from parsed text.
+--  What we have never had is the message-id table -- which id means gained
+--  and which means wore off for a party member who is not you.
+--
+--  Everything lands in omniwatch.log. Bounded: at most 300 lines a second
+--  and 4000 lines a run, then it stops itself.
+-- ════════════════════════════════════════════════════════════════════════
+_ow_trustcap_on    = false
+_ow_trustcap_lines = 0
+_ow_trustcap_sec   = 0
+_ow_trustcap_rate  = 0
+
+local _OW_TCAP_MAX_LINES = 4000
+local _OW_TCAP_MAX_RATE  = 300
+
+-- Index -> name, id -> name for the alter egos currently out. Rebuilt on
+-- every capture start and refreshed as the party changes, so a trust
+-- called mid-run is picked up too.
+_ow_trustcap_ix = {}
+_ow_trustcap_id = {}
+
+function _ow_trustcap_roster()
+    _ow_trustcap_ix, _ow_trustcap_id = {}, {}
+    local party = windower.ffxi.get_party and windower.ffxi.get_party()
+    if not party then return 0 end
+    local n = 0
+    for _, key in ipairs({'p1', 'p2', 'p3', 'p4', 'p5'}) do
+        local m = party[key]
+        local mob = m and m.mob
+        -- A trust is a party member whose entity is an NPC: a real player
+        -- never is. spawn_type 14 is the alter-ego type, but it is not
+        -- relied on alone in case a future trust type differs.
+        if mob and mob.index and (mob.is_npc or mob.spawn_type == 14) then
+            _ow_trustcap_ix[mob.index] = mob.name or key
+            if mob.id then _ow_trustcap_id[mob.id] = mob.name or key end
+            n = n + 1
+        end
+    end
+    return n
+end
+
+function _ow_trustcap_set(on)
+    _ow_trustcap_on = on and true or false
+    _ow_trustcap_lines = 0
+    if _ow_trustcap_on then
+        local n = _ow_trustcap_roster()
+        ow_chat(207, string.format('[TCAP] capture ON — %d alter ego(s)', n))
+        for ix, nm in pairs(_ow_trustcap_ix) do
+            ow_chat(207, string.format('[TCAP] trust index=%d (0x%03X) %s',
+                ix, ix, tostring(nm)))
+        end
+        if n == 0 then
+            ow_chat(207, '[TCAP] no trusts out — call them, then run '
+                .. '//ow trustcap on again')
+        end
+    else
+        ow_chat(207, '[TCAP] capture OFF')
+    end
+end
+
+local function _ow_tcap_say(line)
+    if _ow_trustcap_lines >= _OW_TCAP_MAX_LINES then
+        if _ow_trustcap_lines == _OW_TCAP_MAX_LINES then
+            _ow_trustcap_lines = _ow_trustcap_lines + 1
+            _ow_trustcap_on = false
+            ow_chat(207, '[TCAP] line cap reached — capture stopped')
+        end
+        return
+    end
+    local sec = math.floor(os.clock())
+    if sec ~= _ow_trustcap_sec then
+        _ow_trustcap_sec, _ow_trustcap_rate = sec, 0
+    end
+    _ow_trustcap_rate = _ow_trustcap_rate + 1
+    if _ow_trustcap_rate > _OW_TCAP_MAX_RATE then return end
+    _ow_trustcap_lines = _ow_trustcap_lines + 1
+    ow_chat(207, line)
+end
+
+local function _ow_tcap_hex(data, from, to)
+    local out = {}
+    for i = from, math.min(to, #data) do
+        out[#out + 1] = string.format('%02X', data:byte(i))
+    end
+    return table.concat(out, ' ')
+end
+
+-- Where in the payload a trust's index or id appears, if anywhere.
+local function _ow_tcap_match(data)
+    local hits = {}
+    local n = #data
+    for i = 1, n - 1 do
+        local v16 = data:byte(i) + data:byte(i + 1) * 256
+        local who = _ow_trustcap_ix[v16]
+        if who then
+            hits[#hits + 1] = string.format('index %s @0x%02X', who, i - 1)
+        end
+        if i <= n - 3 then
+            local v32 = data:byte(i) + data:byte(i + 1) * 256
+                      + data:byte(i + 2) * 65536 + data:byte(i + 3) * 16777216
+            local who2 = _ow_trustcap_id[v32]
+            if who2 then
+                hits[#hits + 1] = string.format('id %s @0x%02X', who2, i - 1)
+            end
+        end
+        if #hits >= 4 then break end
+    end
+    return hits
+end
+
+ow_safe_register('incoming chunk', function(id, data)
+    if not _ow_trustcap_on then return end
+    -- Keep the roster current: a trust called or dismissed mid-run would
+    -- otherwise be invisible or logged under a stale index.
+    if id == 0x0C8 or id == 0x0DD or id == 0x0DF then
+        pcall(_ow_trustcap_roster)
+    end
+
+    -- THE ACTION PACKET HAS TO BE PARSED, NOT SCANNED.
+    --
+    -- 0x028 is where a buff LANDING is reported, and its fields are
+    -- bit-packed: a target's id never sits on a byte boundary, so the byte
+    -- scan below cannot see it and the first two captures caught only the
+    -- wear-offs. The packets library knows the layout, so hand it over and
+    -- read the parsed targets instead. Message ids, per Windower's own
+    -- list: 205 gains the effect of, 206 effect wears off, 204 is no
+    -- longer. The status id rides in the action's Param.
+    if id == 0x028 then
+        local ok_p, pk = pcall(packets.parse, 'incoming', data)
+        if ok_p and type(pk) == 'table' then
+            local tcount = tonumber(pk['Target Count']) or 0
+            for t = 1, math.min(tcount, 16) do
+                local tid = pk['Target ' .. t .. ' ID']
+                local who = tid and _ow_trustcap_id[tid]
+                if who then
+                    local acount = tonumber(
+                        pk['Target ' .. t .. ' Action Count']) or 1
+                    for a = 1, math.min(acount, 8) do
+                        local pre = 'Target ' .. t .. ' Action ' .. a .. ' '
+                        _ow_tcap_say(string.format(
+                            '[TCAP] 0x028 ON %s msg=%s param=%s '
+                            .. '(category=%s spell=%s)',
+                            who, tostring(pk[pre .. 'Message']),
+                            tostring(pk[pre .. 'Param']),
+                            tostring(pk['Category']), tostring(pk['Param'])))
+                    end
+                end
+            end
+        end
+        return
+    end
+
+    -- The two message packets get decoded when they name a trust, whether
+    -- or not the byte scan finds the number anywhere else.
+    --
+    -- OFFSETS, measured off his 2026-09-23 capture rather than assumed --
+    -- the first version of this read the target two bytes early and every
+    -- line fell through to the raw dump. Lua strings are 1-based, so a
+    -- field at payload offset 0x08 is byte 9.
+    --   0x04 actor id   0x08 target id   0x0C param1   0x10 param2
+    --   0x14 actor index   0x16 target index   0x18 message id
+    if (id == 0x029 or id == 0x02D) and #data >= 0x1A then
+        local tid = data:byte(0x09) + data:byte(0x0A) * 256
+                  + data:byte(0x0B) * 65536 + data:byte(0x0C) * 16777216
+        local who = _ow_trustcap_id[tid]
+        if who then
+            local p1 = data:byte(0x0D) + data:byte(0x0E) * 256
+                     + data:byte(0x0F) * 65536 + data:byte(0x10) * 16777216
+            local p2 = data:byte(0x11) + data:byte(0x12) * 256
+                     + data:byte(0x13) * 65536 + data:byte(0x14) * 16777216
+            local msg = (data:byte(0x19) + data:byte(0x1A) * 256) % 32768
+            _ow_tcap_say(string.format(
+                '[TCAP] 0x%03X ON %s msg=%d p1=%d p2=%d | %s',
+                id, who, msg, p1, p2, _ow_tcap_hex(data, 1, 32)))
+            return
+        end
+    end
+
+    local hits = _ow_tcap_match(data)
+    if #hits == 0 then return end
+    _ow_tcap_say(string.format('[TCAP] 0x%03X len=%d [%s] | %s',
+        id, #data, table.concat(hits, ', '), _ow_tcap_hex(data, 1, 48)))
+end)
+
+-- ════════════════════════════════════════════════════════════════════════
+--  Delivery box
+--  The box is opened CLIENT-SIDE, by injecting the game's own dialog packet
+--  (incoming 0x4B, Type 0x0E inbox / 0x0D outbox) and letting the client run
+--  its normal handshake with the server. NOTHING is sent to the server to
+--  open or refresh a box: outgoing opens re-request it and trip the server's
+--  reopen limit ("Please try again in a little while"), which is what sank
+--  the first attempt at this feature. Outgoing 0x4D packets go out only for
+--  real actions -- take, send, return.
+--
+--  The server sends the box contents ONCE, on open, so a delivery that lands
+--  while you are looking at the box is invisible until it is opened again.
+--  Refresh is what reopens it -- on the user's say-so, never on a timer:
+--  every reopen redraws the game's own box window, and a box that reopens
+--  itself flickers over the game for no good reason.
+--
+--  Sending is from MAIN INVENTORY only, like the game's own menu.
+--
+--  Wire (python -> lua):
+--    DBOX|open|<in|out> / close / refresh / take|<slot> / takeall /
+--    return|<slot> / send|<slot>|<id>|<count>|<name> / gil|<amount>|<name> /
+--    log|<on|off> / status
+--  Wire (lua -> python):
+--    DBOX|box|<inbox rows>|<outbox rows>   row: slot~id~count~name~who~ts~gil
+--    DBOX|status|<open>|<busy>|<queued>|<note>
+-- ════════════════════════════════════════════════════════════════════════
+do
+    local DBC = {
+        LAST = 7,          -- slots 0..7
+        OP_DELAY = 1.0,    -- between the two halves of a take / return
+        PKT_GAP = 0.5,     -- minimum spacing between injected 0x4D packets
+        SWITCH = 1.2,      -- client teardown beat between close and open
+        TIMEOUT = 90,      -- a single job may not outlive this
+    }
+    -- The server's own box-opened / box-closed messages, replayed into our
+    -- client. Type is at offset 0x04: 0x0E inbox, 0x0D outbox, 0x0F closed.
+    local DLG = {
+        ['in'] = string.char(0x4B, 0x0A, 0, 0, 0x0E, 0xFF, 0xFF, 0xFF, 0xFF,
+                             0xFF, 0xFF, 0xFF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF,
+                             0xFF, 0xFF, 0xFF),
+        out    = string.char(0x4B, 0x0A, 0, 0, 0x0D, 0xFF, 0xFF, 0xFF, 0xFF,
+                             0xFF, 0xFF, 0xFF, 0x01, 0xFF, 0xFF, 0xFF, 0xFF,
+                             0xFF, 0xFF, 0xFF),
+        shut   = string.char(0x4B, 0x0A, 0, 0, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF,
+                             0xFF, 0xFF, 0xFF, 0x01, 0xFF, 0xFF, 0xFF, 0, 0,
+                             0, 0),
+    }
+    -- Where the box works: a Mog House, a nomad moogle zone, or an AH city
+    -- (the counters there share the delivery NPC).
+    local DB_ZONES = {}
+    for _, z in ipairs({'Bastok Mines', 'Bastok Markets', 'Norg',
+            "Southern San d'Oria", "Port San d'Oria", 'Rabao',
+            'Windurst Woods', 'Windurst Walls', 'Kazham', 'Lower Jeuno',
+            "Ru'Lude Gardens", 'Port Jeuno', 'Upper Jeuno',
+            'Aht Urhgan Whitegate', 'Al Zahbi', 'Nashmau',
+            'Tavnazian Safehold', 'Western Adoulin', 'Eastern Adoulin'}) do
+        DB_ZONES[z] = true
+    end
+    local DB_NOMAD = { [26] = true, [53] = true, [247] = true, [248] = true,
+                       [249] = true, [250] = true, [252] = true }
+
+    -- Everything else hangs off this one global: the 200-local cap in the
+    -- main chunk is why the functions are fields rather than locals.
+    _G._ow_dbox = {
+        inbox = {}, outbox = {}, open = nil, note = '',
+        q = {}, run = nil, pq = {}, pq_last = 0,
+        -- Packet logging is off now the box is proven; //ow dbox turns it
+        -- back on if a take or a send ever misbehaves.
+        dirty = true, statdirty = true, log = false,
+        opening = false, open_which = nil, open_t = 0,
+    }
+    local D = _G._ow_dbox
+
+    D.say = function(msg)
+        if D.log then ow_chat(207, '[OW dbox] ' .. tostring(msg)) end
+    end
+
+    D.note_set = function(msg)
+        D.note = tostring(msg or '')
+        D.statdirty = true
+        D.say(msg)
+    end
+
+    D.emit = function(payload)
+        if udp_gs then pcall(function() udp_gs:send(payload) end) end
+    end
+
+    D.clean = function(v)
+        return (tostring(v or ''):gsub('[|;~]', ' '))
+    end
+
+    D.allowed = function()
+        local info = windower.ffxi.get_info and windower.ffxi.get_info()
+        if not info then return false end
+        if info.mog_house then return true end
+        local z = info.zone
+        if z and DB_NOMAD[z] then return true end
+        local zn = z and res.zones[z]
+        return (zn and DB_ZONES[zn.en]) and true or false
+    end
+
+    D.item_name = function(id)
+        local r = res and res.items and res.items[id]
+        return (r and (r.english or r.en)) or ('#' .. tostring(id))
+    end
+
+    D.box_rows = function(box)
+        local parts = {}
+        for s = 0, DBC.LAST do
+            local it = box[s]
+            if it then
+                parts[#parts + 1] = string.format('%d~%d~%d~%s~%s~%d~%d',
+                    s, it.id or 0, it.count or 1, D.clean(it.name),
+                    D.clean(it.who), it.ts or 0, it.gil and 1 or 0)
+            end
+        end
+        return table.concat(parts, ';')
+    end
+
+    D.emit_box = function()
+        D.emit('DBOX|box|' .. D.box_rows(D.inbox) .. '|' .. D.box_rows(D.outbox))
+        D.dirty = false
+    end
+
+    D.emit_status = function()
+        D.emit(string.format('DBOX|status|%s|%d|%d|%s',
+            D.open or '', D.run and 1 or 0, #D.q, D.clean(D.note)))
+        D.statdirty = false
+    end
+
+    -- One delivery-box command packet (outgoing 0x4D).
+    D.op = function(cmd, box_no, post_no, item_no)
+        return string.char(0x4D, 0x10, 0, 0, cmd, box_no, post_no, item_no,
+                           0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0)
+               .. string.rep('\0', 16)
+    end
+
+    -- Queue rather than fire: the client's own menu leaves room between
+    -- these and the server has a state change to make between each.
+    D.inject = function(p)
+        D.pq[#D.pq + 1] = p
+    end
+
+    D.pq_drain = function(now)
+        if #D.pq == 0 then return end
+        if now - D.pq_last < DBC.PKT_GAP then return end
+        local p = table.remove(D.pq, 1)
+        if D.log then
+            local hex = {}
+            for i = 1, math.min(#p, 16) do
+                hex[#hex + 1] = string.format('%02X', p:byte(i))
+            end
+            D.say('OUT ' .. table.concat(hex, ' '))
+        end
+        pcall(function() windower.packets.inject_outgoing(0x4D, p) end)
+        D.pq_last = now
+    end
+
+    D.close_inject = function()
+        pcall(function() windower.packets.inject_incoming(0x4B, DLG.shut) end)
+    end
+
+    D.open_inject = function(which)
+        pcall(function()
+            windower.packets.inject_incoming(0x4B, DLG[which] or DLG['in'])
+        end)
+        D.open = which
+        D.opening = false
+        D.dirty = true
+        D.statdirty = true
+    end
+
+    -- Close, wait a beat, reopen: the only way to re-read a box, since the
+    -- contents arrive once per open.
+    D.reopen = function(which, now)
+        D.close_inject()
+        D.open = nil
+        D.opening = true
+        D.open_which = which
+        D.open_t = now or os.clock()
+        D.statdirty = true
+    end
+
+    D.open_box = function(which)
+        if not D.allowed() then
+            D.note_set('not at a delivery box'); return
+        end
+        which = (which == 'out') and 'out' or 'in'
+        if D.open == which and not D.opening then
+            D.statdirty = true; return
+        end
+        if D.open ~= nil then
+            D.reopen(which, os.clock())
+        else
+            D.open_inject(which)
+        end
+        D.note_set((which == 'out') and 'outbox open' or 'inbox open')
+    end
+
+    D.close_box = function()
+        D.opening = false
+        D.close_inject()
+        D.open = nil
+        D.note_set('closed')
+    end
+
+    -- A name the game will accept: letters only, capitalised, 16 bytes.
+    D.pad_name = function(name)
+        local nm = tostring(name or ''):gsub('[^%a]', '')
+        if #nm == 0 then return nil end
+        nm = nm:sub(1, 1):upper() .. nm:sub(2, 15):lower()
+        return nm .. string.rep('\0', 16 - #nm)
+    end
+
+    -- 0x4D Type 0x02: stage <count> of inventory slot <inv_idx> into outbox
+    -- slot <post_no>, addressed to <name>. Gil rides the same packet as
+    -- inventory slot 0 with the amount in the count field.
+    D.set_packet = function(post_no, inv_idx, count, name)
+        local nb = D.pad_name(name)
+        if not nb then return nil end
+        local c = math.max(1, math.floor(count or 1))
+        return string.char(0x4D, 0x10, 0, 0, 0x02, 2, post_no % 256,
+                           inv_idx % 256)
+               .. string.char(c % 256, math.floor(c / 256) % 256,
+                              math.floor(c / 65536) % 256,
+                              math.floor(c / 16777216) % 256)
+               .. string.char(0, 0, 0, 0) .. nb
+    end
+
+    D.free_out_slot = function()
+        for s = 0, DBC.LAST do
+            if not D.outbox[s] then return s end
+        end
+        return nil
+    end
+
+    D.inv_free = function()
+        local ok, bi = pcall(function()
+            return windower.ffxi.get_bag_info and windower.ffxi.get_bag_info(0)
+        end)
+        if ok and type(bi) == 'table' and bi.max and bi.count then
+            return bi.max - bi.count
+        end
+        return nil            -- unknown: don't block on it
+    end
+
+    D.enqueue = function(job)
+        D.q[#D.q + 1] = job
+        D.statdirty = true
+    end
+
+    D.finish = function(note)
+        D.run = nil
+        D.note_set(note or '')
+    end
+
+    -- ── the job runner ──────────────────────────────────────────────────
+    D.job_take = function(r, now)
+        if D.open ~= 'in' then D.finish('inbox not open'); return end
+        if r.phase == 'get' then
+            if now - r.t < DBC.OP_DELAY then return end
+            if r.i > #r.slots then r.phase = 'fin'; r.t = now; return end
+            local free = D.inv_free()
+            if free ~= nil and free <= 0 then
+                D.finish('inventory full'); return
+            end
+            D.inject(D.op(0x08, 1, r.slots[r.i], 0xFF))
+            r.t = now; r.phase = 'one'
+        elseif r.phase == 'one' then
+            if now - r.t < 0.6 then return end
+            local s = r.slots[r.i]
+            D.inject(D.op(0x0A, 1, s, 0xFF))
+            D.inbox[s] = nil
+            D.dirty = true
+            r.i = r.i + 1; r.t = now; r.phase = 'get'
+        elseif r.phase == 'fin' then
+            if now - r.t < 0.5 then return end
+            D.finish('took ' .. #r.slots .. ' item(s)')
+        end
+    end
+
+    D.job_return = function(r, now)
+        if D.open ~= 'out' then D.finish('outbox not open'); return end
+        if r.phase == 'cancel' then
+            if now - r.t < DBC.OP_DELAY then return end
+            if r.i > #r.slots then r.phase = 'fin'; r.t = now; return end
+            D.inject(D.op(0x04, 2, r.slots[r.i], 0xFF))
+            r.t = now; r.phase = 'one'
+        elseif r.phase == 'one' then
+            if now - r.t < 0.6 then return end
+            local s = r.slots[r.i]
+            D.inject(D.op(0x0A, 2, s, 0xFF))
+            D.outbox[s] = nil
+            D.dirty = true
+            r.i = r.i + 1; r.t = now; r.phase = 'cancel'
+        elseif r.phase == 'fin' then
+            if now - r.t < 0.5 then return end
+            D.finish('returned ' .. #r.slots .. ' item(s)')
+        end
+    end
+
+    D.job_send = function(r, now)
+        if r.phase == 'check' then
+            if not r.gil then
+                -- The panel drew this row some seconds ago; the slot may
+                -- hold something else by now. Mailing the wrong item is not
+                -- recoverable, so a mismatch stops the job.
+                local inv = windower.ffxi.get_items and windower.ffxi.get_items(0)
+                local it = inv and inv[r.slot]
+                if not (type(it) == 'table' and it.id == r.id and it.id ~= 0) then
+                    D.finish('that inventory slot changed; nothing sent'); return
+                end
+                if (it.status or 0) ~= 0 then
+                    D.finish('item is equipped or in a bazaar'); return
+                end
+                r.count = math.min(r.count, it.count or r.count)
+            else
+                local items = windower.ffxi.get_items and windower.ffxi.get_items()
+                local have = (items and items.gil) or 0
+                r.count = math.min(r.count, have)
+                if r.count < 1 then D.finish('no gil to send'); return end
+            end
+            r.phase = 'open'; r.t = now
+        elseif r.phase == 'open' then
+            if D.open ~= 'out' then D.finish('outbox not open'); return end
+            r.t = now; r.phase = 'set'
+        elseif r.phase == 'set' then
+            if now - r.t < 0.6 then return end
+            r.post = D.free_out_slot()
+            if r.post == nil then D.finish('outbox is full'); return end
+            local p = D.set_packet(r.post, r.gil and 0 or r.slot, r.count, r.to)
+            if not p then D.finish('bad recipient name'); return end
+            D.inject(p)
+            r.t = now; r.phase = 'send'
+        elseif r.phase == 'send' then
+            if now - r.t < 0.9 then return end
+            D.inject(D.op(0x03, 2, r.post or 0, 0xFF))
+            r.t = now; r.phase = 'fin'
+        elseif r.phase == 'fin' then
+            if now - r.t < 1.5 then return end
+            -- Ask the client to re-read the outbox so the new parcel shows.
+            D.inject(D.op(0x01, 2, 0xFF, 0xFF))
+            D.inject(D.op(0x05, 2, 0xFF, 0xFF))
+            D.finish('sent to ' .. tostring(r.to or ''))
+        end
+    end
+
+    _G._ow_dbox_tick = function()
+        local now = os.clock()
+        D.pq_drain(now)
+        if D.opening and (now - D.open_t) >= DBC.SWITCH then
+            D.open_inject(D.open_which or 'in')
+        end
+        if not D.run then
+            if #D.q > 0 then
+                if not D.allowed() then
+                    D.q = {}
+                    D.note_set('not at a delivery box')
+                else
+                    D.run = table.remove(D.q, 1)
+                    D.run.t = now
+                    D.run.start = now
+                    D.statdirty = true
+                end
+            end
+        elseif not D.opening then
+            local r = D.run
+            if now - r.start > DBC.TIMEOUT then
+                D.finish('timed out')
+            elseif r.kind == 'take' then
+                D.job_take(r, now)
+            elseif r.kind == 'return' then
+                D.job_return(r, now)
+            elseif r.kind == 'send' then
+                D.job_send(r, now)
+            else
+                D.finish('unknown job')
+            end
+        end
+
+        if D.dirty then D.emit_box() end
+        if D.statdirty then D.emit_status() end
+    end
+
+    -- ── the box contents, read passively ────────────────────────────────
+    windower.register_event('incoming chunk', function(id, data)
+        if id ~= 0x4B then return end
+        local ok, p = pcall(packets.parse, 'incoming', data)
+        if not ok or type(p) ~= 'table' then return end
+        local t = p.Type
+        if D.log then
+            D.say(string.format('IN type=%s slot=%s item=%s count=%s',
+                tostring(t), tostring(p['Delivery Slot']), tostring(p.Item),
+                tostring(p.Count)))
+        end
+        if t == 0x0E or t == 0x0D then
+            -- 0xFA here is the server's reopen-limit "busy". The box is
+            -- already switched client-side, so this is harmless -- note it
+            -- and carry on rather than bouncing the open state.
+            if #data >= 13 and data:byte(13) == 0xFA then
+                D.note_set('server busy; showing what we have')
+                return
+            end
+            D.open = (t == 0x0E) and 'in' or 'out'
+            D.statdirty = true
+            return
+        elseif t == 0x0F then
+            D.open = nil
+            D.statdirty = true
+            return
+        end
+        if t ~= 0x01 then return end
+        local slot = p['Delivery Slot']
+        if type(slot) ~= 'number' or slot < 0 or slot > DBC.LAST then return end
+        local box = (D.open == 'out') and D.outbox or D.inbox
+        local item = p.Item
+        if item == 0xFFFF then
+            -- Gil. Amounts over 65,535 carry their high bits alongside.
+            local hi = tonumber(p['_unknown11']) or 0
+            box[slot] = { id = 65535, count = (p.Count or 0) + hi * 65536,
+                          name = 'Gil', who = p['Player Name'] or '',
+                          ts = tonumber(p.Timestamp) or 0, gil = true }
+        elseif item and item ~= 0 then
+            box[slot] = { id = item, count = p.Count or 1,
+                          name = D.item_name(item),
+                          who = p['Player Name'] or '',
+                          ts = tonumber(p.Timestamp) or 0 }
+        else
+            box[slot] = nil
+        end
+        D.dirty = true
+    end)
+
+    -- ── commands from the overlay ───────────────────────────────────────
+    _G._ow_dbox_cmd = function(rest)
+        local s, pos, f = tostring(rest or ''), 1, {}
+        while true do
+            local i = s:find('|', pos, true)
+            if not i then f[#f + 1] = s:sub(pos); break end
+            f[#f + 1] = s:sub(pos, i - 1)
+            pos = i + 1
+        end
+        local cmd = (f[1] or ''):lower()
+        if cmd == 'open' then
+            D.open_box(f[2])
+        elseif cmd == 'close' then
+            D.close_box()
+        elseif cmd == 'refresh' then
+            if D.open and D.allowed() then
+                D.reopen(D.open, os.clock())
+            else
+                D.open_box('in')
+            end
+        elseif cmd == 'take' then
+            local s = tonumber(f[2])
+            if s and D.inbox[s] then
+                D.enqueue({ kind = 'take', slots = { s }, i = 1, phase = 'get' })
+            end
+        elseif cmd == 'takeall' then
+            local slots = {}
+            for s = 0, DBC.LAST do
+                if D.inbox[s] then slots[#slots + 1] = s end
+            end
+            if #slots > 0 then
+                D.enqueue({ kind = 'take', slots = slots, i = 1, phase = 'get' })
+            end
+        elseif cmd == 'return' then
+            local s = tonumber(f[2])
+            if s and D.outbox[s] then
+                D.enqueue({ kind = 'return', slots = { s }, i = 1,
+                            phase = 'cancel' })
+            end
+        elseif cmd == 'returnall' then
+            local slots = {}
+            for s = 0, DBC.LAST do
+                if D.outbox[s] then slots[#slots + 1] = s end
+            end
+            if #slots > 0 then
+                D.enqueue({ kind = 'return', slots = slots, i = 1,
+                            phase = 'cancel' })
+            end
+        elseif cmd == 'send' then
+            local slot, id = tonumber(f[2]), tonumber(f[3])
+            local count, to = tonumber(f[4]) or 1, f[5]
+            if not (slot and id and D.pad_name(to)) then
+                D.note_set('send needs an item and a name'); return
+            end
+            D.enqueue({ kind = 'send', slot = slot, id = id,
+                        count = math.max(1, count), to = to, phase = 'check' })
+        elseif cmd == 'gil' then
+            local amt, to = tonumber(f[2]) or 0, f[3]
+            if not D.pad_name(to) then D.note_set('send needs a name'); return end
+            amt = math.min(1000000, math.max(1, math.floor(amt)))
+            D.enqueue({ kind = 'send', gil = true, slot = 0, count = amt,
+                        to = to, phase = 'check' })
+        elseif cmd == 'log' then
+            D.log = ((f[2] or ''):lower() == 'on')
+            D.statdirty = true
+        elseif cmd == 'status' then
+            D.dirty = true
+            D.statdirty = true
+        end
+    end
+end
+
 
 local function _ow_drain_inbound()
     if not udp_cmd_in then return end
@@ -10731,6 +12200,11 @@ local function _ow_drain_inbound()
                     end
                 end
             end
+        elseif head == 'MAGEBUFF' then
+            local ok, merr = pcall(_ow_magebuff_command, rest)
+            if not ok then
+                ow_chat(123, '[OmniWatch] magebuff error: ' .. tostring(merr))
+            end
         elseif head == 'PUPATT' then
             local ok, perr = pcall(_ow_pupatt_command, rest)
             if not ok then
@@ -10804,6 +12278,13 @@ local function _ow_drain_inbound()
                 if not ok_p then
                     ow_chat(123, '[OW pool] ' .. tostring(err_p))
                 end
+            end
+        elseif head == 'DBOX' then
+            -- Delivery box panel (AH window, Delivery tab). The payload
+            -- forms are listed at the delivery-box block above.
+            local ok_d, err_d = pcall(_G._ow_dbox_cmd, rest)
+            if not ok_d then
+                ow_chat(123, '[OW dbox] ' .. tostring(err_d))
             end
         elseif head == 'TARGET' then
             -- Click-to-target from the party panel.
@@ -10894,19 +12375,42 @@ local function _ow_drain_inbound()
                 pcall(function()
                     st_open = windower.ffxi.get_mob_by_target('st') ~= nil
                 end)
-                local ok_t, err_t = pcall(function()
-                    packets.inject(packets.new('incoming', 0x058, {
-                        ['Player']       = me.id,
-                        ['Target']       = tid,
-                        ['Player Index'] = me.index,
-                    }))
+                -- HOW THE CURSOR IS ACTUALLY MOVED, AND WHAT IS OUT OF
+                -- SCOPE.
+                --
+                -- The incoming 0x058 is the ASSIST RESPONSE -- the message
+                -- the server sends when you /assist someone, telling your
+                -- client to copy their battle target. So it lands on
+                -- players and monsters, and is ignored for ordinary NPCs
+                -- however the cursor is cleared first: a shopkeeper is not
+                -- a battle target. `/ta <name>` covers players only.
+                --
+                -- NPCs ARE DELIBERATELY NOT SUPPORTED HERE. The one route
+                -- that reaches them is the game's own selection cursor
+                -- (`/ta <stnpc>`, move it with 0x058, confirm with Enter);
+                -- it was built and it was not reliable enough to keep, and
+                -- it borrowed Enter and Escape from the game to do it.
+                -- Battle targets work off the packet alone, which is what
+                -- click-to-target is actually for. Don't re-add the cursor
+                -- route without a better reason than "it nearly worked".
+                local function aim()
+                    return pcall(function()
+                        packets.inject(packets.new('incoming', 0x058, {
+                            ['Player']       = me.id,
+                            ['Target']       = tid,
+                            ['Player Index'] = me.index,
+                        }))
+                    end)
+                end
+                local st_open = false
+                pcall(function()
+                    st_open = windower.ffxi.get_mob_by_target('st') ~= nil
                 end)
+                local ok_t, err_t = aim()
                 if ok_t and st_open then
-                    -- setkey drives the game's own key handling, which is
-                    -- what the cursor is listening to; a chat command
-                    -- can't confirm a subtarget. The small wait is for
-                    -- the cursor to settle on the new target before the
-                    -- keypress lands.
+                    -- A subtarget cursor was ALREADY open (you fired a
+                    -- macro built on <stpc>): move it and confirm, or the
+                    -- client sits waiting for a confirm that never comes.
                     windower.send_command(
                         'wait 0.1; setkey enter down; '
                         .. 'wait 0.05; setkey enter up')
@@ -10918,6 +12422,43 @@ local function _ow_drain_inbound()
                     '[OW target] %s id=%d -> inject 0x058 ok=%s%s',
                     tostring(nm), tid, tostring(ok_t),
                     ok_t and '' or (' err=' .. tostring(err_t))))
+
+                local want_id, want_nm, want_ix = tid, nm, idx
+                local want_npc = (mob and mob.is_npc) and true or false
+                if ok_t and not st_open then
+                    local function on_it()
+                        local cur = windower.ffxi.get_mob_by_target
+                                    and windower.ffxi.get_mob_by_target('t')
+                        return cur and cur.id == want_id
+                    end
+                    coroutine.schedule(function()
+                        if on_it() then return end
+                        if not want_npc and want_nm ~= '' then
+                            -- A player: the game's own /ta takes a name.
+                            windower.send_command('input /ta ' .. want_nm)
+                            ow_chat(207, string.format(
+                                '[OW target] %s: packet missed, used /ta',
+                                tostring(want_nm)))
+                        end
+                    end, 0.3)
+                    coroutine.schedule(function()
+                        if on_it() then return end
+                        local m2 = windower.ffxi.get_mob_by_index
+                                   and windower.ffxi.get_mob_by_index(want_ix)
+                        local cur = windower.ffxi.get_mob_by_target
+                                    and windower.ffxi.get_mob_by_target('t')
+                        local d = (m2 and m2.distance
+                                   and math.sqrt(m2.distance)) or -1
+                        ow_chat(207, string.format(
+                            '[OW target] FAILED on %s (index %s, id %s) '
+                            .. 'npc=%s dist=%.1f valid=%s hpp=%s now=%s',
+                            tostring(want_nm), tostring(want_ix),
+                            tostring(want_id), tostring(want_npc), d,
+                            tostring(m2 and m2.valid_target),
+                            tostring(m2 and m2.hpp),
+                            tostring(cur and cur.name or 'nothing')))
+                    end, 1.6)
+                end
             end
         elseif head == 'CMD' then
             -- Hotbar buttons of kind="windower" send their command
@@ -11349,6 +12890,9 @@ end)
 -- load message (links here) and //ow help.
 local PW_COMMANDS_HELP = {
     {'help',                  'Show this list of commands.'},
+    {'trustcap [on|off]',     'Log every incoming packet that mentions one '
+                              .. 'of your alter egos to omniwatch.log, to '
+                              .. 'find where their buffs come from.'},
     {'petdump',               'Write every field of the current pet\'s mob '
                               .. 'entry to omniwatch.log.'},
     {'stprobe',               'Toggle the sub-target diagnostic: logs what '
@@ -11492,6 +13036,27 @@ ow_safe_register('addon command', function(command, ...)
         _ow_ah_command(table.concat(args, '|'))
     elseif command == 'pupatt' or command == 'pup' then
         _ow_pupatt_command(table.concat(args, '|'))
+    elseif command == 'trustcap' then
+        local a1 = (args and args[1] or ''):lower()
+        _ow_trustcap_set(a1 ~= 'off' and (a1 == 'on' or not _ow_trustcap_on))
+        if windower and windower.add_to_chat then
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] trust capture = %s (writes to omniwatch.log)',
+                tostring(_ow_trustcap_on)))
+        end
+    elseif command == 'dbox' then
+        local d = _G._ow_dbox
+        if d then
+            d.log = not d.log
+            d.statdirty = true
+            ow_chat(207, string.format('[OW] delivery box log = %s',
+                tostring(d.log)))
+            if windower and windower.add_to_chat then
+                windower.add_to_chat(207, string.format(
+                    '[OmniWatch] delivery box log = %s (writes to omniwatch.log)',
+                    tostring(d.log)))
+            end
+        end
     elseif command == 'bzcap' then
         _ow_bz_cap = not _ow_bz_cap
         ow_chat(207, string.format('[OW] bazaar capture = %s',
@@ -13396,6 +14961,12 @@ local last_zone_send   = 0
 local last_gil_send    = 0
 local last_gil_value   = -1  -- -1 = never sent
 local party_buffs      = {}    -- keyed by player id
+-- Trust statuses are assembled from events elsewhere in the file (0x076 is
+-- never sent for an alter ego), and this is how they reach the same table
+-- the party encoder already reads. Nil clears a member.
+_G._ow_party_buffs_set = function(id, arr)
+    if id then party_buffs[id] = arr end
+end
 -- Party member jobs captured from the 0x0DD/0x0DF packets, keyed by member
 -- id: { mj=str, mjl=int, sj=str, sjl=int, ts=os.time }. GLOBAL (not a
 -- local) so the deep packet handler and the deep party encoder reach the
@@ -24383,6 +25954,13 @@ ow_safe_register('prerender', function()
         pcall(_G._ow_pool_tick)
     end
 
+    -- Delivery box: drains its outgoing packet queue, advances the current
+    -- take/send/return job and re-emits when something changed. Cheap when
+    -- the box is closed and nothing is queued.
+    if _G._ow_dbox_tick then
+        pcall(_G._ow_dbox_tick)
+    end
+
     -- Currency request injection (tier-1 + tier-2). Internal throttle is
     -- 5 minutes; this call is cheap when it returns early so it's safe to
     -- run every prerender tick. First call after load sends the requests
@@ -24473,28 +26051,53 @@ ow_safe_register('prerender', function()
                 -- the leading 'id:' off the front of each entry; entries
                 -- without a colon are treated as legacy name-only.
                 -- Also kicks off async icon extraction for any new ids.
-                local counts, order, ids = {}, {}, {}
-                for _, b in ipairs(buffs) do
-                    if b and b ~= 0 then
-                        local label = buff_name(b)
-                        if counts[label] == nil then
-                            order[#order + 1] = label
-                            counts[label] = 1
-                            ids[label] = b   -- record id for first-seen
-                            ensure_status_icon(b)
-                        else
-                            counts[label] = counts[label] + 1
+                -- ONE ENTRY PER STATUS HELD, repeats included. Two Marches
+                -- are two icons, the way your own statuses read -- rolling
+                -- them up into "March x2" hid which slots were filled.
+                local seen_icon = {}
+                -- Song names for a trust's statuses, when we know them:
+                -- two marches are both "March" by status, which is no use
+                -- on a row.
+                local t_names = _G._ow_tbuff_pub and _G._ow_tbuff_pub[m_id]
+
+                -- YOUR OWN row gets the same treatment, from the slot
+                -- names the buff-timer panel already attributes. Two
+                -- Minuets are both status 198, so listing them separately
+                -- without this showed the same name twice; the slots know
+                -- one is Valor Minuet IV and the other V. Ordered by slot,
+                -- and consumed in order, so the second occurrence of an id
+                -- takes the second slot's name.
+                local self_names = nil
+                if m_id == player_id and _ow_buff_slots then
+                    local slots = {}
+                    for sl in pairs(_ow_buff_slots) do
+                        slots[#slots + 1] = sl
+                    end
+                    table.sort(slots)
+                    self_names = {}
+                    for _, sl in ipairs(slots) do
+                        local bid = _ow_buff_slots[sl]
+                        local full = (_ow_buff_slot_fullname or {})[sl]
+                        if bid and full and full ~= '' then
+                            self_names[bid] = self_names[bid] or {}
+                            local q = self_names[bid]
+                            q[#q + 1] = full
                         end
                     end
                 end
-                for _, label in ipairs(order) do
-                    local n = counts[label]
-                    local id = ids[label] or 0
-                    if n > 1 then
-                        buff_string = buff_string .. tostring(id) .. ':'
-                                      .. label .. ' x' .. tostring(n) .. '|'
-                    else
-                        buff_string = buff_string .. tostring(id) .. ':'
+
+                for bi, b in ipairs(buffs) do
+                    if b and b ~= 0 then
+                        if not seen_icon[b] then
+                            seen_icon[b] = true
+                            ensure_status_icon(b)
+                        end
+                        local label = t_names and t_names[bi]
+                        if not label and self_names and self_names[b] then
+                            label = table.remove(self_names[b], 1)
+                        end
+                        label = label or buff_name(b)
+                        buff_string = buff_string .. tostring(b) .. ':'
                                       .. label .. '|'
                     end
                 end

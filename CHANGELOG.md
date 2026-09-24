@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.14.0] — 2026-09-23
+
+### Added
+
+- **Trust buffs and debuffs.** Your alter egos now show the statuses they are carrying, in the party panel beside everyone else's, named by the song or ability that put them there — Honor March rather than March. They appear as they land and clear as they wear off, and a trust that is dismissed or left behind by a zone takes its statuses with it.
+
+- **Delivery box.** A **Delivery** tab in the Marketplace, beside Buy and Sell. Switch between your inbox and outbox, see all eight slots with who sent each parcel and when it arrived, and take or return them one at a time or all at once. Send items or gil without walking to the moogle: type a name, pick something out of your inventory, set how many, and press Send. **Refresh** picks up anything that arrived while you were looking. The tab works anywhere the box does — a Mog House, a nomad moogle, or an Auction House city — and closing the tab or the window closes the box in the game as well.
+
+- **Minimap.** A small window showing the zone map around you, from **Settings ▸ Misc ▸ Minimap ▸ CONFIGURE**. You sit at the centre with an arrow for the way you are facing, north is up, and the map scrolls as you walk; players, monsters, NPCs and other objects show as coloured dots, and each kind can be switched off. Hover a dot for its name, distance and HP, and click a player or a monster to target it. Scroll to zoom, drag the frame to move it, drag the corner to resize, and set how solid the map is — the dots stay fully visible however faint you make it. The window is remembered between sessions, travels with your layout profiles, works whether or not the Tracker is open, and can be dragged onto the second display. A hotbar action opens and closes it.
+
+- **Listings can be managed from the Sell tab.** Each of your listings now has a button: **Cancel** takes an item off the auction house and hands it straight back, and **Clear** empties a slot the auction has finished with. Sold listings show in green, expired ones in red, so you can see at a glance which slots are free. Each row also carries the same lookups as the Buy tab — hover for the item card, **$** for its recent sales, right-click for its FFXIAH page.
+
+- **Item cards in the inventory.** Hover an item in the inventory dropdown — in a bag, in search results, or stored on a porter slip — and its card appears beside the list, laid out like the game's own item window: icon, name, Rare / Ex, the weapon type or slot with the races that can use it, the description with its stat columns lined up and element icons drawn in place, the augments on that particular piece — so two copies of the same cape each show their own — the level and jobs, stack size and item level. Icons are read from `icons/items`, one `<id>.png` per item; items without one get an empty frame.
+
+- **Key item cards.** Key items in the inventory dropdown get a card too: the name, whether it is permanent or temporary, and the game's own description, read from the client's data files.
+
+- **AH sales history from the inventory.** Right-click an item in the inventory dropdown and choose **AH sales history** to see its last ten sales — date, seller, buyer and price, newest first — with the low and high price over them, plus how many singles and stacks are for sale on the Auction House right now. Stack sales get their own list when the item stacks. The option only appears for items that can be sold on the Auction House, and an **FFXIAH** button opens the item's page there. Drag the window by its title to put it wherever suits you; it opens there next time, and the spot is kept with your profile.
+
+- **Mage tab in Loadouts.** Build named sets of buff spells — Enhancing Magic plus Regen, Reraise, Endark, Dread Spikes and Indi- spells — put them in the order you want, choose who each one goes on (yourself or party member 1–5), and press **Cast** to have them cast one after another. Mark a set active and the new **Cast buff set** hotbar action casts it. Spells your current job can't cast are shown dimmed, and anything on recast, short on MP, not usable on this job or aimed at an empty party slot is skipped with a note in chat.
+
+### Changed
+
+- **The Auction House window is now the Marketplace**, with a **Bazaar** tab beside Buy, Sell and Delivery. Price your own items from your inventory and take them back out again, with the total gil you have on offer; it works anywhere, not just at a counter. Items that can't be bazaared aren't offered, and an item that already has a price starts from that price when you pick it.
+
+- **The Auction House and the population readout survive a server address change.** If the search servers ever move, OmniWatch finds them again on its own and remembers where they went, instead of going quiet until an update.
+
+- **The Auction House window no longer opens the game's own auction window.** Buying and selling work the same as before; you just don't have a second window to close afterwards.
+
+- **The Sell tab clears itself after you list something**, so the item you just sent is not left sitting in the picker looking ready to go again.
+
+- **Refresh looks pressed when you press it**, in the Sell and Delivery tabs.
+
+- **Loadouts tabs are ordered BRD, BLU, Mage, PUP, Trusts.**
+
+- **Equipment panel, sim window and Marketplace tooltips are item cards.** Hovering a piece in the equipment panel, gear or food in the sim window, or an item in the Marketplace now shows the same card as the inventory — the game's own layout, with the augments on that piece of gear where it has them.
+
+### Fixed
+
+- **Your listings show as sold as soon as they sell**, without having to open the auction house in game first.
+
+- **Tooltips work wherever the Loadouts window was** once it is closed or moved.
+
+- **The Unlocking a Myth quests are under Aht Urhgan** in the quest checklist, matching the in-game quest log. Any you had already ticked keep their tick.
+
 ## [1.13.1] — 2026-09-14
 
 ### Added
@@ -59,7 +103,6 @@
 - **Hotbar page names keep leading spaces**, so titles can be indented to line up across bars.
 
 - Timer text on the buff and recast panels is white with a shadow rather than tinted like the bar it sits on, which made it unreadable on the paler colours.
-
 
 ## [1.12.3] — 2026-09-01
 
@@ -223,7 +266,6 @@
 - **Renaming a hotbar page renames the one you clicked** — with more than one hotbar on screen, editing a page name from any of them wrote the new name onto the first panel's page instead. Clicking a page name now opens the editor for that panel's own page, and an empty name falls back to that page's number rather than the first one's.
 - **Party names no longer react through anything drawn over them** — with the travel menu, the Settings dropdown or the character/profile menu open across the party panel, hovering it still raised the "Click to target" tooltip for the member underneath, and clicking still targeted them. Every panel hit-test now checks for a menu, popover or floating button over that point first, and the tooltip stays quiet entirely while a settings dialog is open. The same check covers the Cheat Sheet window and the equipment tooltip, which had its own copy of the rule.
 
-
 ## [1.11.0] — 2026-08-03
 
 ### Added
@@ -280,7 +322,6 @@
 - **The Cheat Sheet and the travel menu now open from a hotbar button** — putting either one on the hotbar and then turning its floating button off, which is the whole reason you'd move it to the hotbar, left the slot doing nothing. The setting behind each floating button was never just about the button: it was a master switch for the feature, and it was hiding the window along with the launcher. So the more sensibly you set the hotbar up, the less it worked. Those settings now do what their names say and hide only the floating button — the Cheat Sheet window and the travel menu open from wherever you press them. Sing, Call Trust and Auto ranged attack were never affected; they send a command rather than opening a window of their own.
 - **The build record is written where you can find it** — OmniWatch drops a small `omniwatch_build_stamp.txt` next to itself on every start so you can confirm which build is actually running, which matters when a download doesn't take. In the packaged .exe it was being written into the temporary folder Windows unpacks the program into, and that folder is deleted the moment you close it — so the file has never once appeared. It now lands beside OmniWatch.exe.
 - **The “Update available” notice clears without a restart** — the check that raises it runs once at startup, so anything that turned it on kept it on for the rest of the session. It's now rechecked while it's showing, and it names the file responsible in the session log rather than leaving you to guess. The version comparison itself is unchanged: the notice still appears when GitHub is genuinely ahead of what you're running.
-
 
 ## [1.10.0] — 2026-08-01
 
@@ -590,11 +631,9 @@ features and retires the hidden Developer section entirely.
 
 - **Sim food item ids corrected to real windower ids** — every entry in the sim food table used an id that didn't match the Windower resources (e.g. "Grape Daifuku" was keyed 5736, which is actually Lin. Purse; Sublime Sushi was 4359 = Dhalmel Meat; etc.). The stat values still applied correctly (the python list and lua `_FOOD_STATS` shared the same key), but any `res.items[id]` lookup — like the **"-- Food:" line in an exported sim set** — resolved to the wrong item name. All twelve existing ids are now the verified windower ids (Grape Daifuku = 6343, Sublime Sushi = 6468, Sole Sushi = 5149, Akamochi = 6260, Soy Ramen = 6458, Tropical Crepe = 6567, Red Curry Bun = 5759, Yellow Curry Bun = 5757, Pear Crepe = 5777, Marine Stewpot = 5893, and the two sushi +1s = 6469/5163), so the food name now resolves correctly. Stat values are unchanged.
 
-
   - **Honor March** was modeled as 90/1024 (8.8%) at +0 with a +48/1024 step; it's actually **126/1024 (12.30%) at +0, +12/1024 per March+ step** (linear: 138/150/162/174 at +1…+4).
   - **Advancing March** and **Victory March** were modeled with a flat linear per-plus step, but marches actually scale **multiplicatively** as `floor(base × (1 + 0.1 × March+))` (the HasteInfo/BG-wiki march formula). Advancing's base is **108/1024 (10.55%)** → 108/118/129/140/151/162/172/183/194 at +0…+8; Victory's base is **163/1024 (15.92%)** → 163/179/195/211/228/244/260/277/293. Victory's base had also been wrong (138 instead of 163).
   - Corrected in **both** `OmniWatch_Sim.lua` (the sim's song math gained a `haste_mult` multiplicative mode) and `OmniWatch.lua` (the live song-table derivation now asserts these BG-wiki values rather than trusting the vendored GearInfo `Bard_Songs` data, which was shipping wrong numbers). Honor March's Attack (168, +16/step) and Accuracy (42, +4/step) rows were already correct and are unchanged.
-
 
 ## [1.7.4] — 2026-06-12
 
@@ -638,7 +677,6 @@ Hook-driven capture deliberately never takes SDL/OS focus (activating the overla
 
 Each active trait in the editor's TRAIT TOTALS panel now shows its resolved stat value on an indented grey sub-line — e.g. Dual Wield (+gift) Tier VI · 48p over “+40”, Attack Bonus (sub) Tier I · 8p over “+10”. The values come from the per-tier arrays Lua ships in the BLU_TIERS payload (which now carries each trait's stat key and value ladder alongside the thresholds), resolved through the same gift/subjob-pool model as the tier labels. String-tier traits with no numeric value (Killers, Gilfinder) and locked progress rows show no sub-line, and the panel's overflow (“+N more…”) accounts for the extra line height. A “Show live” stat-panel preview was built first (Lua-computed via a BLU_PREVIEW round-trip so it matched the live engine exactly) but didn't work out in practice and was removed in favor of this inline display; all of its machinery — the toggle, the preview packet tagging, the Lua set-override and command handler — is gone. Also fixed the Dual Wield trait ladder, which capped at tier V (35%): BLU reaches tier VI through Job Point gifts, so the ladder now includes the 48-point / 40% sixth tier (confirmed in-game and per BG-wiki). Reaching 40% requires 32+ Dual Wield spell points plus both gifts.
 
-
 Chat upgrades ported from the OmniChat side project, plus an NPC dialog pad. Headlines: **focus words** (define words or phrases in the Filters GUI and the matched word itself pulse-highlights in amber, any channel, any tab, with inactive tabs blinking their label until visited), **Filters GUI saves applying live** (no more reloading OmniWatch after editing routing) and a **continue arrow** on the last chat line whenever your character is sitting in an NPC dialog.
 
 ### Added
@@ -656,7 +694,6 @@ Chat upgrades ported from the OmniChat side project, plus an NPC dialog pad. Hea
 
 ### Internal
 
-
 - **Focus matching is one lowercased substring scan per event at ingest**; word pixel positions are measured at render time with the line's own body font, so the shade lands on the word regardless of wrapping, sender split, or span coloring. A phrase split across a wrap boundary doesn't highlight (neither half is the phrase).
 
 ## [1.7.0] — 2026-06-09
@@ -667,7 +704,6 @@ A travel-and-tidy release: a **Warp button** — a floating, pulsing one-click t
 
 - **Warp button (superwarp integration)** — a small floating button (sibling of the cheat-sheet button: drag it anywhere, resize by its corner handle, both persist) that **pulses teal when a Home Point or Survival Guide is within superwarp's 6-yalm range**. The lua side scans nearby NPCs at ~2 Hz and reports proximity (multibox-tagged, with a 3-second freshness window so the pulse stops when you walk away or zone). Clicking opens a travel menu grouped by network — Home Point / Survival Guide — with destinations sourced from your **checklist attunement data** (what you've actually unlocked), region-grouped, with a JSON-config fallback (`omniwatch_warp.json`, written with editable defaults on first run). Multi-zone cities are **expandable groups** (Jeuno → Port / Lower / Upper / Ru'Lude). The menu windows to 12 rows with mouse-wheel scrolling and an accent scrollbar; out-of-range networks pin to the bottom as greyed headers so they stay visible without scrolling. Every destination asks **"Warp to X?"** with Warp / Cancel before firing `sw hp <zone>` / `sw sg <zone>` through the command rail, and the warp only executes on the displayed character — same multibox guard as the inventory actions, so you can't warp the wrong box. A **configure panel** (Settings → Misc, or right-click the button) holds **Show warp button** (recoverable even when hidden) and **Warp all characters (Send All)**, which prepends superwarp's `all` so every box travels together. Equipment tooltips are suppressed over the button, menu, and confirm popover.
 - **Inventory right-click actions (Treasury integration)** — right-click any item row in the inventory dropdown (bag detail or search results) for a context menu with **Drop item** (main Inventory bag only — you can't drop from storage/wardrobes) and **Auto-drop (Treasury)**, available everywhere. Auto-drop hands the item to the Treasury addon via `tr drop add <name>`: it's added to Treasury's auto-drop list, and with Treasury's AutoDrop on, the copy in your bag drops immediately and future copies keep dropping. Plain Drop resolves the item by id against live inventory on the lua side. Both actions carry the locked character's name and the lua client refuses to act unless it IS that character — multibox-safe by construction. Esc or clicking elsewhere closes the menu.
-
 
 ### Internal
 
@@ -708,7 +744,6 @@ A cheat-sheet feature plus two window-handling fixes. The headline is a new **ch
 - **Cheat-sheet data layer** — sheets load from JSON in a rich `{title, groups:[{label, col, rows:[{key, desc}]}]}` form, with the baked example as the fallback when no file is present; files are mtime-cached and reloaded live as they're edited.
 - **Windowed-size persistence** — the windowed dimensions are saved to the layout (`ow_window_size`) and re-applied at startup after the layout loads; the always-on-top / opacity / transparency window flags are re-applied after each in-app resize, since `set_mode` clears them.
 
-
 ## [1.6.4] — 2026-06-05
 
 An equipment-tooltip polish pass plus a header coordinate-precision fix. The headline tooltip work: Unity Concord gear and JSE necks now resolve their hidden augments to real stat lines instead of bottoming out at "Path: A", the augment bullet that rendered as a missing-glyph box is fixed, the tooltip text is ~10% smaller, and the tooltip can now be toggled off. Separately, the header coordinates finally show a real third decimal — they'd been padding a zero because the addon only ever sent two.
@@ -732,7 +767,6 @@ An equipment-tooltip polish pass plus a header coordinate-precision fix. The hea
 - **Rich-tooltip augment wire field adopted** — the 5007 equipment-metadata packet has carried a full augment-block field (every augment line joined by `;;`) for a while, but the overlay was still reading only the four fixed augment fields, which truncates gear whose path resolves to five or six stat lines. The parser now prefers the full block when present, length-guarded so older builds still interoperate.
 - **Coordinate wire precision** — the 5003 zone packet now sends `%.6f` coords instead of `%.2f`. The overlay's `%.3f` display formatting is the single authority on display precision, so changing it later won't reintroduce the trailing-zero bug.
 
-
 ## [1.6.3] — 2026-06-05
 
 A BLU stat-accuracy bug-fix pass. The headline is a nasty set-spell bug: removing a spell from the middle of your BLU set caused OmniWatch to silently see only **one** spell, which zeroed out Dual Wield and dropped Defense/Evasion across the board. That's fixed, along with the BLU spell-trait Defense Bonus (which had regressed to contributing nothing) and Master-Level PLD subjob Defense Bonus reaching its correct tier.
@@ -749,7 +783,6 @@ A BLU stat-accuracy bug-fix pass. The headline is a nasty set-spell bug: removin
 - **Gap-safe set-spell read** — `ow_get_blu_set_spells()` now walks `get_mjob_data().spells` with `pairs()` instead of `ipairs()` (which halts at the first `nil`), with a de-dupe guard, so a sparse set array (the result of a mid-list unset) is fully collected.
 - **PLD subjob Defense Bonus tier kept in sync** — the OmniWatch-side `_sub_def_bonus` subtraction and GearInfo's base `get_player_def_from_job` now both grant PLD sub 35 at level 50+, so the BLU defense merge subtracts the correct already-counted subjob value.
 - **Two BLU spell-data files clarified** — OmniWatch loads its BLU spell trait/stat table from `data/resources/BlueMagic.lua`; the vendored GearInfo loads its own `Blu_spells` global from `Blue_Mage_Spells.lua`. Both files are required (deleting the GearInfo one breaks GearInfo's load); per-spell stat corrections that should affect the panel go in `BlueMagic.lua`.
-
 
 ## [1.6.2] — 2026-06-04
 
@@ -776,7 +809,6 @@ A correctness and polish pass. The big-ticket items: Master-Level subjob evasion
 
 - **Shared subjob Evasion Bonus ladder** — the THF/DNC/PUP evasion tier tables are now expressed once (as `OW_BLU_EVA_SUB_LADDER` + `ow_sub_eva_bonus()` in OmniWatch.lua, mirrored in GearInfo) so the base computation and the trait subtraction read identical values.
 - **Rich-tooltip wire protocol** — the 5007 equipment-metadata packet gained a trailing stat-lines field (description lines joined by `;;`); the Python parser is length-guarded so older/newer builds interoperate without breaking.
-
 
 ## [1.6.1] — 2026-06-03
 
@@ -809,7 +841,6 @@ A BLU stat-accuracy pass plus a few chat-color and quality-of-life fixes. The he
 
 - **Lua chunk-local limit relief** — the main `OmniWatch.lua` chunk hit Lua 5.1's hard cap of 200 local variables. Twelve single-value buff-id constants were converted from top-level locals to globals (same names, same read-only use), bringing the count back to 187 with headroom. No behavior change.
 - **bluGuide model captured as reference** — the subjob points tables, tier values, and gift-exempt trait list were lifted from bluGuide's `res/traits.lua` and validated end-to-end against two full 21-combination `/checkparam` runs (no-subjob and /DNC), matching within ±1 (the residual is the DEX→accuracy `floor` rounding, a real game mechanic).
-
 
 ## [1.6.0] — 2026-05-30
 
@@ -868,7 +899,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 - **Ring detection by action-packet deep-walk** — earlier attempts to track Warp Ring cooldown via `extdata.decode()` and via `windower.res.items` name-lookups both failed on the live Windower install (the cooldown field wasn't surfaced by extdata for Enchanted Equipment, and the name lookup returned nil). The working approach is a deep-walk of every numeric field in player-actor action packets looking for the hardcoded ring ids — false-positive-resistant since ring ids (5-digit) are well outside the value range of typical damage/animation numbers. Action detection is hooked from inside `handle_incoming_action()` because the addon parses 0x028 packets directly rather than going through Windower's `'action'` event.
 - **Wire format** for ring cooldowns: `RINGS|warp=N;dem=N;holla=N;mea=N;echad=N;trizek=N;reraise=N;endorsement=N;emporox=N` — single line emitted at 1Hz, each value seconds remaining (0 = ready).
 
-
 ## [1.5.3] - 2026-05-27
 
 ### Added
@@ -882,7 +912,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 - **Unity gear augment stats partly missing (e.g. Sailfi Belt +1's Double Attack)** — the augment block applied correctly (STR landed), but stats GearInfo doesn't return in its physical totals — Double Attack and the other multi-hit/extra stats — never flowed out to the panel. Covered by the gear copy-through above.
 - **Dual-march timer labels showing the same song twice** — two trusts casting different marches (Advancing + Victory, both buff id 214) near-simultaneously could label both timer slots with the same song name. Each active slot is now given a distinct song name from the recorded sources when a buff id has multiple active slots and multiple distinct songs. Only the displayed name is affected; timers continue to use the server-truth expiry, so accuracy is unchanged. (Marches share a duration, so which name pairs to which slot is immaterial.)
 - **Subjob level cap re-derivation** — several stat estimates (innate traits, Protect/Shell tier) re-derived the subjob cap as half the main level instead of trusting the level the game reports. At max level with Master Levels this undercut the real subjob level (e.g. forcing a level-55 sub back to 49 and dropping its higher trait tier). All now use the reported subjob level directly.
-
 
 ## [1.5.2] - 2026-05-25
 
@@ -922,8 +951,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 - **Sim Import file selection moved to the native OS file picker**: the earlier in-overlay folder browser (configurable root + file list) was replaced by a single **Browse…** button using the same native picker as the hotbar icon chooser — browse anywhere on disk, no per-user root to configure.
 - Readme updated for the global UI scale setting, the Clear Tab / Clear All chat buttons, the new scroll-lock behavior, the Filters rename, a note that Shift+drag moves the (borderless) overlay window, the new Tell tab, the Protect (DEF) / Shell (MDT) stat handling with its tier-detection caveats, the new "Dual Wield for GearSwap gear swaps" integration section, and the Sim mode Import Set feature.
 
-
-
 ## [1.4.1] - 2026-05-19
 
 ### Fixed
@@ -932,7 +959,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 ### Changed
 - **World tab chat color differentiation**: say/shout/tell/yell/emote now render in distinct colors so a mixed stream reads at a glance. Say stays white. Shout is light yellow. Tell (received and sent) is light purple, with sent slightly dimmer to mirror the existing in/out distinction. Yell is pink. Emote is a soft blue. The orange sender name color is unchanged — channel is signaled by message-body color, speaker by sender color.
 - Readme now documents the chat panel (tabs, unread badges, scrollback, composer with say/tell/reply/shout/yell/ls1/ls2 channels, and the routing-config gear button that launches `omniwatch_routing_gui.exe`). File-layout section adds the routing GUI executable alongside `OmniWatch.exe` and the `omniwatch_chat_routing.json` + per-job `omniwatch_chat_routing-<JOB>.json` files in the per-character config block.
-
 
 ## [1.4.0] - 2026-05-18
 
@@ -975,7 +1001,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
   2. Even after the new pattern was in place, the parsed values were served from the persisted gearinfo cache rather than being re-parsed (the new `//ow gearcache_clear` command nukes the cache).
   3. With a correct Gear_info value, `get_player_acc` was returning range=0 anyway because the player had no ranged weapon equipped, and the result clobbered the panel's display. The lua→python copy now falls back to the raw Gear_info value in that case.
 
-
 ## [1.3.0] — 2026-05-12
 
 ### Added
@@ -994,7 +1019,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 ### Removed
 - **Borderless window setting** (`borderless_window` in settings.json): made unconditional, so the toggle is gone. Stale keys in upgraded settings.json files are ignored harmlessly.
 - **Per-mode panel layouts** (`window_mode_layouts` in omniwatch_layout.json): the framed-vs-borderless layout-swap mechanism is gone since there's only one window mode now. Stale keys in upgraded layout files are ignored harmlessly. Your current panel positions are preserved — only the (unused) secondary slot is dropped.
-
 
 ## [1.2.0] — 2026-05-12
 
@@ -1022,7 +1046,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 - **Trust Primer / food crash (`attempt to call global 'ow_parse_desc_line' (a nil value)`)**: using a consumable item could crash the addon due to a forward-reference issue — the function was declared `local` after the closure that referenced it, so the upvalue resolved to nil at call time. Forward-declared the local so all consumers share the same slot.
 - **Stats layout not persisting between sessions**: saved layouts weren't being read on subsequent launches. The load was being skipped because of a startup shortcut that runs when the character pre-selection heuristic guesses correctly. Added a deferred load call right before the main loop so layouts always load regardless of which startup path fires.
 
-
 ## [1.1.0] — 2026-05-11
 
 ### Added
@@ -1037,7 +1060,6 @@ A settings-menu rework plus a handful of new header features. The big behavioral
 
 ### Changed
 - Buff timer wire format bumped to v3 with absolute timestamps (backwards compatible — older Python overlays still work with newer Lua, just without the persistence benefit).
-
 
 ## [1.0.0] — 2026-05-09
 
@@ -1064,6 +1086,5 @@ Initial public release.
 - Lanun gear roll-proc accuracy may not always reflect the boosted value (server doesn't reliably push the relevant packet)
 - Running multiple FFXI clients with OmniWatch on the same machine is not supported (UDP port collision). Single-client multi-character config support via the character dropdown works normally.
 - Some BLU JP-category linear bonuses for MAB/MAcc are not yet wired through
-
 
 ---

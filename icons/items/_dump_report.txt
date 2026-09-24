@@ -1,0 +1,14 @@
+dump_icons v4.3
+FFXI: C:\Program Files (x86)\SquareEnix\SquareEnix\FINAL FANTASY XI
+
+General Items              3836  standard layout  78% alpha-clean  [ROM\118\106.DAT]
+Usable Items               2470  standard layout  100% alpha-clean  [ROM\118\107.DAT]
+Automaton Items             512  standard layout (no names to cross-check)  100% alpha-clean  [ROM\118\110.DAT]
+General Items 2            1398  standard layout  86% alpha-clean  [ROM\301\115.DAT]
+Armor Items                6091  standard layout  100% alpha-clean  [ROM\118\109.DAT]
+Weapon Items               5227  standard layout  100% alpha-clean  [ROM\118\108.DAT]
+Armor Items 2              4209  standard layout  100% alpha-clean  [ROM\286\73.DAT]
+Maze Items, Basic Items     278  standard layout  100% alpha-clean  [ROM\217\21.DAT]
+Instinct Items                0  REFUSED: standard layout 0% clean
+Monipulator Items           512  standard layout (no names to cross-check)  100% alpha-clean  [ROM\288\67.DAT]
+Gil                           0  REFUSED: standard layout 0% clean

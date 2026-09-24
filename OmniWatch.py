@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.13.1 (2026-09-14)"
+OMNIWATCH_BUILD_STAMP = "v1.14.0 (2026-09-21)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.13.1"
+OMNIWATCH_VERSION = "1.14.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1492,7 +1492,7 @@ _DRAG_STATE_GLOBALS = (
     "_warp_btn_resize", "_warp_menu_drag", "_warp_confirm_drag", "_gsd_drag",
     "_gsd_resize", "_pupatt_win_drag", "_brdset_win_drag", "_syn_drag_off",
     "_craft_drag_off", "_pool_drag_off", "_alert_drag_off", "_fisher_drag_off",
-    "_tag_drag",
+    "_tag_drag", "_ahhist_drag_off", "_magesets_win_drag",
 )
 
 
@@ -7356,6 +7356,20 @@ inventory_bazaar_popup_rects = []  # [(pygame.Rect, action)] per frame
 # {"item_id": int, "item_name": str, "from_bag": str} or None.
 inventory_move_popup = None
 inventory_move_popup_rects = []
+
+# AH sales-history popup (right-click -> AH sales history). Shape:
+# {"item_id": int, "item_name": str, "state": "loading"|"noserver"|
+#  "error"|"done", "single": [sale...], "stack": [sale...],
+#  "on_ah": (singles, stacks) | "loading" | None} or None. Filled by a
+# worker thread.
+inventory_ahhist_popup = None
+inventory_ahhist_popup_rects = []
+# Where the user dragged it (top-left), or None to centre it in the main
+# window. Saved with the layout. Clamped for drawing only -- never written
+# back -- with the drawn spot in _ahhist_draw_pos for the drag to adopt.
+ahhist_pos = None
+_ahhist_draw_pos = (0, 0)
+_ahhist_drag_off = None
 # (bag key as sent to lua, short label)
 _INV_MOVE_BAGS = [
     ("inventory", "Inventory"), ("satchel", "Satchel"), ("sack", "Sack"),
@@ -7953,6 +7967,7 @@ def _overlay_blocks_point(pos):
 _LATER_PANEL_RECT_DICTS = (
     "_tag_rects",
     "_alert_rects", "_pool_rects", "_ah_rects", "_craft_rects",
+    "_minimap_rects",
     "_syn_rects", "_fisher_rects", "_skillup_rects", "_sz_rects",
     # The GearSwap rows. This one already published its envelope and was
     # simply never listed -- and the pad is designed to sit directly above
@@ -7971,7 +7986,7 @@ _LATER_PANEL_RECT_DICTS = (
 # the tooltip is legitimately above it.)
 _LATER_PANEL_RECT_GLOBALS = (
     "_blusets_win_rect", "_trustsets_win_rect", "_pupatt_win_rect",
-    "_brdset_win_rect",
+    "_brdset_win_rect", "_magesets_win_rect",
     # The hotbar editor form. It covers whatever is under it -- with
     # several bars stacked that is bars 2 and 3 -- and those covered
     # cells were still answering the hover test, so their tooltips drew
@@ -7992,7 +8007,8 @@ _LATER_PANEL_RECT_GLOBALS = (
 # enough envelope because they ARE almost entirely clickable rows.
 _LATER_PANEL_RECT_LISTS = (
     "inventory_item_ctx_rects", "inventory_bazaar_popup_rects",
-    "inventory_move_popup_rects", "cfgwiz_hit_rects",
+    "inventory_move_popup_rects", "inventory_ahhist_popup_rects",
+    "cfgwiz_hit_rects",
     "inventory_dropdown_rects",
 )
 
@@ -11065,6 +11081,8 @@ HOTBAR_ACTIONS = [
     ("warp",       "Warp menu",          "_warp_toggle_menu"),
     ("cheatsheet", "Cheat Sheet",        "_cheatsheet_toggle"),
     ("autora",     "Auto ranged attack", "_hb_toggle_autora"),
+    ("magebuff",   "Cast buff set",      "_mage_cast_invoke"),
+    ("minimap",    "Minimap",            "_toggle_minimap"),
 ]
 HOTBAR_ACTION_KEYS   = [a[0] for a in HOTBAR_ACTIONS]
 HOTBAR_ACTION_LABELS = {a[0]: a[1] for a in HOTBAR_ACTIONS}
@@ -11098,6 +11116,8 @@ def _hb_action_is_on(key):
             return bool(globals().get("cheatsheet_window_open"))
         if key == "autora":
             return bool(setting("autora_enabled"))
+        if key == "minimap":
+            return bool(globals().get("minimap_open"))
     except Exception:
         return False
     return False
@@ -11138,6 +11158,11 @@ def _hotbar_run_action(key):
     elif key == "calltrust":
         note = globals().get("_ct_msg")
         btn_rect = globals().get("calltrust_button_rect")
+    elif key == "magebuff":
+        # No floating button of its own, so the note always goes to the
+        # cursor.
+        note = globals().get("_mage_msg")
+        btn_rect = None
     if note and btn_rect is None and time.time() < note[1]:
         _hb_action_note = {"text": note[0], "until": note[1],
                            "x": mx, "y": my}
@@ -13184,21 +13209,23 @@ SETTINGS_SCHEMA = [
     # ── Misc ────────────────────────────────────────────────────────
     {
         "key":     "open_auction",
-        "label":   "Auction House",
+        "label":   "Marketplace",
         "kind":    "button",
         "button_text": "OPEN",
         "section": "Misc",
         "applies": "python",
         "action":  "open_auction",
-        "help":    "Open the Auction House panel: a Buy tab and a Sell tab in "
-                   "one window. Buy has live item search (singles and stacks "
-                   "listed separately), a multi-item queue with per-item "
-                   "start / max / increment and a bid throttle, and a results "
-                   "log. Sell lists your inventory with a single/stack + price "
-                   "form and your active listings. Right-click any item to "
-                   "open its FFXIAH price page; the $ button on a search result "
+        "help":    "Open the Marketplace: four tabs in one window. Buy has "
+                   "live item search (singles and stacks listed separately), "
+                   "a multi-item queue with per-item start / max / increment "
+                   "and a bid throttle, and a results log. Sell lists your "
+                   "inventory with a single/stack + price form and your "
+                   "listings, which you can cancel or clear from there. "
+                   "Bazaar prices your own items, anywhere. Delivery is your "
+                   "mail box: take, return and send items or gil. Right-click "
+                   "any item to open its FFXIAH price page; the $ button "
                    "pulls that item's recent sales from your world's search "
-                   "server into the results pane.",
+                   "server.",
     },
     {
         "key":     "open_treasure",
@@ -13232,6 +13259,97 @@ SETTINGS_SCHEMA = [
                    "minigame; Fishing runs the auto-fisher. Switch tabs with "
                    "Ctrl+Shift+R (Craft) / Ctrl+Shift+Y (Synergy) / "
                    "Ctrl+Shift+F (Fishing).",
+    },
+    {
+        "key":     "minimap_settings",
+        "label":   "Minimap",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_minimap_settings",
+        "help":    "Open and configure the minimap: a player-centred plot "
+                   "of everything around you on the zone map, from the "
+                   "same live entity feed the Tracker uses. You are at the "
+                   "centre facing the way you face, north is up, and the "
+                   "world moves as you do. Hover a dot for its name, "
+                   "distance and HP, click one to target it; scroll to "
+                   "zoom; drag the corner to resize. It works whether or "
+                   "not the Tracker is open.",
+    },
+    {
+        "key":     "show_minimap",
+        "label":   "(internal) minimap shown",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Whether the minimap window is up. Set from its "
+                   "Configure box or a hotbar slot; remembered between "
+                   "sessions.",
+    },
+    {
+        "key":     "minimap_opacity",
+        "label":   "(internal) minimap map opacity %",
+        "kind":    "int",
+        "default": 100,
+        "min":     10,
+        "max":     100,
+        "step":    5,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "How solid the minimap's map is. Dots, your arrow and "
+                   "hover labels stay fully opaque whatever this is set "
+                   "to, so a faint map still reads clearly.",
+    },
+    {
+        "key":     "minimap_show_pc",
+        "label":   "(internal) minimap: players",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show other players on the minimap.",
+    },
+    {
+        "key":     "minimap_show_npc",
+        "label":   "(internal) minimap: NPCs",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show static NPCs on the minimap.",
+    },
+    {
+        "key":     "minimap_show_mob",
+        "label":   "(internal) minimap: monsters",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show monsters on the minimap.",
+    },
+    {
+        "key":     "minimap_blink_tracked",
+        "label":   "(internal) minimap: blink tracked",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Blink anything you are tracking in the Tracker on the "
+                   "minimap, including its last known spot while it is out "
+                   "of range.",
+    },
+    {
+        "key":     "minimap_show_object",
+        "label":   "(internal) minimap: objects",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Show everything else the client knows about -- doors, "
+                   "lamps, clickable scenery. Off by default because busy "
+                   "zones carry a great many of them.",
     },
     {
         "key":     "open_scanzone",
@@ -15010,6 +15128,7 @@ _SETTINGS_ACTIONS = {
     "open_skillup":            lambda: _toggle_skillup_panel(),
     "open_auction":            lambda: _toggle_ah_panel(),
     "open_treasure":           lambda: _toggle_pool_panel(),
+    "open_minimap_settings":   lambda: _open_subdialog("minimap"),
     "edit_alert_sections":     lambda: _open_alert_editor(),
     "open_autora":             lambda: _open_autora(),
 }
@@ -15049,6 +15168,15 @@ def apply_setting_side_effects(key, value):
     """
     global dps_panel_visible, buttons_panel_visible, chat_panel_visible
     global skillchain_panel_visible
+    global minimap_open
+    if key == "show_minimap":
+        # One switch, two places to flip it. Whichever moved, the window
+        # and the entity stream follow from here.
+        minimap_open = bool(value)
+        try:
+            _radar_stream_sync()
+        except Exception:
+            pass
     global chat_composer_visible
     global _gt_capturing_active, chat_composer_focused
     if key == "global_typing" and not value:
@@ -21721,26 +21849,6 @@ _JEUNO_QUESTS_MASTER = [
     "The Unfinished Waltz",
     "The Wonder Magic Set",
     "Unlisted Qualities",
-    "Unlocking a Myth: Bard",
-    "Unlocking a Myth: Beastmaster",
-    "Unlocking a Myth: Black Mage",
-    "Unlocking a Myth: Blue Mage",
-    "Unlocking a Myth: Corsair",
-    "Unlocking a Myth: Dancer",
-    "Unlocking a Myth: Dark Knight",
-    "Unlocking a Myth: Dragoon",
-    "Unlocking a Myth: Monk",
-    "Unlocking a Myth: Ninja",
-    "Unlocking a Myth: Paladin",
-    "Unlocking a Myth: Puppetmaster",
-    "Unlocking a Myth: Ranger",
-    "Unlocking a Myth: Red Mage",
-    "Unlocking a Myth: Samurai",
-    "Unlocking a Myth: Scholar",
-    "Unlocking a Myth: Summoner",
-    "Unlocking a Myth: Thief",
-    "Unlocking a Myth: Warrior",
-    "Unlocking a Myth: White Mage",
     "VW Op. #115: Valkurm Duster",
     "VW Op. #118: Buburimu Squall",
     "Whence Blows the Wind",
@@ -21829,6 +21937,26 @@ _AHTURHGAN_QUESTS_MASTER = [
     "Transformations",
     "Two Horn the Savage",
     "Unwavering Resolve",
+    "Unlocking a Myth: Bard",
+    "Unlocking a Myth: Beastmaster",
+    "Unlocking a Myth: Black Mage",
+    "Unlocking a Myth: Blue Mage",
+    "Unlocking a Myth: Corsair",
+    "Unlocking a Myth: Dancer",
+    "Unlocking a Myth: Dark Knight",
+    "Unlocking a Myth: Dragoon",
+    "Unlocking a Myth: Monk",
+    "Unlocking a Myth: Ninja",
+    "Unlocking a Myth: Paladin",
+    "Unlocking a Myth: Puppetmaster",
+    "Unlocking a Myth: Ranger",
+    "Unlocking a Myth: Red Mage",
+    "Unlocking a Myth: Samurai",
+    "Unlocking a Myth: Scholar",
+    "Unlocking a Myth: Summoner",
+    "Unlocking a Myth: Thief",
+    "Unlocking a Myth: Warrior",
+    "Unlocking a Myth: White Mage",
     "Vanishing Act",
     "VW Op. #050: Aht Urhgan Assault",
     "VW Op. #068: Subterranean Skirmish",
@@ -23734,6 +23862,17 @@ def _checklist_save():
         print(f"[OmniWatch] Could not save checklist: {e}")
 
 
+# Quests that moved between tabs: (name, old category, new category).
+# _checklist_load moves a tick made under the old tab across, so fixing
+# where a quest belongs never costs anyone their progress.
+_CHECKLIST_QUEST_MOVES = tuple(
+    ("Unlocking a Myth: " + _j, "quests_jeuno", "quests_ahturhgan")
+    for _j in ("Bard", "Beastmaster", "Black Mage", "Blue Mage", "Corsair",
+               "Dancer", "Dark Knight", "Dragoon", "Monk", "Ninja",
+               "Paladin", "Puppetmaster", "Ranger", "Red Mage", "Samurai",
+               "Scholar", "Summoner", "Thief", "Warrior", "White Mage"))
+
+
 def _checklist_load():
     """Read manual-check sets from disk into checklist_known. Silent
     no-op if the file doesn't exist or is malformed."""
@@ -23777,6 +23916,24 @@ def _checklist_load():
                 checklist_known[cat_key]["auto"] = {
                     str(x).lower() for x in auto
                     if isinstance(x, (str, int))}
+    # Rows that changed tab keep their ticks: carry any manual tick from
+    # the tab a quest used to sit in to the tab it sits in now, then save
+    # so the move happens once.
+    _moved = 0
+    for _qname, _from, _to in _CHECKLIST_QUEST_MOVES:
+        _k = _qname.lower()
+        _src = checklist_known.get(_from, {}).get("manual")
+        if _src and _k in _src and _to in checklist_known:
+            _src.discard(_k)
+            checklist_known[_to].setdefault("manual", set()).add(_k)
+            _moved += 1
+    if _moved:
+        print(f"[OmniWatch] checklist load: carried {_moved} quest tick(s) "
+              "to their new tab")
+        try:
+            _checklist_save()
+        except Exception:
+            pass
     if _weapon_restored:
         print(f"[OmniWatch] checklist load: restored weapons "
               f"{dict(sorted(_weapon_restored.items()))} from {path}")
@@ -27252,6 +27409,15 @@ def save_layout():
             # than beside the pool's own state: it is a window
             # arrangement, which is exactly what a profile is for.
             "pool_pos":        list(globals().get("pool_pos", [300, 240])),
+            # The minimap: where it sits, how big it is and how far it
+            # sees. All three are window arrangement, so they ride the
+            # layout with everything else.
+            "minimap_pos":     list(globals().get("minimap_pos", [40, 320])),
+            "minimap_size":    list(globals().get("minimap_size", [250, 190])),
+            "minimap_zoom":    float(globals().get("minimap_zoom", 1.0)),
+            # AH sales-history popup; None = centred, the default.
+            "ahhist_pos":      (list(globals()["ahhist_pos"])
+                                if globals().get("ahhist_pos") else None),
             "gs_display_pos":  (list(gs_display_pos)
                                 if gs_display_pos else None),
             "gs_display_w":    (int(gs_display_w) if gs_display_w else None),
@@ -27513,8 +27679,31 @@ def load_layout():
                 hotbar_editor_pos = [int(hep_[0]), int(hep_[1])]
             except (TypeError, ValueError):
                 pass
+        _ahp = data.get("ahhist_pos")
+        if isinstance(_ahp, list) and len(_ahp) == 2:
+            try:
+                globals()["ahhist_pos"] = [int(_ahp[0]), int(_ahp[1])]
+            except (TypeError, ValueError):
+                pass
+        elif "ahhist_pos" in data and _ahp is None:
+            globals()["ahhist_pos"] = None
+        _mz = data.get("minimap_zoom")
+        if isinstance(_mz, (int, float)) and 0.2 <= float(_mz) <= 6.0:
+            globals()["minimap_zoom"] = float(_mz)
+        _ms = data.get("minimap_size")
+        if isinstance(_ms, list) and len(_ms) == 2:
+            try:
+                globals()["minimap_size"] = [
+                    max(120, min(520, int(_ms[0]))),
+                    max(120, min(520, int(_ms[1])))]
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(_ms, int):          # square, from an earlier layout
+            globals()["minimap_size"] = [max(120, min(520, _ms)),
+                                         max(120, min(520, _ms))]
         for _key, _dflt in (("craftsyn_pos", [260, 200]),
-                            ("pool_pos", [300, 240])):
+                            ("pool_pos", [300, 240]),
+                            ("minimap_pos", [40, 320])):
             _v = data.get(_key)
             if isinstance(_v, list) and len(_v) == 2:
                 try:
@@ -31987,7 +32176,620 @@ def _brdset_handle_event(event):
     return False
 
 
-# ── Loadouts window (tabbed wrapper: BLU / Trusts / PUP) ──────────────────
+# ── Mage tab (Loadouts): buff spell sets ──────────────────────────────────
+# Named lists of buff spells, each with its own target (<me> or party
+# member 1-5), cast in order by the lua when a set's Cast button -- or the
+# hotbar's "Cast buff set" action, which casts the ACTIVE set -- is pressed. The spell list comes from the lua on
+# request (MAGEBUFF|sync -> MAGEBUFF|spells|...): every LEARNED spell that
+# can target yourself and is a buff (Enhancing Magic, plus Regen / Reraise,
+# Endark / Dread Spikes and Indi- spells), flagged castable-now for the
+# current main / sub job and level. Sets persist per character to
+# omniwatch_mage_sets_<char>.json beside the trust sets.
+_MAGESET_MAX = 16
+
+_magesets_open        = False
+_magesets_view        = "list"       # "list" | "edit"
+_magesets_sets        = {}           # name -> [[spell, target], ...] in
+                                     # cast order; target "me" or "p1".."p5"
+_magesets_active      = None         # the set the hotbar action casts
+_magesets_loaded_char = None
+_magesets_win_pos     = None
+_magesets_scroll      = 0
+_magesets_note        = None         # (text, expire_ts)
+_magesets_confirm_del = None         # (name, expire_ts)
+_magesets_spells      = []           # [(name, castable_now)] from the lua
+_magesets_spells_got  = False
+_magesets_party       = {}           # lowercased spell -> can target party
+_mage_msg             = None         # (text, expire_ts) for the hotbar note
+_MAGESET_TARGETS      = ("me", "p1", "p2", "p3", "p4", "p5")
+
+_magesets_edit_name   = ""
+_magesets_edit_orig   = None
+_magesets_edit_list   = []           # [[spell, target], ...] cast order
+_magesets_name_focus  = False
+_magesets_win_drag    = None
+
+_magesets_win_rect    = None
+_magesets_title_rect  = None
+_magesets_close_rect  = None
+_magesets_new_rect    = None
+_magesets_name_rect   = None
+_magesets_save_rect   = None
+_magesets_cancel_rect = None
+_magesets_row_rects   = []           # list view: (r_cast, r_edit, r_del,
+                                     #             r_act, name)
+_magesets_pick_rects  = []           # edit view: (rect, name)
+_magesets_order_rects = []           # edit view: (r_up, r_dn, r_del,
+                                     #             r_tgt, idx)
+_magesets_pick_area   = None
+
+
+def _magesets_file_for(char):
+    safe = "".join(c for c in (char or "") if c.isalnum()) or "default"
+    return os.path.join(USER_DIR, f"omniwatch_mage_sets_{safe}.json")
+
+
+def _magesets_norm_entry(e):
+    """One saved spell as [name, target]. A bare string (the first
+    version's format) is a spell cast on yourself."""
+    if isinstance(e, str):
+        return [e.strip(), "me"] if e.strip() else None
+    if isinstance(e, (list, tuple)) and e:
+        nm = str(e[0]).strip()
+        tg = str(e[1]).strip().lower() if len(e) > 1 else "me"
+        if tg not in _MAGESET_TARGETS:
+            tg = "me"
+        return [nm, tg] if nm else None
+    return None
+
+
+def _magesets_ensure_loaded():
+    """(Re)load the sets when the locked character changes."""
+    global _magesets_sets, _magesets_loaded_char, _magesets_active
+    global _magesets_view, _magesets_confirm_del
+    ch = _blusets_char()
+    if ch == _magesets_loaded_char:
+        return
+    _magesets_loaded_char = ch
+    _magesets_sets = {}
+    _magesets_active = None
+    _magesets_view = "list"
+    _magesets_confirm_del = None
+    try:
+        with open(_magesets_file_for(ch), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        sets = data.get("sets")
+        if isinstance(sets, dict):
+            for k, v in sets.items():
+                if isinstance(v, list):
+                    ents = [_magesets_norm_entry(e) for e in v]
+                    _magesets_sets[str(k)] = [e for e in ents if e]
+        act = data.get("active")
+        if isinstance(act, str) and act in _magesets_sets:
+            _magesets_active = act
+    except Exception:
+        pass
+
+
+def _magesets_persist():
+    try:
+        with open(_magesets_file_for(_magesets_loaded_char), "w",
+                  encoding="utf-8") as f:
+            json.dump({"sets": _magesets_sets, "active": _magesets_active},
+                      f, indent=2)
+    except Exception as e:
+        print(f"[OmniWatch] mage sets save failed: {e!r}")
+
+
+def _magesets_can_party(name):
+    """Can this spell be cast on a party member? Unknown (spell list not
+    in yet) counts as yes, so a target is never locked by missing data."""
+    return _magesets_party.get((name or "").lower(), True)
+
+
+def _magesets_set_note(text):
+    global _magesets_note
+    _magesets_note = (text, time.time() + 4.0)
+
+
+def _magesets_request_sync():
+    try:
+        sock_cmd_out.sendto(b"MAGEBUFF|sync", _cmd_addr())
+    except Exception:
+        pass
+
+
+def _magesets_ingest(raw):
+    """MAGEBUFF|spells|<name>~<castable 1|0>~<party 1|0>;...   and
+    MAGEBUFF|status|<text>."""
+    global _magesets_spells, _magesets_spells_got, _magesets_party
+    parts = raw.split("|", 2)
+    if len(parts) < 3:
+        return
+    if parts[1] == "spells":
+        out, party = [], {}
+        for ent in parts[2].split(";"):
+            if not ent:
+                continue
+            f = ent.split("~")
+            nm = f[0].strip()
+            if nm:
+                out.append((nm, len(f) > 1 and f[1].strip() == "1"))
+                party[nm.lower()] = (len(f) < 3 or f[2].strip() == "1")
+        out.sort(key=lambda t: t[0].lower())
+        _magesets_spells = out
+        _magesets_party = party
+        _magesets_spells_got = True
+    elif parts[1] == "status":
+        _magesets_set_note(parts[2])
+
+
+def _magesets_payload(name):
+    """MAGEBUFF|cast|<char>|<set>|<Spell@target;...>, or None if empty."""
+    ents = _magesets_sets.get(name) or []
+    parts = []
+    for e in ents:
+        nm = str(e[0]).replace(";", "").replace("|", "").replace("@", "")
+        if nm.strip():
+            parts.append(nm.strip() + "@" + (e[1] if e[1] in _MAGESET_TARGETS
+                                             else "me"))
+    if not parts:
+        return None
+    return ("MAGEBUFF|cast|" + _blusets_char() + "|"
+            + name.replace("|", "") + "|" + ";".join(parts))
+
+
+def _magesets_send_cast(name):
+    """Send one set to the lua. Returns the note it set."""
+    payload = _magesets_payload(name)
+    if payload is None:
+        _magesets_set_note("Set is empty - nothing to cast.")
+        return "Set is empty - nothing to cast."
+    try:
+        sock_cmd_out.sendto(payload.encode("utf-8"), _cmd_addr())
+        msg = f'Casting "{name}" - watch game chat.'
+    except Exception as e:
+        print(f"[OmniWatch] mage set cast send failed: {e!r}")
+        msg = "Send failed - see session log."
+    _magesets_set_note(msg)
+    return msg
+
+
+def _mage_cast_invoke():
+    """Hotbar action: cast the ACTIVE buff set (Loadouts > Mage)."""
+    global _mage_msg
+    _magesets_ensure_loaded()
+    act = _magesets_active
+    if not act or not _magesets_sets.get(act):
+        print("[OmniWatch] mage cast declined: "
+              + ("no active buff set" if not act else f"set {act!r} is empty"))
+        _mage_msg = ("No active buff set - pick one in Loadouts > Mage.",
+                     time.time() + 4.0)
+        return
+    _mage_msg = (_magesets_send_cast(act), time.time() + 4.0)
+
+
+def _magesets_open_editor(orig=None):
+    global _magesets_view, _magesets_edit_name, _magesets_edit_orig
+    global _magesets_edit_list, _magesets_name_focus, _magesets_scroll
+    _magesets_view = "edit"
+    _magesets_scroll = 0
+    _magesets_edit_orig = orig
+    _magesets_edit_name = orig or ""
+    _magesets_edit_list = ([list(e) for e in (_magesets_sets.get(orig) or [])]
+                           if orig else [])
+    _magesets_name_focus = not orig
+    _magesets_request_sync()
+
+
+def _magesets_editor_save():
+    global _magesets_view, _magesets_name_focus, _magesets_scroll
+    nm = _magesets_edit_name.strip().replace("|", "").replace(";", "")
+    if not nm:
+        _magesets_set_note("Give the set a name first.")
+        return
+    if not _magesets_edit_list:
+        _magesets_set_note("Pick at least one spell.")
+        return
+    global _magesets_active
+    if _magesets_edit_orig and _magesets_edit_orig != nm:
+        _magesets_sets.pop(_magesets_edit_orig, None)
+        if _magesets_active == _magesets_edit_orig:
+            _magesets_active = nm
+    _magesets_sets[nm] = [list(e) for e in _magesets_edit_list]
+    if _magesets_active is None:
+        _magesets_active = nm          # the first set is the active one
+    _magesets_persist()
+    _magesets_view = "list"
+    _magesets_name_focus = False
+    _magesets_scroll = 0
+    _magesets_set_note(f'Saved "{nm}" ({len(_magesets_edit_list)} spells).')
+
+
+def _magesets_button(surface, rect, label, font, hot=False, danger=False):
+    hov = rect.collidepoint(_mouse_pos())
+    if danger:
+        bg = (96, 44, 48) if hov else (58, 36, 40)
+        bd = (150, 80, 86)
+    elif hot:
+        bg = (48, 86, 70) if hov else (36, 64, 54)
+        bd = (90, 160, 128)
+    else:
+        bg = (54, 62, 82) if hov else (40, 46, 62)
+        bd = (84, 94, 120)
+    pygame.draw.rect(surface, bg, rect, border_radius=3)
+    pygame.draw.rect(surface, bd, rect, 1, border_radius=3)
+    t = font.render(label, True, (222, 228, 240))
+    surface.blit(t, (rect.centerx - t.get_width() // 2,
+                     rect.centery - t.get_height() // 2))
+
+
+def draw_magesets_window(surface):
+    """The Mage tab: list of buff sets, or the set editor."""
+    global _magesets_win_rect, _magesets_title_rect, _magesets_close_rect
+    global _magesets_new_rect, _magesets_name_rect, _magesets_save_rect
+    global _magesets_cancel_rect, _magesets_win_pos, _magesets_scroll
+    global _magesets_pick_area
+    if not _magesets_open:
+        return
+    _magesets_ensure_loaded()
+    f_r = _blusets_font(12)
+    f_s = _blusets_font(11)
+    W = 440 if _magesets_view == "list" else 580
+    title_h, foot_h, note_h = 26, 34, 18
+    strip_h = 34 if _magesets_view == "edit" else 0
+
+    if _magesets_view == "list":
+        names = sorted(_magesets_sets.keys(), key=str.lower)
+        row_h = 26
+        content_h = (len(names) * row_h + 6) if names else 40
+    else:
+        row_h = 20
+        content_h = max(len(_magesets_spells),
+                        len(_magesets_edit_list)) * row_h + 26
+        content_h = max(content_h, 80)
+    max_h = min(HEIGHT - 60, 560)
+    body_h = min(content_h, max_h - title_h - strip_h - foot_h - note_h)
+    H = title_h + strip_h + body_h + foot_h + note_h
+
+    if _magesets_win_pos is None:
+        _magesets_win_pos = [max(10, (WIDTH - W) // 2),
+                             max(10, (HEIGHT - H) // 3)]
+    x0 = max(0, min(int(_magesets_win_pos[0]), WIDTH - W))
+    y0 = max(0, min(int(_magesets_win_pos[1]), HEIGHT - title_h))
+    _magesets_win_rect = pygame.Rect(x0, y0, W, H)
+
+    draw_panel_shadow(surface, _magesets_win_rect, radius=6)
+    pygame.draw.rect(surface, (24, 26, 34), _magesets_win_rect,
+                     border_radius=6)
+    _magesets_title_rect = pygame.Rect(x0, y0, W, title_h)
+    pygame.draw.rect(surface, (34, 38, 52), _magesets_title_rect,
+                     border_top_left_radius=6, border_top_right_radius=6)
+    draw_bevel(surface, _magesets_win_rect, radius=6)
+    pygame.draw.rect(surface, (78, 86, 110), _magesets_win_rect, 1,
+                     border_radius=6)
+    _magesets_close_rect = pygame.Rect(x0 + W - 22, y0 + 5, 16, 16)
+    hov = _magesets_close_rect.collidepoint(_mouse_pos())
+    pygame.draw.rect(surface, (90, 40, 44) if hov else (50, 36, 40),
+                     _magesets_close_rect, border_radius=3)
+    xs = f_s.render("\u2715", True, (220, 180, 184))
+    surface.blit(xs, (_magesets_close_rect.x + (16 - xs.get_width()) // 2,
+                      _magesets_close_rect.y + (16 - xs.get_height()) // 2))
+
+    _magesets_row_rects.clear()
+    _magesets_pick_rects.clear()
+    _magesets_order_rects.clear()
+    _magesets_new_rect = _magesets_name_rect = None
+    _magesets_save_rect = _magesets_cancel_rect = None
+    _magesets_pick_area = None
+
+    by = y0 + title_h
+    if _magesets_view == "edit":
+        pygame.draw.rect(surface, (28, 31, 42), pygame.Rect(x0, by, W, 34))
+        surface.blit(f_r.render("Name:", True, (190, 196, 210)),
+                     (x0 + 10, by + 8))
+        _magesets_name_rect = pygame.Rect(x0 + 62, by + 5, 230, 24)
+        pygame.draw.rect(surface, (18, 20, 28), _magesets_name_rect,
+                         border_radius=3)
+        pygame.draw.rect(surface, (110, 150, 210) if _magesets_name_focus
+                         else (70, 78, 98), _magesets_name_rect, 1,
+                         border_radius=3)
+        txt = _magesets_edit_name + ("|" if _magesets_name_focus
+                                     and int(time.time() * 2) % 2 else "")
+        surface.blit(f_r.render(txt, True, (225, 230, 240)),
+                     (_magesets_name_rect.x + 6, _magesets_name_rect.y + 4))
+        cnt = f_s.render(f"{len(_magesets_edit_list)}/{_MAGESET_MAX} spells",
+                         True, (160, 168, 186))
+        surface.blit(cnt, (x0 + W - 14 - cnt.get_width(), by + 10))
+        by += 34
+
+    body = pygame.Rect(x0 + 1, by, W - 2, body_h)
+    clip_prev = surface.get_clip()
+    surface.set_clip(body)
+    if _magesets_view == "list":
+        names = sorted(_magesets_sets.keys(), key=str.lower)
+        max_scroll = max(0, len(names) * 26 + 6 - body_h)
+        _magesets_scroll = max(0, min(_magesets_scroll, max_scroll))
+        if not names:
+            surface.blit(f_r.render("No buff sets yet - click New set.",
+                                    True, (150, 156, 172)),
+                         (x0 + 12, by + 12))
+        cy = by + 3 - _magesets_scroll
+        for i, nm in enumerate(names):
+            r = pygame.Rect(x0 + 6, cy, W - 12, 24)
+            if i % 2:
+                pygame.draw.rect(surface, (30, 33, 44), r, border_radius=3)
+            r_act = pygame.Rect(r.x + 4, r.y + 4, 16, 16)
+            on = (nm == _magesets_active)
+            pygame.draw.circle(surface, (90, 200, 120) if on else (60, 66, 82),
+                               r_act.center, 5)
+            pygame.draw.circle(surface, (140, 230, 160) if on else (96, 104, 126),
+                               r_act.center, 5, 1)
+            label = nm if len(nm) <= 24 else nm[:23] + "\u2026"
+            surface.blit(f_r.render(label, True, (220, 226, 238)),
+                         (r.x + 24, r.y + 4))
+            n = len(_magesets_sets.get(nm) or [])
+            ct = f_s.render(f"{n} spell{'s' if n != 1 else ''}", True,
+                            (140, 148, 166))
+            surface.blit(ct, (r.x + 210, r.y + 6))
+            r_del = pygame.Rect(r.right - 30, r.y + 3, 26, 18)
+            r_edit = pygame.Rect(r_del.x - 44, r.y + 3, 40, 18)
+            r_cast = pygame.Rect(r_edit.x - 48, r.y + 3, 44, 18)
+            confirm = (_magesets_confirm_del and _magesets_confirm_del[0] == nm
+                       and _magesets_confirm_del[1] > time.time())
+            _magesets_button(surface, r_cast, "Cast", f_s, hot=True)
+            _magesets_button(surface, r_edit, "Edit", f_s)
+            _magesets_button(surface, r_del, "?" if confirm else "\u2715",
+                             f_s, danger=True)
+            _magesets_row_rects.append((r_cast, r_edit, r_del,
+                                        pygame.Rect(r.x, r.y, 200, r.h), nm))
+            cy += 26
+    else:
+        half = (W - 30) // 2
+        lx, rx = x0 + 10, x0 + 20 + half
+        surface.blit(f_s.render("Spells you know  (click to add)", True,
+                                (170, 190, 220)), (lx, by + 4))
+        surface.blit(f_s.render("Cast order", True, (170, 190, 220)),
+                     (rx, by + 4))
+        _th = f_s.render("target", True, (170, 190, 220))
+        surface.blit(_th, (rx + half - 81 - _th.get_width() // 2, by + 4))
+        list_top = by + 22
+        _magesets_pick_area = pygame.Rect(lx, list_top, half,
+                                          body_h - 24)
+        rows = _magesets_spells
+        max_scroll = max(0, len(rows) * 20 - (body_h - 24))
+        _magesets_scroll = max(0, min(_magesets_scroll, max_scroll))
+        surface.set_clip(_magesets_pick_area.clip(body))
+        if not rows:
+            msg = ("Reading your spells\u2026" if not _magesets_spells_got
+                   else "No self-buff spells learned.")
+            surface.blit(f_s.render(msg, True, (150, 156, 172)),
+                         (lx + 4, list_top + 4))
+        chosen = {e[0].lower() for e in _magesets_edit_list}
+        cy = list_top - _magesets_scroll
+        for i, (nm, ok) in enumerate(rows):
+            r = pygame.Rect(lx, cy, half, 19)
+            if r.bottom >= list_top and r.top <= _magesets_pick_area.bottom:
+                if r.collidepoint(_mouse_pos()):
+                    pygame.draw.rect(surface, (44, 52, 70), r,
+                                     border_radius=3)
+                elif i % 2:
+                    pygame.draw.rect(surface, (29, 32, 42), r,
+                                     border_radius=3)
+                col = ((110, 118, 134) if nm.lower() in chosen
+                       else (222, 228, 240) if ok else (130, 138, 154))
+                surface.blit(f_s.render(nm, True, col), (r.x + 6, r.y + 3))
+                if not ok:
+                    tag = f_s.render("other job", True, (110, 116, 130))
+                    surface.blit(tag, (r.right - 6 - tag.get_width(),
+                                       r.y + 3))
+                _magesets_pick_rects.append((r, nm))
+            cy += 20
+        surface.set_clip(body)
+        cy = list_top
+        if not _magesets_edit_list:
+            surface.blit(f_s.render("Nothing yet.", True, (150, 156, 172)),
+                         (rx + 4, cy + 4))
+        for i, (nm, tg) in enumerate(_magesets_edit_list):
+            r = pygame.Rect(rx, cy, half, 19)
+            if i % 2:
+                pygame.draw.rect(surface, (29, 32, 42), r, border_radius=3)
+            label = f"{i + 1}. {nm}"
+            if len(label) > 22:
+                label = label[:21] + "\u2026"
+            surface.blit(f_s.render(label, True, (222, 228, 240)),
+                         (r.x + 6, r.y + 3))
+            r_del = pygame.Rect(r.right - 20, r.y + 1, 18, 17)
+            r_dn = pygame.Rect(r_del.x - 20, r.y + 1, 18, 17)
+            r_up = pygame.Rect(r_dn.x - 20, r.y + 1, 18, 17)
+            r_tgt = pygame.Rect(r_up.x - 38, r.y + 1, 34, 17)
+            if _magesets_can_party(nm):
+                _magesets_button(surface, r_tgt, tg, f_s, hot=(tg != "me"))
+            else:
+                # Self-only spell: the target is fixed.
+                pygame.draw.rect(surface, (30, 33, 44), r_tgt,
+                                 border_radius=3)
+                t = f_s.render("me", True, (120, 126, 142))
+                surface.blit(t, (r_tgt.centerx - t.get_width() // 2,
+                                 r_tgt.centery - t.get_height() // 2))
+            _magesets_button(surface, r_up, "\u25B2", f_s)
+            _magesets_button(surface, r_dn, "\u25BC", f_s)
+            _magesets_button(surface, r_del, "\u2715", f_s, danger=True)
+            _magesets_order_rects.append((r_up, r_dn, r_del, r_tgt, i))
+            cy += 20
+    surface.set_clip(clip_prev)
+
+    fy = y0 + H - foot_h - note_h
+    pygame.draw.line(surface, (52, 58, 76), (x0 + 1, fy), (x0 + W - 2, fy))
+    if _magesets_view == "list":
+        _magesets_new_rect = pygame.Rect(x0 + 10, fy + 7, 80, 20)
+        _magesets_button(surface, _magesets_new_rect, "New set", f_s)
+    else:
+        _magesets_save_rect = pygame.Rect(x0 + W - 150, fy + 7, 64, 20)
+        _magesets_cancel_rect = pygame.Rect(x0 + W - 80, fy + 7, 64, 20)
+        _magesets_button(surface, _magesets_save_rect, "Save", f_s, hot=True)
+        _magesets_button(surface, _magesets_cancel_rect, "Cancel", f_s)
+    if _magesets_note and _magesets_note[1] > time.time():
+        nt = f_s.render(_magesets_note[0], True, (190, 200, 150))
+        surface.blit(nt, (x0 + 10, y0 + H - note_h + 2))
+
+
+def _magesets_handle_event(event):
+    """All input for the Mage tab. Returns True when consumed."""
+    global _magesets_open, _magesets_view, _magesets_scroll
+    global _magesets_win_drag, _magesets_win_pos, _magesets_name_focus
+    global _magesets_edit_name, _magesets_confirm_del, _magesets_active
+    if not _magesets_open:
+        return False
+    if event.type == pygame.MOUSEWHEEL:
+        if (_magesets_win_rect is not None
+                and _magesets_win_rect.collidepoint(_mouse_pos())):
+            _magesets_scroll = max(0, _magesets_scroll - event.y * 30)
+            return True
+        return False
+    if event.type == pygame.KEYDOWN:
+        if _magesets_name_focus:
+            if event.key == pygame.K_BACKSPACE:
+                _magesets_edit_name = _magesets_edit_name[:-1]
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                               pygame.K_ESCAPE):
+                _magesets_name_focus = False
+            elif (event.unicode and event.unicode.isprintable()
+                  and event.unicode not in "|;"
+                  and len(_magesets_edit_name) < 24):
+                _magesets_edit_name += event.unicode
+            return True
+        if event.key == pygame.K_ESCAPE:
+            if _magesets_view == "edit":
+                _magesets_view = "list"
+                _magesets_scroll = 0
+            else:
+                _magesets_open = False
+            return True
+        return False
+    if event.type == pygame.MOUSEMOTION and _magesets_win_drag is not None:
+        _magesets_win_pos = [
+            _magesets_win_drag["ox"] + event.pos[0] - _magesets_win_drag["x"],
+            _magesets_win_drag["oy"] + event.pos[1] - _magesets_win_drag["y"]]
+        return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _magesets_win_drag is not None:
+            _magesets_win_drag = None
+            return True
+        return False
+    if event.type != pygame.MOUSEBUTTONDOWN or _magesets_win_rect is None:
+        return False
+    mx, my = event.pos
+    if not _magesets_win_rect.collidepoint(mx, my):
+        if event.button == 1:
+            _magesets_name_focus = False
+        return False
+    if event.button == 3 and _magesets_view == "edit":
+        # Right-click a target button steps it backwards.
+        for _u, _d, _x, r_tgt, i in _magesets_order_rects:
+            if r_tgt.collidepoint(mx, my):
+                _magesets_step_target(i, -1)
+                return True
+    if event.button != 1:
+        return True
+    if _magesets_close_rect and _magesets_close_rect.collidepoint(mx, my):
+        _magesets_open = False
+        return True
+    if _magesets_title_rect and _magesets_title_rect.collidepoint(mx, my):
+        _magesets_win_drag = {"x": mx, "y": my,
+                              "ox": _magesets_win_rect.x,
+                              "oy": _magesets_win_rect.y}
+        return True
+    if _magesets_view == "list":
+        if _magesets_new_rect and _magesets_new_rect.collidepoint(mx, my):
+            _magesets_open_editor(None)
+            return True
+        for r_cast, r_edit, r_del, r_act, nm in _magesets_row_rects:
+            if r_cast.collidepoint(mx, my):
+                _magesets_send_cast(nm)
+                return True
+            if r_edit.collidepoint(mx, my):
+                _magesets_open_editor(nm)
+                return True
+            if r_del.collidepoint(mx, my):
+                if (_magesets_confirm_del and _magesets_confirm_del[0] == nm
+                        and _magesets_confirm_del[1] > time.time()):
+                    _magesets_sets.pop(nm, None)
+                    if _magesets_active == nm:
+                        _magesets_active = None
+                    _magesets_persist()
+                    _magesets_confirm_del = None
+                    _magesets_set_note(f'Deleted "{nm}".')
+                else:
+                    _magesets_confirm_del = (nm, time.time() + 3.0)
+                    _magesets_set_note("Click again to delete.")
+                return True
+            if r_act.collidepoint(mx, my):
+                _magesets_active = nm
+                _magesets_persist()
+                _magesets_set_note(f'"{nm}" is the set the hotbar casts.')
+                return True
+        return True
+    # edit view
+    if _magesets_name_rect and _magesets_name_rect.collidepoint(mx, my):
+        _magesets_name_focus = True
+        return True
+    _magesets_name_focus = False
+    if _magesets_save_rect and _magesets_save_rect.collidepoint(mx, my):
+        _magesets_editor_save()
+        return True
+    if _magesets_cancel_rect and _magesets_cancel_rect.collidepoint(mx, my):
+        _magesets_view = "list"
+        _magesets_scroll = 0
+        return True
+    for r_up, r_dn, r_del, r_tgt, i in _magesets_order_rects:
+        if r_tgt.collidepoint(mx, my):
+            _magesets_step_target(i, +1)
+            return True
+        if r_up.collidepoint(mx, my):
+            if i > 0:
+                L = _magesets_edit_list
+                L[i - 1], L[i] = L[i], L[i - 1]
+            return True
+        if r_dn.collidepoint(mx, my):
+            if i < len(_magesets_edit_list) - 1:
+                L = _magesets_edit_list
+                L[i + 1], L[i] = L[i], L[i + 1]
+            return True
+        if r_del.collidepoint(mx, my):
+            if 0 <= i < len(_magesets_edit_list):
+                _magesets_edit_list.pop(i)
+            return True
+    if _magesets_pick_area and _magesets_pick_area.collidepoint(mx, my):
+        for r, nm in _magesets_pick_rects:
+            if r.collidepoint(mx, my):
+                if nm.lower() in {e[0].lower() for e in _magesets_edit_list}:
+                    _magesets_set_note(f"{nm} is already in the set.")
+                elif len(_magesets_edit_list) >= _MAGESET_MAX:
+                    _magesets_set_note(
+                        f"A set holds at most {_MAGESET_MAX} spells.")
+                else:
+                    _magesets_edit_list.append([nm, "me"])
+                return True
+    return True
+
+
+def _magesets_step_target(i, step):
+    """Cycle one spell's target me -> p1 .. p5 (or back). Self-only spells
+    stay on me."""
+    if not (0 <= i < len(_magesets_edit_list)):
+        return
+    nm, tg = _magesets_edit_list[i]
+    if not _magesets_can_party(nm):
+        _magesets_edit_list[i][1] = "me"
+        _magesets_set_note(f"{nm} can only be cast on yourself.")
+        return
+    k = _MAGESET_TARGETS.index(tg) if tg in _MAGESET_TARGETS else 0
+    _magesets_edit_list[i][1] = _MAGESET_TARGETS[(k + step)
+                                                 % len(_MAGESET_TARGETS)]
+
+
+# ── Loadouts window (tabbed wrapper: BRD / BLU / Mage / PUP / Trusts) ────
 # One Settings entry, three tabs. This is a thin coordinator over the three
 # existing panels: it drives their open-flags + a shared window position from
 # one state, delegates draw/input to the active tab's own panel unchanged,
@@ -31996,21 +32798,28 @@ _loadouts_open      = False
 _loadouts_tab       = "blu"      # "blu" | "trust" | "pup"
 _loadouts_pos       = globals().get("_loadouts_pos_loaded")  # shared [x,y], restored by load_layout
 _loadouts_tab_rects = []         # [(rect, key)] rebuilt each frame
+# Tab strip, left to right.
+_LOADOUTS_TABS = (("brd", "BRD"), ("blu", "BLU"), ("mage", "Mage"),
+                  ("pup", "PUP"), ("trust", "Trusts"))
 
 
 def _loadouts_pre():
     """Push shared open/position state down into the active sub-panel."""
     global _blusets_open, _trustsets_open, _pupatt_open, _brdset_open
+    global _magesets_open
     global _blusets_win_pos, _trustsets_win_pos, _pupatt_win_pos, _brdset_win_pos
+    global _magesets_win_pos
     _blusets_open   = (_loadouts_open and _loadouts_tab == "blu")
     _trustsets_open = (_loadouts_open and _loadouts_tab == "trust")
     _pupatt_open    = (_loadouts_open and _loadouts_tab == "pup")
     _brdset_open    = (_loadouts_open and _loadouts_tab == "brd")
+    _magesets_open  = (_loadouts_open and _loadouts_tab == "mage")
     if _loadouts_pos is not None:
         if _blusets_open:   _blusets_win_pos   = list(_loadouts_pos)
         if _trustsets_open: _trustsets_win_pos = list(_loadouts_pos)
         if _pupatt_open:    _pupatt_win_pos    = list(_loadouts_pos)
         if _brdset_open:    _brdset_win_pos    = list(_loadouts_pos)
+        if _magesets_open:  _magesets_win_pos  = list(_loadouts_pos)
 
 
 def _loadouts_post():
@@ -32019,6 +32828,7 @@ def _loadouts_post():
     src = (_blusets_win_pos if _loadouts_tab == "blu" else
            _trustsets_win_pos if _loadouts_tab == "trust" else
            _brdset_win_pos if _loadouts_tab == "brd" else
+           _magesets_win_pos if _loadouts_tab == "mage" else
            _pupatt_win_pos)
     if src is not None:
         _loadouts_pos = list(src)
@@ -32029,6 +32839,7 @@ def _loadouts_draw_tabs_overlay(surface):
     tr = (_blusets_title_rect if _loadouts_tab == "blu" else
           _trustsets_title_rect if _loadouts_tab == "trust" else
           _brdset_title_rect if _loadouts_tab == "brd" else
+          _magesets_title_rect if _loadouts_tab == "mage" else
           _pupatt_title_rect)
     if tr is None:
         return
@@ -32036,7 +32847,7 @@ def _loadouts_draw_tabs_overlay(surface):
     th = min(16, tr.height - 4)
     ty = tr.y + (tr.height - th) // 2
     tx = tr.x + 8
-    for key, label in (("blu", "BLU"), ("trust", "Trusts"), ("pup", "PUP"), ("brd", "BRD")):
+    for key, label in _LOADOUTS_TABS:
         r = pygame.Rect(tx, ty, 54, th)
         on = (_loadouts_tab == key)
         pygame.draw.rect(surface, (54, 74, 104) if on else (28, 32, 42),
@@ -32052,6 +32863,15 @@ def _loadouts_draw_tabs_overlay(surface):
 
 
 def draw_loadouts_window(surface):
+    # Every sub-window publishes its frame while it is drawn, and the hover
+    # tests (tooltips underneath, click-through) read those frames. Clear
+    # them all each frame so only the tab actually on screen has one --
+    # otherwise a closed window, or a tab you switched away from, keeps
+    # blocking the spot it was last drawn at.
+    global _blusets_win_rect, _trustsets_win_rect, _pupatt_win_rect
+    global _brdset_win_rect, _magesets_win_rect
+    _blusets_win_rect = _trustsets_win_rect = _pupatt_win_rect = None
+    _brdset_win_rect = _magesets_win_rect = None
     if not _loadouts_open:
         return
     _loadouts_pre()
@@ -32061,6 +32881,8 @@ def draw_loadouts_window(surface):
         draw_trustsets_window(surface)
     elif _loadouts_tab == "brd":
         draw_brdset_window(surface)
+    elif _loadouts_tab == "mage":
+        draw_magesets_window(surface)
     else:
         draw_pupatt_window(surface)
     _loadouts_post()
@@ -32080,6 +32902,8 @@ def _loadouts_handle_event(event):
                     _loadouts_tab = key
                     if key == "pup":
                         _pupatt_request_sync()
+                    elif key == "mage":
+                        _magesets_request_sync()
                 return True
     if _loadouts_tab == "blu":
         consumed = _blusets_handle_event(event)
@@ -32087,12 +32911,15 @@ def _loadouts_handle_event(event):
         consumed = _trustsets_handle_event(event)
     elif _loadouts_tab == "brd":
         consumed = _brdset_handle_event(event)
+    elif _loadouts_tab == "mage":
+        consumed = _magesets_handle_event(event)
     else:
         consumed = _pupatt_handle_event(event)
     _loadouts_post()
     if ((_loadouts_tab == "blu" and not _blusets_open)
             or (_loadouts_tab == "trust" and not _trustsets_open)
             or (_loadouts_tab == "brd" and not _brdset_open)
+            or (_loadouts_tab == "mage" and not _magesets_open)
             or (_loadouts_tab == "pup" and not _pupatt_open)):
         _loadouts_open = False
     return consumed
@@ -32101,7 +32928,7 @@ def _loadouts_handle_event(event):
 def _loadouts_show(tab="blu"):
     """Open the Loadouts window (Settings → Misc → Loadouts) on a tab."""
     global _loadouts_open, _loadouts_tab, settings_menu_open
-    if tab not in ("blu", "trust", "pup", "brd"):
+    if tab not in ("blu", "trust", "pup", "brd", "mage"):
         tab = "blu"
     _loadouts_tab = tab
     _loadouts_open = True
@@ -32111,10 +32938,13 @@ def _loadouts_show(tab="blu"):
         _trustsets_ensure_loaded()
         _pupatt_ensure_loaded()
         _brdset_ensure_loaded()
+        _magesets_ensure_loaded()
     except Exception:
         pass
     if tab == "pup":
         _pupatt_request_sync()
+    elif tab == "mage":
+        _magesets_request_sync()
 
 
 def draw_blusets_window(surface):
@@ -35383,7 +36213,7 @@ class _TextField:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  DEV · Auction House panel
+#  DEV · Marketplace panel (the auction house, bazaar and delivery box)
 #  Framework: Buy / Sell / List tabs, a working section (left) + a purchase-
 #  results log (right). Buy tab carries the search box, an AH-style expandable
 #  category tree, a multi-item buy queue (each item has start price / max price
@@ -35416,6 +36246,7 @@ ah_state = {
     "running": False,
     "results": [],           # purchase-result log lines (newest appended)
     "results_scroll": 0,
+    "cancel_arm": None,      # (slot, t) — Cancel/Take back armed for a click
     "edit": None,            # ("throttle",) | ("q", idx, "start|max|inc|qty")
     "edit_buf": "",
 }
@@ -35450,6 +36281,26 @@ def _ah_save_geometry():
 def _ah_clear_rects():
     _ah_rects.clear()
     _ah_item_tip_rects.clear()
+
+_ah_press_flash = {}
+_AH_PRESS_FLASH = 0.22      # seconds a pressed button stays lit
+
+
+def _ah_press(key):
+    """Mark a button as just-clicked."""
+    _ah_press_flash[key] = time.time()
+
+
+def _ah_pressed(key):
+    """True while that button should still be drawn pressed."""
+    t = _ah_press_flash.get(key)
+    if t is None:
+        return False
+    if time.time() - t > _AH_PRESS_FLASH:
+        _ah_press_flash.pop(key, None)
+        return False
+    return True
+
 
 def _ah_send(sub):
     try:
@@ -36021,6 +36872,12 @@ def _ah_note_search_error(exc=None):
         _ah_search_fails = 0
         _ah_search_ip = None          # in-memory only — disk keeps the value
         _ah_search_detect_next = 0.0  # let the next resolve re-detect at once
+        # Re-detection only helps while the addresses we know are still the
+        # right ones. If the block has been renumbered they are all dead and
+        # nothing here knows the new ones, so go and look. Costs one sweep
+        # every few minutes at worst, and never runs unless the servers have
+        # actually stopped answering.
+        _ahsrch_rescan_async()
 
 
 def _ah_hist_emit(line):
@@ -36912,30 +37769,199 @@ def _ahsrch_query_population(host, port=_AHSRCH_PORT, timeout=8.0, **filters):
 # AuctionWatch). Used to label the population readout with the world name the
 # resolved search-server address belongs to; unknown addresses fall back to a
 # plain "Server" label.
-_AHSRCH_WORLD_BY_IP = {
-    "124.150.154.61": "Bahamut",
-    "124.150.154.62": "Shiva",
-    "124.150.154.63": "Phoenix",
-    "124.150.154.64": "Carbuncle",
-    "124.150.154.65": "Fenrir",
-    "124.150.154.66": "Sylph",
-    "124.150.154.67": "Valefor",
-    "124.150.154.68": "Leviathan",
-    "124.150.154.69": "Odin",
-    "124.150.154.70": "Quetzalcoatl",
-    "124.150.154.71": "Siren",
-    "124.150.154.72": "Ragnarok",
-    "124.150.154.73": "Cerberus",
-    "124.150.154.74": "Bismarck",
-    "124.150.154.75": "Lakshmi",
-    "124.150.154.76": "Asura",
-}
-
-# Reverse of the above: world name -> search-server address. Lets the
+# The 16 retail search servers sit in one contiguous block, in this order,
+# one address per world. Only the FIRST address is a constant: the rest are
+# that address plus an offset, so if Square Enix ever renumbers the block the
+# whole table moves together and only the base has to be relearned.
+_AHSRCH_WORLD_ORDER = [
+    "Bahamut", "Shiva", "Phoenix", "Carbuncle", "Fenrir", "Sylph",
+    "Valefor", "Leviathan", "Odin", "Quetzalcoatl", "Siren", "Ragnarok",
+    "Cerberus", "Bismarck", "Lakshmi", "Asura",
+]
+_AHSRCH_BASE_DEFAULT = "124.150.154.61"
+_ahsrch_base = _AHSRCH_BASE_DEFAULT
+_AHSRCH_WORLD_BY_IP = {}
+# Reverse of the block: world name -> search-server address. Lets the
 # resolver answer straight from the user's own "Server" setting
 # (ffxi_server), the way the MobileWatch companion app does -- one static
 # lookup, nothing to discover and nothing to get wrong.
-_AHSRCH_IP_BY_WORLD = {w: i for i, w in _AHSRCH_WORLD_BY_IP.items()}
+_AHSRCH_IP_BY_WORLD = {}
+
+
+def _ahsrch_ip_add(ip, n):
+    """<ip> with n added to its final octet. None if that leaves the range."""
+    try:
+        head, _, last = ip.rpartition(".")
+        last = int(last) + int(n)
+    except (ValueError, AttributeError):
+        return None
+    if not head or last < 1 or last > 254:
+        return None
+    return "%s.%d" % (head, last)
+
+
+def _ahsrch_set_block(base):
+    """Point the world tables at a block of 16 starting at <base>."""
+    global _ahsrch_base, _AHSRCH_WORLD_BY_IP, _AHSRCH_IP_BY_WORLD
+    by_ip = {}
+    for n, world in enumerate(_AHSRCH_WORLD_ORDER):
+        ip = _ahsrch_ip_add(base, n)
+        if not ip:
+            return False
+        by_ip[ip] = world
+    _ahsrch_base = base
+    _AHSRCH_WORLD_BY_IP = by_ip
+    _AHSRCH_IP_BY_WORLD = {w: i for i, w in by_ip.items()}
+    return True
+
+
+_ahsrch_set_block(_AHSRCH_BASE_DEFAULT)
+
+_ah_block_loaded = False        # read the remembered block once per run
+_ah_block_busy = False          # a sweep is in flight
+_ah_block_next_scan = 0.0       # time.time() gate between sweeps
+_AH_BLOCK_RESCAN_EVERY = 300.0  # seconds
+_AH_BLOCK_PROBE_ITEM = 4096     # any real item; we only care that it answers
+_AH_BLOCK_PROBE_TIMEOUT = 1.8
+_AH_BLOCK_WORKERS = 16
+
+
+def _ahsrch_block_path():
+    return os.path.join(os.environ.get("APPDATA", ""), "OmniWatch",
+                        "search_block.txt")
+
+
+def _ahsrch_load_block():
+    """Adopt a block address learned on an earlier run, if there is one."""
+    global _ah_block_loaded
+    if _ah_block_loaded:
+        return
+    _ah_block_loaded = True
+    try:
+        with open(_ahsrch_block_path(), "r") as f:
+            base = f.read().strip()
+    except Exception:
+        return
+    if base and base != _ahsrch_base:
+        _ahsrch_set_block(base)
+
+
+def _ahsrch_save_block(base):
+    try:
+        path = _ahsrch_block_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(base)
+    except Exception:
+        pass
+
+
+def _ahsrch_probe(ip):
+    """True if a real search server answers at <ip>. An open socket is not
+    enough -- anything on the LAN can be holding port 54002 -- so this sends
+    a real query and requires a reply the protocol can parse."""
+    try:
+        return bool(_ahsrch_query(ip, _AHSRCH_PORT, _AH_BLOCK_PROBE_ITEM,
+                                  False, timeout=_AH_BLOCK_PROBE_TIMEOUT))
+    except Exception:
+        return False
+
+
+def _ahsrch_sweep(head):
+    """Probe every host in <head>.1-254 and return the set that answers."""
+    live = set()
+    lock = threading.Lock()
+    todo = list(range(1, 255))
+    pos = [0]
+
+    def worker():
+        while True:
+            with lock:
+                if pos[0] >= len(todo):
+                    return
+                n = todo[pos[0]]
+                pos[0] += 1
+            ip = "%s.%d" % (head, n)
+            if _ahsrch_probe(ip):
+                with lock:
+                    live.add(ip)
+
+    threads = [threading.Thread(target=worker, daemon=True)
+               for _ in range(_AH_BLOCK_WORKERS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return live
+
+
+# The sweep-and-shape approach is borrowed from the Alexandria addon by
+# suspiciousman3187 (MIT).
+def _ahsrch_find_block():
+    """Look for the 16 search servers elsewhere in the same range.
+
+    Every world address is derived from one base, so the whole table breaks
+    together if that block is ever renumbered, and nothing on this PC knows
+    where it went. What identifies it is its shape: sixteen consecutive
+    addresses answering the search protocol, with dead neighbours either
+    side. Sweep the range and adopt a run only when exactly one matches --
+    two candidates mean we cannot tell which is right, and a guess would
+    poison the very table we are repairing.
+    """
+    head = _ahsrch_base.rpartition(".")[0]
+    if not head:
+        return None
+    live = _ahsrch_sweep(head)
+    want = len(_AHSRCH_WORLD_ORDER)
+    runs = []
+    for n in range(1, 255):
+        if "%s.%d" % (head, n) not in live:
+            continue
+        if "%s.%d" % (head, n - 1) in live:
+            continue                      # not the start of a run
+        length = 0
+        while "%s.%d" % (head, n + length) in live:
+            length += 1
+        if length == want:
+            runs.append("%s.%d" % (head, n))
+    if len(runs) != 1:
+        return None
+    return runs[0]
+
+
+def _ahsrch_rescan_block():
+    """Background: nothing answers any more, so go and find the servers."""
+    global _ah_block_busy
+    try:
+        base = _ahsrch_find_block()
+        if not base or base == _ahsrch_base:
+            return
+        old = _ahsrch_base
+        if not _ahsrch_set_block(base):
+            return
+        _ahsrch_save_block(base)
+        _ahsrch_clear_cached()
+        globals()["_ah_search_ip"] = None   # re-resolve against the new block
+        _ah_hist_emit("AH: the search servers moved from %s to %s - using the "
+                      "new addresses" % (old, base))
+    except Exception:
+        pass
+    finally:
+        _ah_block_busy = False
+
+
+def _ahsrch_rescan_async():
+    """Start a sweep off the calling thread, at most once every few minutes."""
+    global _ah_block_busy, _ah_block_next_scan
+    now = time.time()
+    if _ah_block_busy or now < _ah_block_next_scan:
+        return
+    _ah_block_busy = True
+    _ah_block_next_scan = now + _AH_BLOCK_RESCAN_EVERY
+    try:
+        threading.Thread(target=_ahsrch_rescan_block, daemon=True).start()
+    except Exception:
+        _ah_block_busy = False
 
 
 def _ahsrch_is_retail_ip(ip):
@@ -36946,12 +37972,14 @@ def _ahsrch_is_retail_ip(ip):
     could hand back any address on the machine that happened to sit on port
     54002 -- including a LAN address -- and then save it as authoritative.
     """
+    _ahsrch_load_block()
     return ip in _AHSRCH_WORLD_BY_IP
 
 
 def _ahsrch_world_ip():
     """Search-server address for the world chosen in Settings > Header >
     Server, or None if it is unset / unrecognised."""
+    _ahsrch_load_block()
     try:
         return _AHSRCH_IP_BY_WORLD.get(setting("ffxi_server"))
     except Exception:
@@ -37027,6 +38055,7 @@ def _ah_resolve_server():
     # erase it.
     global _ah_search_ip, _ah_search_detect_next, _ah_cache_sanitised
     port = _AHSRCH_PORT
+    _ahsrch_load_block()
 
     manual = _ahsrch_manual_server()
     if manual:
@@ -37185,47 +38214,6 @@ def _ah_log(line):
     if len(ah_state["results"]) > 300:
         ah_state["results"] = ah_state["results"][-300:]
 
-def _ah_draw_tooltip(surface, mx, my, lines, fnt, fnt_b, fnt_s):
-    pad = 6
-    fonts = [fnt_b] + [fnt_s] * max(0, len(lines) - 1)
-    tw = 0
-    th = pad * 2
-    for f, ln in zip(fonts, lines):
-        tw = max(tw, f.size(ln)[0])
-        th += f.get_height()
-    tw += pad * 2
-    x, y = mx + 14, my + 16
-    # Keep the card inside the viewport the CURSOR is in, not the whole
-    # canvas -- otherwise a tooltip near the main window's right edge
-    # spills across the boundary into the desk window.
-    _vpb = _view_bounds_at(mx, my)
-    sw, sh = _vpb[0] + _vpb[2], _vpb[1] + _vpb[3]
-    if x + tw > sw:
-        x = mx - tw - 10
-    if y + th > sh:
-        y = sh - th - 4
-    x = max(_vpb[0] + 2, x)
-    y = max(_vpb[1] + 2, y)
-    box = pygame.Rect(x, y, tw, th)
-    pygame.draw.rect(surface, (12, 14, 20), box, border_radius=4)
-    pygame.draw.rect(surface, (96, 104, 126), box, 1, border_radius=4)
-    yy = y + pad
-    _pzone = False
-    for i, (f, ln) in enumerate(zip(fonts, lines)):
-        _sep = ln.startswith("\u2500 your prices")
-        if _sep:
-            _pzone = True
-        if i == 0:
-            col = (236, 228, 168)
-        elif _sep:
-            col = (140, 150, 168)
-        elif _pzone:
-            col = (150, 214, 162)
-        else:
-            col = (200, 208, 224)
-        surface.blit(f.render(ln, True, col), (x + pad, yy))
-        yy += f.get_height()
-
 def draw_ah_window(surface):
     global ah_panel_pos
     _ah_clear_rects()
@@ -37254,7 +38242,7 @@ def draw_ah_window(surface):
     # title + close
     pygame.draw.rect(surface, COL_EV_HEADER,
                      (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
-    ts = fnt_b.render("Auction House", True, COL_EV_TITLE)
+    ts = fnt_b.render("Marketplace", True, COL_EV_TITLE)
     surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
     close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
     pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
@@ -37342,8 +38330,10 @@ def draw_ah_window(surface):
 
     # ── Buy / Sell tab bar over the working pane ──
     tab_h = 20
-    _tw = left.width // 2
-    for _i, (_tk, _tl) in enumerate((("buy", "Buy"), ("sell", "Sell"))):
+    _tw = left.width // 4
+    for _i, (_tk, _tl) in enumerate((("buy", "Buy"), ("sell", "Sell"),
+                                     ("bazaar", "Bazaar"),
+                                     ("dbox", "Delivery"))):
         _tr = pygame.Rect(left.x + _i * _tw, left.y, _tw, tab_h)
         btn(_tr, _tl, on=(ah_state.get("tab", "buy") == _tk), font=fnt_b)
         _ah_rects["tab:" + _tk] = _tr
@@ -37351,24 +38341,33 @@ def draw_ah_window(surface):
                           left.width, left.height - tab_h - 4)
     if ah_state.get("tab") == "sell":
         _ah_draw_sell(surface, content, fnt, fnt_b, fnt_s, btn, field)
+    elif ah_state.get("tab") == "bazaar":
+        _ah_draw_bazaar(surface, content, fnt, fnt_b, fnt_s, btn, field)
+    elif ah_state.get("tab") == "dbox":
+        _ah_draw_dbox(surface, content, fnt, fnt_b, fnt_s, btn, field)
     else:
         _ah_draw_buy(surface, content, fnt, fnt_b, fnt_s, btn, field)
 
-    # ── item hover tooltip (what am I buying / selling) ──
+    # ── item hover card (what am I buying / selling) ──
+    # The same card as the inventory and equipment panel: the game's own
+    # item window from the resources, no augments (nothing on the AH is a
+    # particular copy). It sits just right of the cursor, top-aligned with
+    # the hovered row, rather than outside the panel -- the AH window is
+    # often wide enough that its edge is a long way from the row.
     mx, my = _mouse_pos()
-    _hover_id = None
+    _item_card_prefetch([_i for _r, _i in _ah_item_tip_rects])
+    _hover = None
     for _rr, _iid in _ah_item_tip_rects:
         if _rr.collidepoint(mx, my):
-            _hover_id = _iid
+            _hover = (_rr, _iid)
             break
-    if _hover_id is not None:
-        if (_hover_id not in ah_state["iteminfo"]
-                and _hover_id not in ah_state["info_seen"]):
-            ah_state["info_seen"].add(_hover_id)
-            _ah_send("info|%d" % _hover_id)
-        _tip = ah_state["iteminfo"].get(_hover_id)
-        if _tip:
-            _ah_draw_tooltip(surface, mx, my, _tip, fnt, fnt_b, fnt_s)
+    if _hover is not None and int(_hover[1] or 0) > 0:
+        _rr, _iid = _hover
+        try:
+            draw_item_card(surface, int(_iid), "", _rr, augs=[],
+                           beside=pygame.Rect(mx + 8, _rr.top, 1, _rr.h))
+        except Exception as e:
+            print(f"[OmniWatch] AH item card draw failed: {e!r}")
 
     # ── resize grip (bottom-right corner) ──
     grip = pygame.Rect(x + w - 16, y + h - 16, 16, 16)
@@ -37558,7 +38557,7 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
     surface.blit(fnt_b.render("Your inventory", True, (200, 208, 222)),
                  (area.x + 2, area.y))
     rf = pygame.Rect(area.right - 60, area.y - 1, 58, 17)
-    btn(rf, "Refresh")
+    btn(rf, "Refresh", on=_ah_pressed("sellrefresh"))
     _ah_rects["sellrefresh"] = rf
 
     # sellable-inventory list (top ~45%)
@@ -37646,27 +38645,743 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
                  (area.x + 2, fy))
     fy += 16
     by_slot = {sl["slot"]: sl for sl in ah_state.get("sales", [])}
+    _armed = ah_state.get("cancel_arm")
+    if _armed and time.time() - _armed[1] > 4.0:
+        ah_state["cancel_arm"] = _armed = None
     for slot in range(7):
         row = pygame.Rect(area.x, fy, area.width, 15)
         sl = by_slot.get(slot)
-        if sl and sl.get("status") and sl["status"] not in ("Empty", "Sold"):
+        if sl and sl.get("status") and sl["status"] != "Empty":
             stat = sl["status"]
             col = ((150, 210, 160) if stat == "Sold"
                    else (212, 158, 158) if stat == "Not Sold"
                    else (202, 196, 150))
-            nm = sl.get("name") or "?"
-            while nm and fnt_s.size(nm)[0] > area.width - 150:
-                nm = nm[:-1]
-            surface.blit(fnt_s.render("%d. %s" % (slot + 1, nm), True,
-                                      (200, 206, 218)), (row.x + 4, row.y))
+            # Stop the sale / take the item back. Armed on the first click
+            # so a stray click can't pull a listing off the auction house --
+            # except on a sold slot, where clearing only acknowledges a sale
+            # that already happened and there is nothing to protect.
+            _armed_here = (bool(_armed) and _armed[0] == slot
+                           and stat != "Sold")
+            _cb = pygame.Rect(row.right - 64, row.y, 62, 14)
+            if _armed_here:
+                btn(_cb, "Sure?", on=True, on_bg=(96, 44, 44),
+                    on_bd=(170, 90, 90), on_tx=(245, 205, 205))
+            else:
+                # One word for both finished states: the slot is emptied and
+                # whatever was in it comes back, sold or not.
+                btn(_cb, "Cancel" if stat == "On auction" else "Clear")
+            _ah_rects["sellcancel:%d" % slot] = _cb
+            # The same lookups as the Buy tab: hover for the item card, $ for
+            # the sales history, right-click for FFXIAH.
+            _sid = int(sl.get("id", 0) or 0)
+            _hx = _cb.x
+            if _sid > 0:
+                _hb = pygame.Rect(_cb.x - 18, row.y, 14, 14)
+                surface.blit(fnt_s.render("$", True, (224, 196, 120)),
+                             (_hb.x + 3, row.y))
+                _ah_rects["hist:%d:%d" % (_sid, 1 if sl.get("count", 1) > 1
+                                          else 0)] = _hb
+                _nr = pygame.Rect(row.x, row.y, max(1, _hb.x - row.x), 14)
+                _ah_rects["salefx:%d" % _sid] = _nr
+                _ah_item_tip_rects.append((_nr, _sid))
+                _hx = _hb.x
             _ts = fnt_s.render("%s  %s" % (_ah_fmt_gil(sl.get("price", 0)), stat),
                                True, col)
-            surface.blit(_ts, (row.right - 6 - _ts.get_width(), row.y))
+            surface.blit(_ts, (_hx - 8 - _ts.get_width(), row.y))
+            # Truncate against where the price actually starts, so a long
+            # name can never run into it.
+            nm = "%d. %s" % (slot + 1, sl.get("name") or "?")
+            _lim = (_hx - 8 - _ts.get_width()) - (row.x + 8)
+            if fnt_s.size(nm)[0] > _lim:
+                while nm and fnt_s.size(nm + "\u2026")[0] > _lim:
+                    nm = nm[:-1]
+                nm += "\u2026"
+            surface.blit(fnt_s.render(nm, True, col if stat != "On auction"
+                                      else (200, 206, 218)),
+                         (row.x + 4, row.y))
         else:
             surface.blit(fnt_s.render("%d. (empty)" % (slot + 1), True,
                                       (96, 102, 114)), (row.x + 4, row.y))
         fy += 15
 
+
+# === BAZAAR TAB BEGIN ===
+# The Bazaar tab of the AH window. Your own bazaar: what is in it, what it
+# is priced at, and setting or clearing prices from your inventory. Unlike
+# the auction house this works anywhere -- a bazaar price is just a flag on
+# an inventory item -- so there is no zone gate here.
+#
+# The prices come from the inventory snapshot the lua already pushes every
+# few seconds (each item carries its bazaar price), and setting one goes
+# out through the same INVACT|bazaar path the inventory's right-click menu
+# uses, packet order and all.
+baz_state = {
+    "pick": None,        # (slot, id, name) chosen from inventory
+    "price": "",
+    "find": "",
+    "scroll": 0,
+    "arm": None,         # (item id, when) -- Remove armed for a second click
+}
+_baz_price_field = _TextField(max_length=9, allowed="0123456789")
+_baz_find_field = _TextField(max_length=24)
+
+
+def _baz_blur():
+    _baz_price_field.blur()
+    _baz_find_field.blur()
+
+
+def _baz_inventory(listable_only=True, use_find=True):
+    """Main-inventory rows, filtered by the find box.
+
+    Exclusive items cannot go in a bazaar, so they are left out of the
+    picker rather than offered and silently refused by the game. That
+    reads off the item card, which the list prefetches; an item whose
+    card has not arrived yet is shown, since hiding things on a guess is
+    worse than showing one that turns out not to work.
+    """
+    rows = []
+    q = (baz_state.get("find") or "").strip().lower()
+    _item_card_prefetch([it.get("id") for it
+                         in inventory_state.get("inventory", []) or []])
+    for it in inventory_state.get("inventory", []) or []:
+        try:
+            iid = int(it.get("id", 0))
+            slot = int(it.get("slot", 0))
+        except (TypeError, ValueError):
+            continue
+        if iid <= 0 or slot <= 0:
+            continue
+        baz = int(it.get("bazaar", 0) or 0)
+        if listable_only and baz <= 0:
+            card = inv_card_cache.get(iid)
+            if card and card.get("ex"):
+                continue
+        nm = it.get("name") or ("item %d" % iid)
+        if use_find and q and q not in nm.lower():
+            continue
+        rows.append({"slot": slot, "id": iid, "name": nm,
+                     "count": int(it.get("count", 1) or 1),
+                     "bazaar": baz})
+    rows.sort(key=lambda r: r["name"].lower())
+    return rows
+
+
+def _baz_listed():
+    """What is in the bazaar right now, dearest first."""
+    # The find box belongs to the picker; what is in your bazaar is not
+    # something to filter out from under yourself.
+    rows = [r for r in _baz_inventory(listable_only=False, use_find=False)
+            if r["bazaar"] > 0]
+    rows.sort(key=lambda r: -r["bazaar"])
+    return rows
+
+
+def _baz_set_price():
+    pick = baz_state.get("pick")
+    if not pick:
+        _ah_log("bazaar: pick an item from your inventory")
+        return
+    try:
+        price = int((baz_state.get("price") or "").strip() or 0)
+    except ValueError:
+        price = 0
+    if price < 1:
+        _ah_log("bazaar: enter a price")
+        return
+    _inv_send_bazaar(pick[1], price)
+    baz_state["price"] = ""
+    baz_state["pick"] = None
+    _baz_price_field.blur()
+
+
+def _ah_draw_bazaar(surface, area, fnt, fnt_b, fnt_s, btn, field):
+    listed = _baz_listed()
+    pick = baz_state.get("pick")
+    total = sum(r["bazaar"] for r in listed)
+    arm = baz_state.get("arm")
+    if arm and time.time() - arm[1] > 4.0:
+        baz_state["arm"] = arm = None
+
+    surface.blit(fnt_b.render("Your inventory", True, (200, 208, 222)),
+                 (area.x + 2, area.y))
+
+    # ── inventory to pick from (top, as in the Sell tab) ──
+    inv_h = max(60, int((area.height - 22) * 0.42))
+    fr = pygame.Rect(area.x, area.y + 19, area.width - 2, 19)
+    field(fr, baz_state.get("find", ""), _baz_find_field,
+          "find an item in your inventory\u2026")
+    _ah_rects["bz:find"] = fr
+    list_r = pygame.Rect(area.x, fr.bottom + 3, area.width, inv_h)
+    pygame.draw.rect(surface, (16, 18, 22), list_r, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 80), list_r, 1, border_radius=3)
+    clip = surface.get_clip()
+    surface.set_clip(list_r.inflate(-2, -2))
+    items = _baz_inventory()
+    ih = 15
+    vis = max(1, (list_r.height - 4) // ih)
+    off = max(0, min(int(baz_state.get("scroll", 0)), max(0, len(items) - vis)))
+    baz_state["scroll"] = off
+    iy = list_r.y + 2
+    if not items:
+        surface.blit(fnt_s.render("(nothing you can bazaar)", True,
+                                  (120, 128, 142)), (list_r.x + 6, iy))
+    for _vi, it in enumerate(items[off:off + vis]):
+        row = pygame.Rect(list_r.x + 2, iy, list_r.width - 4, ih)
+        sel = bool(pick) and pick[0] == it["slot"]
+        if sel:
+            pygame.draw.rect(surface, (50, 60, 80), row, border_radius=2)
+        elif (off + _vi) % 2:
+            pygame.draw.rect(surface, _AH_STRIPE, row)
+        nm = it["name"]
+        while nm and fnt_s.size(nm)[0] > list_r.width - 120:
+            nm = nm[:-1]
+        surface.blit(fnt_s.render(nm, True,
+                                  (235, 220, 160) if sel else (206, 212, 224)),
+                     (row.x + 4, row.y))
+        # Already bazaared items say so here too, so the two halves of the
+        # tab never disagree about what is listed.
+        _rt = ("%s gil" % _ah_fmt_gil(it["bazaar"])) if it["bazaar"] > 0 \
+            else ("x%d" % it["count"])
+        _rs = fnt_s.render(_rt, True,
+                           (202, 196, 150) if it["bazaar"] > 0
+                           else (150, 162, 184))
+        surface.blit(_rs, (row.right - 6 - _rs.get_width(), row.y))
+        _ah_rects["bz:item:%d" % it["slot"]] = row
+        _ah_item_tip_rects.append((row, it["id"]))
+        iy += ih
+    surface.set_clip(clip)
+    _ah_rects["bz:list"] = list_r
+
+    # ── set a price on the picked item ──
+    y = list_r.bottom + 6
+    surface.blit(fnt_b.render("Set a price", True, (200, 208, 222)),
+                 (area.x + 2, y))
+    _pk = fnt_s.render(pick[2] if pick else "nothing picked", True,
+                       (224, 196, 120) if pick else (120, 128, 142))
+    surface.blit(_pk, (area.right - _pk.get_width() - 2, y + 2))
+    y += 17
+    pr = pygame.Rect(area.x, y, 110, 19)
+    field(pr, baz_state.get("price", ""), _baz_price_field, "price (gil)")
+    _ah_rects["bz:price"] = pr
+    if pick:
+        hb = pygame.Rect(pr.right + 5, y + 2, 15, 15)
+        surface.blit(fnt_s.render("$", True, (224, 196, 120)),
+                     (hb.x + 4, hb.y + 1))
+        _ah_rects["hist:%d:0" % pick[1]] = hb
+    sb = pygame.Rect(area.right - 52, y, 50, 19)
+    btn(sb, "Set", on=bool(pick), on_bg=(50, 80, 55), on_bd=(90, 150, 100),
+        on_tx=(190, 235, 200))
+    _ah_rects["bz:set"] = sb
+
+    # ── what is in the bazaar (bottom, where the listings sit in Sell) ──
+    y += 24
+    surface.blit(fnt_b.render("In your bazaar", True, (200, 208, 222)),
+                 (area.x + 2, y))
+    if listed:
+        _ts = fnt_s.render("%d item%s  %s gil" % (
+            len(listed), "" if len(listed) == 1 else "s",
+            _ah_fmt_gil(total)), True, (170, 180, 196))
+        surface.blit(_ts, (area.right - _ts.get_width() - 2, y + 2))
+    y += 17
+    top_r = pygame.Rect(area.x, y, area.width, max(24, area.bottom - y))
+    pygame.draw.rect(surface, (16, 18, 24), top_r, border_radius=3)
+    pygame.draw.rect(surface, (54, 60, 74), top_r, 1, border_radius=3)
+    clip = surface.get_clip()
+    surface.set_clip(top_r.inflate(-2, -2))
+    rh = 16
+    ry = top_r.y + 2
+    if not listed:
+        surface.blit(fnt_s.render("(nothing in your bazaar)", True,
+                                  (120, 128, 142)), (top_r.x + 6, ry))
+    for _i, r in enumerate(listed[:max(1, (top_r.height - 4) // rh)]):
+        row = pygame.Rect(top_r.x + 2, ry, top_r.width - 4, rh - 1)
+        if _i % 2:
+            pygame.draw.rect(surface, _AH_STRIPE, row)
+        rm = pygame.Rect(row.right - 58, row.y, 56, rh - 2)
+        if arm and arm[0] == r["id"]:
+            btn(rm, "Sure?", on=True, on_bg=(96, 44, 44),
+                on_bd=(170, 90, 90), on_tx=(245, 205, 205))
+        else:
+            btn(rm, "Remove")
+        _ah_rects["bz:remove:%d" % r["id"]] = rm
+        _ps = fnt_s.render(_ah_fmt_gil(r["bazaar"]), True, (202, 196, 150))
+        surface.blit(_ps, (rm.x - 8 - _ps.get_width(), row.y + 1))
+        nm = r["name"] + (" x%d" % r["count"] if r["count"] > 1 else "")
+        _lim = (rm.x - 8 - _ps.get_width()) - (row.x + 8)
+        if fnt_s.size(nm)[0] > _lim:
+            while nm and fnt_s.size(nm + "\u2026")[0] > _lim:
+                nm = nm[:-1]
+            nm += "\u2026"
+        surface.blit(fnt_s.render(nm, True, (206, 212, 224)),
+                     (row.x + 4, row.y + 1))
+        _ah_item_tip_rects.append((pygame.Rect(row.x, row.y, rm.x - row.x,
+                                               rh - 1), r["id"]))
+        ry += rh
+    surface.set_clip(clip)
+    _ah_rects["bz:listed"] = top_r
+
+
+def _baz_handle_click(key, rect, mx, my):
+    """Bazaar-tab clicks. Returns True when the key was ours."""
+    if key.startswith("bz:remove:"):
+        iid = int(key.rsplit(":", 1)[1])
+        arm = baz_state.get("arm")
+        if arm and arm[0] == iid and time.time() - arm[1] <= 4.0:
+            baz_state["arm"] = None
+            _inv_send_bazaar(iid, 0)       # price 0 takes it back out
+        else:
+            baz_state["arm"] = (iid, time.time())
+        return True
+    if key.startswith("bz:item:"):
+        slot = int(key.rsplit(":", 1)[1])
+        for it in _baz_inventory():
+            if it["slot"] == slot:
+                baz_state["pick"] = (slot, it["id"], it["name"])
+                # Priced already? Start from that, so a tweak is a tweak.
+                if it["bazaar"] > 0 and not baz_state.get("price"):
+                    baz_state["price"] = str(it["bazaar"])
+                break
+        return True
+    if key == "bz:price":
+        _claim_overlay_text_focus()
+        _field_begin_drag(_baz_price_field, baz_state.get("price", ""), mx,
+                          rect, lambda: baz_state.get("price", ""),
+                          key="baz_price")
+        return True
+    if key == "bz:find":
+        _claim_overlay_text_focus()
+        _field_begin_drag(_baz_find_field, baz_state.get("find", ""), mx,
+                          rect, lambda: baz_state.get("find", ""),
+                          key="baz_find")
+        return True
+    if key == "bz:set":
+        _baz_set_price()
+        return True
+    return False
+
+
+def _baz_handle_key(event):
+    """Typing in the two Bazaar fields. Returns True when consumed."""
+    if _baz_price_field.focused:
+        baz_state["price"], action = _baz_price_field.handle_event(
+            event, baz_state.get("price", ""))
+        if action == "submit":
+            _baz_set_price()
+        elif action == "cancel":
+            _baz_price_field.blur()
+        return True
+    if _baz_find_field.focused:
+        baz_state["find"], action = _baz_find_field.handle_event(
+            event, baz_state.get("find", ""))
+        if action in ("submit", "changed"):
+            baz_state["scroll"] = 0
+        elif action == "cancel":
+            _baz_find_field.blur()
+        return True
+    return False
+# === BAZAAR TAB END ===
+
+
+# === DELIVERY BOX BEGIN ===
+# The Delivery tab of the AH window. The lua half opens the box client-side
+# and reads its contents passively; everything here is display plus the four
+# actions (take, take all, return, send). No panel of its own: it rides the
+# AH window's frame, drag, resize and rect bookkeeping.
+dbox_state = {
+    "open": "",              # "", "in" or "out" -- what the client has up
+    "busy": False,
+    "queue": 0,
+    "note": "",
+    "in": {},                # slot -> {id,count,name,who,ts,gil}
+    "out": {},
+    "box": "in",             # which box the tab is showing
+    "to": "",                # recipient
+    "amount": "",            # item count, or the gil amount
+    "mode": "item",          # item | gil
+    "pick": None,            # (slot, id, name) chosen from inventory
+    "find": "",
+    "scroll": 0,
+    "opened_at": 0.0,
+}
+_dbox_to_field = _TextField(
+    max_length=15,
+    allowed="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+_dbox_amt_field = _TextField(max_length=9, allowed="0123456789")
+_dbox_find_field = _TextField(max_length=24)
+
+
+def _dbox_send(sub):
+    try:
+        sock_cmd_out.sendto(("DBOX|" + sub).encode("utf-8"), _cmd_addr())
+    except Exception:
+        pass
+
+
+def _dbox_blur():
+    _dbox_to_field.blur()
+    _dbox_amt_field.blur()
+    _dbox_find_field.blur()
+
+
+def _dbox_open(which):
+    """Show a box: ask the lua to open it and remember which side we want."""
+    dbox_state["box"] = which
+    dbox_state["opened_at"] = time.time()
+    _dbox_send("open|" + which)
+
+
+def _dbox_leave():
+    """Leaving the tab (or closing the window) closes the game's box too --
+    the whole reason the AH window's own pop-up was a nuisance."""
+    _dbox_blur()
+    if dbox_state.get("open"):
+        _dbox_send("close")
+    dbox_state["open"] = ""
+
+
+def _dbox_inventory():
+    """Sendable main-inventory rows, newest snapshot, filtered by the find
+    box. Mailing is from inventory only, exactly like the game's menu."""
+    rows = []
+    q = (dbox_state.get("find") or "").strip().lower()
+    for it in inventory_state.get("inventory", []) or []:
+        try:
+            iid = int(it.get("id", 0))
+            slot = int(it.get("slot", 0))
+        except (TypeError, ValueError):
+            continue
+        if iid <= 0 or slot <= 0:
+            continue
+        nm = it.get("name") or ("item %d" % iid)
+        if q and q not in nm.lower():
+            continue
+        rows.append({"slot": slot, "id": iid, "name": nm,
+                     "count": int(it.get("count", 1) or 1)})
+    rows.sort(key=lambda r: r["name"].lower())
+    return rows
+
+
+def _dbox_when(ts):
+    """A delivery's date. The box shows nothing about age in game, and a
+    parcel sitting for weeks is worth noticing."""
+    try:
+        ts = int(ts or 0)
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    try:
+        return time.strftime("%m/%d", time.localtime(ts))
+    except (ValueError, OSError):
+        return ""
+
+
+def _ah_draw_dbox(surface, area, fnt, fnt_b, fnt_s, btn, field):
+    which = dbox_state.get("box", "in")
+    rows = dbox_state.get(which) or {}
+
+    # ── which box, refresh, take all ──
+    y = area.y
+    in_r = pygame.Rect(area.x, y, 54, 19)
+    out_r = pygame.Rect(in_r.right + 4, y, 60, 19)
+    btn(in_r, "Inbox", on=(which == "in"))
+    btn(out_r, "Outbox", on=(which == "out"))
+    _ah_rects["db:box:in"] = in_r
+    _ah_rects["db:box:out"] = out_r
+    rf_r = pygame.Rect(out_r.right + 8, y, 58, 19)
+    btn(rf_r, "Refresh", on=_ah_pressed("db:refresh"))
+    _ah_rects["db:refresh"] = rf_r
+    all_r = pygame.Rect(rf_r.right + 4, y, 64, 19)
+    btn(all_r, "Take all" if which == "in" else "Return all")
+    _ah_rects["db:all"] = all_r
+
+    # state line: what the client has open, and whatever the lua last said
+    note = dbox_state.get("note") or ""
+    if dbox_state.get("busy"):
+        note = "working\u2026 " + note
+    elif not dbox_state.get("open"):
+        note = note or "opening\u2026"
+    if note:
+        _ns = fnt_s.render(note, True, (170, 180, 196))
+        while _ns.get_width() > area.width - (all_r.right - area.x) - 10:
+            note = note[:-1]
+            _ns = fnt_s.render(note + "\u2026", True, (170, 180, 196))
+        surface.blit(_ns, (area.right - _ns.get_width() - 2, y + 3))
+
+    # ── the eight slots ──
+    y += 23
+    rh = 17
+    box_r = pygame.Rect(area.x, y, area.width, rh * 8 + 4)
+    pygame.draw.rect(surface, (16, 18, 24), box_r, border_radius=3)
+    pygame.draw.rect(surface, (54, 60, 74), box_r, 1, border_radius=3)
+    ry = box_r.y + 2
+    for slot in range(8):
+        it = rows.get(slot)
+        row = pygame.Rect(box_r.x + 2, ry, box_r.width - 4, rh - 1)
+        if slot % 2:
+            pygame.draw.rect(surface, _AH_STRIPE, row)
+        if not it:
+            surface.blit(fnt_s.render("%d. (empty)" % (slot + 1), True,
+                                      (96, 102, 114)), (row.x + 4, row.y + 1))
+            ry += rh
+            continue
+        cnt = int(it.get("count", 1) or 1)
+        if it.get("gil"):
+            label = "%s gil" % _ah_fmt_gil(cnt)
+        else:
+            label = it.get("name") or "?"
+            if cnt > 1:
+                label += " x%d" % cnt
+        label = "%d. %s" % (slot + 1, label)
+        # act button on the right, then sender and date to its left
+        act_r = pygame.Rect(row.right - 54, row.y, 52, rh - 2)
+        btn(act_r, "Take" if which == "in" else "Return",
+            on=True, on_bg=(50, 70, 58), on_bd=(90, 140, 110),
+            on_tx=(190, 230, 200))
+        _ah_rects["db:act:%d" % slot] = act_r
+        meta = it.get("who") or ""
+        when = _dbox_when(it.get("ts"))
+        if when:
+            meta = (meta + "  " + when) if meta else when
+        _ms = fnt_s.render(meta, True, (150, 162, 184))
+        surface.blit(_ms, (act_r.x - 6 - _ms.get_width(), row.y + 1))
+        lim = act_r.x - 12 - _ms.get_width() - (row.x + 4)
+        if fnt_s.size(label)[0] > lim:
+            # Ellipsis, so a cut item name can't read as a different item.
+            while label and fnt_s.size(label + "\u2026")[0] > lim:
+                label = label[:-1]
+            label += "\u2026"
+        surface.blit(fnt_s.render(label, True, (206, 212, 224)),
+                     (row.x + 4, row.y + 1))
+        if not it.get("gil") and int(it.get("id", 0) or 0) > 0:
+            _ah_item_tip_rects.append((pygame.Rect(row.x, row.y,
+                                                  act_r.x - row.x, rh - 1),
+                                       int(it["id"])))
+        ry += rh
+    _ah_rects["db:slots"] = box_r
+
+    # ── send form ──
+    y = box_r.bottom + 6
+    surface.blit(fnt_b.render("Send", True, (200, 208, 222)), (area.x + 2, y))
+    # What is going: the list highlight scrolls away, this doesn't.
+    _pk = dbox_state.get("pick")
+    if dbox_state.get("mode") == "gil":
+        _pk_txt = "gil"
+    elif _pk:
+        _pk_txt = _pk[2]
+    else:
+        _pk_txt = "nothing picked"
+    _pk_s = fnt_s.render(_pk_txt, True,
+                         (224, 196, 120) if (_pk or dbox_state.get("mode")
+                                             == "gil") else (120, 128, 142))
+    while _pk_s.get_width() > area.width - 60:
+        _pk_txt = _pk_txt[:-1]
+        _pk_s = fnt_s.render(_pk_txt + "\u2026", True, (224, 196, 120))
+    surface.blit(_pk_s, (area.right - _pk_s.get_width() - 2, y + 2))
+    y += 16
+    to_r = pygame.Rect(area.x, y, 118, 19)
+    field(to_r, dbox_state.get("to", ""), _dbox_to_field, "to\u2026")
+    _ah_rects["db:to"] = to_r
+    item_r = pygame.Rect(to_r.right + 5, y, 44, 19)
+    gil_r = pygame.Rect(item_r.right + 3, y, 36, 19)
+    btn(item_r, "Item", on=(dbox_state.get("mode") == "item"))
+    btn(gil_r, "Gil", on=(dbox_state.get("mode") == "gil"))
+    _ah_rects["db:mode:item"] = item_r
+    _ah_rects["db:mode:gil"] = gil_r
+    amt_r = pygame.Rect(gil_r.right + 5, y, 78, 19)
+    field(amt_r, dbox_state.get("amount", ""), _dbox_amt_field,
+          "gil" if dbox_state.get("mode") == "gil" else "qty")
+    _ah_rects["db:amt"] = amt_r
+    go_r = pygame.Rect(area.right - 52, y, 50, 19)
+    _ready = bool((dbox_state.get("to") or "").strip()) and (
+        dbox_state.get("mode") == "gil" or dbox_state.get("pick"))
+    btn(go_r, "Send", on=_ready, on_bg=(50, 80, 55), on_bd=(90, 150, 100),
+        on_tx=(190, 235, 200))
+    _ah_rects["db:send"] = go_r
+
+    # ── the item to send: inventory picker (hidden in gil mode) ──
+    y += 23
+    if dbox_state.get("mode") == "gil":
+        surface.blit(fnt_s.render(
+            "gil is sent from your purse \u2014 1,000,000 per parcel",
+            True, (120, 128, 142)), (area.x + 2, y))
+        return
+    find_r = pygame.Rect(area.x, y, area.width - 2, 19)
+    field(find_r, dbox_state.get("find", ""), _dbox_find_field,
+          "find an item in your inventory\u2026")
+    _ah_rects["db:find"] = find_r
+    y += 22
+    list_r = pygame.Rect(area.x, y, area.width, max(24, area.bottom - y))
+    pygame.draw.rect(surface, (16, 18, 22), list_r, border_radius=3)
+    pygame.draw.rect(surface, (60, 66, 80), list_r, 1, border_radius=3)
+    clip = surface.get_clip()
+    surface.set_clip(list_r.inflate(-2, -2))
+    items = _dbox_inventory()
+    ih = 15
+    vis = max(1, (list_r.height - 4) // ih)
+    off = max(0, min(int(dbox_state.get("scroll", 0)), max(0, len(items) - vis)))
+    dbox_state["scroll"] = off
+    iy = list_r.y + 2
+    pick = dbox_state.get("pick")
+    if not items:
+        surface.blit(fnt_s.render("(nothing in your inventory)", True,
+                                  (120, 128, 142)), (list_r.x + 6, iy))
+    for _vi, it in enumerate(items[off:off + vis]):
+        row = pygame.Rect(list_r.x + 2, iy, list_r.width - 4, ih)
+        sel = bool(pick) and pick[0] == it["slot"]
+        if sel:
+            pygame.draw.rect(surface, (50, 60, 80), row, border_radius=2)
+        elif (off + _vi) % 2:
+            pygame.draw.rect(surface, _AH_STRIPE, row)
+        nm = it["name"]
+        while nm and fnt_s.size(nm)[0] > list_r.width - 60:
+            nm = nm[:-1]
+        surface.blit(fnt_s.render(nm, True,
+                                  (235, 220, 160) if sel else (206, 212, 224)),
+                     (row.x + 4, row.y))
+        _cs = fnt_s.render("x%d" % it["count"], True, (150, 162, 184))
+        surface.blit(_cs, (row.right - 6 - _cs.get_width(), row.y))
+        _ah_rects["db:pick:%d" % it["slot"]] = row
+        _ah_item_tip_rects.append((row, it["id"]))
+        iy += ih
+    surface.set_clip(clip)
+    _ah_rects["db:list"] = list_r
+
+
+def _dbox_do_send():
+    """Send what the form says. The lua re-checks the slot still holds what
+    we picked before anything goes out."""
+    to = (dbox_state.get("to") or "").strip()
+    if not to:
+        _ah_log("delivery: type a recipient first")
+        return
+    try:
+        amount = int((dbox_state.get("amount") or "").strip() or 0)
+    except ValueError:
+        amount = 0
+    if dbox_state.get("mode") == "gil":
+        if amount < 1:
+            _ah_log("delivery: enter an amount of gil")
+            return
+        _dbox_send("gil|%d|%s" % (amount, to))
+        return
+    pick = dbox_state.get("pick")
+    if not pick:
+        _ah_log("delivery: pick an item from your inventory")
+        return
+    _dbox_send("send|%d|%d|%d|%s" % (pick[0], pick[1], max(1, amount or 1), to))
+
+
+def _dbox_handle_click(key, rect, mx, my):
+    """Delivery-tab clicks. Returns True when the key was ours."""
+    if key in ("db:box:in", "db:box:out"):
+        _dbox_open("in" if key.endswith(":in") else "out")
+        return True
+    if key == "db:refresh":
+        _ah_press(key)
+        _dbox_send("refresh")
+        return True
+    if key == "db:all":
+        _dbox_send("takeall" if dbox_state.get("box") == "in" else "returnall")
+        return True
+    if key.startswith("db:act:"):
+        slot = int(key.rsplit(":", 1)[1])
+        _dbox_send(("take|%d" if dbox_state.get("box") == "in"
+                    else "return|%d") % slot)
+        return True
+    if key == "db:to":
+        _claim_overlay_text_focus()
+        _field_begin_drag(_dbox_to_field, dbox_state.get("to", ""), mx, rect,
+                          lambda: dbox_state.get("to", ""), key="dbox_to")
+        return True
+    if key == "db:amt":
+        _claim_overlay_text_focus()
+        _field_begin_drag(_dbox_amt_field, dbox_state.get("amount", ""), mx,
+                          rect, lambda: dbox_state.get("amount", ""),
+                          key="dbox_amt")
+        return True
+    if key == "db:find":
+        _claim_overlay_text_focus()
+        _field_begin_drag(_dbox_find_field, dbox_state.get("find", ""), mx,
+                          rect, lambda: dbox_state.get("find", ""),
+                          key="dbox_find")
+        return True
+    if key in ("db:mode:item", "db:mode:gil"):
+        dbox_state["mode"] = "gil" if key.endswith(":gil") else "item"
+        return True
+    if key.startswith("db:pick:"):
+        slot = int(key.rsplit(":", 1)[1])
+        for it in _dbox_inventory():
+            if it["slot"] == slot:
+                dbox_state["pick"] = (slot, it["id"], it["name"])
+                break
+        return True
+    if key == "db:send":
+        _dbox_do_send()
+        return True
+    return False
+
+
+def _dbox_handle_key(event):
+    """Typing in the three Delivery fields. Returns True when consumed."""
+    if _dbox_to_field.focused:
+        dbox_state["to"], action = _dbox_to_field.handle_event(
+            event, dbox_state.get("to", ""))
+        if action == "submit":
+            _dbox_do_send()
+        elif action == "cancel":
+            _dbox_to_field.blur()
+        return True
+    if _dbox_amt_field.focused:
+        dbox_state["amount"], action = _dbox_amt_field.handle_event(
+            event, dbox_state.get("amount", ""))
+        if action == "submit":
+            _dbox_do_send()
+        elif action == "cancel":
+            _dbox_amt_field.blur()
+        return True
+    if _dbox_find_field.focused:
+        dbox_state["find"], action = _dbox_find_field.handle_event(
+            event, dbox_state.get("find", ""))
+        if action in ("submit", "changed"):
+            dbox_state["scroll"] = 0
+        elif action == "cancel":
+            _dbox_find_field.blur()
+        return True
+    return False
+
+
+def _dbox_parse(af):
+    """DBOX|box|<inbox rows>|<outbox rows> or DBOX|status|... from the lua."""
+    head = af[0] if af else ""
+    if head == "box":
+        for idx, side in ((1, "in"), (2, "out")):
+            rows = {}
+            for ent in (af[idx] if len(af) > idx else "").split(";"):
+                if not ent:
+                    continue
+                p = ent.split("~")
+                if len(p) < 7:
+                    continue
+                try:
+                    rows[int(p[0])] = {
+                        "id": int(p[1]), "count": int(p[2]), "name": p[3],
+                        "who": p[4], "ts": int(p[5]), "gil": p[6] == "1"}
+                except ValueError:
+                    continue
+            dbox_state[side] = rows
+    elif head == "status":
+        af += [""] * (5 - len(af))
+        dbox_state["open"] = af[1]
+        dbox_state["busy"] = (af[2] == "1")
+        try:
+            dbox_state["queue"] = int(af[3] or 0)
+        except ValueError:
+            dbox_state["queue"] = 0
+        if af[4]:
+            dbox_state["note"] = af[4]
+# === DELIVERY BOX END ===
 
 def _ah_txn_file():
     return os.path.join(_ports_dir(), "ah_transactions.json")
@@ -37845,14 +39560,28 @@ def _ah_handle_event(event):
                 if 0 <= qi < len(ah_state["queue"]):
                     _ah_open_ffxiah(ah_state["queue"][qi]["id"])
                 return True
-            if key == "tab:buy" or key == "tab:sell":
+            if key in ("tab:buy", "tab:sell", "tab:bazaar", "tab:dbox"):
                 _ah_commit_edit()
                 _nt = key.split(":")[1]
+                _ot = ah_state.get("tab")
                 ah_state["tab"] = _nt
+                # Leaving Delivery closes the game's own box window, so it
+                # can't be left standing over the game.
+                if _ot == "dbox" and _nt != "dbox":
+                    _dbox_leave()
                 if _nt == "sell":
                     _ah_send("inv"); _ah_send("sales")
+                elif _nt == "dbox":
+                    _dbox_open(dbox_state.get("box", "in"))
+                if _ot == "bazaar" and _nt != "bazaar":
+                    _baz_blur()
+                return True
+            if key.startswith("bz:") and _baz_handle_click(key, rr, mx, my):
+                return True
+            if key.startswith("db:") and _dbox_handle_click(key, rr, mx, my):
                 return True
             if key == "sellrefresh":
+                _ah_press(key)
                 _ah_send("inv"); _ah_send("sales"); return True
             if key == "sellcancel":
                 _ah_commit_edit()
@@ -37889,6 +39618,12 @@ def _ah_handle_event(event):
                 if _sid is not None and _pr > 0:
                     _ah_send("sell|%d|%d|%d" % (
                         _sid, ah_state.get("sell_single", 1), _pr))
+                    # The item is on its way to the auction house, so clear
+                    # the picker rather than leaving it looking armed.
+                    ah_state["sell_id"] = None
+                    ah_state["sell_price"] = 0
+                    ah_state["edit"] = None
+                    _ah_edit_field.blur()
                 return True
             if key.startswith("qdel:"):
                 qi = int(key.split(":", 1)[1])
@@ -37916,6 +39651,23 @@ def _ah_handle_event(event):
                 _field_begin_drag(_ah_edit_field, ah_state["edit_buf"],
                                   mx, rr, lambda: ah_state["edit_buf"],
                                   key="ah_edit")
+                return True
+            if key.startswith("sellcancel:"):
+                _cs = int(key.split(":", 1)[1])
+                _arm = ah_state.get("cancel_arm")
+                _st = ""
+                for _sl in ah_state.get("sales", []):
+                    if _sl.get("slot") == _cs:
+                        _st = _sl.get("status") or ""
+                        break
+                if _st == "Sold":
+                    ah_state["cancel_arm"] = None
+                    _ah_send("cancel|%d" % _cs)
+                elif _arm and _arm[0] == _cs and time.time() - _arm[1] <= 4.0:
+                    ah_state["cancel_arm"] = None
+                    _ah_send("cancel|%d" % _cs)
+                else:
+                    ah_state["cancel_arm"] = (_cs, time.time())
                 return True
             if key == "ah_sort":
                 _order = ["name", "level_asc", "level_desc"]
@@ -37969,7 +39721,7 @@ def _ah_handle_event(event):
             if key.startswith("item:"):
                 _ah_open_ffxiah(int(key.split(":")[1]))
                 return True
-            if key.startswith("sellitem:"):
+            if key.startswith("sellitem:") or key.startswith("salefx:"):
                 _ah_open_ffxiah(int(key.split(":", 1)[1]))
                 return True
             if key.startswith("fx:"):
@@ -37988,9 +39740,23 @@ def _ah_handle_event(event):
                 and _ah_rects["sellinv"].collidepoint(mx, my)):
             ah_state["inv_scroll"] = max(0, ah_state.get("inv_scroll", 0) + d)
             return True
+        if ah_state.get("tab") == "bazaar":
+            if (_ah_rects.get("bz:list")
+                    and _ah_rects["bz:list"].collidepoint(mx, my)):
+                baz_state["scroll"] = max(0, int(baz_state.get("scroll", 0)) + d)
+            return True
+        if ah_state.get("tab") == "dbox":
+            if (_ah_rects.get("db:list")
+                    and _ah_rects["db:list"].collidepoint(mx, my)):
+                dbox_state["scroll"] = max(0, int(dbox_state.get("scroll", 0)) + d)
+            return True
         ah_state["items_scroll"] = max(0, ah_state["items_scroll"] + d)
         return True
     elif event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+        if ah_state.get("tab") == "dbox" and _dbox_handle_key(event):
+            return True
+        if ah_state.get("tab") == "bazaar" and _baz_handle_key(event):
+            return True
         if ah_state["edit"] is not None:
             ah_state["edit_buf"], action = _ah_edit_field.handle_event(
                 event, ah_state["edit_buf"])
@@ -38494,6 +40260,16 @@ _scanzone_wide_tmp  = {}            # accumulates during a SZWIDE start..end bur
 _sz_nyzul_wide_last = 0             # throttle (ms) for the Nyzul auto widescan
 scanzone_radar      = []            # [(idx,type,dx,dy,hpp,name)] live mob array
 scanzone_radar_heading = 0.0        # player heading (radians, world space)
+# Where the player was when the last entity sweep was taken. Entities are
+# offsets from that point, so this is what they must be plotted against --
+# our own position now updates far more often than the sweep does.
+scanzone_radar_origin = None        # (x, y) or None
+scanzone_target_index = 0           # what the game has targeted, 0 = nothing
+# Our own position at the stream's own rate: (x, y, z, when). Kept apart
+# from zone_info, which the zone stream owns and writes far less often --
+# letting both write one place made a standing character twitch on the
+# map as the two cadences took turns.
+scanzone_me = None
 scanzone_radar_zoom = 1.0           # radar scroll-zoom multiplier
 _sz_ctx             = None          # right-click menu: {x,y,idx,items}
 _sz_rects           = {}            # built each draw for hit-testing
@@ -38957,6 +40733,421 @@ def _pool_handle_event(event):
         pool_pos[1] = event.pos[1] - _pool_drag_off[1]
         return True
     return False
+
+
+
+# === MINIMAP BEGIN ===
+# ── Minimap ──────────────────────────────────────────────────────────────
+# A small, always-open plot of what is around you, drawn from the same live
+# entity stream the Tracker's radar uses. The lua side sends each entity's
+# offset from YOU -- dx east, dy north -- so the map is player-centred by
+# construction: you sit in the middle and the world slides past as you walk.
+#
+# It is deliberately not the Tracker in miniature. No roster, no filters, no
+# tracking, no pins: dots, your facing, a couple of range rings, a zoom, and
+# a name when you hover one. Anything more belongs in the Tracker, which is
+# a window you open to work in rather than one you leave sitting open.
+#
+# It does NOT depend on the Tracker being open. Both windows want the same
+# stream, so _radar_stream_sync() keeps it running while either one is up.
+MINIMAP_MIN_PX, MINIMAP_MAX_PX = 120, 520
+MINIMAP_RADIUS = 12
+minimap_open      = bool(setting("show_minimap"))
+minimap_pos       = globals().get("minimap_pos") or [40, 320]
+# Width and height separately: a map is wider than it is tall on screen,
+# and the window has no title strip to drag, so the whole frame moves it.
+minimap_size      = globals().get("minimap_size") or [250, 190]
+minimap_zoom      = float(globals().get("minimap_zoom") or 1.0)
+# Where it was last actually drawn, after clamping -- same split as the
+# treasure pool, so a clamped window can be dragged without teleporting.
+_minimap_draw_pos = [0, 0]
+_minimap_rects    = {}
+_minimap_drag_off = None
+_minimap_resizing = False
+_minimap_stream_t = 0.0
+# [(screen rect, entity index, name)] for the dots drawn this frame, so a
+# click can target what it landed on.
+_minimap_dots     = []
+
+
+def _minimap_clear_rects():
+    _minimap_rects.clear()
+    del _minimap_dots[:]
+
+
+def _radar_stream_wanted():
+    """True while anything on screen is showing live entity positions."""
+    return bool(minimap_open) or bool(
+        globals().get("scanzone_panel_open")
+        and globals().get("scanzone_view") in ("radar", "map"))
+
+
+def _radar_stream_sync():
+    """Start or stop the entity stream to match what is open.
+
+    The Tracker and the minimap both feed off it, so neither may turn it
+    off on its own: closing one while the other is open would blank the
+    window still being looked at.
+    """
+    want = _radar_stream_wanted()
+    if want == globals().get("_radar_stream_on"):
+        return
+    globals()["_radar_stream_on"] = want
+    _scanzone_set_radar(want)
+
+
+_radar_stream_on = False
+
+
+def _toggle_minimap():
+    """Flip the minimap from the hotbar or the Configure box.
+
+    The open state is a SETTING rather than a loose global, so it is
+    remembered between sessions for free and the tick in the Configure
+    box and the hotbar slot are two switches on one wire instead of two
+    states that can disagree.
+    """
+    try:
+        set_setting("show_minimap", not bool(setting("show_minimap")))
+    except Exception:
+        globals()["minimap_open"] = not globals().get("minimap_open")
+        _radar_stream_sync()
+
+
+def _minimap_apply_mask(surf, w, h, opacity):
+    """Round <surf>'s corners, and dim it to <opacity> percent."""
+    mask = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(mask, (255, 255, 255, int(255 * opacity / 100.0)),
+                     mask.get_rect(), border_radius=MINIMAP_RADIUS)
+    surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+
+def _minimap_here():
+    """Where we are, preferring the fast stream over the zone packet."""
+    me = globals().get("scanzone_me")
+    if me and (time.time() - me[3]) < 2.0:
+        return me[0], me[1], me[2]
+    return zone_info.get("x"), zone_info.get("y"), zone_info.get("z")
+
+
+def _minimap_placer(calib, f, ox_s, oy_s):
+    """world (x, y) -> screen pixel, for the map currently drawn."""
+    a, b, c, d = calib
+
+    def _place(wx, wy):
+        return (int(ox_s + (a * wx + b) * f),
+                int(oy_s + (c * wy + d) * f))
+    return _place
+
+
+def _minimap_map_ok():
+    """True when the Tracker's map machinery is available to borrow."""
+    for _n in ("_scanzone_map_surface", "_sz_effective_map_index",
+               "_scanzone_calib_for", "_scanzone_calib_observe"):
+        if not callable(globals().get(_n)):
+            return False
+    return isinstance(globals().get("zone_info"), dict)
+
+
+def _minimap_preview_dots():
+    """Something to aim at while positioning the window in setup mode."""
+    return [(0, 3, 12.0, 8.0, 74, "Example Mob"),
+            (1, 3, -22.0, 14.0, 100, "Another Mob"),
+            (2, 2, 6.0, -18.0, 100, "SomePlayer"),
+            (3, 1, -9.0, -5.0, 100, "Shopkeeper")]
+
+
+def draw_minimap_window(surface):
+    # minimap_pos is mutated in place, never rebound.
+    _minimap_clear_rects()
+    if not minimap_open:
+        return
+    # Re-ask for the entity stream now and then. The window can be open
+    # before the lua is listening (it comes back open at launch), and a
+    # `//lua reload omniwatch` drops the stream with nothing on this side
+    # noticing. Cheap: one datagram every few seconds while it is open.
+    _now = time.time()
+    if _now - float(globals().get("_minimap_stream_t") or 0.0) > 5.0:
+        globals()["_minimap_stream_t"] = _now
+        _scanzone_set_radar(True)
+        globals()["_radar_stream_on"] = True
+    fnt_s = get_font("Consolas", 11)
+    w = max(MINIMAP_MIN_PX, min(MINIMAP_MAX_PX, int(minimap_size[0])))
+    h = max(MINIMAP_MIN_PX, min(MINIMAP_MAX_PX, int(minimap_size[1])))
+    x = _clamp_win_x(minimap_pos[0], w)
+    y = _clamp_win_y(minimap_pos[1], h, x)
+    _minimap_draw_pos[0], _minimap_draw_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _minimap_rects["panel"] = panel_r
+    _minimap_rects["plot"] = pygame.Rect(x + 2, y + 2, w - 4, h - 4)
+
+    # Everything is drawn onto its own surface and composited at the end.
+    # That is what lets the map have rounded corners -- a map blitted
+    # straight to the screen would square them off again -- and it gives
+    # this window its own opacity in the same step, without touching the
+    # process-wide window transparency.
+    # TWO layers. The map and the panel behind it go on `back`, which is
+    # what the opacity setting dims; dots, your arrow and the hover label
+    # go on `body` at full strength. Dimming everything together is what
+    # you do NOT want -- a faint map is useful, a faint mob is not.
+    back = pygame.Surface((w, h), pygame.SRCALPHA)
+    body = pygame.Surface((w, h), pygame.SRCALPHA)
+    plot = pygame.Rect(2, 2, w - 4, h - 4)
+    mpos_scr = _mouse_pos()
+    mpos = (mpos_scr[0] - x, mpos_scr[1] - y)       # body-local cursor
+    pygame.draw.rect(back, COL_PANEL, back.get_rect(),
+                     border_radius=MINIMAP_RADIUS)
+    cxp, cyp = plot.centerx, plot.centery
+    rad_px = max(8, min(plot.width, plot.height) // 2 - 2)
+    rng = 50.0 / max(0.04, minimap_zoom)          # yalms at the edge
+    sc = rad_px / rng
+
+    prev_clip = body.get_clip()
+    body.set_clip(plot)
+    back.set_clip(plot)
+
+    # The zone map, exactly as the Tracker draws it: same files, same map
+    # index for multi-floor zones, same world-to-image calibration. Falling
+    # back to the plain ring plot when the zone has no map or no calibration
+    # yet keeps the window useful instead of blank.
+    place = None            # world (x, y) -> body pixel, when a map is under us
+    if _minimap_map_ok():
+        _scanzone_calib_observe()
+        zid = zone_info.get("zone_id", 0)
+        pwx, pwy, pwz = _minimap_here()
+        mi = _sz_effective_map_index(
+            zid, zone_info.get("map_index", 0), pwx, pwy, pwz)
+        msurf = _scanzone_map_surface(zid, mi)
+        if msurf is not None and pwx is not None and pwy is not None:
+            iw, ih = msurf.get_size()
+            calib = _scanzone_calib_for(zid, mi, iw, ih)
+            if calib:
+                A, B, C, D = calib
+                # Cover the LONGER side, like the Tracker's map view, so a
+                # wide window shows more map rather than bars either side.
+                msize = max(8, int(max(plot.width, plot.height)
+                                   * minimap_zoom * 2.0))
+                f = msize / float(iw)
+                ox_s = cxp - (A * pwx + B) * f
+                oy_s = cyp - (C * pwy + D) * f
+                back.blit(
+                    pygame.transform.smoothscale(msurf, (msize, msize)),
+                    (int(ox_s), int(oy_s)))
+                place = _minimap_placer(calib, f, ox_s, oy_s)
+
+    if place is None:
+        pygame.draw.circle(back, (38, 44, 54), (cxp, cyp), rad_px, 1)
+        pygame.draw.circle(back, (30, 36, 46), (cxp, cyp),
+                           max(1, rad_px // 2), 1)
+        pygame.draw.line(back, (28, 34, 44),
+                         (cxp, plot.top), (cxp, plot.bottom))
+        pygame.draw.line(back, (28, 34, 44),
+                         (plot.left, cyp), (plot.right, cyp))
+
+    dots = list(scanzone_radar)
+    preview = False
+    if setup_mode and not dots:
+        dots = _minimap_preview_dots()
+        preview = True
+
+    hover = None                       # (name, distance) under the cursor
+    hover_d2 = 999999
+    _hx, _hy, _hz = _minimap_here()
+    org = scanzone_radar_origin or (_hx or 0, _hy or 0)
+    blink = bool(setting("minimap_blink_tracked"))
+    # 0..1 and back, twice a second, shared by every pulsing marker so they
+    # beat together rather than shimmering independently.
+    pulse = abs((time.time() * 2.0) % 2.0 - 1.0)
+    seen_tracked = set()
+    show = {3: bool(setting("minimap_show_mob")),
+            2: bool(setting("minimap_show_pc")),
+            1: bool(setting("minimap_show_npc")),
+            0: bool(setting("minimap_show_object"))}
+    tgt = globals().get("scanzone_target_index")
+    del _minimap_dots[:]
+    for (idx, t, dx, dy, hpp, nm) in dots:
+        if not show.get(t, True):
+            continue
+        if place is not None:
+            sxp, syp = place(org[0] + dx, org[1] + dy)
+            if not plot.collidepoint(sxp, syp):
+                continue
+        else:
+            sxp = int(cxp + dx * sc)
+            syp = int(cyp - dy * sc)               # north up, like the Tracker
+            if (sxp - cxp) ** 2 + (syp - cyp) ** 2 > rad_px * rad_px:
+                continue
+        # Same colours as the Tracker's radar, deliberately: two windows
+        # showing the same mob must never disagree about what it is.
+        col = {3: (220, 95, 95), 2: (110, 170, 230),
+               1: (210, 190, 110)}.get(t, (150, 160, 175))
+        if blink and idx in scanzone_tracks:
+            # Tracked in the Tracker: a pulsing ring, so it is findable in
+            # a field of dots without having to hover them one at a time.
+            pygame.draw.circle(body, (235, 205, 120), (sxp, syp),
+                               6 + int(3 * pulse), 2)
+            seen_tracked.add(idx)
+        if tgt and idx == tgt:
+            # What the game currently has targeted, ringed the way the
+            # Tracker rings a tracked entity.
+            pygame.draw.circle(body, (130, 200, 230), (sxp, syp), 7, 2)
+        pygame.draw.circle(body, col, (sxp, syp), 3)
+        if t in (2, 3):
+            # Players and monsters only. The targeting packet is the
+            # game's assist reply, which reaches battle targets and
+            # nothing else -- an NPC dot draws and highlights, but a
+            # click on it would do nothing, so it is not offered.
+            _minimap_dots.append((sxp + x, syp + y, idx, nm or ""))
+        d2 = (mpos[0] - sxp) ** 2 + (mpos[1] - syp) ** 2
+        if d2 <= 36 and d2 < hover_d2 and plot.collidepoint(*mpos):
+            hover_d2 = d2
+            hover = (nm or "?", (dx * dx + dy * dy) ** 0.5, hpp, col)
+
+    # Tracked mobs the live sweep can no longer see -- out of range, or
+    # down. The Tracker keeps their last reported position, and that is
+    # exactly what you want on a map: where to go back to.
+    if blink and place is not None:
+        for _tix, _te in list(scanzone_tracks.items()):
+            if _tix in seen_tracked or not _te.get("pos"):
+                continue
+            _tx, _ty = place(_te["pos"][0], _te["pos"][1])
+            if not plot.collidepoint(_tx, _ty):
+                continue
+            pygame.draw.circle(body, (190, 165, 110), (_tx, _ty),
+                               5 + int(3 * pulse), 1)
+
+    # You, and which way you are pointing.
+    try:
+        hd = float(scanzone_radar_heading or 0.0)
+    except (TypeError, ValueError):
+        hd = 0.0
+    # FFXI heading, per Windower's own docs: 0 = east, pi/2 = SOUTH, so it
+    # turns clockwise with north up -- which makes (cos, sin) a SCREEN
+    # vector directly, y already counting downward. Same pair the Tracker's
+    # arrow uses; the two must agree.
+    _fx, _fy = math.cos(hd), math.sin(hd)      # forward, in screen pixels
+    _rx, _ry = -_fy, _fx                       # your right hand
+
+    def _pt(fwd, side_off):
+        return (cxp + fwd * _fx + side_off * _rx,
+                cyp + fwd * _fy + side_off * _ry)
+
+    _arrow = [_pt(9, 0), _pt(-6, 6), _pt(-3, 0), _pt(-6, -6)]
+    pygame.draw.polygon(body, (250, 250, 255), _arrow)
+    pygame.draw.polygon(body, (40, 44, 54), _arrow, 1)
+
+    if hover:
+        nm, dist, hpp, col = hover
+        label = "%s  %.0fy" % (nm, dist)
+        if hpp and hpp < 100:
+            label += "  %d%%" % hpp
+        lt = fnt_s.render(label, True, (235, 238, 245))
+        bx = min(mpos[0] + 10, plot.right - lt.get_width() - 6)
+        by = min(mpos[1] + 10, plot.bottom - lt.get_height() - 4)
+        bg = pygame.Rect(bx - 3, by - 2, lt.get_width() + 6,
+                         lt.get_height() + 4)
+        pygame.draw.rect(body, (18, 20, 26), bg, border_radius=3)
+        pygame.draw.rect(body, col, bg, 1, border_radius=3)
+        body.blit(lt, (bx, by))
+
+    # On the ring plot the zoom needs a readout to mean anything; on a real
+    # map the map itself says where you are.
+    if place is None:
+        _rs = fnt_s.render("%.0fy" % rng, True, (120, 130, 148))
+        body.blit(_rs, (plot.x + 3, plot.bottom - _rs.get_height() - 2))
+    if preview:
+        _px = fnt_s.render("example data", True, (150, 140, 110))
+        body.blit(_px, (plot.right - _px.get_width() - 3, plot.y + 2))
+    elif not dots:
+        _ns = fnt_s.render("nothing in range", True, (110, 118, 132))
+        body.blit(_ns, (cxp - _ns.get_width() // 2, plot.bottom - 16))
+    body.set_clip(prev_clip)
+    back.set_clip(prev_clip)
+
+    grip_r = pygame.Rect(w - 12, h - 12, 11, 11)
+    for _g in range(3):
+        pygame.draw.line(body, (90, 98, 112),
+                         (grip_r.right - 2 - _g * 3, grip_r.bottom - 2),
+                         (grip_r.right - 2, grip_r.bottom - 2 - _g * 3))
+    _minimap_rects["grip"] = grip_r.move(x, y)
+    pygame.draw.rect(body, COL_SLOT_BDR, body.get_rect(), 1,
+                     border_radius=MINIMAP_RADIUS)
+
+    try:
+        op = int(setting("minimap_opacity"))
+    except (TypeError, ValueError):
+        op = 100
+    op = max(10, min(100, op))
+    # The map layer gets the opacity AND the rounded corners; the marker
+    # layer gets the corners only, so it stays solid at any setting.
+    _minimap_apply_mask(back, w, h, op)
+    _minimap_apply_mask(body, w, h, 100)
+    surface.blit(back, (x, y))
+    surface.blit(body, (x, y))
+
+
+def _minimap_handle_event(event):
+    global minimap_zoom, minimap_size
+    global _minimap_drag_off, _minimap_resizing
+    if not minimap_open:
+        return False
+    r = _minimap_rects
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
+        if r.get("plot") and r["plot"].collidepoint(*event.pos):
+            minimap_zoom = max(0.2, min(6.0, minimap_zoom
+                                        * (1.15 if event.button == 4
+                                           else 1 / 1.15)))
+            return True
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        # Dots before the frame: the whole frame is the drag handle, so
+        # testing it first would swallow every click on a mob. NEAREST
+        # dot, not the first one whose box contains the click -- entities
+        # a few yalms apart are a few pixels apart, so overlapping boxes
+        # would always answer with whichever was drawn first, and it would
+        # not be the one the hover label just named.
+        _best, _bd = None, 49          # within 7px
+        for _dx0, _dy0, _didx, _dnm in _minimap_dots:
+            _d2 = (mx - _dx0) ** 2 + (my - _dy0) ** 2
+            if _d2 <= _bd:
+                _bd, _best = _d2, (_didx, _dnm)
+        if _best is not None:
+            _send_target(_best[0], _best[1], 0)
+            return True
+        # Grip before the panel, or the drag swallows every press on it.
+        if r.get("grip") and r["grip"].collidepoint(mx, my):
+            _minimap_resizing = True
+            return True
+        if r.get("panel") and r["panel"].collidepoint(mx, my):
+            # No title strip to grab, so the whole frame is the handle.
+            # Adopt the drawn position first: while clamped, minimap_pos is
+            # off screen and an offset measured from it would jump.
+            minimap_pos[0], minimap_pos[1] = _minimap_draw_pos
+            _minimap_drag_off = (mx - minimap_pos[0], my - minimap_pos[1])
+            return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _minimap_drag_off is not None or _minimap_resizing:
+            _minimap_drag_off = None
+            _minimap_resizing = False
+            try:
+                save_layout()
+            except Exception:
+                pass
+    if event.type == pygame.MOUSEMOTION:
+        if _minimap_resizing:
+            minimap_size = [
+                max(MINIMAP_MIN_PX, min(MINIMAP_MAX_PX,
+                                        event.pos[0] - _minimap_draw_pos[0])),
+                max(MINIMAP_MIN_PX, min(MINIMAP_MAX_PX,
+                                        event.pos[1] - _minimap_draw_pos[1]))]
+            return True
+        if _minimap_drag_off is not None:
+            minimap_pos[0] = event.pos[0] - _minimap_drag_off[0]
+            minimap_pos[1] = event.pos[1] - _minimap_drag_off[1]
+            return True
+    return False
+# === MINIMAP END ===
 
 
 # ── Party alert box ──────────────────────────────────────────────────────
@@ -39511,6 +41702,7 @@ def _alert_cycle_cure(row, delta):
 # time to count from, and inventing one would be worse than saying
 # nothing.
 support_buffs = {}
+
 
 # (player id, section name) -> the label we last saw up. A buff we have
 # SEEN on a member stays listed after it wears off, showing "worn",
@@ -41219,7 +43411,7 @@ def _scanzone_set_pin(text):
         scanzone_status = "pin at %s-%d" % (chr(65 + p[1]), p[2] + 1)
     if scanzone_view != "map":
         scanzone_view = "map"
-        _scanzone_set_radar(True)
+        _radar_stream_sync()
 
 def _sz_alert_beep():
     """Short audio cue when an alert-flagged tracked mob spawns."""
@@ -41558,7 +43750,7 @@ def _toggle_synergy_panel():
 
 
 def _toggle_ah_panel():
-    """Settings -> Misc -> Auction House [OPEN]. Toggles the panel;
+    """Settings -> Misc -> Marketplace [OPEN]. Toggles the panel;
     when opening, closes the settings dropdown (mirrors the other launchers)."""
     global ah_panel_open
     ah_panel_open = not ah_panel_open
@@ -41570,6 +43762,11 @@ def _toggle_ah_panel():
     else:
         _ah_search_field.blur()
         _ah_edit_field.blur()
+        # The delivery box is open in the game only while this panel shows
+        # it; closing the panel closes it there too.
+        if ah_state.get("tab") == "dbox":
+            _dbox_leave()
+        _baz_blur()
 
 
 def _toggle_craftsyn_panel():
@@ -41582,8 +43779,7 @@ def _toggle_craftsyn_panel():
             globals()["settings_menu_open"] = False
         except Exception:
             pass
-    _scanzone_set_radar(scanzone_panel_open
-                        and scanzone_view in ("radar", "map"))
+    _radar_stream_sync()
 
 
 def _toggle_craft_panel():
@@ -41597,8 +43793,7 @@ def _toggle_craft_panel():
             globals()["settings_menu_open"] = False
         except Exception:
             pass
-    _scanzone_set_radar(scanzone_panel_open
-                        and scanzone_view in ("radar", "map"))
+    _radar_stream_sync()
 
 def _toggle_skillup_panel():
     """Settings -> Statistics -> SkillUp [OPEN]. Toggles the panel; closes the
@@ -42256,7 +44451,9 @@ def draw_scanzone_window(surface):
                     if (scanzone_type_filter != "any"
                             and _SZ_RT.get(t, "object") != scanzone_type_filter):
                         continue
-                    sx, sy = _img_to_scr(A * (pwx + dx) + B, C * (pwy + dy) + D)
+                    _ox2, _oy2 = scanzone_radar_origin or (pwx, pwy)
+                    sx, sy = _img_to_scr(A * (_ox2 + dx) + B,
+                                         C * (_oy2 + dy) + D)
                     if not area_r.collidepoint(sx, sy):
                         continue
                     col = {3: (220, 95, 95), 2: (110, 170, 230),
@@ -43060,8 +45257,7 @@ def _scanzone_handle_event(event):
             scanzone_panel_open = not scanzone_panel_open
             if not scanzone_panel_open:
                 _scanzone_field.blur()
-            _scanzone_set_radar(scanzone_panel_open
-                                and scanzone_view in ("radar", "map"))
+            _radar_stream_sync()
             return True
     if not scanzone_panel_open:
         return False
@@ -43176,7 +45372,7 @@ def _scanzone_handle_event(event):
         if r.get("close") and r["close"].collidepoint(mx, my):
             scanzone_panel_open = False
             _scanzone_field.blur()
-            _scanzone_set_radar(False)
+            _radar_stream_sync()
             return True
         for _bk, _dragvar in (("listbar", "_sz_listbar_drag"),
                               ("rosterbar", "_sz_rosterbar_drag")):
@@ -43279,7 +45475,7 @@ def _scanzone_handle_event(event):
             _vorder = ["list", "radar", "map"]
             scanzone_view = _vorder[
                 (_vorder.index(scanzone_view) + 1) % len(_vorder)]
-            _scanzone_set_radar(scanzone_view in ("radar", "map"))
+            _radar_stream_sync()
             return True
         if r.get("spawned") and r["spawned"].collidepoint(mx, my):
             _o = ["all", "spawned", "unspawned"]
@@ -43439,7 +45635,7 @@ def _scanzone_handle_event(event):
                 return True
             scanzone_panel_open = False
             _scanzone_field.blur()
-            _scanzone_set_radar(False)
+            _radar_stream_sync()
             return True
         if not _scanzone_field.focused:
             return False
@@ -46299,6 +48495,10 @@ def draw_inventory_dropdown(surface):
             inventory_dropdown_rects.append((row_rect, {
                 "kind": "open_item_url",
                 "url":  _bgwiki_item_url(nm),
+                # Hover card only -- slip contents can't be dropped or
+                # moved, so no item_id (that would open the item menu).
+                "card_id":   it.get("id", 0),
+                "card_name": it.get("name", "") or nm,
             }))
             cy += row_h
 
@@ -46633,6 +48833,14 @@ def draw_inventory_dropdown(surface):
                     "item_count": cnt,
                     "bag":        bag_key,
                     "bazaar":     it.get("bazaar", 0),
+                    "card_id":    (0 if str(bag_key).startswith("key_items")
+                                   else it.get("id", 0)),
+                    "ki_id":      (it.get("id", 0)
+                                   if str(bag_key).startswith("key_items")
+                                   else 0),
+                    "card_name":  it.get("name", "") or nm,
+                    "card_bag":   bag_key,
+                    "card_slot":  it.get("slot", 0),
                 }))
                 cy += row_h
 
@@ -46916,6 +49124,15 @@ def draw_inventory_dropdown(surface):
             "item_count": cnt,
             "bag":        bag_key,
             "bazaar":     it.get("bazaar", 0),
+            # Key items live in their own id space -- res.items[id] would
+            # describe an unrelated item, so they get no card.
+            "card_id":    (0 if str(bag_key).startswith("key_items")
+                           else it.get("id", 0)),
+            "ki_id":      (it.get("id", 0)
+                           if str(bag_key).startswith("key_items") else 0),
+            "card_name":  it.get("name", "") or nm,
+            "card_bag":   bag_key,
+            "card_slot":  it.get("slot", 0),
         }))
         cy += row_h
 
@@ -47346,6 +49563,242 @@ def _inventory_move_popup_event(event):
     return False
 
 
+def _inv_ahhist_start(item_id, item_name):
+    """Open the AH sales-history popup for an item and fetch its recent
+    single and stack sales from the world's search server in the
+    background. Stack history is only shown when it has sales, so items
+    that don't stack simply show one list."""
+    global inventory_ahhist_popup
+    pop = {"item_id": int(item_id), "item_name": item_name or "?",
+           "state": "loading", "single": [], "stack": [], "on_ah": None}
+    inventory_ahhist_popup = pop
+
+    def _worker(pop=pop):
+        try:
+            ip, port = _ah_resolve_server()
+            if not ip:
+                pop["state"] = "noserver"
+                return
+            iid = pop["item_id"]
+            for key, stk in (("single", 0), ("stack", 1)):
+                res = _ahsrch_parse_history(
+                    _ahsrch_query_history(ip, port, iid, stk, timeout=8.0))
+                _ah_note_search_ok()
+                if res.get("ok"):
+                    # Newest first.
+                    pop[key] = sorted(res.get("sales", []),
+                                      key=lambda sv: sv.get("date", 0),
+                                      reverse=True)
+            # Show the sales straight away; the for-sale counts need a
+            # category listing, which can take a few pages to come back.
+            pop["on_ah"] = "loading"
+            pop["state"] = "done"
+            # Always a fresh listing — "for sale now" should be now, not
+            # whenever the category was last browsed. The result also
+            # refreshes the AH panel's cache for that category.
+            try:
+                cat = _ah_item_cat(iid)
+                items = _ahsrch_query_category(ip, port, cat,
+                                               timeout=8.0)["items"]
+                _ah_note_search_ok()
+                _ah_cat_cache[cat] = items
+                pop["on_ah"] = items.get(iid, (0xFFFFFFFF, 0xFFFFFFFF))
+            except OSError as e:
+                pop["on_ah"] = None
+                _ah_note_search_error(e)
+            except Exception:
+                pop["on_ah"] = None
+        except OSError as e:
+            pop["state"] = "error"
+            _ah_note_search_error(e)
+        except Exception:
+            pop["state"] = "error"
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _inventory_ahhist_popup_event(event):
+    """Capture input while the AH sales-history popup is open. Its title
+    strip drags it; the spot is saved with the layout on release."""
+    global inventory_ahhist_popup, ahhist_pos, _ahhist_drag_off
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _ahhist_drag_off is not None:
+            _ahhist_drag_off = None
+            try:
+                save_layout()
+            except Exception:
+                pass
+            return True
+    if event.type == pygame.MOUSEMOTION and _ahhist_drag_off is not None:
+        ahhist_pos = [event.pos[0] - _ahhist_drag_off[0],
+                      event.pos[1] - _ahhist_drag_off[1]]
+        return True
+    if inventory_ahhist_popup is None:
+        return False
+    if event.type == pygame.KEYDOWN:
+        if event.key in (pygame.K_ESCAPE, pygame.K_RETURN,
+                         pygame.K_KP_ENTER):
+            inventory_ahhist_popup = None
+        return True
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        for rect, act in inventory_ahhist_popup_rects:
+            if rect.collidepoint(mx, my):
+                if act == "close":
+                    inventory_ahhist_popup = None
+                elif act == "ffxiah":
+                    _ah_open_ffxiah(inventory_ahhist_popup["item_id"])
+                elif act == "drag":
+                    # Adopt the DRAWN spot first, so a clamped popup
+                    # doesn't jump by the clamp distance on the first pixel.
+                    ahhist_pos = list(_ahhist_draw_pos)
+                    _ahhist_drag_off = (mx - ahhist_pos[0],
+                                        my - ahhist_pos[1])
+                return True             # "panel" swallows, keeps open
+        inventory_ahhist_popup = None   # click outside closes
+        return True
+    if event.type == pygame.MOUSEBUTTONDOWN:
+        # Wheel / right-click over the popup shouldn't reach what's behind.
+        for rect, act in inventory_ahhist_popup_rects:
+            if act == "panel" and rect.collidepoint(*event.pos):
+                return True
+    return False
+
+
+def draw_inventory_ahhist_popup(surface):
+    global inventory_ahhist_popup_rects
+    inventory_ahhist_popup_rects = []
+    p = inventory_ahhist_popup
+    if p is None:
+        return
+    tf = pygame.font.SysFont("Consolas", 12, bold=True)
+    f = pygame.font.SysFont("Consolas", 11)
+    fb = pygame.font.SysFont("Consolas", 11, bold=True)
+    lh = f.get_height() + 3
+    c_dim, c_txt, c_gold = (150, 156, 168), (200, 206, 218), (235, 205, 120)
+    c_head = (170, 205, 235)
+
+    # Build the body as rows: ("msg", text, color) | ("head", text) |
+    # ("sale", date, who, price) | ("gap",).
+    body = []
+    st = p.get("state")
+    if st == "loading":
+        body.append(("msg", "Looking up recent sales\u2026", c_dim))
+    elif st == "noserver":
+        body.append(("msg", "Search server not found. Use /search in-game"
+                     " once, then retry.", (185, 150, 150)))
+    elif st == "error":
+        body.append(("msg", "No reply from the search server \u2014"
+                     " try again shortly.", (185, 150, 150)))
+    else:
+        oa = p.get("on_ah")
+        if oa == "loading":
+            body.append(("msg", "For sale now: checking\u2026", c_dim))
+            body.append(("gap",))
+        elif oa:
+            # 0xFFFFFFFF = no listing of that form (e.g. doesn't stack).
+            sd = 0 if oa[0] == 0xFFFFFFFF else oa[0]
+            parts = ["%d single%s" % (sd, "" if sd == 1 else "s")]
+            if oa[1] != 0xFFFFFFFF:
+                parts.append("%d stack%s" % (oa[1],
+                                              "" if oa[1] == 1 else "s"))
+            body.append(("msg", "For sale now: " + ", ".join(parts), c_txt))
+            body.append(("gap",))
+        sections = [("Singles", p.get("single") or [])]
+        if p.get("stack"):
+            sections.append(("Stacks", p["stack"]))
+        for si, (label, sales) in enumerate(sections):
+            if si:
+                body.append(("gap",))
+            prices = [sv["price"] for sv in sales if sv.get("price")]
+            if prices:
+                label += "  (%s \u2013 %s g)" % (
+                    "{:,}".format(min(prices)), "{:,}".format(max(prices)))
+            body.append(("head", label))
+            if not sales:
+                body.append(("msg", "  no recent sales", c_dim))
+            for sv in sales:
+                body.append(("sale", _ahsrch_fmtdate(sv.get("date", 0)),
+                             "%s > %s" % (sv.get("seller") or "?",
+                                          sv.get("buyer") or "?"),
+                             "{:,} g".format(sv.get("price", 0))))
+
+    # Measure: sale rows are three columns, price right-aligned.
+    col_d = max([f.size(r[1])[0] for r in body if r[0] == "sale"] or [0])
+    col_w = max([f.size(r[2])[0] for r in body if r[0] == "sale"] or [0])
+    col_p = max([f.size(r[3])[0] for r in body if r[0] == "sale"] or [0])
+    sale_w = (col_d + 14 + col_w + 18 + col_p) if col_d else 0
+    nm = p.get("item_name") or "?"
+    if len(nm) > 40:
+        nm = nm[:39] + "\u2026"
+    w = max(260, sale_w, tf.size("AH sales history")[0], f.size(nm)[0],
+            max([f.size(r[1])[0] for r in body if r[0] == "msg"] or [0]),
+            max([fb.size(r[1])[0] for r in body if r[0] == "head"] or [0]))
+    w += 24
+    body_h = sum(6 if r[0] == "gap" else lh for r in body)
+    h = 44 + body_h + 10 + 24
+    global _ahhist_draw_pos
+    sw, shh = _ui_edge()
+    if ahhist_pos:
+        _vb = _view_bounds_at(int(ahhist_pos[0]) + 1, int(ahhist_pos[1]) + 1)
+        w = min(w, max(120, _vb[2] - 8))
+        h = min(h, max(80, _vb[3] - 8))
+        x = _clamp_win_x(ahhist_pos[0], w)
+        y = _clamp_win_y(ahhist_pos[1], h, x)
+    else:
+        w = min(w, max(120, sw - 8))
+        h = min(h, max(80, shh - 8))
+        x = (sw - w) // 2
+        y = (shh - h) // 2
+    _ahhist_draw_pos = (x, y)
+    pygame.draw.rect(surface, (28, 28, 36), (x, y, w, h), border_radius=5)
+    pygame.draw.rect(surface, COL_BORDER, (x, y, w, h), 1, border_radius=5)
+    # Grip marks at the right of the title strip: it is the drag handle.
+    for _gi in range(3):
+        pygame.draw.line(surface, (90, 96, 118), (x + w - 24, y + 10 + _gi * 4),
+                         (x + w - 12, y + 10 + _gi * 4))
+    surface.blit(tf.render("AH sales history", True, c_head), (x + 12, y + 8))
+    surface.blit(f.render(nm, True, c_gold), (x + 12, y + 26))
+
+    clip_prev = surface.get_clip()
+    body_bottom = y + h - 34
+    surface.set_clip(pygame.Rect(x, y + 42, w, max(0, body_bottom - y - 42)))
+    cy = y + 44
+    for r in body:
+        if r[0] == "gap":
+            cy += 6
+            continue
+        if r[0] == "msg":
+            surface.blit(f.render(r[1], True, r[2]), (x + 12, cy))
+        elif r[0] == "head":
+            surface.blit(fb.render(r[1], True, c_head), (x + 12, cy))
+        else:
+            surface.blit(f.render(r[1], True, c_dim), (x + 16, cy))
+            surface.blit(f.render(r[2], True, c_txt),
+                         (x + 16 + col_d + 14, cy))
+            _pt = f.render(r[3], True, c_gold)
+            surface.blit(_pt, (x + w - 12 - _pt.get_width(), cy))
+        cy += lh
+    surface.set_clip(clip_prev)
+
+    close = pygame.Rect(x + w - 62, y + h - 24, 52, 18)
+    pygame.draw.rect(surface, (48, 54, 68), close, border_radius=3)
+    _c = f.render("Close", True, (210, 216, 228))
+    surface.blit(_c, (close.centerx - _c.get_width() // 2,
+                      close.centery - _c.get_height() // 2))
+    inventory_ahhist_popup_rects.append((close, "close"))
+    fx = pygame.Rect(x + 10, y + h - 24, 62, 18)
+    pygame.draw.rect(surface, (44, 52, 64), fx, border_radius=3)
+    _x = f.render("FFXIAH", True, (170, 205, 235))
+    surface.blit(_x, (fx.centerx - _x.get_width() // 2,
+                      fx.centery - _x.get_height() // 2))
+    inventory_ahhist_popup_rects.append((fx, "ffxiah"))
+    # Title strip (title + item name) is the drag handle.
+    inventory_ahhist_popup_rects.append((pygame.Rect(x, y, w, 40), "drag"))
+    # panel LAST so the buttons are tested first
+    inventory_ahhist_popup_rects.append((pygame.Rect(x, y, w, h), "panel"))
+
+
 def draw_inventory_move_popup(surface):
     global inventory_move_popup_rects
     inventory_move_popup_rects = []
@@ -47450,6 +49903,949 @@ def draw_inventory_bazaar_popup(surface):
     inventory_bazaar_popup_rects.append((pygame.Rect(x, y, w, h), "panel"))
 
 
+# ── Item card (hover in the inventory dropdown) ─────────────────────────────
+# The game's own item help window, the same panel the wiki's item images are
+# screenshots of and the one MobileWatch / AuctionWatch draw: icon, name,
+# Rare / Ex, the (Skill) or [Slot] line with races, the description verbatim in
+# a monospace face so its stat columns line up, the Lv / jobs line, and the
+# item level. Nothing is fetched -- the lua reads the item's record out of
+# Windower's resources on request (AH|card|<id>) and the icon comes from
+# icons/items/<id>.png beside the other icon folders.
+#
+# inv_card_cache : {id: dict}   parsed replies ({"unknown": True} for an id
+#                                the resources don't know, so we stop asking)
+# inv_card_asked : {id: time}   last request, so a lost reply is re-asked
+#                                after a few seconds instead of every frame
+inv_card_cache = {}
+inv_card_asked = {}
+_ITEM_CARD_RETRY = 3.0
+inv_card_ver = {}           # id -> bumped on every reply (finished-card cache key)
+inv_card_fresh = set()      # ids answered THIS session (the rest came off disk)
+_ITEM_CARD_FILE = None      # %APPDATA%/OmniWatch/omniwatch_item_cards.json
+_item_card_disk_loaded = False
+_item_card_dirty_at = 0.0
+_item_card_saved_at = 0.0
+_ITEM_CARD_SAVE_EVERY = 10.0
+
+_CARD_ELEM_COLS = (
+    (232, 84, 60),     # Fire
+    (140, 212, 242),   # Ice
+    (96, 202, 112),    # Wind
+    (204, 162, 72),    # Earth
+    (184, 112, 232),   # Lightning
+    (72, 124, 232),    # Water
+    (244, 242, 222),   # Light
+    (104, 76, 128),    # Dark
+)
+
+
+def _item_card_parse(af):
+    """AH|card|<id>|name~flags~stack~level~ilvl~jobs~races~kind~desc.
+    The description is last and split with a limit, so it may hold any
+    character except '|' (the lua swaps that for '/'); its line breaks
+    arrive as tabs."""
+    try:
+        iid = int(af[1])
+    except (IndexError, ValueError):
+        return
+    body = "|".join(af[2:]) if len(af) > 2 else ""
+    if not body:
+        inv_card_cache[iid] = {"unknown": True}
+        inv_card_fresh.add(iid)
+        return
+    f = body.split("~", 8)
+    f += [""] * (9 - len(f))
+
+    def _i(v):
+        try:
+            return int(v)
+        except ValueError:
+            return 0
+    desc = [ln.rstrip() for ln in f[8].split("\t")]
+    while desc and not desc[-1]:
+        desc.pop()
+    inv_card_fresh.add(iid)
+    inv_card_ver[iid] = inv_card_ver.get(iid, 0) + 1
+    _item_card_mark_dirty()
+    inv_card_cache[iid] = {
+        "name":  f[0],
+        "rare":  "R" in f[1],
+        "ex":    "E" in f[1],
+        "stack": _i(f[2]),
+        "level": _i(f[3]),
+        "ilvl":  _i(f[4]),
+        "jobs":  f[5],
+        "races": f[6],
+        "kind":  f[7],
+        "desc":  desc,
+    }
+
+
+def _item_card_get(iid):
+    """The parsed card for an item id, asking the lua for it if we haven't
+    got it. None while the reply is on its way. A card that came off disk
+    is shown straight away and quietly re-asked for once this session, so
+    a game patch that rewords an item still reaches the card."""
+    _item_card_disk_load()
+    _item_card_maybe_save()
+    c = inv_card_cache.get(iid)
+    now = time.time()
+    if c is not None:
+        if (iid not in inv_card_fresh
+                and now - inv_card_asked.get(iid, 0) > _ITEM_CARD_RETRY):
+            inv_card_asked[iid] = now
+            _ah_send("card|%d" % int(iid))
+        return c
+    if now - inv_card_asked.get(iid, 0) > _ITEM_CARD_RETRY:
+        inv_card_asked[iid] = now
+        _ah_send("card|%d" % int(iid))
+    return None
+
+
+def _item_card_prefetch(ids):
+    """Ask for every card in `ids` we don't have yet, in batches, so the
+    card is already here when the row is hovered. Called each frame by the
+    lists that show items; cheap when there's nothing new (a set lookup
+    per id), and each id is asked for at most once per retry window."""
+    _item_card_disk_load()
+    now = time.time()
+    want = []
+    for iid in ids:
+        try:
+            iid = int(iid or 0)
+        except (TypeError, ValueError):
+            continue
+        if iid <= 0 or iid in inv_card_cache:
+            continue
+        if now - inv_card_asked.get(iid, 0) <= _ITEM_CARD_RETRY:
+            continue
+        inv_card_asked[iid] = now
+        want.append(iid)
+    for i in range(0, len(want), 40):
+        _ah_send("cards|" + ",".join(str(x) for x in want[i:i + 40]))
+
+
+def _item_aug_prefetch(entries):
+    """Same for per-copy augments: (bag, slot, id) for rows whose card says
+    they are gear. Batched as AH|augs|bag:slot:id,..."""
+    now = time.time()
+    want = []
+    for bag, slot, iid in entries:
+        if not bag or not slot or not iid:
+            continue
+        c = inv_card_cache.get(iid)
+        if not c or not c.get("kind"):
+            continue
+        hit = inv_aug_cache.get((bag, slot))
+        if hit is not None and hit[0] == iid:
+            continue
+        k = (bag, slot, iid)
+        if now - inv_aug_asked.get(k, 0) <= _ITEM_CARD_RETRY:
+            continue
+        inv_aug_asked[k] = now
+        want.append("%s:%d:%d" % (bag, int(slot), int(iid)))
+    for i in range(0, len(want), 30):
+        _ah_send("augs|" + ",".join(want[i:i + 30]))
+
+
+def _item_card_path():
+    global _ITEM_CARD_FILE
+    if _ITEM_CARD_FILE is None:
+        _ITEM_CARD_FILE = os.path.join(USER_DIR, "omniwatch_item_cards.json")
+    return _ITEM_CARD_FILE
+
+
+def _item_card_disk_load():
+    """Seed the card cache from disk, once. Item text barely changes, so a
+    session starts with every card it has ever seen."""
+    global _item_card_disk_loaded
+    if _item_card_disk_loaded:
+        return
+    _item_card_disk_loaded = True
+    try:
+        with open(_item_card_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict) or data.get("v") != 1:
+            return
+        for k, c in (data.get("cards") or {}).items():
+            try:
+                iid = int(k)
+            except ValueError:
+                continue
+            if isinstance(c, dict) and c.get("name") is not None \
+                    and iid not in inv_card_cache:
+                c.setdefault("desc", [])
+                inv_card_cache[iid] = c
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[OmniWatch] item card cache unreadable: {e!r}")
+
+
+def _item_card_mark_dirty():
+    global _item_card_dirty_at
+    if not _item_card_dirty_at:
+        _item_card_dirty_at = time.time()
+
+
+def _item_card_maybe_save(force=False):
+    """Write the card cache back at most every few seconds (and on quit)."""
+    global _item_card_dirty_at, _item_card_saved_at
+    if not _item_card_dirty_at:
+        return
+    now = time.time()
+    if not force and now - _item_card_saved_at < _ITEM_CARD_SAVE_EVERY:
+        return
+    cards = {str(k): v for k, v in inv_card_cache.items()
+             if isinstance(v, dict) and not v.get("unknown")}
+    try:
+        tmp = _item_card_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"v": 1, "cards": cards}, fh, separators=(",", ":"))
+        os.replace(tmp, _item_card_path())
+        _item_card_dirty_at = 0.0
+        _item_card_saved_at = now
+    except Exception as e:
+        _item_card_saved_at = now
+        print(f"[OmniWatch] item card cache save failed: {e!r}")
+
+
+# Augments belong to one COPY of an item, not to the id, so they are asked
+# for by bag and slot: AH|aug|<bag>|<slot>|<id>. The lua checks the slot
+# still holds that id before answering, so a stale row never shows another
+# item's augments.
+#   inv_aug_cache : {(bag, slot): (id, [lines], time received)}
+#   inv_aug_asked : {(bag, slot, id): time of the last request}
+# Re-asked after a minute while hovered, which covers a piece being
+# re-augmented or the bag being rearranged under an open dropdown.
+inv_aug_cache = {}
+inv_aug_asked = {}
+_ITEM_AUG_TTL = 60.0
+
+
+def _item_aug_parse(af):
+    """AH|aug|<bag>|<slot>|<id>|<line>\t<line>... (empty = no augments)."""
+    try:
+        bag, slot, iid = af[1], int(af[2]), int(af[3])
+    except (IndexError, ValueError):
+        return
+    body = "|".join(af[4:]) if len(af) > 4 else ""
+    lines = [ln.strip() for ln in body.split("\t") if ln.strip()]
+    inv_aug_cache[(bag, slot)] = (iid, lines, time.time())
+
+
+def _item_aug_get(bag, slot, iid):
+    """Augment lines for the copy of `iid` in bag/slot. [] when it has
+    none, None while the answer is on its way."""
+    if not bag or not slot or not iid:
+        return []
+    now = time.time()
+    hit = inv_aug_cache.get((bag, slot))
+    fresh = hit is not None and hit[0] == iid and now - hit[2] < _ITEM_AUG_TTL
+    if not fresh:
+        k = (bag, slot, iid)
+        if now - inv_aug_asked.get(k, 0) > _ITEM_CARD_RETRY:
+            inv_aug_asked[k] = now
+            _ah_send("aug|%s|%d|%d" % (bag, int(slot), int(iid)))
+    if hit is not None and hit[0] == iid:
+        return hit[1]          # stale but right item: show it meanwhile
+    return None
+
+
+_card_icon_cache = {}        # id -> Surface (32x32)
+_card_icon_miss = {}         # id -> time of the last failed look
+_card_icon_dirs = None
+_card_icon_dirs_at = 0.0
+
+
+def _item_card_icon_dirs():
+    """Folders that may hold <id>.png item icons: icons/items under the same
+    icons/ root as the equipment folder, beside the exe (and a level or two
+    up for a dist/ build), and under %APPDATA%/OmniWatch. Re-scanned every
+    half minute while none exist, so a folder dropped in mid-session is
+    picked up without a restart."""
+    global _card_icon_dirs, _card_icon_dirs_at
+    now = time.time()
+    if _card_icon_dirs and now - _card_icon_dirs_at < 300:
+        return _card_icon_dirs
+    if _card_icon_dirs == [] and now - _card_icon_dirs_at < 30:
+        return _card_icon_dirs
+    roots = []
+    try:
+        roots.append(os.path.dirname(ICON_DIR))
+    except Exception:
+        pass
+    try:
+        sd = _self_addon_dir()
+        for b in (sd, os.path.dirname(sd),
+                  os.path.dirname(os.path.dirname(sd))):
+            if b:
+                roots.append(os.path.join(b, "icons"))
+    except Exception:
+        pass
+    roots.append(os.path.join(USER_DIR, "icons"))
+    out = []
+    for r in roots:
+        d = os.path.normcase(os.path.abspath(os.path.join(r, "items")))
+        if os.path.isdir(d) and d not in out:
+            out.append(d)
+    _card_icon_dirs, _card_icon_dirs_at = out, now
+    return out
+
+
+def _item_card_icon(iid):
+    """32x32 icon for any item id, or None. icons/items first (every item,
+    PNG or BMP); failing that an equipment icon that is already on disk --
+    never an extraction request, which is only meant for gear and would
+    raise the equipment panel's missing-icons banner for a potion."""
+    iid = int(iid or 0)
+    if iid <= 0:
+        return None
+    surf = _card_icon_cache.get(iid)
+    if surf is not None:
+        return surf
+    if time.time() - _card_icon_miss.get(iid, 0) < 15.0:
+        return None
+    path = None
+    for d in _item_card_icon_dirs():
+        for ext in (".png", ".bmp"):
+            cand = os.path.join(d, "%d%s" % (iid, ext))
+            if os.path.isfile(cand):
+                path = cand
+                break
+        if path:
+            break
+    surf = None
+    if path:
+        try:
+            surf = pygame.image.load(path).convert_alpha()
+        except Exception:
+            surf = None
+    if surf is None:
+        try:
+            if (os.path.isfile(os.path.join(ICON_DIR_RW, "%d.bmp" % iid))
+                    or os.path.isfile(os.path.join(ICON_DIR, "%d.bmp" % iid))):
+                surf = load_icon_surface(iid)
+        except Exception:
+            surf = None
+    if surf is None:
+        _card_icon_miss[iid] = time.time()
+        return None
+    if surf.get_size() != (32, 32):
+        try:
+            surf = pygame.transform.smoothscale(surf, (32, 32))
+        except Exception:
+            surf = pygame.transform.scale(surf, (32, 32))
+    _card_icon_cache[iid] = surf
+    return surf
+
+
+_card_fonts = {}
+
+
+def _item_card_fonts():
+    if not _card_fonts:
+        _card_fonts["name"] = pygame.font.SysFont("Segoe UI,Arial", 13, bold=True)
+        _card_fonts["mono"] = pygame.font.SysFont("Consolas", 12)
+        _card_fonts["small"] = pygame.font.SysFont("Segoe UI,Arial", 11)
+        _card_fonts["pill"] = pygame.font.SysFont("Segoe UI,Arial", 10, bold=True)
+    return _card_fonts
+
+
+def _item_card_wrap(text, font, max_w, glyph_w):
+    """Word-wrap one description line to max_w, counting an element glyph
+    as glyph_w wide. Leading spaces are kept (they are column alignment)."""
+    def width(t):
+        w = 0
+        for ch in t:
+            if 0xE000 <= ord(ch) <= 0xE007:
+                w += glyph_w
+            else:
+                w += font.size(ch)[0] if ch != " " else font.size(" ")[0]
+        return w
+    if width(text) <= max_w:
+        return [text]
+    out, cur = [], ""
+    for word in text.split(" "):
+        trial = (cur + " " + word) if cur else word
+        if cur and width(trial) > max_w:
+            out.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        out.append(cur)
+    return out or [text]
+
+
+def _item_card_blit_line(surface, text, x, y, font, col, glyph_w):
+    """Draw a description line, the private-use element characters as
+    coloured element marks inline on the text line."""
+    run = ""
+    lh = font.get_height()
+    for ch in text:
+        o = ord(ch)
+        if 0xE000 <= o <= 0xE007:
+            if run:
+                t = font.render(run, True, col)
+                surface.blit(t, (x, y))
+                x += t.get_width()
+                run = ""
+            ec = _CARD_ELEM_COLS[o - 0xE000]
+            r = max(3, (glyph_w - 2) // 2)
+            cx, cy = x + glyph_w // 2, y + lh // 2
+            pygame.draw.circle(surface, ec, (cx, cy), r)
+            pygame.draw.circle(surface, (20, 20, 28), (cx, cy), r, 1)
+            x += glyph_w
+        elif 0xE008 <= o <= 0xF8FF:
+            run += "?"
+        else:
+            run += ch
+    if run:
+        surface.blit(font.render(run, True, col), (x, y))
+
+
+def _item_card_render(iid, fallback_name, card, augs, ic):
+    """Lay out and paint one card onto its own surface (box at 0,0). The
+    expensive part -- measuring every character, wrapping, rendering text
+    -- happens here once per distinct card; draw_item_card keeps the result
+    and only blits it each frame."""
+    F = _item_card_fonts()
+    fn, fm, fs, fp = F["name"], F["mono"], F["small"], F["pill"]
+    pad, icon_px = 10, 32
+    glyph_w = max(10, fm.size("0")[0] + 3)
+    c_name, c_txt, c_dim = (240, 236, 222), (222, 224, 232), (150, 156, 172)
+    c_jobs, c_ilvl = (132, 184, 240), (236, 206, 122)
+    c_aug = (126, 222, 196)
+
+    name = (card or {}).get("name") or fallback_name or ("Item #%d" % iid)
+    pills = []
+    if card and card.get("rare"):
+        pills.append(("Rare", (206, 172, 70)))
+    if card and card.get("ex"):
+        pills.append(("Ex", (190, 96, 96)))
+    pill_w = sum(fp.size(t)[0] + 12 for t, _c in pills) + (4 * max(0, len(pills) - 1))
+
+    # Body rows: ("kind", left, right) | ("desc", text) | ("jobs", text) |
+    # ("msg", text) | ("gap",)
+    body = []
+    if card is None:
+        body.append(("msg", "Reading item\u2026"))
+    else:
+        if card.get("kind") or card.get("races"):
+            body.append(("kind", card.get("kind", ""), card.get("races", "")))
+        for ln in card.get("desc", []):
+            body.append(("desc", ln))
+        # This copy's augments, where the game puts them: under the
+        # description, above the level / jobs line.
+        if augs:
+            body.append(("gap",))
+            for a in augs:
+                a = str(a).lstrip("\u25C6\u2756 ").strip()
+                if a:
+                    body.append(("aug", a))
+        if card.get("note"):
+            body.append(("msg", card["note"]))
+        jl = []
+        if card.get("level"):
+            jl.append("Lv.%d" % card["level"])
+        if card.get("jobs"):
+            jl.append(card["jobs"])
+        if jl:
+            body.append(("gap",))
+            body.append(("jobs", " ".join(jl)))
+
+    # Width: fit the description (as the game lays it out), within limits.
+    min_w, max_inner = 250, 400
+    inner = max(min_w - 2 * pad,
+                icon_px + 8 + fn.size(name)[0] + (pill_w + 8 if pills else 0))
+    for r in body:
+        if r[0] in ("desc", "aug"):
+            w = sum(glyph_w if 0xE000 <= ord(ch) <= 0xE007
+                    else fm.size(ch)[0] for ch in r[1])
+            inner = max(inner, w)
+        elif r[0] == "kind":
+            inner = max(inner, fs.size(r[1])[0] + 16 + fs.size(r[2])[0])
+    inner = min(inner, max_inner)
+
+    rows = []
+    for r in body:
+        if r[0] in ("desc", "aug"):
+            for piece in _item_card_wrap(r[1], fm, inner, glyph_w):
+                rows.append((r[0], piece))
+        elif r[0] == "jobs":
+            for piece in _item_card_wrap(r[1].replace("/", "/ "), fs,
+                                         inner, glyph_w):
+                rows.append(("jobs", piece.replace("/ ", "/")))
+        else:
+            rows.append(r)
+
+    lh_m, lh_s = fm.get_height() + 1, fs.get_height() + 2
+    head_h = icon_px
+    body_h = 0
+    for r in rows:
+        body_h += (5 if r[0] == "gap"
+                   else (lh_m if r[0] in ("desc", "aug") else lh_s))
+    foot = []
+    if card and card.get("stack", 0) > 1:
+        foot.append(("Stack %d" % card["stack"], c_dim, "l"))
+    if card and card.get("ilvl", 0):
+        foot.append(("<Item Level: %d>" % card["ilvl"], c_ilvl, "r"))
+    foot_h = (lh_s + 4) if foot else 0
+    w = inner + 2 * pad
+    h = pad + head_h + 8 + body_h + foot_h + pad
+
+    out = pygame.Surface((w, h), pygame.SRCALPHA)
+    x = y = 0
+    box = pygame.Rect(0, 0, w, h)
+    pygame.draw.rect(out, (27, 28, 42), box, border_radius=5)
+    pygame.draw.rect(out, (118, 126, 156), box, 1, border_radius=5)
+    pygame.draw.rect(out, (48, 52, 74), box.inflate(-4, -4), 1,
+                     border_radius=4)
+
+    ir = pygame.Rect(x + pad, y + pad, 32, 32)
+    if ic is not None:
+        out.blit(ic, ir.topleft)
+    else:
+        pygame.draw.rect(out, (40, 42, 58), ir, border_radius=3)
+        pygame.draw.rect(out, (70, 74, 96), ir, 1, border_radius=3)
+    nx = ir.right + 8
+    n_max = x + w - pad - nx - (pill_w + 8 if pills else 0)
+    nm = name
+    if fn.size(nm)[0] > n_max:
+        while nm and fn.size(nm + "\u2026")[0] > n_max:
+            nm = nm[:-1]
+        nm += "\u2026"
+    ns = fn.render(nm, True, c_name)
+    out.blit(ns, (nx, ir.centery - ns.get_height() // 2))
+    px = x + w - pad
+    for txt, col in reversed(pills):
+        tw = fp.size(txt)[0] + 12
+        pr = pygame.Rect(px - tw, y + pad, tw, fp.get_height() + 4)
+        pygame.draw.rect(out, tuple(c // 3 for c in col), pr,
+                         border_radius=pr.height // 2)
+        pygame.draw.rect(out, col, pr, 1, border_radius=pr.height // 2)
+        ts = fp.render(txt, True, col)
+        out.blit(ts, (pr.centerx - ts.get_width() // 2,
+                      pr.centery - ts.get_height() // 2))
+        px -= tw + 4
+
+    cy = y + pad + head_h + 8
+    pygame.draw.line(out, (58, 62, 86), (x + pad, cy - 4),
+                     (x + w - pad, cy - 4))
+    for r in rows:
+        k = r[0]
+        if k == "gap":
+            cy += 5
+            continue
+        if k == "kind":
+            out.blit(fs.render(r[1], True, c_dim), (x + pad, cy))
+            if r[2]:
+                rs = fs.render(r[2], True, c_dim)
+                out.blit(rs, (x + w - pad - rs.get_width(), cy))
+            cy += lh_s
+        elif k == "desc":
+            _item_card_blit_line(out, r[1], x + pad, cy, fm, c_txt, glyph_w)
+            cy += lh_m
+        elif k == "aug":
+            _item_card_blit_line(out, r[1], x + pad, cy, fm, c_aug, glyph_w)
+            cy += lh_m
+        elif k == "jobs":
+            out.blit(fs.render(r[1], True, c_jobs), (x + pad, cy))
+            cy += lh_s
+        else:
+            out.blit(fs.render(r[1], True, c_dim), (x + pad, cy))
+            cy += lh_s
+    if foot:
+        fy = y + h - pad - lh_s + 1
+        for txt, col, side in foot:
+            ts = fs.render(txt, True, col)
+            fx = (x + pad) if side == "l" else (x + w - pad - ts.get_width())
+            out.blit(ts, (fx, fy))
+    return out
+
+
+# Finished cards, keyed by everything that shows on them. Small LRU: a few
+# dozen cards cover any hovering session, and each is only a few KB.
+_card_surf_cache = {}
+_CARD_SURF_MAX = 64
+_card_shadow_cache = {}
+
+
+def _card_content_key(iid, card, supplied):
+    if card is None:
+        return ("loading",)
+    if supplied:
+        return ("s", card.get("name"), card.get("kind"),
+                tuple(card.get("desc") or ()), card.get("note"))
+    return ("c", inv_card_ver.get(iid, 0))
+
+
+def draw_item_card(surface, iid, fallback_name, anchor, bag=None, slot=0,
+                   augs=None, beside=None, card=None, icon=None):
+    """Draw the item card for `iid` beside `anchor` (the hovered row's
+    rect): to the right of `beside` (default: the inventory panel) when it
+    fits in the view the cursor is in, otherwise to its left, top aligned
+    with the anchor and held inside the view.
+
+    Augments: an explicit `augs` list is used as given (the equipment panel
+    already holds each worn piece's resolved augments); otherwise bag/slot
+    asks the lua for that copy's -- at the same time as the card itself, so
+    gear doesn't wait for two round trips. `card` / `icon` supply a
+    ready-made card (key items, which are not in the item resources)
+    instead of the AH|card lookup."""
+    supplied = card is not None
+    if card is None:
+        card = _item_card_get(iid)
+    if card is not None and card.get("unknown"):
+        return
+    if augs is None and bag and slot and (card is None or card.get("kind")):
+        augs = _item_aug_get(bag, slot, iid)
+    ic = icon if icon is not None else _item_card_icon(iid)
+    key = (iid, fallback_name, _card_content_key(iid, card, supplied),
+           tuple(augs or ()), id(ic) if ic is not None else 0)
+    surf = _card_surf_cache.pop(key, None)
+    if surf is None:
+        surf = _item_card_render(iid, fallback_name, card, augs, ic)
+        while len(_card_surf_cache) >= _CARD_SURF_MAX:
+            _card_surf_cache.pop(next(iter(_card_surf_cache)))
+    _card_surf_cache[key] = surf          # most recent last
+    w, h = surf.get_size()
+
+    # Placement.
+    mx, my = _mouse_pos()
+    vx, vy, vw, vh = _view_bounds_at(mx, my)
+    panel = beside
+    if panel is None:
+        try:
+            g = _inventory_panel_geometry()
+            if g:
+                panel = pygame.Rect(*g)
+        except Exception:
+            panel = None
+    left_edge = panel.left if panel else anchor.left
+    right_edge = panel.right if panel else anchor.right
+    x = right_edge + 6
+    if x + w > vx + vw - 2:
+        x = left_edge - 6 - w
+    if x < vx + 2:
+        x = max(vx + 2, min(mx + 16, vx + vw - w - 2))
+    y = max(vy + 2, min(anchor.top, vy + vh - h - 2))
+
+    sh = _card_shadow_cache.get((w, h))
+    if sh is None:
+        sh = pygame.Surface((w + 6, h + 6), pygame.SRCALPHA)
+        pygame.draw.rect(sh, (0, 0, 0, 90), sh.get_rect(), border_radius=7)
+        if len(_card_shadow_cache) > 32:
+            _card_shadow_cache.clear()
+        _card_shadow_cache[(w, h)] = sh
+    surface.blit(sh, (x - 1, y + 2))
+    surface.blit(surf, (x, y))
+
+
+# ── Key item cards ────────────────────────────────────────────────────────
+# Windower's key item resource carries only id, name and Permanent /
+# Temporary -- no description. The game's Key Items menu does show one, and
+# it lives in the client's own key item table: FTABLE file id 0xD98F, a
+# d_msg string list. Windower's ResourceExtractor reads the same file for
+# the names -- field 0 is the id, field 4 the English name -- and has the
+# description at field 6 written in but commented out. We read it here, the
+# same way the icons are read straight from the DATs.
+#
+# Guard: before trusting a description we check the DAT's name for that id
+# against the name the inventory list carries. If they disagree the layout
+# guess is wrong for this client, and the card shows no description rather
+# than the wrong one (and says so once in the session log).
+_KI_DAT_ID = 0xD98F
+_ki_table = None             # {id: (name, desc)} or {} when unavailable
+_ki_warned = False
+_ki_loading = False          # background read in progress
+
+
+def _ki_load_async():
+    """Read the key item file on a worker thread the first time the
+    inventory opens, so the first key item hover doesn't stall the frame
+    while a few thousand entries are decoded."""
+    global _ki_loading
+    if _ki_table is not None or _ki_loading:
+        return
+    _ki_loading = True
+
+    def _work():
+        global _ki_loading
+        try:
+            _ki_load()
+        finally:
+            _ki_loading = False
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def _ki_ffxi_path(file_id):
+    """ROM path for a DAT file id, via FTABLE.DAT in the FFXI root."""
+    root = _ffxi_root()
+    if not root:
+        return None
+    ft = os.path.join(root, "FTABLE.DAT")
+    try:
+        with open(ft, "rb") as fh:
+            fh.seek(file_id * 2)
+            b = fh.read(2)
+    except OSError:
+        return None
+    if len(b) < 2:
+        return None
+    v = b[0] | (b[1] << 8)
+    return os.path.join(root, "ROM", str(v >> 7), "%d.DAT" % (v & 0x7F))
+
+
+def _ki_decode(raw):
+    """FFXI's Shift-JIS variant, as far as key item text needs it: ASCII,
+    0x07 / 0x0A line breaks, element icons (0xEF 0x1F..0x26 -> U+E000..7,
+    the same characters item descriptions carry), colour and other control
+    codes dropped with their argument byte, auto-translate blocks
+    (0xFD ... 0xFD) dropped, and ordinary two-byte characters through cp932."""
+    out, i, n = [], 0, len(raw)
+    one_arg = {0x19, 0x1A, 0x1C, 0x1E, 0x1F}
+    while i < n:
+        b = raw[i]
+        if b == 0:
+            break
+        if b in (0x07, 0x0A):
+            out.append("\n"); i += 1
+        elif 0x20 <= b <= 0x7E:
+            out.append(chr(b)); i += 1
+        elif b == 0xFD:
+            j = raw.find(b"\xfd", i + 1)
+            i = (j + 1) if j != -1 else n
+        elif b == 0xEF and i + 1 < n and 0x1F <= raw[i + 1] <= 0x26:
+            out.append(chr(0xE000 + raw[i + 1] - 0x1F)); i += 2
+        elif 0x10 <= b <= 0x1F or b == 0x0C:
+            i += 2 if b in one_arg else 1
+        elif (0x81 <= b <= 0x9F or 0xE0 <= b <= 0xFC) and i + 1 < n:
+            try:
+                out.append(raw[i:i + 2].decode("cp932"))
+            except UnicodeDecodeError:
+                pass
+            i += 2
+        else:
+            i += 1
+    return "".join(out)
+
+
+def _ki_parse_dmsg(data):
+    """Parse a d_msg string list: [{field_index: str|int}, ...]. Layout from
+    ResourceExtractor's DMsgParser: 64-byte header (Pack=4), an optional
+    offset/length table, then per entry a u32 field count and (offset,
+    type) pairs; strings sit 0x1C past their offset. Encrypted files are
+    bitwise-NOT."""
+    import struct as _st
+    if len(data) < 64 or data[:8] != b"d_msg\x00\x00\x00":
+        raise ValueError("not a d_msg file")
+    enc = data[10] != 0
+    hdr_size, tbl_size, ent_size, dat_size, count = _st.unpack_from(
+        "<IIIii", data, 24)
+    if tbl_size:
+        table = list(_st.unpack_from("<%dq" % count, data, hdr_size))
+        if enc:
+            table = [~t for t in table]
+    else:
+        table = None
+    blob = data[hdr_size + tbl_size:hdr_size + tbl_size + dat_size]
+    if enc:
+        blob = bytes(~c & 0xFF for c in blob)
+    recs = []
+    for i in range(count):
+        if table is not None:
+            off, ln = table[i] & 0xFFFFFFFF, (table[i] >> 32) & 0xFFFFFFFF
+        else:
+            off, ln = i * ent_size, ent_size
+        try:
+            nf = _st.unpack_from("<i", blob, off)[0]
+        except _st.error:
+            recs.append({})
+            continue
+        rec = {}
+        for j in range(max(0, min(nf, 64))):
+            try:
+                eo, et = _st.unpack_from("<ii", blob, off + 4 + j * 8)
+            except _st.error:
+                break
+            eo += off
+            if et == 1:
+                try:
+                    rec[j] = _st.unpack_from("<i", blob, eo)[0]
+                except _st.error:
+                    pass
+            elif et == 0:
+                s0 = eo + 0x1C
+                end = blob.find(b"\x00", s0, s0 + max(ln, 1))
+                rec[j] = _ki_decode(blob[s0:end if end != -1 else s0 + ln])
+        recs.append(rec)
+    return recs
+
+
+def _ki_load():
+    """{key item id: (name, description)} from the client, loaded once.
+    {} when the install or file can't be read -- the card then shows the
+    name and category only."""
+    global _ki_table
+    if _ki_table is not None:
+        return _ki_table
+    table = {}
+    path = _ki_ffxi_path(_KI_DAT_ID)
+    try:
+        if path and os.path.isfile(path):
+            with open(path, "rb") as fh:
+                recs = _ki_parse_dmsg(fh.read())
+            for r in recs:
+                kid = r.get(0)
+                name = r.get(4)
+                if not isinstance(kid, int) or not isinstance(name, str):
+                    continue
+                if not kid or name.startswith("-"):
+                    continue          # category separator rows
+                desc = r.get(6)
+                if not isinstance(desc, str):
+                    # Field 6 absent on this client: take the longest
+                    # other text field, which is where a description is.
+                    cands = [v for k, v in r.items()
+                             if isinstance(v, str) and k != 4]
+                    desc = max(cands, key=len) if cands else ""
+                table[kid] = (name, desc.strip())
+        print(f"[OmniWatch] key item text: {len(table)} entries from "
+              f"{path!r}")
+        if table:
+            _k = sorted(table)[len(table) // 2]
+            print(f"[OmniWatch] key item text sample: {_k} = "
+                  f"{table[_k][0]!r} / {table[_k][1][:80]!r}")
+    except Exception as e:
+        print(f"[OmniWatch] key item text unavailable ({path!r}): {e!r}")
+        table = {}
+    _ki_table = table
+    return table
+
+
+_ki_glyph_surf = None
+
+
+def _ki_glyph():
+    """A 32x32 key, in place of an icon (key items have none of their own)."""
+    global _ki_glyph_surf
+    if _ki_glyph_surf is None:
+        g = pygame.Surface((32, 32), pygame.SRCALPHA)
+        gold, dark = (222, 190, 96), (120, 94, 36)
+        pygame.draw.circle(g, gold, (10, 11), 7)
+        pygame.draw.circle(g, (0, 0, 0, 0), (10, 11), 3)
+        pygame.draw.circle(g, dark, (10, 11), 7, 1)
+        pygame.draw.polygon(g, gold, [(15, 14), (27, 26), (25, 28), (13, 16)])
+        pygame.draw.rect(g, gold, (19, 22, 3, 5))
+        pygame.draw.rect(g, gold, (23, 18, 3, 5))
+        _ki_glyph_surf = g
+    return _ki_glyph_surf
+
+
+def draw_key_item_card(surface, kid, row_name, bag_key, anchor):
+    """Card for a key item: key glyph, name, Permanent / Temporary, and the
+    game's own description when the client file can be read."""
+    global _ki_warned
+    temp = str(bag_key).endswith("_temp")
+    card = {"name": row_name or ("Key item #%d" % kid),
+            "kind": "Temporary Key Item" if temp else "Permanent Key Item",
+            "desc": []}
+    # Never read the file on the draw thread: until the background read
+    # lands, the card shows the name and category only.
+    _ki_load_async()
+    ent = (_ki_table or {}).get(int(kid))
+    if ent:
+        dat_name, desc = ent
+        if (row_name and dat_name
+                and dat_name.strip().lower() != row_name.strip().lower()):
+            if not _ki_warned:
+                _ki_warned = True
+                print(f"[OmniWatch] key item text: name mismatch for {kid} "
+                      f"({dat_name!r} in the DAT vs {row_name!r}) -- "
+                      "descriptions withheld")
+        elif desc:
+            card["desc"] = [ln.rstrip() for ln in desc.split("\n")]
+    draw_item_card(surface, 0, card["name"], anchor, card=card,
+                   icon=_ki_glyph(), augs=[])
+
+
+def draw_equipment_item_card(surface, info, slot_rect, at_cursor=False):
+    """The equipment panel's hover, drawn as the same item card as the
+    inventory: the game's own layout from the item resources, with the
+    piece's augments from the caller's own data. Falls back to the older
+    text tooltip if there's no item id to look up.
+
+    at_cursor: sit just right of the cursor (top-aligned with the row)
+    rather than beside the row -- for wide rows such as the sim window's,
+    where the row's far edge can be a long way from where you're looking."""
+    iid = int((info or {}).get("item_id", 0) or 0)
+    if iid <= 0:
+        mx, my = _mouse_pos()
+        draw_item_tooltip(surface, mx, my, info, *_ui_edge())
+        return
+    beside = slot_rect
+    if at_cursor:
+        mx, _my = _mouse_pos()
+        beside = pygame.Rect(mx + 8, slot_rect.top, 1, slot_rect.h)
+    draw_item_card(surface, iid, info.get("name", ""), slot_rect,
+                   augs=list(info.get("augments") or []),
+                   beside=beside)
+
+
+def draw_inventory_item_card_hover(surface):
+    """Show the item card for the inventory-dropdown row under the cursor.
+    Stays out of the way while any of the dropdown's menus or popups is
+    open, since those sit where the card would."""
+    if not inventory_dropdown_open:
+        return
+    _ki_load_async()
+    # Fetch ahead for every item row on screen, and augments for the gear
+    # among them, so the card is ready before the cursor arrives.
+    _ids, _augq = [], []
+    for _r, _a in inventory_dropdown_rects:
+        if isinstance(_a, dict) and _a.get("card_id"):
+            _ids.append(_a["card_id"])
+            if _a.get("card_bag") and _a.get("card_slot"):
+                _augq.append((_a["card_bag"], int(_a["card_slot"]),
+                              int(_a["card_id"])))
+    if _ids:
+        _item_card_prefetch(_ids)
+    if _augq:
+        _item_aug_prefetch(_augq)
+    if (inventory_item_ctx_menu is not None
+            or inventory_bazaar_popup is not None
+            or inventory_move_popup is not None
+            or inventory_ahhist_popup is not None
+            or inventory_slip_nickname_editor is not None):
+        return
+    mx, my = _mouse_pos()
+    for rect, action in inventory_dropdown_rects:
+        if not rect.collidepoint(mx, my):
+            continue
+        kid = action.get("ki_id") if isinstance(action, dict) else None
+        if kid:
+            try:
+                draw_key_item_card(surface, int(kid),
+                                   action.get("card_name", "")
+                                   or action.get("item_name", ""),
+                                   action.get("card_bag") or "", rect)
+            except Exception as e:
+                print(f"[OmniWatch] key item card draw failed: {e!r}")
+            return
+        iid = action.get("card_id") if isinstance(action, dict) else None
+        if iid:
+            try:
+                draw_item_card(surface, int(iid),
+                               action.get("card_name", ""), rect,
+                               action.get("card_bag"),
+                               int(action.get("card_slot", 0) or 0))
+            except Exception as e:
+                print(f"[OmniWatch] item card draw failed: {e!r}")
+        return
+
+
 def draw_inventory_item_ctx_menu(surface):
     """Render the inventory item right-click menu when one is open.
 
@@ -47481,6 +50877,12 @@ def draw_inventory_item_ctx_menu(surface):
     actions.append(("autodrop", "Auto-drop (Treasury)", (235, 205, 150)))
     actions.append(("bazaar", "Bazaar\u2026", (170, 205, 235)))
     actions.append(("moveto", "Move to\u2026", (170, 235, 205)))
+    try:
+        _ah_ok = bool(_ah_item_cat(m.get("item_id", 0)))
+    except Exception:
+        _ah_ok = False
+    if _ah_ok:
+        actions.append(("ahhist", "AH sales history", (235, 205, 120)))
     if m.get("bazaar", 0):
         actions.append(("unbazaar", "Remove from bazaar", (235, 205, 90)))
 
@@ -51099,6 +54501,32 @@ _SUBDIALOG_CONFIGS = {
             ("sc_track_magic_burst","Track magic burst",       "bool"),
         ],
         "helpers": {},
+    },
+    "minimap": {
+        "title":    "Minimap",
+        "subtitle": "The minimap window, what it plots, and how solid "
+                    "the map behind it is.",
+        "rows": [
+            ("show_minimap",         "Show minimap",   "bool"),
+            ("minimap_show_mob",     "Monsters",       "bool"),
+            ("minimap_show_pc",      "Players",        "bool"),
+            ("minimap_show_npc",     "NPCs",           "bool"),
+            ("minimap_show_object",  "Other objects",  "bool"),
+            ("minimap_blink_tracked", "Blink tracked mobs", "bool"),
+            ("minimap_opacity",      "Map opacity %",  "int"),
+        ],
+        "helpers": {
+            "minimap_show_object":
+                "Doors, lamps and other clickable scenery. Busy zones "
+                "carry a lot of these.",
+            "minimap_blink_tracked":
+                "Anything tracked in the Tracker pulses on the minimap. "
+                "One that has gone out of range shows hollow at the last "
+                "place it was seen.",
+            "minimap_opacity":
+                "Dims the map only -- dots, your arrow and hover labels "
+                "stay fully solid so they read over a faint map.",
+        },
     },
     "target_card": {
         "title":    "Target Card",
@@ -60289,53 +63717,32 @@ f"{len(usable_jas)} abilities reported usable)")
 def _party_status_time(pid, bid, label, is_self, occ=0):
     """Second tooltip line for a party status, or "".
 
-    Three different questions, three different answers, and the game
-    only really answers the first:
-
-    * your own buffs are timed for real, from the server timestamps the
-      buff panel already tracks;
-    * a buff YOU put on someone else is counted down from the spell's
-      base duration, so gear, merits and Composure all make it read
-      short — hence the "~";
-    * anything else on anyone else has no duration anywhere, so what is
-      shown is how long OmniWatch has SEEN it, which is a floor, not a
-      remaining time.
-
-    Nothing is invented: a status with none of the three gets no line.
+    ONLY YOUR OWN, and deliberately. Your buffs are timed for real, from
+    the server timestamps the buff panel tracks. Everyone else's were
+    guesses of one kind or another -- a base duration counted down for
+    something you cast, or how long OmniWatch had merely SEEN a status --
+    and a number that is wrong is worse than no number, so they are gone.
+    Their icons and names stay.
     """
-    now = time.time()
-    if is_self:
-        # buff_state is keyed by SLOT, which is what lets the buff timer
-        # panel show two Marches with two different times. Gather every
-        # slot carrying this id, order them the way the game does, and
-        # take the one matching this icon's position among its
-        # duplicates. Matching on id alone gave both copies the first
-        # record's timer.
-        recs = [r for r in buff_state.values() if r.get("buff_id") == bid]
-        if not recs:
-            return ""
-        recs.sort(key=lambda r: (r.get("slot") is None, r.get("slot") or 0))
-        rec = recs[occ] if 0 <= occ < len(recs) else recs[0]
-        eu = rec.get("expires_at_unix")
-        if eu:
-            left = max(0, int(eu - now))
-            return f"{left // 60}:{left % 60:02d} left"
+    if not is_self:
         return ""
-    rec = support_buffs.get((pid, bid))
-    if rec:
-        dur = rec.get("dur") or 0
-        if dur:
-            left = max(0, int(dur - (now - rec["at"])))
-            return f"~{left // 60}:{left % 60:02d} left"
-    seen = _alert_seen.get((pid, label))
-    if seen:
-        up = int(now - seen[0])
-        # seen[1] is False when the status was ALREADY there the first
-        # time we saw this member, so the elapsed time is a minimum.
-        pre = "" if seen[1] else "~"
-        return f"{pre}{up // 60}:{up % 60:02d} up"
+    now = time.time()
+    # buff_state is keyed by SLOT, which is what lets the buff timer
+    # panel show two Marches with two different times. Gather every
+    # slot carrying this id, order them the way the game does, and
+    # take the one matching this icon's position among its
+    # duplicates. Matching on id alone gave both copies the first
+    # record's timer.
+    recs = [r for r in buff_state.values() if r.get("buff_id") == bid]
+    if not recs:
+        return ""
+    recs.sort(key=lambda r: (r.get("slot") is None, r.get("slot") or 0))
+    rec = recs[occ] if 0 <= occ < len(recs) else recs[0]
+    eu = rec.get("expires_at_unix")
+    if eu:
+        left = max(0, int(eu - now))
+        return f"{left // 60}:{left % 60:02d} left"
     return ""
-
 
 _tp_seen  = {}      # member name -> last TP we drew
 _tp_crossed = {}    # member name -> when it last crossed 1000 upward
@@ -65427,6 +68834,8 @@ def _stop_global_typing_hook():
 
 import atexit as _atexit
 _atexit.register(_stop_global_typing_hook)
+# Flush any item cards learned since the last periodic save.
+_atexit.register(lambda: _item_card_maybe_save(force=True))
 
 _start_global_typing_hook()
 
@@ -66313,16 +69722,42 @@ while running:
                         except Exception:
                             pass
                 continue
+            if tag == "SZME":
+                # <x>|<y>|<z>|<heading> -- our own position, 15/sec. Only
+                # the smooth half: the entity sweep is still SZRADAR.
+                mf = value.split("|")
+                if len(mf) >= 4:
+                    try:
+                        globals()["scanzone_me"] = (float(mf[0]),
+                                                    float(mf[1]),
+                                                    float(mf[2]),
+                                                    time.time())
+                        globals()["scanzone_radar_heading"] = float(mf[3])
+                        globals()["scanzone_target_index"] = (
+                            int(mf[4]) if len(mf) > 4 else 0)
+                    except (TypeError, ValueError):
+                        pass
+                continue
             if tag == "SZRADAR":
-                # <heading>|<n>|i,t,dx,dy,hpp,name;...
-                rf = value.split("|", 2)
+                # <heading>|<n>|<px>,<py>|i,t,dx,dy,hpp,name;...
+                rf = value.split("|", 3)
                 try:
                     globals()["scanzone_radar_heading"] = float(rf[0])
                 except Exception:
                     pass
+                if len(rf) >= 4:
+                    try:
+                        _ox, _oy = rf[2].split(",")
+                        globals()["scanzone_radar_origin"] = (float(_ox),
+                                                              float(_oy))
+                    except (TypeError, ValueError):
+                        globals()["scanzone_radar_origin"] = None
+                else:                       # older lua: no origin field
+                    globals()["scanzone_radar_origin"] = None
+                    rf = value.split("|", 2)
                 arr = []
-                if len(rf) >= 3 and rf[2]:
-                    for ent in rf[2].split(";"):
+                if len(rf) >= 3 and rf[-1]:
+                    for ent in rf[-1].split(";"):
                         c = ent.split(",", 5)
                         if len(c) >= 5:
                             try:
@@ -66532,10 +69967,16 @@ while running:
                             try:
                                 _sl.append({"slot": int(_pp[0]), "status": _pp[1],
                                             "name": _pp[2], "count": int(_pp[3]),
-                                            "price": int(_pp[4]), "ts": int(_pp[5])})
+                                            "price": int(_pp[4]), "ts": int(_pp[5]),
+                                            "id": (int(_pp[6]) if len(_pp) > 6
+                                                   else 0)})
                             except ValueError:
                                 pass
                     ah_state["sales"] = _sl
+                elif ahead == "card":
+                    _item_card_parse(af)
+                elif ahead == "aug":
+                    _item_aug_parse(af)
                 elif ahead == "info":
                     if len(af) >= 3:
                         try:
@@ -66547,6 +69988,8 @@ while running:
                 elif ahead == "status":
                     if len(af) > 1:
                         ah_state["running"] = (af[1] == "1")
+            if tag == "DBOX":
+                _dbox_parse(value.split("|"))
             if tag == "SKILLUP":
                 sf = value.split("|")
                 if sf and sf[0] == "status":
@@ -67168,11 +70611,21 @@ while running:
                         except ValueError:
                             continue
                         # Wire formats (newest first):
+                        #   id,count,bazaar,#slot,name     (bag slot, for
+                        #                                   per-copy augments)
                         #   id,count,bazaar,category,name
                         #   id,count,bazaar,name           (no category)
                         #   id,count,name                  (pre-bazaar)
                         cat = ""
-                        if len(fields) >= 5 and fields[2].lstrip("-").isdigit():
+                        slot = 0
+                        if (len(fields) >= 5 and fields[2].lstrip("-").isdigit()
+                                and fields[3].startswith("#")):
+                            baz = int(fields[2]); nm = fields[4]
+                            try:
+                                slot = int(fields[3][1:])
+                            except ValueError:
+                                slot = 0
+                        elif len(fields) >= 5 and fields[2].lstrip("-").isdigit():
                             baz = int(fields[2]); cat = fields[3]; nm = fields[4]
                         elif len(fields) >= 4 and fields[2].lstrip("-").isdigit():
                             baz = int(fields[2]); nm = fields[3]
@@ -67181,7 +70634,7 @@ while running:
                             nm = fields[2] if len(fields) >= 3 else ""
                         items_in_bag.append({
                             "id": iid, "count": cnt, "name": nm,
-                            "bazaar": baz, "category": cat,
+                            "bazaar": baz, "category": cat, "slot": slot,
                         })
                 # APPEND, not replace: a bag's entries arrive across
                 # several packets when the list is long (key items run
@@ -67471,6 +70924,8 @@ while running:
                               f"update failed: {e!r}")
             elif raw.startswith("PUPATT|"):
                 _pupatt_ingest(raw)
+            elif raw.startswith("MAGEBUFF|"):
+                _magesets_ingest(raw)
             elif raw.startswith("BLU_SPELLS|"):
                 # Blue Magic snapshot. Format:
                 #   BLU_SPELLS|<learned1>|<learned2>|...||<master1>|<master2>|...
@@ -69432,8 +72887,12 @@ while running:
                 and m.get("name") == player_self_name
                 and m_buff_ids):
             # Build {buff_id: [specific names from buff_state]} for self.
+            # In SLOT order, so two Minuets come out in the order the
+            # game holds them rather than whatever order the dict walks.
             spec_by_bid = {}
-            for v in buff_state.values():
+            for v in sorted(buff_state.values(),
+                            key=lambda r: (r.get("slot") is None,
+                                           r.get("slot") or 0)):
                 bid = v.get("buff_id")
                 nm  = v.get("name")
                 if not bid or not nm:
@@ -69460,7 +72919,12 @@ while running:
                             count = int(label.rsplit(" x", 1)[1])
                         except (ValueError, IndexError):
                             count = 1
+                    # CONSUMED, not copied. Each entry takes the next
+                    # unused specific name for that id: with the wire
+                    # sending one entry per copy, slicing from the front
+                    # every time gave every Minuet the first name.
                     avail = spec_by_bid[bid][:count]
+                    del spec_by_bid[bid][:count]
                     for spec_nm in avail:
                         new_buffs.append(spec_nm)
                         new_buff_ids.append(bid)
@@ -70516,9 +73980,11 @@ while running:
     if not display_hidden:
         draw_ah_window(screen)
         draw_pool_window(screen)
+        draw_minimap_window(screen)
     else:
         _ah_clear_rects()
         _pool_clear_rects()
+        _minimap_clear_rects()
     # ── DEV · SkillUp (hidden; sentinel-gated) ──
     if not display_hidden:
         draw_skillup_window(screen)
@@ -70547,6 +74013,9 @@ while running:
     draw_inventory_item_ctx_menu(screen)
     draw_inventory_bazaar_popup(screen)
     draw_inventory_move_popup(screen)
+    draw_inventory_ahhist_popup(screen)
+    # ── Item card for the hovered inventory row (on top of the dropdown) ────
+    draw_inventory_item_card_hover(screen)
 
     # ── Character-view dropdown (small; right of gear button) ───────────────
     draw_char_view_dropdown(screen)
@@ -70757,6 +74226,16 @@ while running:
     # through, and (b) show the same rich card for the sim item being
     # hovered (a slot's chosen item or any open-dropdown row). Gated on
     # the same show_equip_tooltips setting and paused while dragging.
+    # Fetch ahead for the equipment slots and the sim window's item and food
+    # rows, so their cards are ready before they are hovered.
+    try:
+        _pf = [(_v or {}).get("item_id", 0) for _v in equip_rich_view.values()]
+        if sim_window_open:
+            _pf += [(_e or {}).get("id", 0) for _r, _e in sim_item_tooltip_rects]
+            _pf += [_f for _r, _f in sim_food_tooltip_rects]
+        _item_card_prefetch(_pf)
+    except Exception:
+        pass
     if (sim_window_open and sim_window_bounds_rect is not None
             and sim_window_bounds_rect.collidepoint(mpos)):
         _suppress_tooltip = True
@@ -70767,17 +74246,23 @@ while running:
                 if _strect.collidepoint(mpos):
                     _stinfo = _sim_item_tooltip_info(_stentry)
                     if _stinfo:
-                        draw_item_tooltip(screen, mpos[0], mpos[1],
-                                          _stinfo, *_ui_edge())
+                        # Same card as the inventory, with that copy's
+                        # augments from the sim's own snapshot.
+                        draw_equipment_item_card(screen, _stinfo, _strect,
+                                                 at_cursor=True)
                     break
             else:
-                # No item-row hit — try the food picker rows.
+                # No item-row hit — try the food picker rows. Food is an
+                # item like any other, so it gets the card too: the game's
+                # own description of what it does.
                 for _ftrect, _ftfid in sim_food_tooltip_rects:
                     if _ftrect.collidepoint(mpos):
                         _ftinfo = _sim_food_tooltip_info(_ftfid)
                         if _ftinfo:
-                            draw_item_tooltip(screen, mpos[0], mpos[1],
-                                              _ftinfo, *_ui_edge())
+                            _ftinfo = dict(_ftinfo)
+                            _ftinfo["augments"] = []
+                            draw_equipment_item_card(screen, _ftinfo,
+                                                     _ftrect, at_cursor=True)
                         break
     if not _suppress_tooltip:
         for _sidx, _srect in equip_slot_rects.items():
@@ -70806,8 +74291,8 @@ while running:
                     if setting("show_equip_tooltips"):
                         _tt_info = equip_rich_view.get(_sidx)
                         if _tt_info:
-                            draw_item_tooltip(screen, mpos[0], mpos[1], _tt_info,
-                              *_ui_edge())
+                            draw_equipment_item_card(screen, _tt_info,
+                                                     _srect)
                 break
 
     # ── Tooltip: if the cursor is over a mob ability name, show its data. ───
@@ -70952,10 +74437,17 @@ while running:
                        # as well. Same omission PR #42 fixed for the AH
                        # and Scan Zone fields.
                        or _trustsets_name_focus or _brdset_name_focus
-                       or _pupatt_name_focus
+                       or _pupatt_name_focus or _magesets_name_focus
                        or (ah_panel_open and
                            (_ah_search_field.focused
-                            or _ah_edit_field.focused))
+                            or _ah_edit_field.focused
+                            # Delivery tab: recipient, amount and the
+                            # inventory find box all take printable keys.
+                            or _dbox_to_field.focused
+                            or _dbox_amt_field.focused
+                            or _dbox_find_field.focused
+                            or _baz_price_field.focused
+                            or _baz_find_field.focused))
                        or (scanzone_panel_open
                            and _scanzone_field.focused)
                        or (sim_import_open and sim_import_field)
@@ -71088,6 +74580,10 @@ while running:
         elif _inventory_move_popup_event(event):
             pass
 
+        elif _inventory_ahhist_popup_event(event):
+            # AH sales-history popup is open and capturing input.
+            pass
+
         elif _inventory_bazaar_popup_event(event):
             # Bazaar price popup is open and capturing input.
             pass
@@ -71110,6 +74606,10 @@ while running:
         elif (not _dev_panel_input_blocked()
                 and _alert_handle_event(event)):
             # Alert box: drag, and click a name to select / target.
+            pass
+        elif (not _dev_panel_input_blocked()
+                and _minimap_handle_event(event)):
+            # Minimap: drag, resize, zoom.
             pass
         elif (not _dev_panel_input_blocked()
                 and _pool_handle_event(event)):
@@ -72566,6 +76066,11 @@ while running:
                                         inventory_item_ctx_menu.get(
                                             "bag", "inventory"),
                                 }
+                            elif _act == "ahhist":
+                                _inv_ahhist_start(
+                                    inventory_item_ctx_menu["item_id"],
+                                    inventory_item_ctx_menu.get(
+                                        "item_name", "?"))
                             break
                     inventory_item_ctx_menu = None
                     continue
