@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.14.0'
+_addon.version  = '1.14.1'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -6990,10 +6990,10 @@ function _ow_scanzone_radar_tick(now)
                 local t = 0                       -- 0 = object / other
                 if not v.is_npc then
                     t = 2                         -- PC (player)
-                elseif v.spawn_type == 2 then
-                    t = 1                         -- NPC (static / friendly)
                 elseif v.spawn_type == 16 then
                     t = 3                         -- monster
+                elseif v.spawn_type == 2 then
+                    t = 1                         -- NPC (static / friendly)
                 end
                 local hpp = v.hpp or 0
                 local nm  = v.name:gsub('[|;,]', ' ')
@@ -10879,6 +10879,354 @@ do
 end
 
 -- ════════════════════════════════════════════════════════════════════════
+--  Find a number in the incoming packets  —  //ow findval <number> [off]
+--
+--  For values the client shows you but no documented packet carries: the
+--  gil in the Mog Garden coffer, a counter in a menu, a balance on an NPC
+--  screen. Read it on screen, tell this the number, then do the thing that
+--  shows it. Every packet is scanned for that value as a 32-bit and a
+--  16-bit little-endian integer, and each hit reports the packet id and
+--  the byte offset -- which is all it takes to read the field properly
+--  afterwards.
+--
+--  BOTH DIRECTIONS. A number the client SENDS is often the only place it
+--  exists: the coffer reports its balance when the menu opens and never
+--  again, so the amount of a deposit is knowable only from the packet
+--  that carries the deposit.
+--
+--  Bounded: at most 40 lines, then it stops itself. Off unless asked for.
+-- ════════════════════════════════════════════════════════════════════════
+_ow_findval_want  = nil
+_ow_findval_lines = 0
+_ow_findval_seen  = {}
+
+function _ow_findval_set(n)
+    _ow_findval_want = n
+    _ow_findval_lines = 0
+    _ow_findval_seen = {}
+    if n then
+        ow_chat(207, string.format(
+            '[FIND] looking for %d in incoming packets - now go and make '
+            .. 'the game show it', n))
+    else
+        ow_chat(207, '[FIND] off')
+    end
+end
+
+local function _ow_findval_scan(dir, id, data)
+    local want = _ow_findval_want
+    if not want then return end
+    if _ow_findval_lines >= 40 then
+        _ow_findval_want = nil
+        ow_chat(207, '[FIND] stopping - 40 hits is enough to go on')
+        return
+    end
+    local n = #data
+    for i = 1, n - 1 do
+        local v16 = data:byte(i) + data:byte(i + 1) * 256
+        local hit = nil
+        if v16 == want then
+            hit = '16-bit'
+        elseif i <= n - 3 then
+            local v32 = v16 + data:byte(i + 2) * 65536
+                            + data:byte(i + 3) * 16777216
+            if v32 == want then hit = '32-bit' end
+        end
+        if hit then
+            -- One line per (packet, offset, width). Menus repeat their
+            -- packets as you click through, and forty copies of the same
+            -- hit would bury the one that matters.
+            local key = string.format('%s:%03X:%d:%s', dir, id, i - 1, hit)
+            if not _ow_findval_seen[key] then
+                _ow_findval_seen[key] = true
+                _ow_findval_lines = _ow_findval_lines + 1
+                ow_chat(207, string.format(
+                    '[FIND] %d in %s 0x%03X at offset 0x%02X (%s), len %d',
+                    want, dir, id, i - 1, hit, n))
+            end
+        end
+    end
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    _ow_findval_scan('in', id, data)
+end)
+
+windower.register_event('outgoing chunk', function(id, data)
+    _ow_findval_scan('out', id, data)
+end)
+
+-- ════════════════════════════════════════════════════════════════════════
+--  Quest and mission completion  —  //ow questcap [on|off]
+--
+--  The server DOES tell the client what you have finished: incoming 0x056,
+--  sent in batches when you zone. It comes in 27 flavours tagged by a Type
+--  at offset 0x24; the ones worth having are the "Completed" ones, each
+--  carrying 32 bytes of flags where the BIT POSITION is the quest's index
+--  in the client's own quest data.
+--
+--  This is read-only and deliberately dumb: it decodes the flags, counts
+--  them, lists the indices, and resolves names when the resources make
+--  that possible. Nothing is wired to the checklist until the indices have
+--  been checked against a real quest log -- an off-by-one in a mapping
+--  would tick the wrong quests, which is worse than ticking none.
+--
+--  COP, SoA and RoV have NO completed-missions packet: the server only
+--  sends your CURRENT mission for those, so their progress has to be read
+--  from how far along you are rather than from a completion flag.
+-- ════════════════════════════════════════════════════════════════════════
+_ow_questcap_on = false
+_ow_quest_flags = {}        -- type -> { [index] = true }
+_ow_quest_open  = {}        -- same, for quests you have ACCEPTED
+
+local _OW_QUEST_TYPES = {
+    [0x0050] = "Current San d'Oria",
+    [0x0058] = 'Current Bastok',
+    [0x0060] = 'Current Windurst',
+    [0x0068] = 'Current Jeuno',
+    [0x0070] = 'Current Other',
+    [0x0078] = 'Current Outlands',
+    [0x0080] = 'Current TOAU (+ Assault/WOTG/Campaign missions)',
+    [0x0088] = 'Current WOTG',
+    [0x0090] = "Completed San d'Oria",
+    [0x0098] = 'Completed Bastok',
+    [0x00A0] = 'Completed Windurst',
+    [0x00A8] = 'Completed Jeuno',
+    [0x00B0] = 'Completed Other',
+    [0x00B8] = 'Completed Outlands',
+    [0x00C0] = 'Completed TOAU and Assaults',
+    [0x00C8] = 'Completed WOTG',
+    [0x00D0] = 'Completed Missions (Nations, Zilart)',
+    [0x00D8] = 'Completed Missions (TOAU, WOTG)',
+    [0x00E0] = 'Current Abyssea',
+    [0x00E8] = 'Completed Abyssea',
+    [0x00F0] = 'Current Adoulin',
+    [0x00F8] = 'Completed Adoulin',
+    [0x0100] = 'Current Coalition',
+    [0x0108] = 'Completed Coalition',
+    [0xFFFE] = 'Current TVR Missions',
+    [0xFFFF] = 'Current Missions',
+}
+
+-- LOOKING FOR THE QUEST LIST, SAFELY.
+--
+-- Windower's resource table RAISES on a resource it does not have rather
+-- than returning nil, and his 2026-09-24 run proved it: the probe threw,
+-- its pcall swallowed the line, and then the dump hit the same throw in
+-- the middle of the first area and stopped -- one header, no indices. So
+-- every resource touch goes through a pcall now, and the answer is cached
+-- rather than re-thrown once per quest.
+_ow_quest_res_cached = false
+_ow_quest_res_value = nil
+
+function _ow_quest_res()
+    if _ow_quest_res_cached then return _ow_quest_res_value end
+    _ow_quest_res_cached = true
+    local ok_r, r = pcall(function() return res and res.quests end)
+    _ow_quest_res_value = (ok_r and type(r) == 'table') and r or nil
+    return _ow_quest_res_value
+end
+
+function _ow_quest_res_probe()
+    local r = _ow_quest_res()
+    if not r then
+        ow_chat(207, '[QCAP] res.quests is not available — indices only')
+        return nil
+    end
+    local outer, inner = 0, nil
+    local ok_walk = pcall(function()
+    for k, v in pairs(r) do
+        outer = outer + 1
+        if inner == nil and type(v) == 'table' then
+            local n, sample = 0, nil
+            for k2, v2 in pairs(v) do
+                n = n + 1
+                if sample == nil then sample = {k2, v2} end
+                if n > 2 then break end
+            end
+            if sample and type(sample[2]) == 'table' then
+                inner = string.format('res.quests[%s][%s] = table (name=%s)',
+                    tostring(k), tostring(sample[1]),
+                    tostring(sample[2].en or sample[2].english))
+            elseif sample then
+                inner = string.format('res.quests[%s].%s = %s', tostring(k),
+                    tostring(sample[1]), tostring(sample[2]))
+            end
+        end
+    end
+    end)
+    ow_chat(207, string.format(
+        '[QCAP] res.quests: %d top-level entries; %s%s',
+        outer, inner or 'shape unknown',
+        ok_walk and '' or ' (walk failed)'))
+    return r
+end
+
+-- Name for one (type, index), if the resources can give one. Tries the two
+-- layouts Windower has used: per-area sub-tables keyed by index, and a flat
+-- list whose entries carry their own area.
+function _ow_quest_name(qtype, idx)
+    local r = _ow_quest_res()
+    if not r then return nil end
+    local area = ({ [0x0090] = 0, [0x0098] = 1, [0x00A0] = 2, [0x00A8] = 3,
+                    [0x00B0] = 4, [0x00B8] = 5, [0x00C0] = 6, [0x00C8] = 7,
+                    [0x00E8] = 8, [0x00F8] = 9, [0x0108] = 10 })[qtype]
+    local sub = area and r[area]
+    if type(sub) == 'table' then
+        local e = sub[idx]
+        if type(e) == 'table' then return e.en or e.english end
+        if type(e) == 'string' then return e end
+    end
+    local e = r[idx]
+    if type(e) == 'table' and (area == nil or e.area == nil or e.area == area) then
+        return e.en or e.english
+    end
+    return nil
+end
+
+function _ow_questcap_set(on)
+    _ow_questcap_on = on and true or false
+    if _ow_questcap_on then
+        ow_chat(207, '[QCAP] capture ON — zone once, then //ow questcap off')
+        pcall(_ow_quest_res_probe)
+    else
+        ow_chat(207, '[QCAP] capture OFF')
+    end
+end
+
+-- Print what has been collected so far, whether or not capture is running.
+function _ow_questcap_dump()
+    local any = false
+    -- In packet-type order, so the log reads the way the areas arrive
+    -- instead of however the table happens to walk.
+    local types = {}
+    for qtype in pairs(_ow_quest_flags) do types[#types + 1] = qtype end
+    table.sort(types)
+    for _, qtype in ipairs(types) do
+        local set = _ow_quest_flags[qtype]
+        local idxs = {}
+        for i in pairs(set) do idxs[#idxs + 1] = i end
+        table.sort(idxs)
+        any = true
+        ow_chat(207, string.format('[QCAP] %s (0x%04X): %d set',
+            _OW_QUEST_TYPES[qtype] or 'type', qtype, #idxs))
+        -- Indices in rows, so a 200-quest area does not produce 200 lines.
+        local row = {}
+        for _, i in ipairs(idxs) do
+            local ok_nm, nm = pcall(_ow_quest_name, qtype, i)
+            if not ok_nm then nm = nil end
+            row[#row + 1] = nm and (i .. '=' .. nm) or tostring(i)
+            if #row >= (nm and 4 or 16) then
+                ow_chat(207, '[QCAP]   ' .. table.concat(row, ', '))
+                row = {}
+            end
+        end
+        if #row > 0 then
+            ow_chat(207, '[QCAP]   ' .. table.concat(row, ', '))
+        end
+    end
+
+    if not any then
+        ow_chat(207, '[QCAP] nothing captured yet — turn it on and zone')
+    end
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x056 then return end
+    if #data < 0x26 then return end
+    local qtype = data:byte(0x25) + data:byte(0x26) * 256
+    local label = _OW_QUEST_TYPES[qtype]
+    -- Only the completion sets are decoded as flags. The "Current" ones
+    -- for TOAU and the mission types carry plain mission numbers in the
+    -- same space, and reading those as a bitfield would be nonsense.
+    -- CURRENT quests are decoded too, and they are worth as much as the
+    -- completed ones for working out an unknown block: an area where you
+    -- have finished everything gives nothing to watch, but a quest you
+    -- have OPEN names its own bit just by being open. Same 32-byte field,
+    -- same index space.
+    --
+    -- The one exception is 0x0080, which packs plain mission numbers into
+    -- the same bytes -- reading those as flags would be nonsense.
+    local is_done = label and label:sub(1, 9) == 'Completed'
+    local is_current = label and label:sub(1, 7) == 'Current'
+                       and qtype ~= 0x0080 and qtype < 0xFFFE
+    if not (is_done or is_current) then
+        if label and _ow_questcap_on then
+            ow_chat(207, string.format('[QCAP] %s (0x%04X) seen, not decoded',
+                label, qtype))
+        end
+        return
+    end
+    local set, list = {}, {}
+    local n = 0
+    for byte = 0, 31 do
+        local b = data:byte(0x05 + byte)
+        if b and b ~= 0 then
+            for bit = 0, 7 do
+                if math.floor(b / (2 ^ bit)) % 2 == 1 then
+                    set[byte * 8 + bit] = true
+                    list[#list + 1] = byte * 8 + bit
+                    n = n + 1
+                end
+            end
+        end
+    end
+    -- WHICH BIT WAS THAT?
+    --
+    -- The only way to tie a bit to a quest with certainty is to watch one
+    -- flip. Guessing from a bit pattern does not work -- dozens of the
+    -- game's tables fit any given set of bits, so the "best match" is
+    -- whichever table happens to be densest. So: finish a quest, zone,
+    -- and this says exactly which bit changed. That is what maps the
+    -- areas that share a packet, where the layout is otherwise unknown.
+    if is_current then
+        -- Kept apart from the completed sets: these tick nothing, they
+        -- are only here to identify bits.
+        _ow_quest_open[qtype] = set
+        if _ow_questcap_on then
+            local list2 = {}
+            for i in pairs(set) do list2[#list2 + 1] = i end
+            table.sort(list2)
+            ow_chat(207, string.format('[QCAP] %s (0x%04X): %d open [%s]',
+                label, qtype, n, table.concat(list2, ',')))
+        end
+        return
+    end
+
+    local prev = _ow_quest_flags[qtype]
+    if prev then
+        local gained, lost = {}, {}
+        for i in pairs(set) do
+            if not prev[i] then gained[#gained + 1] = i end
+        end
+        for i in pairs(prev) do
+            if not set[i] then lost[#lost + 1] = i end
+        end
+        table.sort(gained)
+        table.sort(lost)
+        if #gained > 0 or #lost > 0 then
+            ow_chat(207, string.format(
+                '[QDIFF] %s (0x%04X): +[%s] -[%s]', label, qtype,
+                table.concat(gained, ','), table.concat(lost, ',')))
+        end
+    end
+    _ow_quest_flags[qtype] = set
+
+    -- NOTHING IS SENT TO THE OVERLAY. Auto-ticking the checklist from
+    -- these bits was built and then removed: the flag numbering matches
+    -- the game's own quest tables for some areas and comes apart for
+    -- others (his Mog Garden quests are records 111-128 and those bits
+    -- are clear despite all 18 being done), and a checklist that ticks
+    -- the wrong row is worse than one you tick yourself. What remains
+    -- here is READ-ONLY -- a capture for working the layout out properly
+    -- some day, off unless you ask for it.
+    if _ow_questcap_on then
+        ow_chat(207, string.format('[QCAP] %s (0x%04X): %d completed',
+            label, qtype, n))
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════════════
 --  Trust packet capture  —  //ow trustcap [on|off]
 --
 --  A blind full capture is unreadable: tens of thousands of packets a
@@ -12890,6 +13238,14 @@ end)
 -- load message (links here) and //ow help.
 local PW_COMMANDS_HELP = {
     {'help',                  'Show this list of commands.'},
+    {'clocksync',             'Report the last game-clock reading from the '
+                              .. 'server, and re-send it to the overlay.'},
+    {'findval <number>',      'Hunt a number you can see on screen through '
+                              .. 'the incoming packets, and report where '
+                              .. 'it sits. //ow findval off to stop.'},
+    {'questcap [on|off|dump]','Read the quest and mission completion flags '
+                              .. 'the server sends on zone, and list them '
+                              .. 'in omniwatch.log.'},
     {'trustcap [on|off]',     'Log every incoming packet that mentions one '
                               .. 'of your alter egos to omniwatch.log, to '
                               .. 'find where their buffs come from.'},
@@ -13036,6 +13392,61 @@ ow_safe_register('addon command', function(command, ...)
         _ow_ah_command(table.concat(args, '|'))
     elseif command == 'pupatt' or command == 'pup' then
         _ow_pupatt_command(table.concat(args, '|'))
+    elseif command == 'clocksync' then
+        -- Says which of the two silences you are looking at: the packet
+        -- never arriving, or simply not having zoned since load.
+        local w = _ow_vtime_last
+        if w then
+            ow_chat(207, string.format(
+                '[OW] clock: last weather packet said %d vana minutes, '
+                .. '%ds ago', w.vmin, os.time() - w.at))
+            if udp_zone then
+                pcall(function()
+                    udp_zone:send(_OW_MB_TAG(string.format('VTIME|%d|%d',
+                        w.vmin, w.at)))
+                end)
+            end
+        else
+            ow_chat(207, '[OW] clock: no weather packet seen yet -- that '
+                .. 'is the one that carries the game time.')
+        end
+        local v = _ow_vstamp_last
+        if not v then
+            ow_chat(207, '[OW] clock: no zone packet seen since load. '
+                .. 'Cross a zone line and run this again.')
+        else
+            local age = os.time() - v.seen
+            ow_chat(207, string.format(
+                '[OW] clock: last zone stamp %d, local %d at the time, '
+                .. 'delta %+ds, seen %ds ago',
+                v.stamp, v.at, v.stamp - v.at, age))
+            if udp_zone then
+                pcall(function()
+                    udp_zone:send(_OW_MB_TAG(string.format('VSTAMP|%d|%d',
+                        v.stamp, v.at)))
+                end)
+                ow_chat(207, '[OW] clock: re-sent to the overlay')
+            end
+        end
+    elseif command == 'findval' then
+        local a1 = (args and args[1] or ''):lower()
+        if a1 == '' or a1 == 'off' then
+            _ow_findval_set(nil)
+        else
+            _ow_findval_set(tonumber(a1))
+        end
+    elseif command == 'questcap' then
+        local a1 = (args and args[1] or ''):lower()
+        if a1 == 'dump' then
+            _ow_questcap_dump()
+        else
+            _ow_questcap_set(a1 ~= 'off' and (a1 == 'on' or not _ow_questcap_on))
+        end
+        if windower and windower.add_to_chat then
+            windower.add_to_chat(207, string.format(
+                '[OmniWatch] quest capture = %s (writes to omniwatch.log)',
+                tostring(_ow_questcap_on)))
+        end
     elseif command == 'trustcap' then
         local a1 = (args and args[1] or ''):lower()
         _ow_trustcap_set(a1 ~= 'off' and (a1 == 'on' or not _ow_trustcap_on))
@@ -27805,6 +28216,82 @@ ow_safe_register('prerender', function()
     end
 end)
 
+
+-- ════════════════════════════════════════════════════════════════════════
+--  Vana'diel clock, from the server rather than from this PC
+--
+--  The overlay works the Vana'diel time out from the machine's own clock:
+--  a fixed epoch times 25. That is exact right up until the PC clock is
+--  wrong, and a PC clock is always a little wrong -- which is why the
+--  time slowly fell behind and had to be nudged by hand every so often.
+--
+--  The server states the time outright. Packet 0x057 (the weather change)
+--  carries the Vana'diel time in minutes, and it arrives whenever the
+--  weather turns -- several times an hour of play. Forwarding it lets the
+--  overlay measure its own error and correct itself, so the manual
+--  adjustment stops being something anyone has to think about.
+--
+--  Sent as VTIME|<vana minutes>|<os.time() when it arrived>. The second
+--  number matters: the overlay has to compare like with like, and the
+--  delay between the packet arriving and the overlay reading it is not
+--  zero.
+-- ════════════════════════════════════════════════════════════════════════
+-- AND AT ZONE-IN, WHICH IS BETTER STILL. The zone packet carries the
+-- SERVER'S OWN unix timestamp, so the PC clock's error can be read
+-- outright rather than inferred from the game time: the difference
+-- between that stamp and os.time() IS the drift.
+--
+-- This replaced asking the game with /clock, which would have worked but
+-- toggles the in-game clock widget on and off every time it runs -- a
+-- visible side effect on the player's screen is too high a price for a
+-- clock correction.
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x00A or #data < 0x3C then return end
+    local stamp = data:byte(0x39) + data:byte(0x3A) * 256
+                + data:byte(0x3B) * 65536 + data:byte(0x3C) * 16777216
+    -- SENT WHATEVER IT SAYS, and judged on the other side. Dropping an
+    -- odd-looking value here made "nothing happened" and "the field is
+    -- not what the documentation claims" look identical, and they need
+    -- different fixes.
+    -- LOGGED HERE, in omniwatch.log, because that is the file anyone
+    -- actually opens. The overlay's own print() goes somewhere else
+    -- entirely, so a diagnostic put there looked like silence.
+    _ow_vstamp_last = { stamp = stamp, at = os.time(), seen = os.time() }
+    _ow_vstamp_logged = (_ow_vstamp_logged or 0) + 1
+    if _ow_vstamp_logged <= 3 then
+        ow_chat(207, string.format(
+            '[OW] clock: zone stamp %d, local %d, delta %+ds',
+            stamp, os.time(), stamp - os.time()))
+    end
+    if udp_zone then
+        pcall(function()
+            udp_zone:send(_OW_MB_TAG(string.format('VSTAMP|%d|%d',
+                stamp, os.time())))
+        end)
+    end
+end)
+
+windower.register_event('incoming chunk', function(id, data)
+    if id ~= 0x057 or #data < 8 then return end
+    local vmin = data:byte(5) + data:byte(6) * 256
+               + data:byte(7) * 65536 + data:byte(8) * 16777216
+    if vmin <= 0 then return end
+    -- Logged like the zone stamp, and for the same reason: this is the
+    -- only reading that can show the display being wrong for a reason
+    -- other than PC-clock drift, so its arrival has to be visible.
+    _ow_vtime_last = { vmin = vmin, at = os.time() }
+    _ow_vtime_logged = (_ow_vtime_logged or 0) + 1
+    if _ow_vtime_logged <= 3 then
+        ow_chat(207, string.format(
+            '[OW] clock: weather packet says %d vana minutes', vmin))
+    end
+    if udp_zone then
+        pcall(function()
+            udp_zone:send(_OW_MB_TAG(string.format('VTIME|%d|%d',
+                vmin, os.time())))
+        end)
+    end
+end)
 
 -- ════════════════════════════════════════════════════════════════════════
 -- Embedded Fisher engine (dev-gated). Adapted from "fisher" by Seth

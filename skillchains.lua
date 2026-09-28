@@ -1118,16 +1118,32 @@ end
 -- Returns the current "target of interest" id — the player's target
 -- if they have one with a resonating entry, otherwise the most-
 -- recently-updated mob with resonating state.
+-- A DEAD MOB HAS NO CHAIN. This is the original addon's rule and the
+-- fork lost it: the original drew only while `targ.hpp > 0`, so a
+-- weaponskill that killed the mob never showed a window, and a mob
+-- dying mid-window took the panel with it instantly. Waiting for the
+-- window to expire instead leaves a dead chain up for as much as eleven
+-- seconds, which in a fight is forever.
+local function alive(mob)
+    return mob and mob.hpp and mob.hpp > 0
+end
+
 local function pick_active_target()
     local targ = windower.ffxi.get_mob_by_target('t', 'bt')
-    if targ and resonating[targ.id] then
+    if alive(targ) and resonating[targ.id] then
         return targ.id
     end
-    -- Fall back to the mob with the latest resonating update.
+    -- Fall back to the mob with the latest resonating update -- but only
+    -- one still alive and still in the zone. Without that check the
+    -- fallback cheerfully resurrected the chain of the mob that just
+    -- died, which is the same bug wearing a hat.
     local best_id, best_when = nil, -1
     for tid, r in pairs(resonating) do
         if r.created > best_when then
-            best_id, best_when = tid, r.created
+            local ok_m, m = pcall(windower.ffxi.get_mob_by_id, tid)
+            if ok_m and alive(m) then
+                best_id, best_when = tid, r.created
+            end
         end
     end
     return best_id
@@ -1141,7 +1157,12 @@ function M.tick(now_clock)
     -- packet, or where the player switches zones mid-fight).
     local stale_cutoff = now_clock - 30
     for tid, r in pairs(resonating) do
-        if r.created < stale_cutoff then
+        local ok_m, m = pcall(windower.ffxi.get_mob_by_id, tid)
+        if ok_m and m and not alive(m) then
+            -- Dead or despawned: dropped now, not at the window and not
+            -- at the 30s sweep.
+            resonating[tid] = nil
+        elseif r.created < stale_cutoff then
             resonating[tid] = nil
         else
             -- Window-expiry prune: once the SC window has fully passed,

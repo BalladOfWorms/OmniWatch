@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.14.1] — 2026-09-28
+
+### Added
+
+- **Alerts.** Things you want to be told about when the moment comes, from **Settings ▸ Misc ▸ Alerts ▸ CONFIGURE**. Write a message, choose what sets it off — a time of day, a day of the week, a zone you enter, a Vana'diel moon phase or weekday, or the weather — and press Add. Stack conditions with **+** to want several at once: in Gustaberg *and* raining. When it fires the panel appears with the message and a beep, and **Dismiss** clears it and leaves the alert armed for the next time its moment comes round; the **x** on a row deletes it. Values you can choose from are chosen rather than typed, so a weather alert set for "water" catches Rain and Squall as you would expect. The panel can be placed in setup mode before it has anything to say.
+
+- **Tick a whole tab at once.** The quest and mission tabs of the checklist have a button in the header that ticks every row, or clears them all when they are already ticked. Two clicks, since a hundred rows is a lot to change by accident.
+
+- **Your gil in the Marketplace.** Shown in the title bar, so pricing a listing or a bazaar item does not mean closing the window to check.
+
+- **Hover the moon for the phases ahead.** Every phase and how long until it comes round, soonest first, so a quest waiting on a full moon can be planned for rather than waited on. Full Moon reads warm and New Moon dim.
+
+- **Hover the Vana'diel day for the week ahead.** The eight days with the time until each, down to the second, each in its own element colour.
+
+### Changed
+
+- **More quests in the checklist.** Twenty-four added against the game's own quest tables — seventeen in Jeuno, four in Adoulin and three in Outlands — and *Her Memories: The Grave Resolve* is now named as the game names it.
+
+### Fixed
+
+- **The minimap zooms with the wheel at any time**, not only while you are arranging panels.
+
+- **The hotbar works with a panel open.** A checklist, a campaigns window or a Configure box no longer stops buttons elsewhere on the screen from firing, and pressing one no longer closes the box you were working in. A button genuinely underneath a panel still does not fire, and its tooltip stays hidden.
+
+- **The minimap stays out of the way of the hotbar editor**, so a SAVE button under it can be pressed without moving the minimap first.
+
+- **Items the auction house has no category for can still be looked up.** A Scroll of Frazzle and its neighbours were reported as impossible to auction; their sales history now works as it does for anything else.
+
+- **The remove button in the buy queue can be reached** whatever the width of the Marketplace window.
+
+- **The Vana'diel clock matches the game's**, and keeps itself there: it reads the server's own clock when you zone and corrects for any drift in your PC's.
+
+- **Typing into a panel goes only to that panel.** Editing a hotbar label, an alert or a price no longer puts the same keystrokes into the chat draft, and backspace reaches the box you are typing in.
+
+- **A settings box on top of another window takes the clicks.** Opening CONFIGURE over the Marketplace no longer leaves it looking at you but unresponsive. Hotbar buttons stay the exception: one you can still see is one you can still press.
+
 ## [1.14.0] — 2026-09-23
 
 ### Added

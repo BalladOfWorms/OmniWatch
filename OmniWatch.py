@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.14.0 (2026-09-21)"
+OMNIWATCH_BUILD_STAMP = "v1.14.1 (2026-09-28)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.14.0"
+OMNIWATCH_VERSION = "1.14.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -599,7 +599,19 @@ VANA_OFFSET  = 92514960         # seconds, from Ashita's vanatime.lua
 # time tweaks, or a rendering offset between when data is sampled and when
 # minutes are truncated for display. Raise to make the clock run later; lower
 # to make it earlier. 1 Earth second = 25 Vana seconds.
-VANA_FINE_TUNE = -43
+# Earth seconds added to the epoch before the x25.
+#
+# ZERO, and it needs to stay that way. This carried -43 for a long time,
+# which multiplied by 25 is 1075 Vana'diel seconds -- just under EIGHTEEN
+# VANA'DIEL MINUTES of lag against the game's own clock. The epoch above
+# is the standard one every FFXI clock uses; it needs no help.
+#
+# The scale is the trap here: one earth second is twenty-five Vana'diel
+# seconds, so a constant that looks like a rounding tweak is worth most
+# of a Vana'diel minute, and a value that looks like "under a minute
+# out" is worth nearly twenty. Any future adjustment belongs in Vana'diel
+# minutes, in the user setting below, not here.
+VANA_FINE_TUNE = 0
 VANA_SPEED   = 25
 SECS_PER_DAY = 86400
 
@@ -707,6 +719,102 @@ def _moon_phase_name(moon_phase_day, moon_percent):
     # p < 43
     return "Waning Crescent" if waning else "Waxing Crescent"
 
+# What the SERVER says the time is, and what we thought it was.
+#
+# The clock here is the machine's own, times 25 -- exact only while the
+# PC clock is. It never is quite, so the Vana'diel time slid behind and
+# had to be nudged by hand. The server states the time in every weather
+# change packet, so the error can simply be measured and removed.
+vana_auto_offset_sec = 0.0       # earth seconds, applied to our epoch
+_vana_last_sync = 0.0
+
+
+def vana_clock_observed(server_vana_min, at_unix):
+    """Correct our clock from the server's own statement of the time.
+
+    <server_vana_min> is Vana'diel minutes since the epoch, straight out
+    of packet 0x057; <at_unix> is when it arrived here.
+    """
+    ours_sec = (at_unix + VANA_OFFSET + VANA_FINE_TUNE) * VANA_SPEED
+    error_vana = server_vana_min * 60.0 - ours_sec
+    # In earth seconds: what our epoch is out by.
+    error_earth = error_vana / VANA_SPEED
+    # NO CAP ON THIS ONE, unlike the PC-clock reading.
+    #
+    # This is the server stating the Vana'diel time outright -- it IS
+    # the answer, not a hint about it. Capping it at five minutes was
+    # wrong: if the epoch constant this overlay was built on is off by
+    # more than that, the cap threw away the only reading that could
+    # have revealed it, and the display stayed wrong while the logs
+    # said the clock had been corrected.
+    print("[OmniWatch] game clock: server says %d vana min, we said %.0f "
+          "(%+.1fs of ours)"
+          % (server_vana_min, ours_sec / 60.0, error_earth))
+    _vana_apply_error(error_earth, at_unix, cap=None)
+
+
+def _vana_apply_error(error_earth, at_unix, cap=300.0):
+    """Fold a measured error into the running correction.
+
+    Averaged in rather than snapped to, for two reasons: one odd reading
+    cannot jerk the clock, and the game reports WHOLE Vana minutes --
+    2.4 earth seconds apiece -- so any single reading is quantised by up
+    to a second either way. Averaging removes that.
+    """
+    global vana_auto_offset_sec, _vana_last_sync
+    if cap is not None and abs(error_earth) > cap:
+        return
+    if _vana_last_sync <= 0:
+        vana_auto_offset_sec = error_earth
+        print("[OmniWatch] game clock: %+.1fs out, correcting" % error_earth)
+    else:
+        vana_auto_offset_sec = (vana_auto_offset_sec * 0.7
+                                + error_earth * 0.3)
+    _vana_last_sync = at_unix
+
+
+_vstamp_logged = [0]
+
+
+def vana_clock_observed_stamp(server_unix, at_unix):
+    """Correct from the SERVER'S OWN clock, which the zone packet carries.
+
+    The cleanest reading of the two by a distance: no Vana'diel
+    arithmetic and no quantising to whole minutes. The gap between the
+    server's timestamp and this machine's IS the drift, in earth
+    seconds, exactly.
+    """
+    delta = float(server_unix - at_unix)
+    # Said out loud the first few times. Whether the field really is a
+    # unix time on retail is not something to assume, and a silent
+    # rejection would look exactly like the packet never arriving.
+    if _vstamp_logged[0] < 3:
+        _vstamp_logged[0] += 1
+        print("[OmniWatch] clock: server stamp %d, local %d, delta %+.0fs"
+              % (server_unix, at_unix, delta))
+    if abs(delta) > 300.0:
+        return
+    # A DEADBAND, because this reading is COARSER THAN THE ERROR.
+    #
+    # Both timestamps are whole seconds, so the delta is quantised to
+    # +/-1 earth second -- 25 Vana'diel seconds. Correcting by it when
+    # the clock is already good does not remove drift, it adds up to
+    # half a Vana'diel minute of noise, and it fought the fine-tune
+    # constant every time a zone line was crossed. Below two seconds
+    # the PC clock is doing fine and this reading has nothing useful
+    # to say.
+    if abs(delta) < 2.0:
+        if vana_auto_offset_sec:
+            print("[OmniWatch] game clock: back in step, correction cleared")
+        globals()["vana_auto_offset_sec"] = 0.0
+        globals()["_vana_last_sync"] = at_unix
+        return
+    _vana_apply_error(delta, at_unix)
+
+
+_clock_banner = [False]
+
+
 def get_vana_time():
     """Return (hours, minutes, day_name, moon_pct, moon_phase_name).
 
@@ -716,7 +824,7 @@ def get_vana_time():
     sync with whatever the user has dialed in — no extra plumbing
     needed elsewhere.
     """
-    now_sec          = time.time()
+    now_sec          = time.time() + vana_auto_offset_sec
     vana_sec         = (now_sec + VANA_OFFSET + VANA_FINE_TUNE) * VANA_SPEED
     # User adjustment in Vana minutes → Vana seconds. Read via the
     # `setting()` helper which falls back to schema default if the
@@ -727,6 +835,15 @@ def get_vana_time():
     except Exception:
         user_offset_min = 0
     vana_sec += user_offset_min * 60
+    # Said once, at the first reading. Two constants and a saved
+    # setting all move this clock, and without knowing which build is
+    # running and what the setting holds, a reported "still N seconds
+    # out" cannot be acted on.
+    if not _clock_banner[0]:
+        _clock_banner[0] = True
+        print("[OmniWatch] clock: fine-tune %.2fs, user offset %d vana min, "
+              "auto %+.2fs" % (VANA_FINE_TUNE, user_offset_min,
+                               vana_auto_offset_sec))
     day_of_year      = int(vana_sec // SECS_PER_DAY)
     secs_in_day      = vana_sec - day_of_year * SECS_PER_DAY
     hours            = int(secs_in_day // 3600)
@@ -3254,6 +3371,10 @@ def _sim_food_tooltip_info(food_id):
     return None
 
 gearswap_gil   = -1      # -1 = never received; >= 0 = real value
+def currency_shown(key):
+    """A currency's value as the header shows it."""
+    return currency_state.get(key, 0)
+
 
 # Setup mode: when True, all panels render with mock data + drag handles
 # regardless of in-game state. Toggled via //ow setup. See draw_setup_*
@@ -7936,6 +8057,30 @@ click_targets   = []
 # Stats panel click regions (only populated in setup mode):
 # Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click toggles hidden.
 _stats_cell_click_rects = []
+def _hotbar_hit_visible(mx, my):
+    """True when this point is on a hotbar button you can actually see.
+
+    The hotbar draws early, so its rects answer "yes" for points that a
+    later window has since covered -- which is why this asks whether the
+    point is covered before saying yes. A press on a covered button must
+    go to the window on top, and a press on an uncovered one must reach
+    the button even with a window open elsewhere on screen.
+    """
+    try:
+        if _hotbar_tooltip_blocked((mx, my)):
+            return False
+        for _rect, _payload in (buttons_rects or ()):
+            if _rect.collidepoint(mx, my):
+                return True
+        for _entries in (buttons_panel_rects or {}).values():
+            for _rect, _payload in _entries:
+                if _rect.collidepoint(mx, my):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def _overlay_blocks_point(pos):
     """True when a floating button or popover covers this point.
 
@@ -8035,6 +8180,47 @@ _SCREEN_MODAL_FLAGS = (
     "profile_name_modal_open", "clock_modal_open",
     "checklist_modal_open", "campaigns_modal_open", "sim_import_open",
 )
+
+
+# The modals that are WINDOWS rather than full-screen surfaces, and the
+# global holding each one's frame. A window only covers the part of the
+# screen it occupies, so the hotbar underneath the rest of it should still
+# work -- having a checklist open on one side of the screen is no reason
+# for the buttons on the other side to stop responding.
+_WINDOW_MODAL_RECTS = (
+    ("checklist_modal_open", "_checklist_modal_rect"),
+    ("campaigns_modal_open", "_campaigns_modal_rect"),
+)
+
+
+def _modal_covers_point(pos):
+    """True when an open modal actually covers this point.
+
+    Full-screen surfaces cover everything; the window-shaped ones are
+    asked about their own frame. A modal whose rect has not been drawn
+    yet counts as covering, since its position is unknown.
+    """
+    for _flag in _SCREEN_MODAL_FLAGS:
+        if not globals().get(_flag):
+            continue
+        rect_name = dict(_WINDOW_MODAL_RECTS).get(_flag)
+        if rect_name is None:
+            return True
+        r = globals().get(rect_name)
+        if r is None or r.collidepoint(pos):
+            return True
+    try:
+        for _sst in _subdialog_states.values():
+            # A Configure box is a window with a dimming backdrop, not a
+            # full-screen surface. It covers what it covers; the hotbar
+            # showing through the dim should still work.
+            if _sst.get("open"):
+                pr = _sst.get("panel_rect")
+                if pr is None or pr.collidepoint(pos):
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def _screen_modal_open():
@@ -8524,7 +8710,7 @@ def _hotbar_tooltip_blocked(pos):
     drawn above those windows too -- so the hover has to be refused at
     the source instead.
     """
-    if _screen_modal_open():
+    if _modal_covers_point(pos):
         return True
     if _overlay_blocks_point(pos):
         return True
@@ -13261,6 +13447,33 @@ SETTINGS_SCHEMA = [
                    "Ctrl+Shift+F (Fishing).",
     },
     {
+        "key":     "open_alerts",
+        "label":   "Alerts",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_alerts_settings",
+        "help":    "Things you want to be told about when the moment "
+                   "comes. Each alert is a message and one trigger -- a "
+                   "time of day, a day of the week, a zone you enter, a "
+                   "Vana'diel moon phase or weekday. When it fires the "
+                   "panel opens, the message is listed and the machine "
+                   "beeps. Dismiss clears that firing and leaves the "
+                   "alert armed for next time; the x deletes it.",
+    },
+    {
+        "key":     "alerts_enabled",
+        "label":   "(internal) alerts armed",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Whether alerts are watched for and allowed to open "
+                   "the panel on their own. Off keeps the list and stops "
+                   "the watching.",
+    },
+    {
         "key":     "minimap_settings",
         "label":   "Minimap",
         "kind":    "button",
@@ -13287,6 +13500,16 @@ SETTINGS_SCHEMA = [
         "help":    "Whether the minimap window is up. Set from its "
                    "Configure box or a hotbar slot; remembered between "
                    "sessions.",
+    },
+    {
+        "key":     "show_alerts",
+        "label":   "(internal) alerts panel shown",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Whether the alerts panel is on screen. An alert "
+                   "firing turns this on by itself.",
     },
     {
         "key":     "minimap_opacity",
@@ -15129,6 +15352,7 @@ _SETTINGS_ACTIONS = {
     "open_auction":            lambda: _toggle_ah_panel(),
     "open_treasure":           lambda: _toggle_pool_panel(),
     "open_minimap_settings":   lambda: _open_subdialog("minimap"),
+    "open_alerts_settings":    lambda: _open_subdialog("alerts"),
     "edit_alert_sections":     lambda: _open_alert_editor(),
     "open_autora":             lambda: _open_autora(),
 }
@@ -15168,7 +15392,9 @@ def apply_setting_side_effects(key, value):
     """
     global dps_panel_visible, buttons_panel_visible, chat_panel_visible
     global skillchain_panel_visible
-    global minimap_open
+    global minimap_open, alerts_open
+    if key == "show_alerts":
+        alerts_open = bool(value)
     if key == "show_minimap":
         # One switch, two places to flip it. Whichever moved, the window
         # and the entity stream follow from here.
@@ -21753,6 +21979,7 @@ _JEUNO_QUESTS_MASTER = [
     "Apocalypse Nigh",
     "Atop the Highest Mountains",
     "Axe the Competition",
+    "Beam Me Up...No, Not There!",
     "Beat Around the Bushin",
     "Beyond Infinity",
     "Beyond the Stars",
@@ -21792,6 +22019,7 @@ _JEUNO_QUESTS_MASTER = [
     "Expanding Horizons",
     "Fistful of Fury",
     "Full Speed Ahead!",
+    "Further Founts",
     "Girl in the Looking Glass",
     "Hook, Line, and Sinker",
     "In Defiant Challenge",
@@ -21799,14 +22027,24 @@ _JEUNO_QUESTS_MASTER = [
     "Lakeside Minuet",
     "Lure of the Wildcat (Jeuno)",
     "Martial Mastery",
+    "Middle Lands Investigation",
     "Mirror Images",
     "Mirror, Mirror",
     "Mixed Signals",
     "Mysteries of Beadeaux I",
     "Mysteries of Beadeaux II",
+    "Mystery of Darkness",
+    "Mystery of Earth",
+    "Mystery of Fire",
+    "Mystery of Ice",
+    "Mystery of Light",
+    "Mystery of Lightning",
+    "Mystery of Water",
+    "Mystery of Wind",
     "Never to Return",
     "New Worlds Await",
     "Northward",
+    "Now Recording...",
     "Painful Memory",
     "Past Reflections",
     "Path of the Bard",
@@ -21814,6 +22052,7 @@ _JEUNO_QUESTS_MASTER = [
     "Prelude to Puissance",
     "Pretty Little Things",
     "Regaining Trust",
+    "Researchers from the West",
     "Riding on the Clouds",
     "Rubbish Day",
     "Save My Sister",
@@ -21823,11 +22062,14 @@ _JEUNO_QUESTS_MASTER = [
     "Searching for the Right Words",
     "Shadows of the Departed",
     "Shattering Stars",
+    "Shifty Shades of Prey",
     "Storms of Fate",
+    "Teleports by Twilight",
     "Tenshodo Membership",
     "The Antique Collector",
     "The Circle of Time",
     "The Clockmaster",
+    "The Flying Machine of Eld",
     "The Gobbiebag Part I",
     "The Gobbiebag Part II",
     "The Gobbiebag Part III",
@@ -21848,6 +22090,7 @@ _JEUNO_QUESTS_MASTER = [
     "The Road to Divadom",
     "The Unfinished Waltz",
     "The Wonder Magic Set",
+    "To Kill Mocking Birds",
     "Unlisted Qualities",
     "VW Op. #115: Valkurm Duster",
     "VW Op. #118: Buburimu Squall",
@@ -22004,6 +22247,7 @@ _ADOULIN_QUESTS_MASTER = [
     "Don't Ever Leaf Me",
     "Elementary, My Dear Sylvie",
     "Empty Nest",
+    "Endeavoring to Awaken",
     "Epiphany",
     "Exotic Delicacies",
     "Eye of the Beholder",
@@ -22040,6 +22284,7 @@ _ADOULIN_QUESTS_MASTER = [
     "Order Up",
     "Orobon Appetit",
     "Poisoning the Well",
+    "Quiescence",
     "Raptor Rapture",
     "Rune Fencing the Night Away",
     "Saved by the Bell",
@@ -22053,6 +22298,7 @@ _ADOULIN_QUESTS_MASTER = [
     "The Longest Way Round...",
     "The Old Man and the Harpoon",
     "The Secret to Success",
+    "The Silent Forest",
     "The Starving",
     "The Weatherspoon Inquisition",
     "The Weatherspoon War",
@@ -22073,6 +22319,7 @@ _ADOULIN_QUESTS_MASTER = [
     "Wayward Waypoints",
     "Wes...Eastern Waypoints, Ho!",
     "Western Waypoints, Ho!",
+    "Winds of Eternity",
 ]
 
 
@@ -22191,6 +22438,7 @@ _OUTLANDS_QUESTS_MASTER = [
     "Even More Gullible's Travels",
     "Everyone's Grudge",
     "Everyone's Grudging",
+    "Fish Favors the Bold",
     "Forge Your Destiny",
     "Greetings to the Guardian",
     "Gullible's Travels",
@@ -22207,6 +22455,7 @@ _OUTLANDS_QUESTS_MASTER = [
     "Skyward Ho, Voidwatcher!",
     "Soul Searching",
     "Stop Your Whining",
+    "Thanks for All the Fish",
     "The Firebloom Tree",
     "The Immortal Lu Shang",
     "The Kuftal Tour",
@@ -22214,6 +22463,7 @@ _OUTLANDS_QUESTS_MASTER = [
     "The Opo-opo and I",
     "The Potential Within",
     "The Sacred Katana",
+    "The Sahagin's Key",
     "The Sahagin's Stash",
     "The Search for Goldmane",
     "Trial by Fire",
@@ -22284,12 +22534,12 @@ _CRYSTAL_WAR_QUESTS_MASTER = [
     "Healing Herbs",
     "Her Memories: Azure Footfalls",
     "Her Memories: Carnelian Footfalls",
+    "Her Memories: Grave Resolve",
     "Her Memories: Homecoming Queen",
     "Her Memories: Of Malign Maladies",
     "Her Memories: Old Bean",
     "Her Memories: Operation Cupid",
     "Her Memories: The Faux Pas",
-    "Her Memories: The Grave Resolve",
     "Her Memories: Verdure Footfalls",
     "Honor Under Fire",
     "Howl from the Heavens",
@@ -23943,6 +24193,10 @@ def _checklist_load():
     # with any current or future category key.
     if isinstance(data.get("_achievement_completed"), bool):
         _achievement_unlocked = data["_achievement_completed"]
+
+
+# [category key, when armed] for the header's tick-everything control.
+_checklist_bulk_arm = [None, 0.0]
 
 
 def _checklist_toggle_manual(item_key):
@@ -26111,7 +26365,10 @@ def _current_vana_seconds():
     integer: seconds since VD epoch. Mirrors get_vana_time()'s offset
     handling so the transport countdowns stay aligned with whatever
     the clock header shows. Pure math, no I/O."""
-    now_sec = time.time()
+    # The auto correction belongs here too: the transports are timed off
+    # the same clock the header shows, and leaving it out let the two
+    # disagree by whatever the correction was worth.
+    now_sec = time.time() + vana_auto_offset_sec
     vana_sec = (now_sec + VANA_OFFSET + VANA_FINE_TUNE) * VANA_SPEED
     try:
         user_offset_min = int(setting("vana_time_offset_min") or 0)
@@ -33425,7 +33682,45 @@ def _dev_panel_input_blocked():
         or display_settings_modal_open or header_settings_modal_open
         or inventory_settings_modal_open or statistics_settings_modal_open
         or alert_editor_open
+        # ...AND ANY CONFIGURE BOX THE CURSOR IS OVER.
+        #
+        # The list above is hand-maintained and covers the full-screen
+        # surfaces. A Configure box is a window: it draws last, so it is
+        # on top, but its handler runs LATE in the event loop, after the
+        # Marketplace and the rest. Whichever handler is asked first used
+        # to win, so a Configure box opened over the Marketplace could be
+        # looked at but not clicked. Asking whether the box covers the
+        # cursor puts priority back where it belongs -- on what is
+        # painted on top -- without reordering the whole chain.
+        or _subdialog_covers_mouse()
     )
+
+
+def _subdialog_covers_mouse():
+    """True when an open Configure box is under the cursor.
+
+    THE HOTBAR IS THE EXCEPTION to "whatever is on top wins". Those
+    buttons are how you play, and a settings box open in a corner must
+    never take them away -- so a press on a hotbar button you can still
+    see belongs to the button, whatever else is open elsewhere. A button
+    genuinely underneath the box is covered and stays blocked, which
+    _hotbar_hit_visible already accounts for.
+    """
+    try:
+        pos = _mouse_pos()
+        if _hotbar_hit_visible(pos[0], pos[1]):
+            return False
+        for _sst in _subdialog_states.values():
+            if not _sst.get("open"):
+                continue
+            pr = _sst.get("panel_rect")
+            # Not yet drawn: assume it covers, so nothing leaks through
+            # on its first frame.
+            if pr is None or pr.collidepoint(pos):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _blusets_handle_event(event):
@@ -35982,10 +36277,17 @@ def _field_begin_drag(field, text, mouse_x, rect, get_text, key=None):
     _field_drag = {"field": field, "get": get_text, "rect": rect}
 
 
+# Every text field in the overlay, so "is the keyboard busy here?" can
+# be answered without each panel having to remember to say so. A field
+# added tomorrow is covered the moment it is constructed.
+_ALL_TEXT_FIELDS = []
+
+
 class _TextField:
     """Small pygame text editor: cursor, selection, filtering and drawing."""
 
     def __init__(self, max_length=120, allowed=None):
+        _ALL_TEXT_FIELDS.append(self)
         self.max_length = max_length
         self.allowed = allowed
         self.focused = False
@@ -37037,10 +37339,13 @@ def _ah_fetch_combined(item_id, stack):
         return
     name = _ah_item_name(item_id)
     cat = _ah_item_cat(item_id)
-    if not cat:
-        _ah_hist_emit("%s can't be listed on the Auction House." % name)
-        return
-    catname = _AH_CATNAMES.get(cat, "category %d" % cat)
+    # AN UNKNOWN CATEGORY IS NOT PROOF OF ANYTHING. The bundled map has
+    # gaps -- ids 4904-4915 are missing outright, which is how a Scroll of
+    # Frazzle came to be reported as unlistable -- and the SALES HISTORY
+    # does not need a category at all: it is queried by item id. So a
+    # missing category now costs the "how many are for sale" line and
+    # nothing else, rather than refusing the whole lookup on bad data.
+    catname = _AH_CATNAMES.get(cat, "category %d" % cat) if cat else None
     _ah_hist_busy = True
 
     def _worker():
@@ -37050,19 +37355,28 @@ def _ah_fetch_combined(item_id, stack):
             if not ip:
                 _ah_hist_emit("AH: search server not found. Use /search in-game once, then retry.")
                 return
-            items = _ah_cat_cache.get(cat)
+            items = None
+            if cat is not None:
+                items = _ah_cat_cache.get(cat)
+                if items is None:
+                    _ah_hist_emit("Checking %s\u2026" % catname)
+                    items = _ahsrch_query_category(ip, port, cat,
+                                                   timeout=8.0)["items"]
+                    _ah_note_search_ok()
+                    _ah_cat_cache[cat] = items
             if items is None:
-                _ah_hist_emit("Checking %s\u2026" % catname)
-                items = _ahsrch_query_category(ip, port, cat, timeout=8.0)["items"]
-                _ah_note_search_ok()
-                _ah_cat_cache[cat] = items
-            sa, st = items.get(item_id, (0xFFFFFFFF, 0xFFFFFFFF))
-            sd = "0" if sa == 0xFFFFFFFF else str(sa)
-            kd = "0" if st == 0xFFFFFFFF else str(st)
-            _ah_hist_emit([
-                ("%s " % name, (235, 205, 120)),
-                ("(%d) \u2014 %s Singles, %s Stacks For Sale" % (item_id, sd, kd),
-                 (190, 198, 212))])
+                _ah_hist_emit([
+                    ("%s " % name, (235, 205, 120)),
+                    ("(%d) \u2014 for-sale counts unavailable, no category "
+                     "on file" % item_id, (150, 156, 168))])
+            else:
+                sa, st = items.get(item_id, (0xFFFFFFFF, 0xFFFFFFFF))
+                sd = "0" if sa == 0xFFFFFFFF else str(sa)
+                kd = "0" if st == 0xFFFFFFFF else str(st)
+                _ah_hist_emit([
+                    ("%s " % name, (235, 205, 120)),
+                    ("(%d) \u2014 %s Singles, %s Stacks For Sale"
+                     % (item_id, sd, kd), (190, 198, 212))])
             res = _ahsrch_parse_history(_ahsrch_query_history(ip, port, item_id, stack))
             _ah_note_search_ok()
             if not res.get("ok") or not res["sales"]:
@@ -38136,7 +38450,15 @@ def _ah_fetch_avail(item_id, stack):
     name = _ah_item_name(item_id)
     cat = _ah_item_cat(item_id)
     if not cat:
-        _ah_hist_emit("%s can't be listed on the Auction House." % name)
+        # A COUNT NEEDS A CATEGORY -- the search server is asked for a
+        # category's listings and the item is looked up within it -- so
+        # this one genuinely cannot proceed. But the bundled map has gaps
+        # (4904-4915 among them), so say what is actually known instead
+        # of declaring the item unlistable on the strength of a missing
+        # row. The sales history still works: it is queried by item id.
+        _ah_hist_emit("%s (%d): no category on file, so the for-sale "
+                      "count is unavailable. The $ sales history still "
+                      "works." % (name, item_id))
         return
     catname = _AH_CATNAMES.get(cat, "category %d" % cat)
     _ah_hist_busy = True
@@ -38243,7 +38565,18 @@ def draw_ah_window(surface):
     pygame.draw.rect(surface, COL_EV_HEADER,
                      (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
     ts = fnt_b.render("Marketplace", True, COL_EV_TITLE)
+    # Your gil, in the title bar. Every tab here spends or earns it --
+    # bidding, listing, pricing a bazaar item, sending gil in the post --
+    # and checking it should not mean closing the window.
     surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    if gearswap_gil >= 0:
+        _gs = fnt_s.render("%s gil" % _ah_fmt_gil(gearswap_gil), True,
+                           (224, 206, 140))
+        # Right of the title, left of the close button, and only when it
+        # fits: a narrow window keeps its close button.
+        _gx = x + w - 24 - _gs.get_width()
+        if _gx > x + 12 + ts.get_width():
+            surface.blit(_gs, (_gx, y + (title_h - _gs.get_height()) // 2))
     close_r = pygame.Rect(x + w - 18, y + 3, 15, 15)
     pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
     xs = fnt_b.render("x", True, (220, 180, 180))
@@ -38524,14 +38857,24 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
             val = ah_state["edit_buf"] if editing else str(q[key])
             field(fr, val, _ah_edit_field if editing else None, "")
             _ah_rects["qf:%d:%s" % (qi, key)] = fr
-        # remove
-        rm = pygame.Rect(q_r.x + 366, qy, 16, qh - 3)
+        # Remove, PINNED TO THE RIGHT EDGE. It used to sit at a fixed
+        # 366px from the left, which falls outside the pane on anything
+        # but a wide window -- the button was clipped away and there was
+        # no way to take a row out of the queue.
+        rm = pygame.Rect(q_r.right - 22, qy, 16, qh - 3)
         btn(rm, "x", off_bg=(70, 40, 40), off_bd=(120, 70, 70), off_tx=(220, 180, 180))
         _ah_rects["qdel:%d" % qi] = rm
-        # status
+        # Status fills whatever is left between the last column and the
+        # button, and is cut rather than allowed to run underneath it.
         if q.get("status"):
-            surface.blit(fnt_s.render(q["status"], True, (180, 190, 160)),
-                         (q_r.x + 388, qy + 2))
+            _st_x = q_r.x + 366
+            _st_w = rm.x - 6 - _st_x
+            if _st_w > 20:
+                _st = q["status"]
+                while _st and fnt_s.size(_st)[0] > _st_w:
+                    _st = _st[:-1]
+                surface.blit(fnt_s.render(_st, True, (180, 190, 160)),
+                             (_st_x, qy + 2))
         qy += qh
     surface.set_clip(qclip)
 
@@ -38704,6 +39047,854 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
                                       (96, 102, 114)), (row.x + 4, row.y))
         fy += 15
 
+
+# === MOON TOOLTIP BEGIN ===
+# How long until each moon phase.
+#
+# The moon is not something the server rolls: the phase is a function of
+# the clock and nothing else, so every future phase can be calculated
+# rather than waited for. A Vana'diel day is 3456 earth seconds and a
+# lunar cycle is 84 of them -- 80.64 earth hours, a shade under three and
+# a half real days.
+#
+# Which matters because a quest that wants a full moon is no use to you
+# the moment it arrives if you are three zones away.
+# THE PHASE BOUNDARIES ARE NOT WRITTEN DOWN HERE ON PURPOSE.
+#
+# The first version of this carried its own table of which day each
+# phase starts on, and the numbers were wrong -- it announced a new moon
+# while the game showed a full one. The game's naming comes from
+# _moon_phase_name, which works off the PERCENTAGE with its own
+# thresholds, so any second table is a guess that can disagree with what
+# is on screen. Now the cycle is simply walked a day at a time and each
+# day named by that same function: it cannot drift from the header
+# because it is the header's own rule.
+_MOON_SEC_PER_VDAY = 86400.0 / 25.0
+header_moon_rect = None          # set by draw_header, read by the tooltip
+
+
+def _moon_phase_day_at(unix_t):
+    day_of_year = int(((unix_t + VANA_OFFSET) * 25) // 86400)
+    return day_of_year, (day_of_year + 26) % 84
+
+
+def _moon_name_on(phase_day):
+    pct = round(abs(42 - phase_day) * 100.0 / 42.0)
+    return _moon_phase_name(phase_day, pct)
+
+
+def _moon_current_name(now=None):
+    _vd, pday = _moon_phase_day_at(time.time() if now is None else now)
+    return _moon_name_on(pday)
+
+
+def _moon_next_times(now=None):
+    """[(phase name, seconds until it begins)], soonest first.
+
+    Walks the cycle forward a Vana'diel day at a time and reports the
+    first day each phase name appears. A phase running right now is
+    reported as its NEXT start, a cycle away -- "how long until it comes
+    round" is the question, and 0 for the current phase answers nothing.
+    """
+    now = time.time() if now is None else now
+    _vd, pday = _moon_phase_day_at(now)
+    into_day = ((now + VANA_OFFSET) * 25) % 86400 / 25.0
+    here = _moon_name_on(pday)
+    out, seen = [], {here}
+    for ahead in range(1, 85):
+        name = _moon_name_on((pday + ahead) % 84)
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append((name, ahead * _MOON_SEC_PER_VDAY - into_day))
+    # The phase you are in now comes round again after the others.
+    for ahead in range(1, 85):
+        if _moon_name_on((pday + ahead) % 84) == here:
+            continue
+        # First day that is NOT this phase; from there, find its return.
+        for back in range(ahead, 85):
+            if _moon_name_on((pday + back) % 84) == here:
+                out.append((here, back * _MOON_SEC_PER_VDAY - into_day))
+                break
+        break
+    out.sort(key=lambda r: r[1])
+    return out
+
+
+def _moon_until_text(secs, with_secs=False):
+    """How long until something. Seconds are optional because they are
+    noise on a 51-hour countdown and the whole answer on a short one."""
+    secs = max(0, int(secs))
+    h, m, sec = secs // 3600, (secs % 3600) // 60, secs % 60
+    if with_secs:
+        if h:
+            return "%dh %02dm %02ds" % (h, m, sec)
+        if m:
+            return "%dm %02ds" % (m, sec)
+        return "%ds" % sec
+    if h:
+        return "%dh %02dm" % (h, m)
+    return "%dm" % m
+
+
+def _vanaday_next_times(now=None):
+    """[(day name, seconds until it next begins)], soonest first.
+
+    The week is eight days of 3456 earth seconds. The day you are in is
+    reported as its NEXT start, a week away -- the same question the
+    moon tooltip answers.
+    """
+    now = time.time() if now is None else now
+    vday, _pday = _moon_phase_day_at(now)
+    into_day = ((now + VANA_OFFSET) * 25) % 86400 / 25.0
+    out = []
+    for ahead in range(1, 9):
+        name = VANA_DAYS[(vday + ahead) % 8]
+        out.append((name, ahead * _MOON_SEC_PER_VDAY - into_day))
+    out.sort(key=lambda r: r[1])
+    return out
+
+
+def draw_vanaday_tooltip(surface, mx, my, screen_w, screen_h):
+    """The hover: the week ahead, and when each day comes round."""
+    fnt = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    rows = _vanaday_next_times()
+    _vd, _pd = _moon_phase_day_at(time.time())
+    title = "%s now \u2014 next days" % VANA_DAYS[_vd % 8]
+    # Seconds shown here: a Vana'diel day is under an hour of real time,
+    # so minutes alone leave you guessing whether the next day is about
+    # to turn or nearly an hour off.
+    w = max(fnt_b.size(title)[0],
+            max(fnt.size("%s  %s" % (n, _moon_until_text(s, True)))[0]
+                for n, s in rows)) + 24
+    h = 20 + len(rows) * 15 + 6
+    x = min(mx + 14, screen_w - w - 4)
+    y = min(my + 16, screen_h - h - 4)
+    panel = pygame.Rect(x, y, w, h)
+    pygame.draw.rect(surface, (18, 20, 26), panel, border_radius=4)
+    pygame.draw.rect(surface, (92, 104, 128), panel, 1, border_radius=4)
+    surface.blit(fnt_b.render(title, True, (226, 228, 236)), (x + 7, y + 4))
+    ry = y + 20
+    for name, secs in rows:
+        # Each day in its own element colour, the same palette the
+        # header uses, so the list reads at a glance.
+        surface.blit(fnt.render(name, True,
+                                DAY_COLORS.get(name, (196, 204, 220))),
+                     (x + 7, ry))
+        _t = fnt.render(_moon_until_text(secs, True), True, (150, 190, 220))
+        surface.blit(_t, (x + w - 7 - _t.get_width(), ry))
+        ry += 15
+
+
+def draw_moon_tooltip(surface, mx, my, screen_w, screen_h):
+    """The hover: every phase and how long until it comes round."""
+    fnt = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    rows = _moon_next_times()
+    title = "%s now \u2014 next phases" % _moon_current_name()
+    w = max(fnt_b.size(title)[0],
+            max(fnt.size("%s  %s" % (n, _moon_until_text(s)))[0]
+                for n, s in rows)) + 24
+    h = 20 + len(rows) * 15 + 6
+    x = min(mx + 14, screen_w - w - 4)
+    y = min(my + 16, screen_h - h - 4)
+    panel = pygame.Rect(x, y, w, h)
+    pygame.draw.rect(surface, (18, 20, 26), panel, border_radius=4)
+    pygame.draw.rect(surface, (92, 104, 128), panel, 1, border_radius=4)
+    surface.blit(fnt_b.render(title, True, (226, 228, 236)), (x + 7, y + 4))
+    ry = y + 20
+    for name, secs in rows:
+        # Full is warm, New is dim, everything between sits in the
+        # middle -- the phase reads off the colour without needing to
+        # parse the words.
+        col = ((240, 226, 150) if name == "Full Moon"
+               else (120, 128, 142) if name == "New Moon"
+               else (196, 204, 220))
+        surface.blit(fnt.render(name, True, col), (x + 7, ry))
+        _t = fnt.render(_moon_until_text(secs), True, (150, 190, 220))
+        surface.blit(_t, (x + w - 7 - _t.get_width(), ry))
+        ry += 15
+# === MOON TOOLTIP END ===
+
+# === ALERTS BEGIN ===
+# Things you want to be told about, when the moment arrives.
+#
+# The case it exists for: a quest that needs a full moon. You will not be
+# watching the moon, and by the time it comes round you have forgotten. So
+# you write the alert once, and it finds you.
+#
+# An alert is a message plus ONE OR MORE triggers, ALL of which must be
+# true at once -- "in Gustaberg AND raining" is one alert with two
+# conditions, not two alerts. Stack them with + before pressing Add.
+#
+# When every trigger is true
+# the panel opens, the message is listed, and the machine beeps. Dismiss
+# clears that one; the alert stays on the list and can fire again next
+# time its trigger comes round, which is what you want for a weekly or a
+# moon phase. Remove deletes it for good.
+#
+# Triggers, all evaluated from data the overlay already has:
+#   time   HH:MM        earth clock, once per day
+#   day    mon..sun     earth weekday, at 00:00 or when first seen
+#   zone   <name>       on entering a zone whose name contains the text
+#   moon   <phase>      Vana'diel moon phase name, e.g. "full"
+#   vday   firesday..   Vana'diel weekday
+#   weather <name>      current zone weather, e.g. "fire" or "rain"
+# Anything unrecognised never fires, and says so in the row rather than
+# pretending to be armed.
+alerts_open = bool(setting("show_alerts"))
+alerts_list = []            # [{msg, conds:[{kind,arg}], fired_key, active}]
+alerts_pos = globals().get("alerts_pos") or [70, 150]
+_alerts_rects = {}
+_alerts_drag_off = None
+_alerts_draw_pos = [0, 0]
+_alerts_loaded = False
+_alerts_last_zone = None
+_ALERT_W, _ALERT_ROW = 330, 18
+_ALERT_KINDS = ("time", "day", "zone", "moon", "vday", "weather")
+# PICK, DO NOT GUESS. A weather alert for "water" matched nothing,
+# because Water is the ELEMENT and the weather is called Rain or Squall.
+# Anything with a known set of values is chosen from that set, so a
+# typo or a reasonable-but-wrong word cannot silently never fire.
+_ALERT_WEATHER_CHOICES = (
+    "fire", "water", "earth", "wind", "ice", "lightning", "light", "dark",
+    "sunshine", "clouds", "fog", "none",
+)
+_ALERT_CHOICES = {
+    "day":   ("mon", "tue", "wed", "thu", "fri", "sat", "sun"),
+    "vday":  ("firesday", "earthsday", "watersday", "windsday",
+              "iceday", "lightningday", "lightsday", "darksday"),
+    "moon":  ("full", "new", "first quarter", "last quarter",
+              "waxing gibbous", "waning gibbous",
+              "waxing crescent", "waning crescent"),
+    "weather": _ALERT_WEATHER_CHOICES,
+}
+_alert_msg_field = _TextField(max_length=64)
+_alert_arg_field = _TextField(max_length=24)
+alerts_msg_text = ""
+alerts_arg_text = ""
+alerts_kind_idx = 0
+# Conditions stacked with + and not yet added. Shown under the form so
+# a half-built alert is visible rather than remembered.
+alerts_pending = []
+
+
+def _alerts_path():
+    try:
+        return os.path.join(SETTINGS_DIR, "omniwatch_alerts.json")
+    except NameError:
+        return None
+
+
+def alerts_load():
+    global _alerts_loaded, alerts_list
+    if _alerts_loaded:
+        return
+    _alerts_loaded = True
+    path = _alerts_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        out = []
+        for row in (data.get("items") or []):
+            msg = str(row.get("msg") or "").strip()
+            if not msg:
+                continue
+            conds = []
+            for cnd in (row.get("conds") or []):
+                k = str(cnd.get("kind") or "")
+                if k:
+                    conds.append({"kind": k,
+                                  "arg": str(cnd.get("arg") or "")[:24]})
+            if not conds and row.get("kind"):
+                # The single-trigger shape this started as.
+                conds = [{"kind": str(row["kind"]),
+                          "arg": str(row.get("arg") or "")[:24]}]
+            if not conds:
+                continue
+            out.append({"msg": msg[:64], "conds": conds,
+                        "fired_key": str(row.get("fired_key") or ""),
+                        "active": False})
+        alerts_list = out
+    except Exception as e:
+        print(f"[OmniWatch] alerts load failed: {e!r}")
+
+
+def alerts_save():
+    path = _alerts_path()
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"items": [{k: a[k] for k in
+                                  ("msg", "conds", "fired_key")}
+                                 for a in alerts_list]}, f, indent=1)
+    except Exception as e:
+        print(f"[OmniWatch] alerts save failed: {e!r}")
+
+
+def _alert_beep():
+    """The same system beep the countdown uses: no mixer, no sound file,
+    works on a machine that has never been set up for audio."""
+    try:
+        if sys.platform.startswith("win"):
+            import winsound
+            winsound.Beep(880, 200)
+        else:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def _alert_due_key(alert, now=None):
+    """Every condition's key joined, or None if ANY is not currently
+    true. All of them have to hold at once -- that is what makes "in
+    Gustaberg and raining" a single alert."""
+    keys = []
+    for cnd in (alert.get("conds")
+                or [{"kind": alert.get("kind"), "arg": alert.get("arg")}]):
+        k = _alert_cond_key(cnd, now)
+        if not k:
+            return None
+        keys.append(k)
+    return "+".join(keys) if keys else None
+
+
+def _alert_cond_key(alert, now=None):
+    """The key identifying THIS occurrence, or None when not due.
+
+    Returning a key rather than a bare yes/no is what stops an alert
+    firing every frame for an hour: the key changes when the occurrence
+    does, so "already fired" is a comparison rather than a timer.
+    """
+    now = time.localtime(now if now is not None else time.time())
+    kind = (alert.get("kind") or "").lower()
+    arg = (alert.get("arg") or "").strip().lower()
+    if kind == "time":
+        # HH:MM, once each day, from the minute it passes.
+        try:
+            hh, mm = [int(x) for x in arg.replace(".", ":").split(":")[:2]]
+        except (ValueError, IndexError):
+            return None
+        if (now.tm_hour, now.tm_min) >= (hh, mm):
+            return "time-%04d%02d%02d" % (now.tm_year, now.tm_mon,
+                                          now.tm_mday)
+        return None
+    if kind == "day":
+        names = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        if arg[:3] not in names:
+            return None
+        if names[now.tm_wday] != arg[:3]:
+            return None
+        return "day-%04d%02d%02d" % (now.tm_year, now.tm_mon, now.tm_mday)
+    if kind == "zone":
+        # zone_NAME. Reading "zone" got an empty string every time, so a
+        # zone alert could never match anything.
+        zname = (zone_info.get("zone_name") or "")
+        if not arg or arg not in zname.lower():
+            return None
+        # Keyed on the ARRIVAL, not the zone: standing in a zone should
+        # alert once, not on a loop, but coming back later should alert
+        # again.
+        return "zone-%s-%s" % (zname.lower(), _alerts_last_zone_stamp())
+    if kind == "weather":
+        wid = zone_info.get("weather", 0)
+        name, _col = weather_display(wid)
+        name = (name or "").lower()
+        # The ELEMENT counts as a match as well as the name, so "water"
+        # catches Rain and Squall the way anyone would expect it to.
+        entry = WEATHER_TABLE.get(wid) or ()
+        element = (entry[1] or "").lower() if len(entry) > 1 else ""
+        if not arg or (arg not in name and arg != element):
+            return None
+        # Keyed on the weather AND the zone, so walking into another
+        # zone with the same weather alerts again, and standing in it
+        # does not.
+        return "weather-%s-%s" % (name, zone_info.get("zone_id"))
+    if kind in ("moon", "vday"):
+        # get_vana_time returns (hours, minutes, day name, moon %, phase).
+        try:
+            _h, _m, vday, moon_pct, moon_phase = get_vana_time()
+        except Exception:
+            return None
+        if kind == "moon":
+            phase = str(moon_phase or "").lower()
+            if not arg or arg not in phase:
+                return None
+            # Keyed on the phase, so it fires once as the phase arrives
+            # rather than every frame it lasts.
+            return "moon-%s" % phase
+        wd = str(vday or "").lower()
+        if not arg or not wd.startswith(arg[:4]):
+            return None
+        # Keyed on the Vana day AND the earth date, so a Firesday alert
+        # fires once per Firesday rather than once ever.
+        return "vday-%s-%04d%02d%02d-%d" % (wd, now.tm_year, now.tm_mon,
+                                            now.tm_mday, now.tm_hour // 2)
+    return None
+
+
+def _alerts_last_zone_stamp():
+    return str(_alerts_last_zone or 0)
+
+
+def alerts_tick():
+    """Fire anything whose moment has come. Cheap enough for every frame,
+    but called on a slow tick since none of these change quickly."""
+    global alerts_open, _alerts_last_zone
+    zid = zone_info.get("zone_id")
+    if zid != _alerts_last_zone:
+        _alerts_last_zone = zid
+    changed = False
+    for a in alerts_list:
+        if a.get("active"):
+            continue
+        key = _alert_due_key(a)
+        if key and key != a.get("fired_key"):
+            a["fired_key"] = key
+            a["active"] = True
+            alerts_open = True
+            try:
+                set_setting("show_alerts", True)
+            except Exception:
+                pass
+            _alert_beep()
+            changed = True
+            print("[OmniWatch] alert: %s" % a["msg"])
+    if changed:
+        alerts_save()
+
+
+def alerts_add(msg, conds):
+    msg = (msg or "").strip()
+    conds = [c for c in (conds or []) if c.get("kind") in _ALERT_KINDS]
+    if not msg or not conds:
+        return False
+    alerts_list.append({"msg": msg[:64], "conds": conds,
+                        "fired_key": "", "active": False})
+    alerts_save()
+    return True
+
+
+def alerts_remove(idx):
+    if 0 <= idx < len(alerts_list):
+        del alerts_list[idx]
+        alerts_save()
+
+
+def alerts_dismiss(idx):
+    """Clear the firing, keep the alert. A weekly or a moon phase should
+    come round again; that is the whole point of it being a trigger
+    rather than a note."""
+    if 0 <= idx < len(alerts_list):
+        alerts_list[idx]["active"] = False
+        if not any(a.get("active") for a in alerts_list):
+            globals()["alerts_open"] = False
+            try:
+                set_setting("show_alerts", False)
+            except Exception:
+                pass
+
+
+def _toggle_alerts():
+    """Flip the panel. The state is a SETTING, so the tick in the
+    Configure box and anything else that opens the panel are two
+    switches on one wire rather than two states that can disagree."""
+    alerts_load()
+    try:
+        set_setting("show_alerts", not bool(setting("show_alerts")))
+    except Exception:
+        globals()["alerts_open"] = not globals().get("alerts_open")
+
+
+def _alert_summary(a):
+    conds = (a.get("conds")
+             or [{"kind": a.get("kind"), "arg": a.get("arg")}])
+    return " + ".join(_alert_cond_summary(c) for c in conds)
+
+
+def _alert_cond_summary(a):
+    kind = a.get("kind", "")
+    arg = a.get("arg", "")
+    if kind not in _ALERT_KINDS:
+        return "never (unknown trigger)"
+    if kind == "time":
+        return "at %s" % (arg or "??:??")
+    if kind == "day":
+        return "on %s" % (arg or "?")
+    if kind == "zone":
+        return "in %s" % (arg or "?")
+    if kind == "moon":
+        return "%s moon" % (arg or "?")
+    if kind == "weather":
+        return "%s weather" % (arg or "?")
+    return "on %s" % (arg or "?")
+
+
+try:
+    alerts_load()
+except Exception as _e:
+    print(f"[OmniWatch] alerts load failed: {_e!r}")
+
+_alerts_tick_at = 0.0
+
+
+def alerts_maybe_tick():
+    """Check the triggers once a second. None of them -- a clock minute,
+    a weekday, a zone, a moon phase -- can change faster than that, and
+    an alert that arrives a second late has still arrived."""
+    global _alerts_tick_at
+    if not setting("alerts_enabled"):
+        return
+    now = time.time()
+    if now - _alerts_tick_at < 1.0:
+        return
+    _alerts_tick_at = now
+    try:
+        alerts_tick()
+    except Exception as e:
+        print(f"[OmniWatch] alerts tick failed: {e!r}")
+
+
+def _draw_alerts_alarm(surface, firing):
+    """The firing view: the message, and a way to make it stop.
+
+    When something has fired you want to READ it, not manage a list --
+    so the editor, the form and the alerts that are merely armed all
+    stay out of the way until you open the panel yourself.
+    """
+    global _alerts_draw_pos
+    fnt = get_font("Consolas", 15, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    rows = []
+    wide = 210
+    for i, a in firing:
+        t = a["msg"]
+        rows.append((i, t))
+        wide = max(wide, fnt.size(t)[0] + 90)
+    w = min(430, wide)
+    h = 24 + len(rows) * 24 + 6
+    x = _clamp_win_x(alerts_pos[0], w)
+    y = _clamp_win_y(alerts_pos[1], h, x)
+    _alerts_draw_pos = [x, y]
+    panel = pygame.Rect(x, y, w, h)
+    _alerts_rects["panel"] = panel
+
+    # A slow pulse on the border and the header. Hard to miss at the
+    # edge of vision, and it costs one sine a frame.
+    pulse = 0.5 + 0.5 * math.sin(time.time() * 3.4)
+    edge = (int(150 + 105 * pulse), int(110 + 70 * pulse), 60)
+    pygame.draw.rect(surface, (38, 30, 18), panel, border_radius=5)
+    pygame.draw.rect(surface, edge, panel, 3, border_radius=5)
+    pygame.draw.rect(surface, (int(70 + 40 * pulse), 52, 22),
+                     (x + 3, y + 3, w - 6, 18), border_radius=3)
+    surface.blit(fnt_s.render("ALERT", True, (255, 226, 160)), (x + 9, y + 5))
+    close_r = pygame.Rect(x + w - 18, y + 4, 14, 14)
+    pygame.draw.rect(surface, (86, 52, 44), close_r, border_radius=3)
+    surface.blit(fnt_s.render("x", True, (240, 205, 195)),
+                 (close_r.x + 4, close_r.y + 1))
+    _alerts_rects["close"] = close_r
+    _alerts_rects["title"] = pygame.Rect(x, y, w - 22, 20)
+
+    ry = y + 24
+    for i, text in rows:
+        dm = pygame.Rect(x + w - 66, ry + 2, 60, 18)
+        pygame.draw.rect(surface, (64, 84, 66), dm, border_radius=3)
+        pygame.draw.rect(surface, (110, 165, 115), dm, 1, border_radius=3)
+        _ds = fnt_s.render("Dismiss", True, (205, 240, 210))
+        surface.blit(_ds, (dm.centerx - _ds.get_width() // 2, dm.y + 3))
+        _alerts_rects["dis:%d" % i] = dm
+        msg = text
+        lim = dm.x - 10 - (x + 10)
+        if fnt.size(msg)[0] > lim:
+            while msg and fnt.size(msg + "\u2026")[0] > lim:
+                msg = msg[:-1]
+            msg += "\u2026"
+        surface.blit(fnt.render(msg, True, (255, 236, 186)), (x + 10, ry + 2))
+        ry += 24
+
+
+def draw_alerts_window(surface):
+    global _alerts_draw_pos
+    _alerts_rects.clear()
+    # SHOWN IN SETUP MODE whatever its open state, so it can be put where
+    # you want it before it ever fires. A panel you can only place while
+    # it happens to be up is a panel you place in a hurry.
+    if not (alerts_open or setup_mode):
+        return
+    # Something has fired: show that and nothing else.
+    _firing = [(i, a) for i, a in enumerate(alerts_list) if a.get("active")]
+    if _firing and not setup_mode:
+        _draw_alerts_alarm(surface, _firing)
+        return
+
+    fnt = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+
+    rows = max(1, len(alerts_list))
+    h = 22 + rows * _ALERT_ROW + 30 + (15 if alerts_pending else 0)
+    ghost = setup_mode and not alerts_open
+    w = _ALERT_W
+    x = _clamp_win_x(alerts_pos[0], w)
+    y = _clamp_win_y(alerts_pos[1], h, x)
+    _alerts_draw_pos = [x, y]
+    panel = pygame.Rect(x, y, w, h)
+    _alerts_rects["panel"] = panel
+    pygame.draw.rect(surface, COL_PANEL, panel, border_radius=4)
+    if ghost:
+        # Dimmed, and labelled, so it is clear this is placement rather
+        # than a live alert.
+        pygame.draw.rect(surface, (58, 66, 84), panel, 1, border_radius=4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel, 1, border_radius=4)
+    pygame.draw.rect(surface, COL_EV_HEADER, (x + 3, y + 1, w - 6, 17),
+                     border_radius=3)
+    surface.blit(fnt_b.render("Alerts" + (" (placement)" if ghost else ""),
+                              True, COL_EV_TITLE), (x + 8, y + 2))
+    close_r = pygame.Rect(x + w - 17, y + 2, 13, 13)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    surface.blit(fnt_s.render("x", True, (220, 180, 180)),
+                 (close_r.x + 4, close_r.y))
+    _alerts_rects["close"] = close_r
+    _alerts_rects["title"] = pygame.Rect(x, y, w - 20, 18)
+
+    ry = y + 21
+    if not alerts_list:
+        surface.blit(fnt_s.render("(no alerts set)", True, (120, 128, 142)),
+                     (x + 8, ry + 1))
+        ry += _ALERT_ROW
+    for i, a in enumerate(alerts_list):
+        row = pygame.Rect(x + 3, ry, w - 6, _ALERT_ROW - 1)
+        if a.get("active"):
+            pygame.draw.rect(surface, (58, 48, 28), row, border_radius=2)
+        elif i % 2:
+            pygame.draw.rect(surface, (26, 30, 38), row)
+        rm = pygame.Rect(row.right - 15, row.y + 2, 13, 13)
+        pygame.draw.rect(surface, (62, 44, 44), rm, border_radius=3)
+        surface.blit(fnt_s.render("x", True, (225, 180, 180)),
+                     (rm.x + 4, rm.y - 1))
+        _alerts_rects["del:%d" % i] = rm
+        right = rm.x - 4
+        if a.get("active"):
+            dm = pygame.Rect(right - 56, row.y + 2, 54, 13)
+            pygame.draw.rect(surface, (54, 70, 56), dm, border_radius=3)
+            pygame.draw.rect(surface, (95, 145, 100), dm, 1, border_radius=3)
+            _ds = fnt_s.render("Dismiss", True, (195, 230, 200))
+            surface.blit(_ds, (dm.centerx - _ds.get_width() // 2, dm.y - 1))
+            _alerts_rects["dis:%d" % i] = dm
+            right = dm.x - 4
+        else:
+            # The trigger summary takes at most half the row, so a
+            # two-condition alert cannot squeeze the message out of the
+            # panel -- which is what pushed text past the frame.
+            _wtxt = _alert_summary(a)
+            _wlim = max(60, (w - 40) // 2)
+            if fnt_s.size(_wtxt)[0] > _wlim:
+                while _wtxt and fnt_s.size(_wtxt + "\u2026")[0] > _wlim:
+                    _wtxt = _wtxt[:-1]
+                _wtxt += "\u2026"
+            _ws = fnt_s.render(_wtxt, True, (160, 168, 184))
+            surface.blit(_ws, (right - _ws.get_width(), ry + 1))
+            right -= _ws.get_width() + 4
+        msg = a["msg"]
+        lim = right - (row.x + 6)
+        if fnt.size(msg)[0] > lim:
+            while msg and fnt.size(msg + "\u2026")[0] > lim:
+                msg = msg[:-1]
+            msg += "\u2026"
+        surface.blit(fnt.render(msg, True,
+                                (250, 225, 160) if a.get("active")
+                                else (216, 222, 232)), (row.x + 6, ry))
+        ry += _ALERT_ROW
+
+    fy = ry + 4
+    if alerts_pending:
+        # Clipped to the frame: a third condition made this line longer
+        # than the panel and it ran off the edge.
+        _ptxt = "and: " + " + ".join(_alert_cond_summary(c)
+                                     for c in alerts_pending)
+        _lim = w - 12
+        if fnt_s.size(_ptxt)[0] > _lim:
+            while _ptxt and fnt_s.size(_ptxt + "\u2026")[0] > _lim:
+                _ptxt = _ptxt[:-1]
+            _ptxt += "\u2026"
+        surface.blit(fnt_s.render(_ptxt, True, (170, 190, 210)), (x + 6, fy))
+        fy += 15
+    mr = pygame.Rect(x + 4, fy, w - 194, 19)
+    kr = pygame.Rect(mr.right + 4, fy, 44, 19)
+    ar = pygame.Rect(kr.right + 4, fy, 72, 19)
+    plusr = pygame.Rect(ar.right + 4, fy, 18, 19)
+    addr = pygame.Rect(plusr.right + 4, fy, 38, 19)
+    _alert_msg_field.draw(surface, mr, alerts_msg_text, fnt_s, "message\u2026")
+    kind = _ALERT_KINDS[alerts_kind_idx % len(_ALERT_KINDS)]
+    pygame.draw.rect(surface, (40, 44, 54), kr, border_radius=3)
+    pygame.draw.rect(surface, (78, 86, 102), kr, 1, border_radius=3)
+    _ks = fnt_s.render(kind, True, (200, 210, 224))
+    surface.blit(_ks, (kr.centerx - _ks.get_width() // 2, kr.y + 3))
+    choices = _ALERT_CHOICES.get(kind)
+    if choices:
+        # A chooser, not a box: click to step through the real values.
+        pygame.draw.rect(surface, (34, 40, 52), ar, border_radius=3)
+        pygame.draw.rect(surface, (78, 86, 102), ar, 1, border_radius=3)
+        _cur = alerts_arg_text if alerts_arg_text in choices else choices[0]
+        _cs2 = fnt_s.render(_cur, True, (206, 216, 230))
+        if _cs2.get_width() > ar.width - 6:
+            _cs2 = fnt_s.render(_cur[:9] + "\u2026", True, (206, 216, 230))
+        surface.blit(_cs2, (ar.centerx - _cs2.get_width() // 2, ar.y + 3))
+    else:
+        _alert_arg_field.draw(surface, ar, alerts_arg_text, fnt_s,
+                              {"time": "18:00", "zone": "jeuno"}[kind])
+    pygame.draw.rect(surface, (44, 52, 66), plusr, border_radius=3)
+    pygame.draw.rect(surface, (84, 96, 116), plusr, 1, border_radius=3)
+    _pl = fnt_s.render("+", True, (200, 215, 235))
+    surface.blit(_pl, (plusr.centerx - _pl.get_width() // 2, plusr.y + 3))
+    pygame.draw.rect(surface, (50, 70, 52), addr, border_radius=3)
+    pygame.draw.rect(surface, (90, 140, 95), addr, 1, border_radius=3)
+    _as = fnt_s.render("Add", True, (195, 230, 200))
+    surface.blit(_as, (addr.centerx - _as.get_width() // 2, addr.y + 3))
+    _alerts_rects["msg"] = mr
+    _alerts_rects["kind"] = kr
+    _alerts_rects["arg"] = ar
+    _alerts_rects["plus"] = plusr
+    _alerts_rects["add"] = addr
+
+
+def _alerts_form_cond():
+    return {"kind": _ALERT_KINDS[alerts_kind_idx % len(_ALERT_KINDS)],
+            "arg": (alerts_arg_text or "").strip()}
+
+
+def _alerts_stack_cond():
+    """+ : hold this condition and clear the argument for the next one."""
+    global alerts_arg_text
+    if len(alerts_pending) < 4:
+        alerts_pending.append(_alerts_form_cond())
+        alerts_arg_text = ""
+        _alert_arg_field.blur()
+
+
+def _alerts_add_from_form():
+    global alerts_msg_text, alerts_arg_text
+    conds = list(alerts_pending)
+    # Whatever is in the boxes right now counts as the last condition,
+    # so a single-condition alert needs no + at all.
+    if (alerts_arg_text or "").strip() or not conds:
+        conds.append(_alerts_form_cond())
+    if alerts_add(alerts_msg_text, conds):
+        alerts_msg_text, alerts_arg_text = "", ""
+        del alerts_pending[:]
+        _alert_msg_field.blur()
+        _alert_arg_field.blur()
+
+
+def _alerts_handle_event(event):
+    global _alerts_drag_off, alerts_open, alerts_kind_idx
+    global alerts_msg_text, alerts_arg_text
+    if not (alerts_open or setup_mode):
+        return False
+    r = _alerts_rects
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            # On the alarm, the x means the same as Dismiss on every
+            # row: closing an alert you have not dealt with would just
+            # bring it back on the next tick.
+            for _i, _a in enumerate(alerts_list):
+                if _a.get("active"):
+                    alerts_dismiss(_i)
+            alerts_open = False
+            try:
+                set_setting("show_alerts", False)
+            except Exception:
+                pass
+            return True
+        for key, rect in list(r.items()):
+            if not rect.collidepoint(mx, my):
+                continue
+            if key.startswith("del:"):
+                alerts_remove(int(key.split(":")[1]))
+                return True
+            if key.startswith("dis:"):
+                alerts_dismiss(int(key.split(":")[1]))
+                return True
+        if r.get("kind") and r["kind"].collidepoint(mx, my):
+            alerts_kind_idx = (alerts_kind_idx + 1) % len(_ALERT_KINDS)
+            nk = _ALERT_KINDS[alerts_kind_idx]
+            ch = _ALERT_CHOICES.get(nk)
+            # Carrying "sun" over from a weekday into a weather alert
+            # would build something that never fires.
+            if ch:
+                if alerts_arg_text not in ch:
+                    alerts_arg_text = ch[0]
+            elif alerts_arg_text in sum(_ALERT_CHOICES.values(), ()):
+                alerts_arg_text = ""
+            return True
+        if r.get("plus") and r["plus"].collidepoint(mx, my):
+            _alerts_stack_cond()
+            return True
+        if r.get("add") and r["add"].collidepoint(mx, my):
+            _alerts_add_from_form()
+            return True
+        if r.get("msg") and r["msg"].collidepoint(mx, my):
+            _claim_overlay_text_focus()
+            _alert_msg_field.focus(alerts_msg_text, mx, r["msg"])
+            _alert_arg_field.blur()
+            return True
+        if r.get("arg") and r["arg"].collidepoint(mx, my):
+            kind = _ALERT_KINDS[alerts_kind_idx % len(_ALERT_KINDS)]
+            choices = _ALERT_CHOICES.get(kind)
+            if choices:
+                try:
+                    nxt = choices[(choices.index(alerts_arg_text) + 1)
+                                  % len(choices)]
+                except ValueError:
+                    nxt = choices[0]
+                alerts_arg_text = nxt
+                _alert_arg_field.blur()
+                return True
+            _claim_overlay_text_focus()
+            _alert_arg_field.focus(alerts_arg_text, mx, r["arg"])
+            _alert_msg_field.blur()
+            return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            alerts_pos[0], alerts_pos[1] = _alerts_draw_pos
+            _alerts_drag_off = (mx - alerts_pos[0], my - alerts_pos[1])
+            return True
+        if r.get("panel") and r["panel"].collidepoint(mx, my):
+            return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _alerts_drag_off is not None:
+            _alerts_drag_off = None
+            try:
+                save_layout()
+            except Exception:
+                pass
+    if event.type == pygame.MOUSEMOTION and _alerts_drag_off is not None:
+        alerts_pos[0] = event.pos[0] - _alerts_drag_off[0]
+        alerts_pos[1] = event.pos[1] - _alerts_drag_off[1]
+        return True
+    # BOTH KEYDOWN AND TEXTINPUT. Letters arrive as TEXTINPUT and the
+    # editing keys as KEYDOWN; listening for only the second is why the
+    # boxes took backspace and Enter but no actual typing.
+    if event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+        if _alert_msg_field.focused:
+            alerts_msg_text, act = _alert_msg_field.handle_event(
+                event, alerts_msg_text)
+            if act == "submit":
+                _alerts_add_from_form()
+            return True
+        if _alert_arg_field.focused:
+            alerts_arg_text, act = _alert_arg_field.handle_event(
+                event, alerts_arg_text)
+            if act == "submit":
+                _alerts_add_from_form()
+            return True
+    return False
+# === ALERTS END ===
 
 # === BAZAAR TAB BEGIN ===
 # The Bazaar tab of the AH window. Your own bazaar: what is in it, what it
@@ -39468,12 +40659,55 @@ def _ah_commit_edit():
 
 
 def _claim_overlay_text_focus():
-    """Give an overlay field exclusive ownership of keyboard text input."""
+    """Give an overlay field exclusive ownership of keyboard text input.
+
+    Clearing the composer's focus is not enough on its own. Type-anywhere
+    captures whenever FFXI is the FOREGROUND window, and clicking the
+    overlay deliberately does not take foreground -- so editing a hotbar
+    label put every keystroke into the chat draft as well, and the hook
+    swallowed backspace before the editor ever saw it. So the claim also
+    suspends the hook until the field is done with the keyboard.
+    """
     global chat_composer_focused, chat_composer_tell_to_focused
     global _gt_capturing_active
     chat_composer_focused = False
     chat_composer_tell_to_focused = False
     _gt_capturing_active = False
+    _gt_state["suspend"] = True
+
+
+def _release_overlay_text_focus():
+    """Hand the keyboard back to type-anywhere."""
+    _gt_state["suspend"] = False
+
+
+def _overlay_text_busy():
+    """Is an overlay field taking typing right now?
+
+    Asked of the fields themselves rather than tracked by each panel:
+    a panel that forgets to announce it has finished would leave the
+    keyboard captured forever, and one added later would never announce
+    at all.
+    """
+    try:
+        if hotbar_focused_field:
+            return True
+        for f in _ALL_TEXT_FIELDS:
+            if getattr(f, "focused", False):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _sync_overlay_text_focus():
+    """Keep the hook's suspend flag in step with the fields, once a
+    frame. This is what hands the keyboard BACK -- a field that loses
+    focus by any route, including a click elsewhere, releases it."""
+    busy = _overlay_text_busy()
+    if bool(_gt_state.get("suspend")) != busy:
+        _gt_state["suspend"] = busy
+        _gt_trace("suspend -> %s" % busy)
 
 
 def _ah_handle_event(event):
@@ -41088,17 +42322,40 @@ def draw_minimap_window(surface):
 
 
 def _minimap_handle_event(event):
-    global minimap_zoom, minimap_size
+    # minimap_zoom is rebound inside _zoom(), which declares it there.
+    global minimap_size
     global _minimap_drag_off, _minimap_resizing
     if not minimap_open:
         return False
+    # THE HOTBAR EDITOR WINS. Every part of the minimap frame is a drag
+    # handle, so a minimap sitting over the editor swallowed its SAVE
+    # button and the only way out was to move the panel. The editor is a
+    # deliberate, temporary mode -- while it is up, the minimap keeps out
+    # of the way.
+    if hotbar_edit_mode:
+        return False
     r = _minimap_rects
+
+    def _zoom(step_in):
+        global minimap_zoom
+        minimap_zoom = max(0.2, min(6.0, minimap_zoom
+                                    * (1.15 if step_in else 1 / 1.15)))
+        try:
+            save_layout()
+        except Exception:
+            pass
+        return True
+
+    # BOTH WHEEL CONVENTIONS. Buttons 4 and 5 are the old SDL1 spelling
+    # and simply never arrive here, so zoom only ever appeared to work in
+    # setup mode -- where the wheel resizes the panel instead, which looks
+    # like zooming. MOUSEWHEEL is what actually fires.
+    if event.type == pygame.MOUSEWHEEL:
+        if r.get("panel") and r["panel"].collidepoint(_mouse_pos()):
+            return _zoom(event.y > 0)
     if event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
-        if r.get("plot") and r["plot"].collidepoint(*event.pos):
-            minimap_zoom = max(0.2, min(6.0, minimap_zoom
-                                        * (1.15 if event.button == 4
-                                           else 1 / 1.15)))
-            return True
+        if r.get("panel") and r["panel"].collidepoint(*event.pos):
+            return _zoom(event.button == 4)
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
         mx, my = event.pos
         # Dots before the frame: the whole frame is the drag handle, so
@@ -46810,6 +48067,10 @@ def draw_warp_confirm(surface):
     warp_confirm_rects = [(warp_rect, "warp"), (cancel_rect, "cancel")]
 
 
+_moon_tip_pending = [None]
+_day_tip_pending = [None]
+
+
 def draw_header(surface, w):
     """Draw the game-clock header bar. Honors header_position: hy0 is the
     bar's top edge (0 at top, HEIGHT-HEADER_H at bottom). All vertical
@@ -46959,6 +48220,7 @@ def draw_header(surface, w):
     # Clear the clock click-rect first so a stale rect from a previous
     # frame can't fire click-routing when the time widget is hidden.
     global header_time_cycle_phase, header_time_cycle_last_advance
+    # header_moon_rect is set through globals() where it is measured.
     global header_clock_button_rect
     header_clock_button_rect = None
     if setting("show_time"):
@@ -47091,6 +48353,12 @@ def draw_header(surface, w):
         day_color = DAY_COLORS.get(day_name, COL_CLOCK)
         d_surf    = font_day.render(day_name, True, day_color)
         surface.blit(d_surf, (cx, cy - d_surf.get_height() // 2))
+        _day_rect = pygame.Rect(cx, hy0, d_surf.get_width(), hh)
+        if _day_rect.collidepoint(mx, my):
+            pygame.draw.rect(surface, (40, 44, 56), _day_rect,
+                             border_radius=3)
+            surface.blit(d_surf, (cx, cy - d_surf.get_height() // 2))
+            _day_tip_pending[0] = (mx, my)
         cx += d_surf.get_width() + _hs(18)
 
         # Divider.
@@ -47098,6 +48366,7 @@ def draw_header(surface, w):
         cx += _hs(14)
 
         # Moon phase + percent.
+        moon_lbl_x = cx
         moon_label = font_moon.render("Moon:", True, COL_LABEL_DIM)
         surface.blit(moon_label, (cx, cy - moon_label.get_height() // 2))
         cx += moon_label.get_width() + _hs(6)
@@ -47105,6 +48374,22 @@ def draw_header(surface, w):
         moon_str  = f"{moon_phase}  {moon_pct}%"
         m_surf    = font_moon.render(moon_str, True, COL_MOON)
         surface.blit(m_surf, (cx, cy - m_surf.get_height() // 2))
+        # The whole "Moon: <phase> <pct>" run is the hover target, label
+        # included -- aiming at the percentage alone would be fiddly.
+        #
+        # DRAWN HERE, not at the end of the frame: the header already
+        # has the cursor (it uses it for its own hover highlights) and
+        # it is drawn last, so this lands on top without a second
+        # coordinate system to get wrong.
+        globals()["header_moon_rect"] = pygame.Rect(
+            moon_lbl_x, hy0, (cx + m_surf.get_width()) - moon_lbl_x, hh)
+        if header_moon_rect.collidepoint(mx, my):
+            pygame.draw.rect(surface, (40, 44, 56), header_moon_rect,
+                             border_radius=3)
+            surface.blit(moon_label, (moon_lbl_x,
+                                      cy - moon_label.get_height() // 2))
+            surface.blit(m_surf, (cx, cy - m_surf.get_height() // 2))
+            _moon_tip_pending[0] = (mx, my)
         cx += m_surf.get_width()
 
     # ── Weather (right after moon, part of the left block) ────────────────
@@ -47294,7 +48579,7 @@ def draw_header(surface, w):
     if enabled_entries:
         max_w = 0
         for key, name in enabled_entries:
-            val = currency_state.get(key, 0)
+            val = currency_shown(key)
             val_str = f"{val:,}"
             num_surf = font_clock.render(val_str, True, cur_col)
             suf_surf = font_moon.render(f" {name}", True, cur_dim)
@@ -47389,7 +48674,7 @@ def draw_header(surface, w):
     # Render the current entry (or placeholder) inside the locked block.
     if enabled_entries:
         cur_key, cur_name = enabled_entries[currency_cycle_index]
-        cur_val = currency_state.get(cur_key, 0)
+        cur_val = currency_shown(cur_key)
         val_str = f"{cur_val:,}"
         num_surf = font_clock.render(val_str, True, cur_col)
         suf_surf = font_moon.render(f" {cur_name}", True, cur_dim)
@@ -52361,7 +53646,7 @@ def draw_currency_settings_modal(surface):
              cy_y + (ctrl_h - name_surf.get_height()) // 2))
         # Show the current value as a faint suffix so the user can
         # confirm at a glance that data is actually flowing.
-        cur_val = currency_state.get(key, 0)
+        cur_val = currency_shown(key)
         val_text = f"({cur_val:,})"
         val_s = small_font.render(val_text, True, (140, 145, 160))
         surface.blit(val_s,
@@ -54502,6 +55787,21 @@ _SUBDIALOG_CONFIGS = {
         ],
         "helpers": {},
     },
+    "alerts": {
+        "title":    "Alerts",
+        "subtitle": "Messages that find you when their moment comes: a "
+                    "time, a weekday, a zone, a moon phase, a Vana'diel "
+                    "day or the weather.",
+        "rows": [
+            ("show_alerts",    "Show the alerts panel", "bool"),
+            ("alerts_enabled", "Alerts armed",          "bool"),
+        ],
+        "helpers": {
+            "alerts_enabled":
+                "Off stops the watching and the beeping. The list is "
+                "kept either way.",
+        },
+    },
     "minimap": {
         "title":    "Minimap",
         "subtitle": "The minimap window, what it plots, and how solid "
@@ -54699,6 +55999,7 @@ def _draw_subdialog(surface, state_key):
          {"action": f"{state_key}_backdrop"}))
 
     panel = pygame.Rect(mx, my, mw, mh)
+    state["panel_rect"] = panel
     pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     state["rects"].append(
@@ -55078,6 +56379,41 @@ def draw_checklist_modal(surface):
          (rarrow_rect.right - 18, rarrow_rect.bottom - 4)])
     _checklist_click_rects.append(
         (rarrow_rect, {"action": "cl_arrow", "direction": +1}))
+
+    # TICK EVERYTHING, for the lists you keep by hand.
+    #
+    # Quests and missions run to a hundred rows an area and most players
+    # have done nearly all of the old ones, so the honest starting point
+    # is "all of them" minus a few, not an empty list clicked one row at
+    # a time. Offered only on those tabs: the auto-detected categories
+    # keep themselves.
+    _all_key = cat["key"]
+    _bulk_rect = None
+    if _all_key.startswith(("quests_", "missions_")):
+        _bulk_rows = [k for k, _lab in (cat.get("row_iter") or (lambda: []))()]
+        _bulk_set = checklist_known.get(_all_key, {}).get("manual", set())
+        _bulk_all = bool(_bulk_rows) and all(k in _bulk_set for k in _bulk_rows)
+        _bulk_rect = pygame.Rect(larrow_rect.right + 4, hdr_top + 8,
+                                 34, header_h - 16)
+        _armed = (_checklist_bulk_arm[0] == _all_key
+                  and time.time() - _checklist_bulk_arm[1] <= 4.0)
+        if _armed:
+            _bg, _fg, _txt = (96, 44, 44), (245, 205, 205), "Sure?"
+        elif _bulk_all:
+            _bg, _fg, _txt = (58, 70, 58), (190, 225, 190), "None"
+        else:
+            _bg, _fg, _txt = (44, 48, 58), (185, 195, 210), "All"
+        if _armed:
+            _bulk_rect.width = 44
+        pygame.draw.rect(surface, _bg, _bulk_rect, border_radius=3)
+        pygame.draw.rect(surface, (78, 86, 102), _bulk_rect, 1,
+                         border_radius=3)
+        _bs = count_font.render(_txt, True, _fg)
+        surface.blit(_bs, (_bulk_rect.centerx - _bs.get_width() // 2,
+                           _bulk_rect.centery - _bs.get_height() // 2))
+        _checklist_click_rects.append(
+            (_bulk_rect, {"action": "cl_all", "cat_key": _all_key,
+                          "clear": _bulk_all}))
 
     # Title centered between arrows, with a leading marker that tells
     # the user at a glance whether the category is auto-detected
@@ -55493,6 +56829,36 @@ def dispatch_checklist_modal_click(mx, my):
                 checklist_current_category = (
                     checklist_current_category + d) % n
                 checklist_scroll = 0
+            return True
+        if what == "cl_all":
+            # Two clicks: a hundred rows is too many to change by
+            # accident, and the second click is the confirmation.
+            cat_key = payload.get("cat_key")
+            if not cat_key:
+                return True
+            if (_checklist_bulk_arm[0] != cat_key
+                    or time.time() - _checklist_bulk_arm[1] > 4.0):
+                _checklist_bulk_arm[0] = cat_key
+                _checklist_bulk_arm[1] = time.time()
+                return True
+            _checklist_bulk_arm[0] = None
+            cat_now = _checklist_active_category()
+            rows = []
+            if cat_now and cat_now["key"] == cat_key:
+                rows = [k for k, _lab in (cat_now.get("row_iter")
+                                          or (lambda: []))()]
+            sets = checklist_known.setdefault(
+                cat_key, {"auto": set(), "manual": set()})
+            manual = sets.setdefault("manual", set())
+            if payload.get("clear"):
+                for k in rows:
+                    manual.discard(k)
+            else:
+                manual.update(rows)
+            try:
+                _checklist_save()
+            except Exception as e:
+                print(f"[OmniWatch] checklist bulk save failed: {e!r}")
             return True
         if what == "cl_box":
             # Click on the checkbox area — toggle the manual check.
@@ -68462,9 +69828,12 @@ def _return_keyboard_focus():
 OW_CAPTURE_EVENT = pygame.USEREVENT + 7
 
 
+# "suspend" is set while an overlay text field owns the keyboard. Read
+# by the hook thread every keystroke, so it takes effect immediately.
 _gt_state = {"capturing": False, "thread": None, "debug": False,
              "hook": None, "proc_ref": None, "vktrace": False,
-             "tid": None, "u32": None, "shutdown": False}
+             "tid": None, "u32": None, "shutdown": False,
+             "suspend": False}
 
 def _gt_trace(msg):
     """Type-anywhere trace -> session log, gated on global_typing_trace.
@@ -68669,9 +70038,18 @@ def _gt_hook_thread():
         # OFF and the hook passes everything straight through — you click
         # the input box to type, or type in-game normally. There is no
         # per-message trigger key: the menu toggle is the whole control.
+        # SUSPENDED means an overlay field owns the keyboard -- a hotbar
+        # label, an alert message, an auction price. Those are typed into
+        # the overlay, which never takes foreground, so without this the
+        # game still looks focused and every key would be captured out
+        # from under the field being edited.
         if _gt_state.get("shutdown") or nCode < 0 \
+                or _gt_state.get("suspend") \
                 or not setting("global_typing") \
                 or not setting("show_chat_composer"):
+            if _gt_state.get("capturing"):
+                _gt_state["capturing"] = False
+                _gt_post("cancel_silent")
             return u32.CallNextHookEx(None, nCode, wParam, lParam)
         try:
             kb = ctypes.cast(lParam,
@@ -69373,6 +70751,22 @@ while running:
             if not _ok:
                 continue
             if raw == "":
+                continue
+            if raw.startswith("VSTAMP|"):
+                _vs = raw.split("|")
+                if len(_vs) >= 3:
+                    try:
+                        vana_clock_observed_stamp(int(_vs[1]), int(_vs[2]))
+                    except ValueError:
+                        pass
+                continue
+            if raw.startswith("VTIME|"):
+                _vt = raw.split("|")
+                if len(_vt) >= 3:
+                    try:
+                        vana_clock_observed(int(_vt[1]), int(_vt[2]))
+                    except ValueError:
+                        pass
                 continue
             parts = raw.split("|")
             if len(parts) >= 6:
@@ -73875,6 +75269,12 @@ while running:
     # In auto-hide mode the bar overlays the panels and only draws while
     # revealed; otherwise it's always drawn. Refresh the reveal state from
     # the mouse first so the decision uses this frame's cursor position.
+    # Whoever owns the keyboard this frame owns it in the hook too.
+    try:
+        _sync_overlay_text_focus()
+    except Exception:
+        pass
+
     _update_header_reveal()
     if header_shown():
         draw_header(screen, WIDTH)
@@ -73981,6 +75381,8 @@ while running:
         draw_ah_window(screen)
         draw_pool_window(screen)
         draw_minimap_window(screen)
+        alerts_maybe_tick()
+        draw_alerts_window(screen)
     else:
         _ah_clear_rects()
         _pool_clear_rects()
@@ -74085,6 +75487,23 @@ while running:
     # drop-target highlight) — also above the modals so the carried
     # ghost is never hidden mid-drag.
     draw_hotbar_drag_overlay(screen)
+
+    # ── Moon hover: how long until each phase comes round ──
+    # The header stashes the cursor when it is over the moon; painting
+    # it here keeps it above every panel.
+    try:
+        _mtip = _moon_tip_pending[0]
+        _moon_tip_pending[0] = None
+        if _mtip is not None:
+            draw_moon_tooltip(screen, _mtip[0], _mtip[1],
+                              screen.get_width(), screen.get_height())
+        _dtip = _day_tip_pending[0]
+        _day_tip_pending[0] = None
+        if _dtip is not None:
+            draw_vanaday_tooltip(screen, _dtip[0], _dtip[1],
+                                 screen.get_width(), screen.get_height())
+    except Exception:
+        pass
 
     # ── Hotbar hover tooltip (stashed by draw_buttons_panel; drawn here
     # so it renders above panels, modals and the editor) ──
@@ -74606,6 +76025,10 @@ while running:
         elif (not _dev_panel_input_blocked()
                 and _alert_handle_event(event)):
             # Alert box: drag, and click a name to select / target.
+            pass
+        elif (not _dev_panel_input_blocked()
+                and _alerts_handle_event(event)):
+            # Alerts panel: drag, add, dismiss, remove.
             pass
         elif (not _dev_panel_input_blocked()
                 and _minimap_handle_event(event)):
@@ -75506,6 +76929,13 @@ while running:
             # via that path) but the loop is defensive.
             _ate_subdialog_click = False
             for _sk in _SUBDIALOG_CONFIGS:
+                if (_subdialog_states[_sk]["open"]
+                        and _hotbar_hit_visible(mx, my)):
+                    # A hotbar button you can still see is a button you
+                    # can still press. Otherwise this click lands on the
+                    # backdrop and closes the box you were working in --
+                    # which is what "I can't use my hotbars" meant.
+                    break
                 if _subdialog_states[_sk]["open"]:
                     dispatch_subdialog_consumed = _dispatch_subdialog(
                         _sk, mx, my)
@@ -75514,17 +76944,16 @@ while running:
             if _ate_subdialog_click:
                 continue
 
-            # Checklist modal — same modal pattern. Eats every click
-            # while open; row clicks toggle manual checks, arrow clicks
-            # cycle categories, backdrop closes.
-            if checklist_modal_open:
+            # Checklist and Campaigns are WINDOWS, not full-screen
+            # surfaces, so they take the clicks they actually cover and
+            # leave the hotbar alone underneath the rest of the screen.
+            # Eating every click meant a checklist open in one corner
+            # stopped every button in the other from firing.
+            if checklist_modal_open and not _hotbar_hit_visible(mx, my):
                 dispatch_checklist_modal_click(mx, my)
                 continue
 
-            # Campaigns modal — fetches PlayOnline's events feed. Eats
-            # every click while open; cards open the source URL,
-            # refresh button forces a fresh fetch, backdrop/X close.
-            if campaigns_modal_open:
+            if campaigns_modal_open and not _hotbar_hit_visible(mx, my):
                 dispatch_campaigns_modal_click(mx, my)
                 continue
 
@@ -77737,11 +79166,13 @@ while running:
                 chat_composer_tell_to_focused = False
                 _gt_capturing_active = True
             elif kind == "text":
-                if _gt_capturing_active or chat_composer_focused:
+                if (not _gt_state.get("suspend")
+                        and (_gt_capturing_active or chat_composer_focused)):
                     _chat_composer_handle_textinput(event.text)
             elif kind in ("backspace", "left", "right",
                           "submit", "clear"):
-                if _gt_capturing_active or chat_composer_focused:
+                if (not _gt_state.get("suspend")
+                        and (_gt_capturing_active or chat_composer_focused)):
                     _key = {"backspace": pygame.K_BACKSPACE,
                             "left": pygame.K_LEFT,
                             "right": pygame.K_RIGHT,
