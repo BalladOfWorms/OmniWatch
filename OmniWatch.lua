@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.14.1'
+_addon.version  = '1.14.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -6904,6 +6904,18 @@ ow_safe_register('incoming chunk', function(id, data)
     end
 end)
 
+-- A track REQUEST, whoever made it -- the game's own widescan Track
+-- button sends this same 0x0F5 (Index u16 @0x04; 0 = stop tracking), so
+-- forwarding it lets the minimap follow tracks started in the game, and
+-- drop the marker the moment the game cancels one.
+ow_safe_register('outgoing chunk', function(id, data)
+    if id ~= 0x0F5 or not data or #data < 6 then return end
+    local idx = (data:byte(0x04 + 1) or 0) + (data:byte(0x05 + 1) or 0) * 256
+    if udp_gs then
+        udp_gs:send(string.format('SZTRACKREQ|%d', idx))
+    end
+end)
+
 -- ════════════════════════════════════════════════════════════════════
 --  Scan Zone — live radar  (dev-mode feature)
 -- ════════════════════════════════════════════════════════════════════
@@ -12200,6 +12212,13 @@ local function _ow_drain_inbound()
                            or (sval == '1')
                 _ow_autora_halt_tp = not ig
             end
+            if skey == 'dps_window_seconds' then
+                -- The DPS Capture Time setting (0 = Encounter mode).
+                local n = tonumber(sval)
+                if n and n >= 0 and n <= 3600 then
+                    _ow_dps_set_window(math.floor(n))
+                end
+            end
             if skey == 'fisher_catch_limit' then
                 if _ow_fisher_set_opt then
                     _ow_fisher_set_opt('catch_limit', tonumber(sval) or 0)
@@ -13333,8 +13352,9 @@ local PW_COMMANDS_HELP = {
     {'dps party',             'Toggle whether party-member damage is '
                               .. 'tracked alongside your own.'},
     {'dps window',            '<seconds> -- set the DPS rolling window length '
-                              .. '(default 300). Pass 0 to keep all events '
-                              .. 'since the last reset (no rolling).'},
+                              .. '(default 300). Pass 0 for Encounter mode: '
+                              .. 'each fight is its own session and is '
+                              .. 'logged when the mob dies.'},
     {'dps status',            'Print DPS tracker diagnostics: how many '
                               .. 'actions we received, what categories, '
                               .. 'how many we classified as ours, and any '
@@ -15237,10 +15257,18 @@ ow_safe_register('addon command', function(command, ...)
         elseif sub == 'window' then
             local n = tonumber(args[2])
             if n and n >= 0 and n <= 3600 then
-                _ow_dps_window_s = (n == 0) and 36000 or n   -- 0 = effectively unbounded (10h)
-                ow_chat(207, string.format(
-                    '[OW] DPS window set to %ds.', _ow_dps_window_s))
-                _ow_dps_prune()
+                n = math.floor(n)
+                _ow_dps_set_window(n)
+                -- Tell python so the Capture Time setting follows, instead
+                -- of python pushing its own value back over this one.
+                udp_dps:send(_OW_MB_TAG('DPS_WINDOW|' .. n))
+                if n == 0 then
+                    ow_chat(207, '[OW] DPS set to Encounter mode: each '
+                        .. 'fight is tracked on its own and logged on the kill.')
+                else
+                    ow_chat(207, string.format(
+                        '[OW] DPS window set to %ds.', n))
+                end
             else
                 ow_chat(207,
                     '[OW] usage: //ow dps window <0..3600>')
@@ -16445,6 +16473,101 @@ end
 -- src is "me", "pet", or "<party_member_name>". Used for filtering in emit.
 _ow_dps_events       = _ow_dps_events       or {}    -- list of event tables
 _ow_dps_window_s     = _ow_dps_window_s     or 300   -- 5 minutes
+-- Encounter mode (Capture Time = Encounter, window 0 on the wire): instead
+-- of one rolling window, every mob the party fights is its own encounter.
+-- The panel shows the current fight -- every mob engaged since the last
+-- time nothing was being fought -- and keeps the finished fight up until
+-- the next one starts. When a mob dies, its own events are rolled up and
+-- sent to python as an ENCOUNTER_BEGIN / ENC_DPS / ENC_WS / ENCOUNTER_END
+-- block, which python writes to omniwatch_dps_log.csv / .json / .html.
+_ow_dps_encounter    = _ow_dps_encounter    or false
+_ow_enc_open         = _ow_enc_open         or {}    -- target_id -> {name, first, last}
+_ow_enc_shown        = _ow_enc_shown        or {}    -- target_id -> true (what the panel shows)
+_ow_enc_pending      = _ow_enc_pending      or {}    -- encounter lines waiting for the next emit
+_ow_enc_dead         = _ow_enc_dead         or {}    -- target_id -> time it was logged dead
+-- A message about a mob just after its death (a pet swing, a late spell)
+-- must not reopen it as a fresh fight and wipe the finished one off the
+-- panel. Short enough that a respawn under the same id still counts.
+ENC_DEAD_HOLD_S      = ENC_DEAD_HOLD_S or 30
+-- Most of your own actions an encounter's log keeps, so a long NM fight
+-- can't outgrow one UDP packet. Anything past this is counted, not listed.
+ENC_MAX_ACTS         = ENC_MAX_ACTS or 300
+
+-- ── Your gear, for the encounter log ─────────────────────────────────
+-- Equipment is tracked from the server's own 0x050 confirmations (index
+-- @0x04, equipment slot @0x05, bag @0x06), so what is recorded for an
+-- action is the set the server had on you when it landed. The precast
+-- / midcast swap is confirmed before the action's result arrives, and the
+-- aftercast swap only after, which is what makes this the right set.
+-- Each distinct set gets a small id; events carry the id, and the names
+-- travel once per encounter in ENC_GEAR lines.
+_OW_ENC_GEAR_SLOTS = {'main', 'sub', 'range', 'ammo', 'head', 'neck',
+    'left_ear', 'right_ear', 'body', 'hands', 'left_ring', 'right_ring',
+    'back', 'waist', 'legs', 'feet'}
+-- 0x050 slot number -> position in _OW_ENC_GEAR_SLOTS
+local _OW_EQ_SLOT_POS = { [0] = 1, [1] = 2, [2] = 3, [3] = 4, [4] = 5,
+    [9] = 6, [11] = 7, [12] = 8, [5] = 9, [6] = 10, [13] = 11, [14] = 12,
+    [15] = 13, [10] = 14, [7] = 15, [8] = 16 }
+_ow_eq_state  = _ow_eq_state  or nil   -- pos -> {bag, index}; nil until seeded
+_ow_gear_dirty = true
+_ow_gear_cur   = _ow_gear_cur  or nil   -- id of the set worn now
+_ow_gear_sigs  = _ow_gear_sigs or {}    -- names joined -> id
+_ow_gear_list  = _ow_gear_list or {}    -- id -> {16 names}
+
+local function _ow_eq_seed()
+    local items = windower.ffxi.get_items()
+    local eq = items and items.equipment
+    if not eq then return false end
+    local st = {}
+    for pos, slot in ipairs(_OW_ENC_GEAR_SLOTS) do
+        st[pos] = {eq[slot .. '_bag'] or 0, eq[slot] or 0}
+    end
+    _ow_eq_state = st
+    return true
+end
+
+ow_safe_register('incoming chunk', function(id, data)
+    if id ~= 0x050 or not data or #data < 7 then return end
+    local pos = _OW_EQ_SLOT_POS[data:byte(6)]
+    if not pos then return end
+    if not _ow_eq_state and not _ow_eq_seed() then return end
+    _ow_eq_state[pos] = {data:byte(7), data:byte(5)}
+    _ow_gear_dirty = true
+end)
+
+-- Id of the set you are wearing right now (nil if it can't be read).
+function _ow_gear_current()
+    if not _ow_gear_dirty and _ow_gear_cur then return _ow_gear_cur end
+    if not _ow_eq_state and not _ow_eq_seed() then return nil end
+    local names = {}
+    for pos = 1, #_OW_ENC_GEAR_SLOTS do
+        local e = _ow_eq_state[pos]
+        local nm = ''
+        if e and e[2] and e[2] ~= 0 then
+            local it = windower.ffxi.get_items(e[1], e[2])
+            local r = it and it.id and it.id ~= 0 and res.items[it.id]
+            nm = (r and (r.en or r.name)) or ''
+        end
+        names[pos] = (nm:gsub('[|\r\n]', ' '))
+    end
+    local sig = table.concat(names, '|')
+    local gid = _ow_gear_sigs[sig]
+    if not gid then
+        gid = #_ow_gear_list + 1
+        _ow_gear_list[gid] = names
+        _ow_gear_sigs[sig] = gid
+    end
+    _ow_gear_cur, _ow_gear_dirty = gid, false
+    return gid
+end
+
+-- Your event kinds that get the set recorded with them.
+local _OW_GEAR_KINDS = { melee_hit = true, melee_miss = true, ws = true,
+    ws_miss = true, magic_land = true, magic_resist = true }
+-- A mob nobody has touched (or been hit by) for this long is dropped
+-- without a log line: it walked off, the party zoned, or someone else
+-- finished it out of range. Only a witnessed death is logged.
+ENC_IDLE_S           = ENC_IDLE_S or 180
 _ow_dps_emit_acc     = _ow_dps_emit_acc     or 0     -- accumulator for 2 Hz emit throttling
 _ow_dps_last_event_ts= _ow_dps_last_event_ts or 0    -- for "active combat" detection (UI hint)
 -- Minimum span (seconds) the DPS divisor is floored to, so the very
@@ -16556,11 +16679,70 @@ function _ow_dps_record(ev)
     table.insert(_ow_dps_events, ev)
     _ow_dps_last_event_ts = ev.ts
     _ow_dps_recorded_events = (_ow_dps_recorded_events or 0) + 1
+    if _ow_dps_encounter and ev.src == 'me' and _OW_GEAR_KINDS[ev.kind] then
+        local ok, gid = pcall(_ow_gear_current)
+        if ok then ev.gear = gid end
+    end
+    if _ow_dps_encounter then
+        local tid = ev.target_id
+        local died = tid and _ow_enc_dead[tid]
+        if died and ev.ts - died > ENC_DEAD_HOLD_S then
+            _ow_enc_dead[tid] = nil
+            died = nil
+        end
+        if tid and tid ~= 0 and not died then
+            -- First action after every fight has ended starts a new one:
+            -- the finished fight leaves the panel now, not at the kill.
+            if next(_ow_enc_open) == nil then
+                _ow_enc_shown = {}
+            end
+            local e = _ow_enc_open[tid]
+            if not e then
+                e = {name = ev.target_name or '?', first = ev.ts}
+                _ow_enc_open[tid] = e
+            elseif e.name == '?' and ev.target_name and ev.target_name ~= '?' then
+                e.name = ev.target_name
+            end
+            e.last = ev.ts
+            _ow_enc_shown[tid] = true
+        end
+    end
+end
+
+-- Switch between a rolling window (n > 0 seconds) and Encounter mode
+-- (n == 0). Changing mode starts clean, so a window's worth of mixed
+-- events can't land in the first encounter's log.
+function _ow_dps_set_window(n)
+    local enc = (n == 0)
+    if enc ~= _ow_dps_encounter then
+        _ow_dps_encounter = enc
+        _ow_enc_open, _ow_enc_shown, _ow_enc_pending = {}, {}, {}
+        if enc then _ow_dps_events = {} end
+    end
+    -- Encounter mode keeps a long cap only as a backstop; the encounter
+    -- bookkeeping is what actually bounds the buffer.
+    _ow_dps_window_s = enc and 36000 or n
+    _ow_dps_prune()
 end
 
 -- Trim everything older than the rolling window. Cheap because events
 -- are timestamp-ordered.
 function _ow_dps_prune()
+    if _ow_dps_encounter then
+        -- Keep only events belonging to a live encounter or the fight on
+        -- the panel; everything else has been logged or abandoned.
+        local kept, dropped = {}, false
+        for _, ev in ipairs(_ow_dps_events) do
+            local tid = ev.target_id
+            if tid and (_ow_enc_open[tid] or _ow_enc_shown[tid]) then
+                kept[#kept + 1] = ev
+            else
+                dropped = true
+            end
+        end
+        if dropped then _ow_dps_events = kept end
+        return
+    end
     local cutoff = os.clock() - _ow_dps_window_s
     local first_keep = 1
     while first_keep <= #_ow_dps_events
@@ -16581,6 +16763,8 @@ end
 function _ow_dps_reset()
     _ow_dps_events = {}
     _ow_dps_last_event_ts = 0
+    _ow_enc_open, _ow_enc_shown, _ow_enc_pending = {}, {}, {}
+    _ow_enc_dead = {}
 end
 
 -- Hook called by handle_incoming_action — feeds DPS-relevant data in.
@@ -16794,7 +16978,7 @@ end
 -- Aggregator: walk events and produce the per-source rolled-up totals.
 -- Returns a nested table keyed by src_tag with all the metrics, plus
 -- a per-WS map and per-mob map.
-function _ow_dps_aggregate()
+function _ow_dps_aggregate(filter)
     _ow_dps_prune()
     local out = {}
     local ws_per_src   = {}    -- src → {ws_name → {count, total, best}}
@@ -16820,6 +17004,7 @@ function _ow_dps_aggregate()
     end
 
     for _, ev in ipairs(_ow_dps_events) do
+      if not filter or filter(ev) then
         local src = ev.src
         local b = bucket(src)
         -- Track the true combat span for this source: earliest and
@@ -16877,32 +17062,160 @@ function _ow_dps_aggregate()
             mm[mname] = r
             mob_per_src[src] = mm
         end
+      end
     end
     return out, ws_per_src, mob_per_src
 end
 
+-- Derived per-source numbers shared by the live DPS line and the
+-- encounter log, so a logged fight reads exactly as the panel showed it.
+-- cap: longest span the divisor may use (the rolling window), or nil.
+function _ow_dps_metrics(b, cap)
+    local total_swings = b.hits + b.misses
+    local melee_acc = total_swings > 0 and (b.hits / total_swings) * 100 or 0
+    local crit_pct  = b.hits > 0 and (b.crits / b.hits) * 100 or 0
+    local mag_attempts = b.spells_landed + b.spells_resisted
+    local mag_acc = mag_attempts > 0
+                    and (b.spells_landed / mag_attempts) * 100 or 0
+    local evasion = b.mob_swings_at > 0
+                    and (b.evaded / b.mob_swings_at) * 100 or 0
+    local total_dmg = b.white_total + b.ranged_total
+                      + b.magic_total + b.ws_total
+    local span = 0
+    if b.first_ts and b.last_ts and b.last_ts > b.first_ts then
+        span = b.last_ts - b.first_ts
+    end
+    if cap and span > cap then span = cap end
+    if span < DPS_MIN_SPAN then span = DPS_MIN_SPAN end
+    return melee_acc, mag_acc, crit_pct, evasion, total_dmg, total_dmg / span
+end
+
+-- A mob died. If it was a live encounter, roll up that mob's own events
+-- and queue the log block for the next emit (sending it inside the
+-- regular DPS packet keeps python from blanking the panel for a frame).
+-- A death the party did no damage to is dropped without a log line.
+function _ow_enc_close(tid)
+    if not _ow_dps_encounter or not tid or not _ow_enc_open[tid] then return end
+    local e = _ow_enc_open[tid]
+    _ow_enc_open[tid] = nil
+    _ow_enc_dead[tid] = os.clock()
+    local out, ws_per_src = _ow_dps_aggregate(function(ev)
+        return ev.target_id == tid
+    end)
+    local body, dealt = {}, 0
+    for src, b in pairs(out) do
+        local melee_acc, mag_acc, crit_pct, _, total_dmg, dps =
+            _ow_dps_metrics(b, nil)
+        if total_dmg > 0 or b.hits + b.misses + b.spells_landed
+                            + b.spells_resisted > 0 then
+            dealt = dealt + total_dmg
+            -- 'white' carries ranged too here: the log has no ranged
+            -- column, and this keeps white+magic+ws equal to total.
+            body[#body + 1] = string.format(
+                'ENC_DPS|%s|%d|%d|%d|%d|%d|%d|%d|%d|%.1f|%.1f|%.1f|%d|%d|%.1f|%d|%d',
+                src, b.white_total + b.ranged_total, b.magic_total,
+                b.ws_total, b.hits, b.misses, b.crits,
+                b.spells_landed, b.spells_resisted,
+                melee_acc, mag_acc, crit_pct,
+                b.longest_hit, total_dmg, dps, 0, 0)
+            for name, w in pairs(ws_per_src[src] or {}) do
+                body[#body + 1] = string.format('ENC_WS|%s|%s|%d|%d|%d',
+                    src, name, w.count, w.total, w.best)
+            end
+        end
+    end
+    if dealt <= 0 then return end
+    -- Your own actions on this mob, in order, each with the set it used;
+    -- and your melee summed into one line under the set worn most.
+    local acts, used, n_acts, more = {}, {}, 0, 0
+    local tp_count, tp_swings, tp_dmg = {}, 0, 0
+    for _, ev in ipairs(_ow_dps_events) do
+        if ev.target_id == tid and ev.src == 'me' then
+            local k = ev.kind
+            if k == 'melee_hit' or k == 'melee_miss' then
+                tp_swings = tp_swings + 1
+                tp_dmg = tp_dmg + (ev.value or 0)
+                if ev.gear then
+                    tp_count[ev.gear] = (tp_count[ev.gear] or 0) + 1
+                end
+            elseif k == 'ws' or k == 'ws_miss'
+                   or k == 'magic_land' or k == 'magic_resist' then
+                if n_acts >= ENC_MAX_ACTS then
+                    more = more + 1
+                else
+                    n_acts = n_acts + 1
+                    local tag = (k == 'ws' and 'ws') or (k == 'ws_miss' and 'miss')
+                                or (k == 'magic_land' and 'spell') or 'resist'
+                    local nm = (k:sub(1, 2) == 'ws') and ev.ws_name
+                               or ev.spell_name
+                    acts[#acts + 1] = string.format('ENC_ACT|%.1f|%s|%s|%d|%d',
+                        math.max(0, ev.ts - e.first), tag,
+                        ((nm or '?'):gsub('[|\r\n]', ' ')),
+                        ev.value or 0, ev.gear or 0)
+                    if ev.gear then used[ev.gear] = true end
+                end
+            end
+        end
+    end
+    local tp_gear, tp_best = 0, 0
+    for gid, c in pairs(tp_count) do
+        if c > tp_best then tp_gear, tp_best = gid, c end
+    end
+    if tp_gear ~= 0 then used[tp_gear] = true end
+    if tp_swings > 0 then
+        acts[#acts + 1] = string.format('ENC_TP|%d|%d|%d',
+            tp_gear, tp_swings, tp_dmg)
+    end
+    if more > 0 then acts[#acts + 1] = 'ENC_MORE|' .. more end
+    for gid in pairs(used) do
+        local g = _ow_gear_list[gid]
+        if g then
+            acts[#acts + 1] = 'ENC_GEAR|' .. gid .. '|' .. table.concat(g, '|')
+        end
+    end
+    for _, ln in ipairs(acts) do body[#body + 1] = ln end
+    local dur = math.max(DPS_MIN_SPAN, (e.last or e.first) - e.first)
+    local name = (e.name or '?'):gsub('[|\r\n]', ' ')
+    _ow_enc_pending[#_ow_enc_pending + 1] = string.format(
+        'ENCOUNTER_BEGIN|%d|%s|%.1f', tid, name, dur)
+    for _, ln in ipairs(body) do
+        _ow_enc_pending[#_ow_enc_pending + 1] = ln
+    end
+    _ow_enc_pending[#_ow_enc_pending + 1] = 'ENCOUNTER_END'
+end
+
 -- Send a single DPS payload over UDP. Throttled to 2 Hz by the caller.
 function _ow_dps_emit()
-    local out, ws_per_src, mob_per_src = _ow_dps_aggregate()
-    local lines = {}
     local now = os.clock()
+    local filter = nil
+    if _ow_dps_encounter then
+        -- Let go of mobs that went quiet without a witnessed death.
+        for tid, e in pairs(_ow_enc_open) do
+            if now - (e.last or e.first) > ENC_IDLE_S then
+                _ow_enc_open[tid] = nil
+            end
+        end
+        filter = function(ev)
+            return ev.target_id and _ow_enc_shown[ev.target_id] or false
+        end
+    end
+    local out, ws_per_src, mob_per_src = _ow_dps_aggregate(filter)
+    local lines = {}
+    -- Finished encounters ride along at the front of this packet.
+    if #_ow_enc_pending > 0 then
+        for _, ln in ipairs(_ow_enc_pending) do lines[#lines + 1] = ln end
+        _ow_enc_pending = {}
+    end
+    -- Encounter mode reports window 0 so python titles the panel
+    -- "Encounter"; the divisor cap is the fight itself (no window).
+    local wire_window = _ow_dps_encounter and 0 or _ow_dps_window_s
+    local span_cap = (not _ow_dps_encounter) and _ow_dps_window_s or nil
 
     local scope = PW_DPS_INCLUDE_PARTY and 'all' or 'me'
 
     for src, b in pairs(out) do
-        local hits_or_crits = b.hits
-        local total_swings  = b.hits + b.misses
-        local melee_acc = total_swings > 0
-                          and (hits_or_crits / total_swings) * 100
-                          or 0
-        local crit_pct  = (b.hits) > 0 and (b.crits / b.hits) * 100 or 0
-        local mag_attempts = b.spells_landed + b.spells_resisted
-        local mag_acc = mag_attempts > 0
-                        and (b.spells_landed / mag_attempts) * 100 or 0
-        local evasion = b.mob_swings_at > 0
-                        and (b.evaded / b.mob_swings_at) * 100 or 0
-        local total_dmg = b.white_total + b.ranged_total
-                          + b.magic_total + b.ws_total
+        local melee_acc, mag_acc, crit_pct, evasion, total_dmg, dps =
+            _ow_dps_metrics(b, span_cap)
         -- DPS = damage / ACTUAL elapsed combat span, not / full window.
         -- Dividing by the fixed window (e.g. 300s) made the number start
         -- tiny and slowly climb as the window filled — only correct after
@@ -16913,21 +17226,12 @@ function _ow_dps_emit()
         -- absurd number). This gives a meaningful average from the first
         -- couple of rounds that then fluctuates around the true rate as
         -- gear/WS/buffs change — the behavior you'd expect.
-        local span
-        if b.first_ts and b.last_ts and b.last_ts > b.first_ts then
-            span = b.last_ts - b.first_ts
-        else
-            span = 0
-        end
-        -- Cap to the rolling window; floor to DPS_MIN_SPAN so early hits
-        -- don't produce a wildly inflated number.
-        if span > _ow_dps_window_s then span = _ow_dps_window_s end
-        if span < DPS_MIN_SPAN then span = DPS_MIN_SPAN end
-        local dps = total_dmg / span
+        -- (span: see _ow_dps_metrics -- capped to the rolling window,
+        -- floored to DPS_MIN_SPAN so early hits don't spike the number.)
         table.insert(lines, string.format(
             'DPS|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%.1f|%.1f|%.1f|%.1f|%d|%d|%.1f|%d|%d|%d',
             src, scope,
-            _ow_dps_window_s,
+            wire_window,
             b.white_total, b.magic_total, b.ws_total,
             b.hits, b.misses, b.crits,
             b.spells_landed, b.spells_resisted,
@@ -16955,7 +17259,9 @@ function _ow_dps_emit()
     end
 
     if #lines == 0 then
-        udp_dps:send(_OW_MB_TAG('DPS_EMPTY'))
+        -- The window rides along so python can see which mode we're in
+        -- before any combat, and re-push Capture Time if they disagree.
+        udp_dps:send(_OW_MB_TAG('DPS_EMPTY|' .. wire_window))
     else
         udp_dps:send(_OW_MB_TAG(table.concat(lines, '\n')))
     end
@@ -18386,6 +18692,7 @@ end
 local function handle_incoming_action_message(arr)
     if MSG_DEATH[arr.message_id] then
         udp_status:send(string.format('CLEAR|%d', arr.target_id))
+        pcall(_ow_enc_close, arr.target_id)
     elseif MSG_WEAR_OFF[arr.message_id] then
         udp_status:send(string.format('REMOVE|%d|%d', arr.target_id, arr.param_1))
         ow_events.emit('buff_loss', {

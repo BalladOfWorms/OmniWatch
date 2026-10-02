@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.14.2] — 2026-09-30
+
+### Added
+
+- **Time left on your listings.** Each item you have on auction shows how long it has before the auction house returns it, in its own column on the Sell tab, turning amber in its last six hours. Hover the time for when it was listed and when it comes back. It works for everything you have up, whether you listed it here or at the auction counter.
+
+- **A browsable encounter log.** In Encounter mode every kill is also written to `omniwatch_dps_log.html`, which opens in your browser from **DPS Tracker ▸ Open log (browser)**. Click a kill to see your weaponskills and spells in order with their damage, your melee summed under the TP set you wore most, and each party member's numbers. Click any of your actions, or hover it, to see the gear you were wearing when it landed.
+
+- **Clear the encounter logs from settings.** **DPS Tracker ▸ Clear logs** erases the CSV, JSON and HTML logs so they start fresh. It asks once more before it does anything.
+
+- **Your widescan Track on the minimap.** Whatever you are tracking, from the game's own widescan or the Tracker, is ringed on the minimap. When it is beyond the minimap's range, an arrow on the rim points to it with the distance. The marker goes away when the track ends, whether you untrack it, the game stops tracking or you change zone.
+
+- **Japan time in the header.** The header clock now cycles Vana'diel time, your own time and Japan time (JST), the game's server clock that events and maintenance are announced in. It skips Japan time when your own clock is already on it.
+
+### Fixed
+
+- **Encounter mode for the DPS panel.** With Capture Time on Encounter, each fight is tracked on its own: the panel shows the mobs you are fighting now and keeps the finished fight up until the next one starts, and every kill is written to `omniwatch_dps_log.csv` and `omniwatch_dps_log.json` with the mob, the fight's length and each party member's numbers. The JSON file is laid out one value per line, so a kill reads as a block in any text editor.
+
+- **Capture Time applies whichever window you choose**, from the moment you pick it and after a restart.
+
+- **The Vana'diel clock keeps time through long sessions**, instead of slowly falling behind after a reload.
+
+- **Airship times in Events say when the airship arrives at port**, which is what the scheduled time is.
+
+- **Buttons answer the first click** after you have been using the other window or switched virtual desktops, in either window.
+
+- **The moon and day tooltips run on the header's clock**, so the phase they call current and their countdowns always match the header.
+
+- **Adjust Vana'diel time is one setting for the whole PC.** It no longer changes when a profile is switched, including the automatic switch on a job change.
+
 ## [1.14.1] — 2026-09-28
 
 ### Added

@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.14.1 (2026-09-28)"
+OMNIWATCH_BUILD_STAMP = "v1.14.2 (2026-09-30)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.14.1"
+OMNIWATCH_VERSION = "1.14.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -730,7 +730,8 @@ _vana_last_sync = 0.0
 
 
 def vana_clock_observed(server_vana_min, at_unix):
-    """Correct our clock from the server's own statement of the time.
+    """Compare our clock with the weather packet's Vana'diel time and
+    log the difference (see below for why it is no longer applied).
 
     <server_vana_min> is Vana'diel minutes since the epoch, straight out
     of packet 0x057; <at_unix> is when it arrived here.
@@ -739,18 +740,22 @@ def vana_clock_observed(server_vana_min, at_unix):
     error_vana = server_vana_min * 60.0 - ours_sec
     # In earth seconds: what our epoch is out by.
     error_earth = error_vana / VANA_SPEED
-    # NO CAP ON THIS ONE, unlike the PC-clock reading.
+    # LOGGED, NEVER APPLIED.
     #
-    # This is the server stating the Vana'diel time outright -- it IS
-    # the answer, not a hint about it. Capping it at five minutes was
-    # wrong: if the epoch constant this overlay was built on is off by
-    # more than that, the cap threw away the only reading that could
-    # have revealed it, and the display stayed wrong while the logs
-    # said the clock had been corrected.
-    print("[OmniWatch] game clock: server says %d vana min, we said %.0f "
-          "(%+.1fs of ours)"
+    # The clock starts exactly right on every load -- epoch x 25 from the
+    # PC clock, nothing else -- and then slid BEHIND as play went on. The
+    # only thing that moved it in between was this reading, applied
+    # uncapped. The weather packet's time is evidently not "now": it
+    # reads as the moment the weather began (or is scheduled to), which
+    # can be well before the packet arrives, so every weather change
+    # dragged the clock back by however old that moment was.
+    #
+    # Real drift comes from the PC clock alone, and the zone packet's
+    # server timestamp measures that exactly (vana_clock_observed_stamp).
+    # This line stays so a disagreement is still visible in the log.
+    print("[OmniWatch] game clock: weather packet says %d vana min, we "
+          "said %.0f (%+.1fs of ours) -- not applied"
           % (server_vana_min, ours_sec / 60.0, error_earth))
-    _vana_apply_error(error_earth, at_unix, cap=None)
 
 
 def _vana_apply_error(error_earth, at_unix, cap=300.0):
@@ -1340,13 +1345,96 @@ def _viewport_origin(name=None):
     return (vp[0], vp[1])
 
 
+_hw_cursor_cache = (0.0, None)
+
+
+def _hw_cursor():
+    """(window name, canvas pos) of the cursor, read from WINDOWS, or None.
+
+    SDL decides which of our windows the mouse is in from its own
+    bookkeeping, and that bookkeeping goes wrong: after a click in one
+    window it can go on treating the other as the mouse's window (it
+    believes a button is still held, and keeps the mouse "captured" by
+    the window that press began in). A click in the second window then
+    arrives measured against the first, misses everything, and only the
+    next click -- once SDL has caught up -- lands. That is the
+    two-clicks-after-using-the-other-window bug.
+
+    Windows has no such confusion: the cursor's screen position, the
+    window drawn under it, and each window's client origin settle it.
+    Cached for a few ms; this is asked many times a frame.
+    """
+    global _hw_cursor_cache
+    if sys.platform != "win32" or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return None
+    now = time.time()
+    if now - _hw_cursor_cache[0] < 0.004:
+        return _hw_cursor_cache[1]
+    res = None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.windll.user32
+        pt = wintypes.POINT()
+        u32.GetCursorPos(ctypes.byref(pt))
+        ours = [(n, _ow_hwnd(n)) for n in ("main", "desk")
+                if n == "main" or _desk_enabled()]
+        ours = [(n, h) for n, h in ours if h]
+        name = None
+        try:
+            under = u32.GetAncestor(u32.WindowFromPoint(pt), 2)  # GA_ROOT
+            for n, h in ours:
+                if h == under:
+                    name = n
+                    break
+        except Exception:
+            pass
+        if name is None:
+            # Over a transparent part of a window (the click goes to the
+            # game there): fall back to whichever visible window's frame
+            # holds the cursor, skipping one cloaked on another desktop.
+            for n, h in ours:
+                r = wintypes.RECT()
+                if not u32.IsWindowVisible(wintypes.HWND(h)):
+                    continue
+                try:
+                    cloaked = ctypes.c_int(0)
+                    ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                        wintypes.HWND(h), 14, ctypes.byref(cloaked), 4)
+                    if cloaked.value:
+                        continue
+                except Exception:
+                    pass
+                u32.GetWindowRect(wintypes.HWND(h), ctypes.byref(r))
+                if r.left <= pt.x < r.right and r.top <= pt.y < r.bottom:
+                    name = n
+                    break
+        if name is None:
+            # Outside every window (a drag carried past the edge): measure
+            # against the window the mouse was last in, as SDL would.
+            name = _MOUSE_WINDOW if _MOUSE_WINDOW in dict(ours) else "main"
+        h = dict(ours).get(name)
+        if h:
+            u32.ScreenToClient(wintypes.HWND(h), ctypes.byref(pt))
+            ox, oy = _viewport_origin(name)
+            res = (name, (pt.x + ox, pt.y + oy))
+    except Exception:
+        res = None
+    _hw_cursor_cache = (now, res)
+    return res
+
+
 def _mouse_pos():
     """Cursor position in CANVAS coordinates.
 
     pygame.mouse.get_pos() is WINDOW-relative and so starts lying the
     moment a second window exists. Every hover test, tooltip, drag and
-    hit-test in this file asks here instead.
+    hit-test in this file asks here instead. On Windows the answer comes
+    from Windows itself (see _hw_cursor); SDL's is the fallback.
     """
+    hw = _hw_cursor()
+    if hw is not None:
+        return hw[1]
     mx, my = pygame.mouse.get_pos()
     ox, oy = _viewport_origin()
     return (mx + ox, my + oy)
@@ -1366,6 +1454,10 @@ def _event_to_canvas(event):
     the wrong viewport.
     """
     global _MOUSE_WINDOW
+
+    # Our own reposts already carry canvas coordinates.
+    if getattr(event, "ow_canvas", False):
+        return event
 
     def _win_name(ev):
         w = getattr(ev, "window", None)
@@ -1395,6 +1487,21 @@ def _event_to_canvas(event):
     # a full screen to the left for that frame and back on the next.
     # Mid-drag, and worst when the desk window is full screen and
     # generating the most motion events.
+    # Clicks and moves are placed by Windows' own reading of the cursor
+    # when it can be had -- SDL can attribute them to the wrong window
+    # (see _hw_cursor), and a click measured against the wrong window
+    # misses whatever it was aimed at.
+    if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+                      pygame.MOUSEMOTION):
+        hw = _hw_cursor()
+        if hw is not None:
+            _MOUSE_WINDOW = hw[0]
+            try:
+                d = dict(event.dict)
+                d["pos"] = hw[1]
+                return pygame.event.Event(event.type, d)
+            except Exception:
+                pass
     name = _win_name(event) or _MOUSE_WINDOW or "main"
     _MOUSE_WINDOW = name
     vp = _VIEWPORTS.get(name)
@@ -1616,6 +1723,172 @@ _DRAG_STATE_GLOBALS = (
 def _drag_in_flight():
     g = globals()
     return any(g.get(n) is not None for n in _DRAG_STATE_GLOBALS)
+
+
+_sdl_held_reported = None
+_btn_seen_down = {}
+_btn_synth_logged = 0
+
+
+def _sdl_unstick_buttons():
+    """Report (once per change) when SDL's record of the mouse buttons
+    disagrees with the hardware. Diagnostic only: an earlier attempt to
+    correct SDL by posting it the missing release had no effect -- its
+    record did not move -- so the repair now happens on our side, in
+    _repair_swallowed_click()."""
+    global _sdl_held_reported
+    if sys.platform != "win32" or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    try:
+        held = tuple(bool(b) for b in pygame.mouse.get_pressed(3))
+        import ctypes
+        gaks = ctypes.windll.user32.GetAsyncKeyState
+        hw = tuple(bool(gaks(vk) & 0x8000) for vk in (0x01, 0x04, 0x02))
+    except Exception:
+        return
+    stale = tuple(h and not r for h, r in zip(held, hw))
+    if stale != _sdl_held_reported:
+        _sdl_held_reported = stale
+        global _sdl_held_report_n
+        _sdl_held_report_n = globals().get("_sdl_held_report_n", 0) + 1
+        if any(stale) and _sdl_held_report_n <= 10:
+            names = [n for n, st in zip(("left", "middle", "right"), stale) if st]
+            print("[OmniWatch] mouse: SDL reports %s held while released"
+                  % "/".join(names))
+
+
+_sdl_last_down_t = 0.0      # when SDL last delivered a real left press
+_hw_prev_down = False
+_hw_press = None            # (time, window name, canvas pos) of a press on us
+_hw_synth_logged = 0
+
+
+def _hw_window_at_cursor():
+    """(window name, canvas pos) if the cursor is over one of our windows
+    -- over a drawn part of it, since a colour-keyed transparent area
+    passes the hit test through to whatever is underneath -- else None."""
+    import ctypes
+    from ctypes import wintypes
+    u32 = ctypes.windll.user32
+    pt = wintypes.POINT()
+    u32.GetCursorPos(ctypes.byref(pt))
+    try:
+        under = u32.GetAncestor(u32.WindowFromPoint(pt), 2)   # GA_ROOT
+    except Exception:
+        return None
+    for name in ("main", "desk"):
+        if name == "desk" and not _desk_enabled():
+            continue
+        h = _ow_hwnd(name)
+        if h and h == under:
+            u32.ScreenToClient(wintypes.HWND(h), ctypes.byref(pt))
+            ox, oy = _viewport_origin(name)
+            return name, (pt.x + ox, pt.y + oy)
+    return None
+
+
+def _hw_click_watch():
+    """Deliver a click Windows registered on our window but SDL never did.
+
+    SDL's own record of the left button goes wrong after a virtual-desktop
+    switch -- the log shows it reporting the button held while it is not,
+    for the rest of the session -- and with that record wrong it drops
+    the next press AND its release entirely, so nothing at all reaches
+    the event loop for that click. Correcting SDL from outside did not
+    take, so this watches the hardware instead: GetAsyncKeyState each
+    frame for the press and the release, WindowFromPoint for where.
+
+    A press that began on one of our windows, released, with no press
+    from SDL anywhere around it, is posted as the click SDL lost -- at
+    the press position, released where the button came up. When SDL does
+    deliver the press, this does nothing, so a click is never doubled.
+    """
+    global _hw_prev_down, _hw_press, _hw_synth_logged
+    if sys.platform != "win32" or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    try:
+        import ctypes
+        down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+    except Exception:
+        return
+    now = time.time()
+    try:
+        if down and not _hw_prev_down:
+            hit = _hw_window_at_cursor()
+            _hw_press = (now, hit[0], hit[1]) if hit else None
+        elif not down and _hw_prev_down and _hw_press is not None:
+            t0, name, cpos = _hw_press
+            _hw_press = None
+            # SDL's press, when it comes, lands within a frame of the
+            # hardware edge on either side; anything later than this
+            # margin before the edge means SDL saw this click itself.
+            if _sdl_last_down_t < t0 - 0.1:
+                rel = _hw_window_at_cursor()
+                rpos = rel[1] if rel and rel[0] == name else cpos
+                # Hover and hit tests that ask _mouse_pos() should agree
+                # with the window the click really landed in.
+                globals()["_MOUSE_WINDOW"] = name
+                pygame.event.post(pygame.event.Event(
+                    pygame.MOUSEBUTTONDOWN,
+                    {"pos": cpos, "button": 1, "ow_canvas": True}))
+                pygame.event.post(pygame.event.Event(
+                    pygame.MOUSEBUTTONUP,
+                    {"pos": rpos, "button": 1, "ow_canvas": True}))
+                if _hw_synth_logged < 20:
+                    _hw_synth_logged += 1
+                    print("[OmniWatch] mouse: delivered a click SDL missed "
+                          "(%s window at %s)" % (name, tuple(cpos)))
+    finally:
+        _hw_prev_down = down
+
+
+def _repair_swallowed_click(event):
+    """A release with no press before it means SDL dropped the press.
+
+    SDL reports a press or release only when its own record of the
+    button changes. So a lone release can only reach us when SDL already
+    had the button down -- a release it missed earlier, typically across
+    a virtual-desktop switch -- and therefore threw away the real press
+    that came just before it. (A press that began outside our windows
+    can't produce this: SDL never saw it go down, so it reports neither
+    half.) That was the click that "did nothing".
+
+    Put the press back: answer the lone release with a press at the same
+    spot now, and the release itself on the next pass, so every handler
+    sees the click it would have seen.
+    """
+    global _btn_synth_logged
+    t = event.type
+    if t == pygame.MOUSEBUTTONDOWN:
+        _btn_seen_down[event.button] = True
+        if event.button == 1 and not getattr(event, "ow_canvas", False):
+            global _sdl_last_down_t
+            _sdl_last_down_t = time.time()
+        return event
+    if t != pygame.MOUSEBUTTONUP:
+        return event
+    b = getattr(event, "button", 1)
+    if b in (4, 5) or getattr(event, "ow_canvas", False):
+        _btn_seen_down[b] = False
+        return event
+    if _btn_seen_down.get(b):
+        _btn_seen_down[b] = False
+        return event
+    # Lone release: replay it as press-then-release.
+    try:
+        up = dict(event.dict)
+        up["ow_canvas"] = True
+        pygame.event.post(pygame.event.Event(pygame.MOUSEBUTTONUP, up))
+        down = dict(event.dict)
+        down["ow_canvas"] = True
+        _btn_seen_down[b] = True
+        if _btn_synth_logged < 20:
+            _btn_synth_logged += 1
+            print("[OmniWatch] mouse: restored a press SDL dropped "
+                  "(button %d at %s)" % (b, tuple(event.pos)))
+        return pygame.event.Event(pygame.MOUSEBUTTONDOWN, down)
+    except Exception:
+        return event
 
 
 def _real_mouse_down(event=None):
@@ -7217,7 +7490,7 @@ ring_cycle_last_advance = 0.0
 # seconds. Phase is recomputed from os.time() each frame (not
 # incremented) so it can't drift; last_advance just records when we
 # last flipped so the dwell time is honored across frames.
-header_time_cycle_phase        = 0     # 0 = Vana'diel, 1 = OS
+header_time_cycle_phase        = 0     # index into the frame's cycle: VT, OS, JST
 header_time_cycle_last_advance = 0.0
 # Cached pixel width reserved for the header time field. Sized once (on
 # first render) to the widest realistic time string ("12:48:59 pm") so
@@ -9439,7 +9712,7 @@ SETTINGS_DIR = USER_DIR
 #
 # A small set of files stay GLOBAL (not per-char) because they're shared
 # state or per-machine settings:
-#   - omniwatch_dps_log.{jsonl,csv}: dps history is character-agnostic
+#   - omniwatch_dps_log.{json,csv,html}: dps history is character-agnostic
 #     for now (would need a char column to split). Stays global.
 #   - logs/ crash-log dir: global.
 current_char_name = ""           # who's logged in right now (from PLAYER pkt)
@@ -9792,8 +10065,12 @@ WARP_FILE = os.path.join(USER_DIR, "omniwatch_warp.json")
 # DPS encounter logs stay GLOBAL (not per-char). JSON: one record per
 # line, each a full encounter dict. CSV: one summary row per encounter.
 # Both append-only and character-agnostic for now.
-DPS_LOG_JSON = os.path.join(USER_DIR, "omniwatch_dps_log.jsonl")
+DPS_LOG_JSON = os.path.join(USER_DIR, "omniwatch_dps_log.json")
+# The one-line-per-kill file this replaced; read once to carry its kills
+# into the new file, never written again.
+DPS_LOG_JSONL_OLD = os.path.join(USER_DIR, "omniwatch_dps_log.jsonl")
 DPS_LOG_CSV  = os.path.join(USER_DIR, "omniwatch_dps_log.csv")
+DPS_LOG_HTML = os.path.join(USER_DIR, "omniwatch_dps_log.html")
 
 # Per-character config files we move into the char subfolder during
 # migration. DPS logs are intentionally absent — they stay global.
@@ -11941,10 +12218,11 @@ SETTINGS_SCHEMA = [
         "default": True,
         "section": "_Hidden",
         "applies": "python",
-        "help":    "Alternate the header time between Vana'diel time "
-                   "(VT) and your real/OS time (OS). Off shows only "
-                   "Vana'diel time. Either way, clicking the time "
-                   "opens the stopwatch/countdown.",
+        "help":    "Cycle the header time through Vana'diel time (VT), "
+                   "your real/OS time (OS) and Japan time (JST, the "
+                   "game's server clock). Off shows only Vana'diel time. "
+                   "Either way, clicking the time opens the "
+                   "stopwatch/countdown.",
     },
     {
         "key":     "clock_cycle_sec",
@@ -11956,8 +12234,8 @@ SETTINGS_SCHEMA = [
         "step":    1,
         "section": "_Hidden",
         "applies": "python",
-        "help":    "How many seconds each time (Vana'diel, then OS) "
-                   "shows before switching, when VT/OS cycling is on. "
+        "help":    "How many seconds each time (Vana'diel, OS, Japan) "
+                   "shows before switching, when time cycling is on. "
                    "Range 2-10.",
     },
     {
@@ -12747,14 +13025,41 @@ SETTINGS_SCHEMA = [
                    "encounter, spreadsheet-friendly).",
     },
     {
+        "key":     "clear_dps_logs",
+        "label":   "(internal) clear DPS logs",
+        "kind":    "button",
+        "section": "_Hidden",
+        "applies": "python",
+        "action":  "clear_dps_logs",
+        "button_text":  "Clear",
+        # Two clicks: the first arms it (reads "Sure?"), the second
+        # within a few seconds clears. Nothing can be brought back.
+        "confirm":      True,
+        "confirm_text": "Sure?",
+        "done_text":    "Cleared",
+        "help":    "Erase the encounter logs -- the CSV, JSON and HTML files "
+                   "-- and start them fresh.",
+    },
+    {
+        "key":     "open_dps_log_html",
+        "label":   "(internal) open HTML log",
+        "kind":    "button",
+        "section": "_Hidden",
+        "applies": "python",
+        "action":  "open_dps_log_html",
+        "help":    "Open omniwatch_dps_log.html in your browser: every kill, "
+                   "each of your weaponskills and spells, and the gear you "
+                   "wore for each.",
+    },
+    {
         "key":     "open_dps_log_json",
         "label":   "(internal) open JSON log",
         "kind":    "button",
         "section": "_Hidden",
         "applies": "python",
         "action":  "open_dps_log_json",
-        "help":    "Open omniwatch_dps_log.jsonl (full detail per "
-                   "encounter, JSON Lines format).",
+        "help":    "Open omniwatch_dps_log.json (full detail per "
+                   "encounter, laid out to be read in a text editor).",
     },
 
     {
@@ -14131,12 +14436,53 @@ def _open_dps_log_csv():
             return
     _open_path(DPS_LOG_CSV, "DPS CSV log")
 
+def _open_dps_log_html():
+    """Open the browsable encounter log. Created with its page header on
+    first open so the browser shows the log's title, not a blank page."""
+    try:
+        _dps_html_ensure_header()
+    except Exception as e:
+        print(f"[OmniWatch] could not create HTML log: {e!r}")
+        return
+    _open_path(DPS_LOG_HTML, "DPS HTML log")
+
+def _clear_dps_logs():
+    """Erase the encounter logs. Each starts again on the next kill (the
+    CSV with its header row, the HTML with its page header).
+
+    The JSON log's predecessor goes too -- the old one-line-per-kill
+    .jsonl and its .carried copy. Left behind, the first kill after a
+    clear finds no .json and carries the old file's kills straight back
+    in, so the JSON log would refill with everything that was cleared.
+
+    Returns the text the button shows: "Cleared", or which file could
+    not be removed (a file held open elsewhere refuses to be deleted)."""
+    global _dps_csv_header_written
+    gone, failed = 0, []
+    for path in (DPS_LOG_CSV, DPS_LOG_JSON, DPS_LOG_HTML,
+                 DPS_LOG_JSONL_OLD, DPS_LOG_JSONL_OLD + ".carried"):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                gone += 1
+        except Exception as e:
+            failed.append(os.path.basename(path))
+            print(f"[OmniWatch] could not clear {os.path.basename(path)}: "
+                  f"{e!r} (is it open in another program?)")
+    _dps_csv_header_written = False
+    print(f"[OmniWatch] DPS logs cleared ({gone} file(s) removed"
+          + (f", {len(failed)} could not be: {', '.join(failed)})"
+             if failed else ")"))
+    if failed:
+        return "In use: " + failed[0].replace("omniwatch_dps_", "")
+    return "Cleared"
+
 def _open_dps_log_json():
     """Open the DPS encounter JSON Lines log."""
     if not os.path.exists(DPS_LOG_JSON):
         try:
-            with open(DPS_LOG_JSON, "w", encoding="utf-8") as f:
-                f.write("")
+            with open(DPS_LOG_JSON, "w", encoding="utf-8", newline="\n") as f:
+                f.write("[\n]\n")
         except Exception as e:
             print(f"[OmniWatch] could not create JSON log: {e!r}")
             return
@@ -15308,6 +15654,8 @@ _SETTINGS_ACTIONS = {
     "open_recast_config":      _open_recast_config_in_editor,
     "open_dps_log_csv":        _open_dps_log_csv,
     "open_dps_log_json":       _open_dps_log_json,
+    "open_dps_log_html":       _open_dps_log_html,
+    "clear_dps_logs":          _clear_dps_logs,
     "open_crash_log_folder":   _open_crash_log_folder,
     "open_update_page":        _open_update_page,
     "restart_overlay":         _restart_overlay,
@@ -15436,6 +15784,9 @@ def apply_setting_side_effects(key, value):
     # (the same socket lua already uses for SETUP/LOCK/BUTTONS control
     # messages). The lua side handles SETTING tags in its gearswap
     # drain loop and translates them into per-feature state changes.
+    if key == "dps_window_seconds":
+        global _dps_window_custom
+        _dps_window_custom = None
     schema = SETTINGS_BY_KEY.get(key, {})
     if schema.get("applies") in ("lua", "both"):
         try:
@@ -15530,11 +15881,141 @@ def apply_setting_side_effects(key, value):
 # apply_setting_side_effects() and call it once at startup with the
 # loaded value.
 
+# ── DPS capture-time sync ────────────────────────────────────────────────
+# There is no bulk settings push at boot, so a fresh lua (or a fresh
+# python) would otherwise sit on lua's built-in 5-minute window whatever
+# Capture Time says. Every DPS packet reports lua's window (0 = Encounter);
+# when it disagrees with the setting, re-send the setting, at most every
+# few seconds. A custom window typed with //ow dps window that isn't one
+# of the menu's choices is respected until the menu is changed again.
+_dps_window_custom = None
+_dps_window_push_ts = 0.0
+
+
+def _dps_window_check(lua_window):
+    global _dps_window_push_ts
+    if lua_window is None or _dps_window_custom is not None:
+        return
+    want = setting("dps_window_seconds")
+    if want is None:
+        want = 300
+    try:
+        if int(lua_window) == int(want):
+            return
+    except (TypeError, ValueError):
+        return
+    now = time.time()
+    if now - _dps_window_push_ts < 5.0:
+        return
+    _dps_window_push_ts = now
+    try:
+        apply_setting_side_effects("dps_window_seconds", want)
+    except Exception as e:
+        print(f"[OmniWatch] DPS capture-time resync failed: {e!r}")
+
+
+def _enc_only_packet(raw):
+    """True when a DPS packet carries nothing but encounter-log lines."""
+    tags = {ln.split("|", 1)[0] for ln in raw.split("\n") if ln}
+    return bool(tags) and tags <= {"ENCOUNTER_BEGIN", "ENC_DPS", "ENC_WS",
+                                   "ENC_ACT", "ENC_TP", "ENC_MORE",
+                                   "ENC_GEAR", "ENCOUNTER_END"}
+
+
+def _dps_window_from_lua(n):
+    """lua reports a //ow dps window change: make Capture Time follow."""
+    global _dps_window_custom
+    opts = SETTINGS_BY_KEY.get("dps_window_seconds", {}).get("options", [])
+    if n in opts:
+        _dps_window_custom = None
+        if settings.get("dps_window_seconds") != n:
+            set_setting("dps_window_seconds", n)
+    else:
+        _dps_window_custom = n
+
+
 # ── DPS encounter logging ────────────────────────────────────────────────
 # Called by the UDP parse loop when an ENCOUNTER_END packet finishes
 # arriving. Appends one JSON-Lines record (full detail) and one CSV row
 # (summary) per encounter. Both files are created on first write.
 _dps_csv_header_written = False
+
+def _dps_json_record_text(record):
+    """One kill, indented to sit inside the file's top-level list."""
+    body = json.dumps(record, indent=2, ensure_ascii=False)
+    return "\n".join("  " + ln for ln in body.split("\n"))
+
+
+def _dps_json_append(record):
+    """Add one kill to omniwatch_dps_log.json.
+
+    The file is ONE valid JSON list, indented so each kill reads as a
+    block in Notepad. Appending stays cheap: only the closing bracket at
+    the end is rewritten, never the kills before it. A file that has lost
+    its closing bracket is set aside rather than appended to, so one bad
+    write can't spoil every kill after it.
+    """
+    text = _dps_json_record_text(record)
+    if not os.path.exists(DPS_LOG_JSON) or os.path.getsize(DPS_LOG_JSON) == 0:
+        # First kill in this file: bring the old one-line-per-kill file's
+        # kills across with it, oldest first.
+        carried = []
+        if os.path.exists(DPS_LOG_JSONL_OLD):
+            try:
+                with open(DPS_LOG_JSONL_OLD, encoding="utf-8") as f:
+                    for ln in f:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            carried.append(json.loads(ln))
+                        except ValueError:
+                            pass
+            except Exception as e:
+                print(f"[OmniWatch] DPS JSON log: could not read old "
+                      f"log: {e!r}")
+        parts = [_dps_json_record_text(r) for r in carried] + [text]
+        with open(DPS_LOG_JSON, "w", encoding="utf-8", newline="\n") as f:
+            f.write("[\n" + ",\n".join(parts) + "\n]\n")
+        if os.path.exists(DPS_LOG_JSONL_OLD):
+            # Renamed, not deleted: carried once, and clearing the new log
+            # later must not bring these kills back.
+            try:
+                os.replace(DPS_LOG_JSONL_OLD, DPS_LOG_JSONL_OLD + ".carried")
+            except Exception:
+                pass
+        if carried:
+            print(f"[OmniWatch] DPS JSON log: carried {len(carried)} kill(s) "
+                  f"over from omniwatch_dps_log.jsonl")
+        return
+    with open(DPS_LOG_JSON, "r+b") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        back = min(size, 4096)
+        f.seek(size - back)
+        tail = f.read(back)
+        close = tail.rstrip().rfind(b"]")
+        if close < 0 or tail.rstrip()[close + 1:].strip():
+            bad = True
+        else:
+            bad = False
+            before = tail[:close].rstrip()
+            empty = before.endswith(b"[")
+            # Cut back to just after the last kill (or the opening bracket)
+            # and write the new kill and a fresh closing bracket there.
+            f.seek(size - back + len(before))
+            f.truncate()
+            f.write(((("\n" if empty else ",\n") + text + "\n]\n")
+                     .encode("utf-8")))
+    if bad:
+        aside = DPS_LOG_JSON[:-5] + time.strftime(
+            ".unreadable-%Y%m%d-%H%M%S.json")
+        os.replace(DPS_LOG_JSON, aside)
+        print(f"[OmniWatch] DPS JSON log was not a complete list; set it "
+              f"aside as {os.path.basename(aside)} and started a new one")
+        with open(DPS_LOG_JSON, "w", encoding="utf-8", newline="\n") as f:
+            f.write("[\n" + text + "\n]\n")
+
 
 def log_encounter(enc):
     """Append `enc` (a dict from the encounter parser) to the JSON
@@ -15552,12 +16033,8 @@ def log_encounter(enc):
         "ws_per_src":    enc.get("ws_per_src", {}),
     }
 
-    # JSON Lines: full detail, one record per line. Easy to grep, easy
-    # to load incrementally without parsing the whole file.
     try:
-        with open(DPS_LOG_JSON, "a", encoding="utf-8") as f:
-            json.dump(record, f, separators=(",", ":"))
-            f.write("\n")
+        _dps_json_append(record)
     except Exception as e:
         print(f"[OmniWatch] DPS JSON log write failed: {e!r}")
 
@@ -15618,11 +16095,138 @@ def log_encounter(enc):
         print(f"[OmniWatch] DPS CSV log write failed: {e!r}")
 
     # Console feedback so user knows it worked.
+    try:
+        _dps_html_append(record, enc)
+    except Exception as e:
+        print(f"[OmniWatch] DPS HTML log write failed: {e!r}")
+
     me_b = record["by_src"].get("me", {})
     print(f"[OmniWatch] encounter logged: {record['mob_name']} "
           f"in {record['duration_s']:.1f}s, "
           f"you dealt {me_b.get('total', 0):,} "
           f"({me_b.get('dps', 0):.1f} dps)")
+
+
+# ── Browsable encounter log (omniwatch_dps_log.html) ─────────────────────
+# Append-only: the page header is written once, then each kill adds one
+# collapsed <details> block at the end, so the file never has to be
+# re-read or rewritten. Kills and every action's gear start closed; an
+# action's gear also shows as a hover tooltip. Gear lives ONLY here, not
+# in the JSONL. Party members get numbers but no gear (only yours is known).
+_DPS_HTML_SLOTS = ["Main", "Sub", "Range", "Ammo", "Head", "Neck",
+                   "Ear 1", "Ear 2", "Body", "Hands", "Ring 1", "Ring 2",
+                   "Back", "Waist", "Legs", "Feet"]
+
+_DPS_HTML_HEAD = """<!DOCTYPE html>
+<meta charset="utf-8">
+<title>OmniWatch encounter log</title>
+<style>
+body{background:#14161c;color:#d6dbe6;font:14px/1.45 Segoe UI,Arial,sans-serif;margin:18px 24px}
+h1{font-size:18px;color:#e8d9a8;margin:0 0 4px}
+.sub{color:#7c8596;margin:0 0 14px;font-size:12px}
+details{margin:2px 0}
+summary{cursor:pointer;padding:3px 6px;border-radius:4px}
+summary:hover{background:#20242d}
+details.kill{border-top:1px solid #2a2f3a;padding:4px 0}
+details.kill>summary{font-weight:600}
+.kbody{margin:4px 0 8px 22px}
+.dim{color:#7c8596;font-weight:400}
+table.party{border-collapse:collapse;margin:4px 0 8px;font-size:13px}
+table.party td,table.party th{padding:2px 10px 2px 0;text-align:right}
+table.party td:first-child,table.party th:first-child{text-align:left}
+table.party th{color:#7c8596;font-weight:400}
+.t{color:#7c8596;display:inline-block;min-width:3.4em}
+.dmg{color:#e8d9a8}
+.miss{color:#c98a8a}
+.gear{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:2px 14px;margin:4px 0 6px 26px;font-size:13px}
+.gear span{color:#7c8596;display:inline-block;min-width:3.6em}
+</style>
+<h1>OmniWatch encounter log</h1>
+<p class="sub">Click a kill to open it, and a weaponskill or spell to see the gear you wore. Hover for a quick look.</p>
+"""
+
+
+def _dps_html_ensure_header():
+    if not os.path.exists(DPS_LOG_HTML) or os.path.getsize(DPS_LOG_HTML) == 0:
+        with open(DPS_LOG_HTML, "w", encoding="utf-8") as f:
+            f.write(_DPS_HTML_HEAD)
+
+
+def _dps_fmt_clock(secs):
+    secs = max(0, int(round(float(secs))))
+    return f"{secs // 60}:{secs % 60:02d}"
+
+
+def _dps_html_gear(names):
+    """(grid html, tooltip text) for one set of 16 slot names."""
+    cells, tip = [], []
+    for slot, nm in zip(_DPS_HTML_SLOTS, names):
+        shown = nm or "\u2014"
+        cells.append(f"<div><span>{slot}</span>{html.escape(shown)}</div>")
+        if nm:
+            tip.append(f"{slot}: {nm}")
+    return ("<div class=\"gear\">" + "".join(cells) + "</div>",
+            html.escape("\n".join(tip) or "no gear recorded", quote=True))
+
+
+def _dps_html_append(record, enc):
+    _dps_html_ensure_header()
+    gear = enc.get("gear", {})
+    by_src = record.get("by_src", {})
+    me = by_src.get("me")
+    when = record.get("timestamp_iso", "").replace("T", " ")[:16]
+    mob = html.escape(str(record.get("mob_name", "?")))
+    dur = _dps_fmt_clock(record.get("duration_s", 0))
+    if me:
+        who = f"you {me.get('total', 0):,} dmg &middot; {me.get('dps', 0):.1f} DPS"
+    else:
+        who = f"party {sum(b.get('total', 0) for b in by_src.values()):,} dmg"
+    out = [f"<details class=\"kill\"><summary>{mob} "
+           f"<span class=\"dim\">&middot; {dur} &middot; {who} &middot; "
+           f"{html.escape(when)}</span></summary><div class=\"kbody\">"]
+
+    if len(by_src) > 1 or not me:
+        out.append("<table class=\"party\"><tr><th>Who</th><th>Damage</th>"
+                   "<th>DPS</th><th>WS dmg</th><th>Acc</th><th>Crit</th></tr>")
+        for src, b in sorted(by_src.items(),
+                             key=lambda kv: -kv[1].get("total", 0)):
+            nm = "You" if src == "me" else src
+            out.append(
+                f"<tr><td>{html.escape(nm)}</td><td>{b.get('total', 0):,}</td>"
+                f"<td>{b.get('dps', 0):.1f}</td><td>{b.get('ws', 0):,}</td>"
+                f"<td>{b.get('melee_acc', 0):.0f}%</td>"
+                f"<td>{b.get('crit_pct', 0):.0f}%</td></tr>")
+        out.append("</table>")
+
+    def _act(label_html, gid):
+        names = gear.get(gid)
+        if not names:
+            return f"<div style=\"padding:3px 6px 3px 22px\">{label_html}</div>"
+        grid, tip = _dps_html_gear(names)
+        return (f"<details><summary title=\"{tip}\">{label_html}</summary>"
+                f"{grid}</details>")
+
+    tp = enc.get("tp")
+    if tp:
+        out.append(_act(
+            f"<span class=\"t\">melee</span>TP set &middot; {tp['swings']} swings"
+            f" &middot; <span class=\"dmg\">{tp['damage']:,}</span>",
+            tp.get("gear")))
+    for a in enc.get("acts", []):
+        name = html.escape(a["name"])
+        if a["kind"] in ("miss", "resist"):
+            res_txt = "missed" if a["kind"] == "miss" else "resisted"
+            tail = f"<span class=\"miss\">{res_txt}</span>"
+        else:
+            tail = f"<span class=\"dmg\">{a['value']:,}</span>"
+        out.append(_act(f"<span class=\"t\">{_dps_fmt_clock(a['t'])}</span>"
+                        f"{name} &middot; {tail}", a.get("gear")))
+    if enc.get("more"):
+        out.append(f"<div class=\"dim\" style=\"padding-left:22px\">"
+                   f"&hellip; and {enc['more']:,} more not listed</div>")
+    out.append("</div></details>\n")
+    with open(DPS_LOG_HTML, "a", encoding="utf-8") as f:
+        f.write("".join(out))
 
 # ── BG-Wiki link helpers ─────────────────────────────────────────────────────
 BGWIKI_BASE = "https://www.bg-wiki.com/ffxi/"
@@ -26386,7 +26990,8 @@ def _next_transport_event(offset_vs, cycle_vs, board_vs):
       earth_secs   - Earth seconds until the NEXT event (boarding
                      starts if waiting; departure happens if currently
                      boarding)
-      event_label  - what's coming up: "departs" / "boards"
+      event_label  - what's coming up: "boards" / "departs" (ferries),
+                     "arrives at port" (airships)
       vana_hhmm    - VD HH:MM string of the next event (display only)
 
     Math: find the most-recent boarding-start at-or-before now, check
@@ -26422,7 +27027,9 @@ def _next_transport_event(offset_vs, cycle_vs, board_vs):
         next_board_start = last_board_start + cycle_vs
         secs_until_vs = next_board_start - now_vs
         status = "waiting"
-        event_label = "boards" if board_vs > 0 else "departs"
+        # An airship's scheduled time (no boarding window) is when it
+        # pulls into the departure city's port, not when it leaves.
+        event_label = "boards" if board_vs > 0 else "arrives at port"
         event_vs = next_board_start
     # Convert VD seconds to Earth seconds. Round to nearest integer so
     # countdowns feel responsive (0.04s precision is overkill).
@@ -26970,6 +27577,12 @@ def _persist_active_profile_name():
         print(f"[OmniWatch] _persist_active_profile_name: {e!r}")
 
 
+# Settings a profile switch must NOT replace. The Vana'diel clock
+# adjustment corrects this PC's clock against the game's; it is the same
+# number whatever job or layout is on screen, so it lives outside them.
+_PROFILE_MACHINE_SETTINGS = ("vana_time_offset_min",)
+
+
 def _profile_mirror(live_path):
     """Copy one just-written live file into the profile in use.
 
@@ -27207,8 +27820,17 @@ def switch_to_profile(name):
     try:
         new_settings = load_settings()
         if isinstance(new_settings, dict):
+            # Settings that belong to the MACHINE, not to a profile, keep
+            # their current value across the switch -- otherwise every
+            # profile holds its own stale copy and whichever one loads
+            # (a job change at login, say) silently puts it back.
+            _keep = {k: settings[k] for k in _PROFILE_MACHINE_SETTINGS
+                     if k in settings}
             settings.clear()
             settings.update(new_settings)
+            if _keep and any(settings.get(k) != v for k, v in _keep.items()):
+                settings.update(_keep)
+                save_settings()   # live file + this profile's copy agree
         for skey in list(settings.keys()):
             schema = SETTINGS_BY_KEY.get(skey)
             if not schema:
@@ -36562,6 +37184,50 @@ _AH_STRIPE = (26, 30, 38)   # alternating row shade for AH lists
 _AH_MAX_W, _AH_MAX_H = 1500, 1100
 _ah_rects = {}
 _ah_item_tip_rects = []   # [(rect, item_id)] for hover tooltips
+_ah_text_tip_rects = []   # [(rect, [lines])] for plain-text hover tips
+
+# How long a listing stays up before the auction house hands it back: thirty
+# Vana'diel weeks (8 days of 3456 earth seconds each), 230.4 real hours.
+# (The AH NPCs still say nine weeks; live listings outlast that.)
+_AH_LISTING_LIFE = 30 * 8 * 3456
+# Earth time of the Vana'diel clock's zero point -- some FFXI packet times
+# count from here rather than from the Unix epoch.
+_AH_VANA_EPOCH = 1009810800
+
+
+def _ah_listing_unix(ts):
+    """Unix time a sale slot was listed, from the slot's server TimeStamp.
+
+    The field is read as Unix seconds or as seconds from the Vana'diel
+    epoch, whichever lands in the window a live listing can occupy (no older
+    than its lifetime plus a couple of days' grace, not in the future).
+    Returns None when neither reading fits, so a wrong guess shows nothing
+    rather than a confident wrong countdown."""
+    try:
+        ts = int(ts or 0)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0:
+        return None
+    now = time.time()
+    for base in (0, _AH_VANA_EPOCH):
+        t = ts + base
+        if now - _AH_LISTING_LIFE - 2 * 86400 <= t <= now + 3600:
+            return t
+    return None
+
+
+def _ah_fmt_left(secs):
+    """'2d 14h' / '5h 12m' / '38m' for the time a listing has left."""
+    secs = max(0, int(secs))
+    d, r = divmod(secs, 86400)
+    h, r = divmod(r, 3600)
+    m = r // 60
+    if d:
+        return "%dd %dh" % (d, h)
+    if h:
+        return "%dh %dm" % (h, m)
+    return "%dm" % max(1, m)
 _ah_drag = {"on": False, "dx": 0, "dy": 0}
 _ah_resize = {"on": False, "x0": 0, "y0": 0, "w0": 0, "h0": 0}
 _ah_search_field = _TextField(max_length=40)
@@ -36583,6 +37249,7 @@ def _ah_save_geometry():
 def _ah_clear_rects():
     _ah_rects.clear()
     _ah_item_tip_rects.clear()
+    _ah_text_tip_rects.clear()
 
 _ah_press_flash = {}
 _AH_PRESS_FLASH = 0.22      # seconds a pressed button stays lit
@@ -38701,6 +39368,25 @@ def draw_ah_window(surface):
                            beside=pygame.Rect(mx + 8, _rr.top, 1, _rr.h))
         except Exception as e:
             print(f"[OmniWatch] AH item card draw failed: {e!r}")
+    elif _hover is None:
+        # plain-text tips (listing times on the Sell tab)
+        for _rr, _lines in _ah_text_tip_rects:
+            if not _rr.collidepoint(mx, my) or not _lines:
+                continue
+            _surfs = [fnt_s.render(_ln, True, (214, 220, 232)) for _ln in _lines]
+            _bw = max(_sf.get_width() for _sf in _surfs) + 12
+            _bh = sum(_sf.get_height() for _sf in _surfs) + 8
+            _sw, _sh = surface.get_size()
+            _bx = min(mx + 12, _sw - _bw - 2)
+            _by = min(_rr.bottom + 2, _sh - _bh - 2)
+            _box = pygame.Rect(_bx, _by, _bw, _bh)
+            pygame.draw.rect(surface, (18, 20, 26), _box)
+            pygame.draw.rect(surface, (90, 100, 120), _box, 1)
+            _yy = _by + 4
+            for _sf in _surfs:
+                surface.blit(_sf, (_bx + 6, _yy))
+                _yy += _sf.get_height()
+            break
 
     # ── resize grip (bottom-right corner) ──
     grip = pygame.Rect(x + w - 16, y + h - 16, 16, 16)
@@ -38991,6 +39677,34 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
     _armed = ah_state.get("cancel_arm")
     if _armed and time.time() - _armed[1] > 4.0:
         ah_state["cancel_arm"] = _armed = None
+    # The time-left column: one left edge for every row, set by the widest
+    # price+status and the widest countdown on screen, so the times line up
+    # instead of each hugging its own price.
+    _now = time.time()
+    _cd_col = None
+    _cd_w = 0
+    for slot in range(7):
+        sl = by_slot.get(slot)
+        if not (sl and sl.get("status") and sl["status"] != "Empty"):
+            continue
+        _rx = area.right - 64 - (18 if int(sl.get("id", 0) or 0) > 0 else 0)
+        _pw = fnt_s.size("%s  %s" % (_ah_fmt_gil(sl.get("price", 0)),
+                                     sl["status"]))[0]
+        _px0 = _rx - 8 - _pw
+        _cd_col = _px0 if _cd_col is None else min(_cd_col, _px0)
+        _lt0 = _ah_listing_unix(sl.get("ts"))
+        if _lt0 is not None and sl["status"] == "On auction":
+            _r0 = _lt0 + _AH_LISTING_LIFE - _now
+            if _r0 > 0:
+                _cd_w = max(_cd_w, fnt_s.size(_ah_fmt_left(_r0))[0])
+    if _cd_col is not None and _cd_w:
+        _cd_col = _cd_col - 10 - _cd_w
+    else:
+        _cd_col = None
+    # A window too narrow to leave the names room keeps each time beside
+    # its own price instead of squeezing every name to nothing.
+    if _cd_col is not None and _cd_col < area.x + 90:
+        _cd_col = None
     for slot in range(7):
         row = pygame.Rect(area.x, fy, area.width, 15)
         sl = by_slot.get(slot)
@@ -39030,11 +39744,46 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
                 _hx = _hb.x
             _ts = fnt_s.render("%s  %s" % (_ah_fmt_gil(sl.get("price", 0)), stat),
                                True, col)
-            surface.blit(_ts, (_hx - 8 - _ts.get_width(), row.y))
+            _px = _hx - 8 - _ts.get_width()
+            surface.blit(_ts, (_px, row.y))
+            # Time left before the auction house returns it, from the slot's
+            # own server timestamp -- so it covers listings made at the game's
+            # counter as well as from here. Only for a live listing; a sold or
+            # returned slot has nothing left to count.
+            _lt = _ah_listing_unix(sl.get("ts"))
+            _tip = []
+            _left_x = _px
+            if _lt is not None:
+                _due = _lt + _AH_LISTING_LIFE
+                _tip.append("Listed  " + time.strftime(
+                    "%a %b %d  %H:%M", time.localtime(_lt)))
+                _rem = _due - _now
+                if stat == "On auction" and _rem > 0:
+                    _tip.append("Returns " + time.strftime(
+                        "%a %b %d  %H:%M", time.localtime(_due)))
+                    _ls = fnt_s.render(_ah_fmt_left(_rem), True,
+                                       (232, 172, 84) if _rem < 6 * 3600
+                                       else (140, 150, 166))
+                    _left_x = (_cd_col if _cd_col is not None
+                               else _px - 10 - _ls.get_width())
+                    surface.blit(_ls, (_left_x, row.y))
+            if _cd_col is not None:
+                # Every row's name stops at the column, timed or not, so
+                # the names end on one line too.
+                _left_x = min(_left_x, _cd_col)
+            if _tip:
+                _ah_text_tip_rects.append(
+                    (pygame.Rect(_left_x, row.y, max(1, _hx - 8 - _left_x), 14),
+                     _tip))
+            if _sid > 0:
+                # The item card's hover area stops at the name, so the time
+                # and price text get the listing tip instead.
+                _ah_item_tip_rects[-1] = (pygame.Rect(
+                    row.x, row.y, max(1, _left_x - 4 - row.x), 14), _sid)
             # Truncate against where the price actually starts, so a long
             # name can never run into it.
             nm = "%d. %s" % (slot + 1, sl.get("name") or "?")
-            _lim = (_hx - 8 - _ts.get_width()) - (row.x + 8)
+            _lim = _left_x - (row.x + 8)
             if fnt_s.size(nm)[0] > _lim:
                 while nm and fnt_s.size(nm + "\u2026")[0] > _lim:
                     nm = nm[:-1]
@@ -39073,8 +39822,21 @@ _MOON_SEC_PER_VDAY = 86400.0 / 25.0
 header_moon_rect = None          # set by draw_header, read by the tooltip
 
 
+def _vana_eff_unix(unix_t):
+    """<unix_t> moved by every correction the header clock applies -- the
+    server-measured drift, the fine-tune constant and the user's minute
+    adjustment -- so the moon and day tooltips count from the same
+    moment the header shows, instead of from the raw PC clock."""
+    try:
+        user_min = int(setting("vana_time_offset_min") or 0)
+    except Exception:
+        user_min = 0
+    return (unix_t + vana_auto_offset_sec + VANA_FINE_TUNE
+            + user_min * 60.0 / VANA_SPEED)
+
+
 def _moon_phase_day_at(unix_t):
-    day_of_year = int(((unix_t + VANA_OFFSET) * 25) // 86400)
+    day_of_year = int(((_vana_eff_unix(unix_t) + VANA_OFFSET) * 25) // 86400)
     return day_of_year, (day_of_year + 26) % 84
 
 
@@ -39098,7 +39860,7 @@ def _moon_next_times(now=None):
     """
     now = time.time() if now is None else now
     _vd, pday = _moon_phase_day_at(now)
-    into_day = ((now + VANA_OFFSET) * 25) % 86400 / 25.0
+    into_day = ((_vana_eff_unix(now) + VANA_OFFSET) * 25) % 86400 / 25.0
     here = _moon_name_on(pday)
     out, seen = [], {here}
     for ahead in range(1, 85):
@@ -39146,7 +39908,7 @@ def _vanaday_next_times(now=None):
     """
     now = time.time() if now is None else now
     vday, _pday = _moon_phase_day_at(now)
-    into_day = ((now + VANA_OFFSET) * 25) % 86400 / 25.0
+    into_day = ((_vana_eff_unix(now) + VANA_OFFSET) * 25) % 86400 / 25.0
     out = []
     for ahead in range(1, 9):
         name = VANA_DAYS[(vday + ahead) % 8]
@@ -41467,6 +42229,12 @@ scanzone_track_info  = ""           # live tracked-entity readout
 scanzone_track_pos   = None         # (wx,wy) of tracked entity, for map
 scanzone_pin         = None         # coord-search pin ("world"/"grid",..)
 scanzone_tracks      = {}           # idx -> roster entry (multi-track)
+# The ONE track the server is streaming right now, whoever asked for it
+# -- the game's own widescan Track button or the Tracker panel. The
+# server tracks a single target at a time, so this is the truth about
+# what is being tracked. {"index", "pos" (wx, wy) or None, "last" (time
+# of the last position), "ended" (server said the stream stopped)}.
+scanzone_game_track  = None
 # How many tracked entries may be re-scanned in a single poll tick.
 # Caps the injected-packet rate: without it the rate grew with the roster
 # and the server eventually stopped replying (see the round-robin note in
@@ -42250,6 +43018,90 @@ def draw_minimap_window(surface):
                 continue
             pygame.draw.circle(body, (190, 165, 110), (_tx, _ty),
                                5 + int(3 * pulse), 1)
+
+    # The track the server is streaming (the game's widescan Track, or the
+    # Tracker's). On the map: a bright ring on it. Off the map: an arrow on
+    # the rim pointing at it, with the distance, so it can be walked to.
+    _gt = globals().get("scanzone_game_track")
+    # A track nothing is keeping alive is over. The game sends a position
+    # every second or so while it tracks, and does not always say when it
+    # stops -- untracking from the widescan list just ends the stream --
+    # so silence is the signal. Only a track the Tracker panel owns is
+    # kept (dimmed): the Tracker re-requests it, so it will come back.
+    if _gt:
+        _gi0 = _gt.get("index")
+        _owned = (_gi0 == globals().get("scanzone_track_index")
+                  or _gi0 in scanzone_tracks)
+        _quiet = time.time() - float(_gt.get("last") or 0) > 6.0
+        if not _owned and (_gt.get("ended") or _quiet):
+            print("[OmniWatch] track: 0x%03X ended (%s)" % (
+                _gi0 or 0, "server stopped" if _gt.get("ended")
+                else "no updates"))
+            globals()["scanzone_game_track"] = _gt = None
+    if _gt and not preview:
+        _gi = _gt.get("index")
+        _gpx = _gnm = None
+        for (idx, t, dx, dy, hpp, nm) in dots:
+            if idx == _gi:
+                _gw = (org[0] + dx, org[1] + dy)
+                _gnm = nm
+                break
+        else:
+            _gw = _gt.get("pos")
+        if _gw is not None:
+            if place is not None:
+                _gpx = place(_gw[0], _gw[1])
+            else:
+                _gpx = (int(cxp + (_gw[0] - org[0]) * sc),
+                        int(cyp - (_gw[1] - org[1]) * sc))
+        if _gpx is not None:
+            _stale = (_gt.get("ended")
+                      or time.time() - float(_gt.get("last") or 0) > 15.0)
+            _gcol = (140, 150, 120) if _stale else (120, 235, 140)
+            _gname = _gnm or _scanzone_name_for(_gi) or "tracked"
+            _gdist = None
+            if _hx is not None and _hy is not None:
+                _gdist = math.hypot(_gw[0] - _hx, _gw[1] - _hy)
+            if place is not None:
+                _inside = plot.inflate(-8, -8).collidepoint(*_gpx)
+            else:
+                _inside = ((_gpx[0] - cxp) ** 2 + (_gpx[1] - cyp) ** 2
+                           <= (rad_px - 4) ** 2)
+            if _inside:
+                pygame.draw.circle(body, _gcol, _gpx,
+                                   8 + (0 if _stale else int(2 * pulse)), 2)
+                _mark = _gpx
+            else:
+                _vx, _vy = _gpx[0] - cxp, _gpx[1] - cyp
+                _vl = math.hypot(_vx, _vy) or 1.0
+                _ux, _uy = _vx / _vl, _vy / _vl
+                if place is not None:
+                    _hw, _hh = plot.width / 2.0 - 9, plot.height / 2.0 - 9
+                    _k = min(_hw / abs(_ux) if _ux else 1e9,
+                             _hh / abs(_uy) if _uy else 1e9)
+                else:
+                    _k = rad_px - 9
+                _ex, _ey = cxp + _ux * _k, cyp + _uy * _k
+                _px_, _py_ = -_uy, _ux
+                _tri = [(_ex + _ux * 7, _ey + _uy * 7),
+                        (_ex - _ux * 5 + _px_ * 6, _ey - _uy * 5 + _py_ * 6),
+                        (_ex - _ux * 5 - _px_ * 6, _ey - _uy * 5 - _py_ * 6)]
+                pygame.draw.polygon(body, _gcol, _tri)
+                pygame.draw.polygon(body, (20, 24, 30), _tri, 1)
+                if _gdist is not None:
+                    _ds = fnt_s.render("%.0fy" % _gdist, True, _gcol)
+                    # Inboard of the arrow, kept inside the plot.
+                    _lx = _ex - _ux * 16 - _ds.get_width() / 2.0
+                    _ly = _ey - _uy * 14 - _ds.get_height() / 2.0
+                    _lx = max(plot.x + 2, min(plot.right - _ds.get_width() - 2, _lx))
+                    _ly = max(plot.y + 2, min(plot.bottom - _ds.get_height() - 2, _ly))
+                    body.blit(_ds, (int(_lx), int(_ly)))
+                _mark = (int(_ex), int(_ey))
+            _d2 = (mpos[0] - _mark[0]) ** 2 + (mpos[1] - _mark[1]) ** 2
+            if _d2 <= 100 and plot.collidepoint(*mpos):
+                hover = ("%s (tracking%s)" % (_gname,
+                         ", last seen" if _stale else ""),
+                         _gdist or 0.0, None, _gcol)
 
     # You, and which way you are pointing.
     try:
@@ -48247,30 +49099,40 @@ def draw_header(surface, w):
             cycle_sec = 5
         cycle_sec = max(2, min(10, cycle_sec))
         now_t = time.time()
+        # The cycle: Vana'diel time, your OS time, then Japan time (the
+        # game's server clock, which event and maintenance times are given
+        # in). Japan time is left out when the OS clock is already showing
+        # it, so the same time never comes round twice.
+        tz_name   = setting("clock_timezone") or "Local"
+        tz_offset = CLOCK_TIMEZONES.get(tz_name)
+        _jst_same = (tz_offset == 9 or (tz_offset is None and
+                     time.localtime().tm_gmtoff == 9 * 3600))
+        _cycle = ["VT", "OS"] if _jst_same else ["VT", "OS", "JST"]
         if cycle_on:
             if header_time_cycle_last_advance == 0.0:
                 header_time_cycle_last_advance = now_t
             if now_t - header_time_cycle_last_advance >= cycle_sec:
-                header_time_cycle_phase = 1 - header_time_cycle_phase
+                header_time_cycle_phase = ((header_time_cycle_phase + 1)
+                                           % len(_cycle))
                 header_time_cycle_last_advance = now_t
+            header_time_cycle_phase %= len(_cycle)
         else:
             header_time_cycle_phase = 0   # Vana only
 
-        # Build the OS-time string (respecting timezone + seconds toggle),
-        # mirroring the former right-side clock block.
-        tz_name   = setting("clock_timezone") or "Local"
-        tz_offset = CLOCK_TIMEZONES.get(tz_name)
+        def _wall_str(tm):
+            hh12  = tm.tm_hour % 12 or 12
+            am_pm = "am" if tm.tm_hour < 12 else "pm"
+            if setting("show_clock_seconds"):
+                return f"{hh12:d}:{tm.tm_min:02d}:{tm.tm_sec:02d} {am_pm}"
+            return f"{hh12:d}:{tm.tm_min:02d} {am_pm}"
+
+        # OS time (respecting timezone + seconds toggle), and Japan time.
         if tz_offset is None:
             local_now = time.localtime()
         else:
             local_now = time.gmtime(time.time() + tz_offset * 3600)
-        hh12  = local_now.tm_hour % 12 or 12
-        am_pm = "am" if local_now.tm_hour < 12 else "pm"
-        if setting("show_clock_seconds"):
-            os_time_str = (f"{hh12:d}:{local_now.tm_min:02d}:"
-                           f"{local_now.tm_sec:02d} {am_pm}")
-        else:
-            os_time_str = f"{hh12:d}:{local_now.tm_min:02d} {am_pm}"
+        os_time_str  = _wall_str(local_now)
+        jst_time_str = _wall_str(time.gmtime(time.time() + 9 * 3600))
         vana_time_str = f"{hours:02d}:{minutes:02d}"
 
         # Decide what this frame shows. Running timers take priority over
@@ -48291,10 +49153,14 @@ def draw_header(surface, w):
             time_text  = f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
             time_color = (220, 200, 130)   # amber — stopwatch running
             show_label = "SW"
-        elif cycle_on and header_time_cycle_phase == 1:
+        elif cycle_on and _cycle[header_time_cycle_phase] == "OS":
             time_text  = os_time_str
             time_color = COL_CLOCK
             show_label = "OS"
+        elif cycle_on and _cycle[header_time_cycle_phase] == "JST":
+            time_text  = jst_time_str
+            time_color = COL_CLOCK
+            show_label = "JST"
         # else: Vana time (already the default above)
 
         # Render the time value + small label, as a clickable button so
@@ -48320,7 +49186,11 @@ def draw_header(surface, w):
         TIME_LABEL_GAP = _hs(12)
         # Compute the label up front so we can size the click box.
         lbl_surf_pre = font_moon.render(show_label, True, COL_LABEL_DIM)
-        widget_w = time_field_w + TIME_LABEL_GAP + lbl_surf_pre.get_width()
+        # The label slot is as wide as the widest cycle label, so the day
+        # and moon to the right don't step sideways as VT / OS / JST turn.
+        lbl_slot_w = max(lbl_surf_pre.get_width(),
+                         font_moon.size("JST")[0])
+        widget_w = time_field_w + TIME_LABEL_GAP + lbl_slot_w
         time_click_rect = pygame.Rect(
             widget_x0 - _hs(4), cy - (t_surf.get_height() // 2) - _hs(3),
             widget_w + _hs(8), t_surf.get_height() + _hs(6))
@@ -48341,7 +49211,7 @@ def draw_header(surface, w):
 
         lbl_surf = font_moon.render(show_label, True, COL_LABEL_DIM)
         surface.blit(lbl_surf, (cx, cy - lbl_surf.get_height() // 2))
-        cx += lbl_surf.get_width() + _hs(18)
+        cx += lbl_slot_w + _hs(18)
 
         header_clock_button_rect = time_click_rect
 
@@ -54512,7 +55382,21 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
     elif kind == "action":
         btn_text   = schema.get("button_text") or "Open..."
         action_key = schema.get("action", "")
-        btn_surf = label_font.render(btn_text, True, (220, 220, 230))
+        _now_t = time.time()
+        _armed = (schema.get("confirm") and _modal_action_armed
+                  and _modal_action_armed[0] == action_key
+                  and _now_t - _modal_action_armed[1] < 4.0)
+        _done = (schema.get("done_text") and _modal_action_done
+                 and _modal_action_done[0] == action_key
+                 and _now_t - _modal_action_done[1] < 3.0)
+        if _armed:
+            btn_text = schema.get("confirm_text") or "Sure?"
+        elif _done:
+            btn_text = ((len(_modal_action_done) > 2 and _modal_action_done[2])
+                        or schema.get("done_text"))
+        btn_surf = label_font.render(btn_text, True,
+                                     (245, 205, 205) if _armed
+                                     else (220, 220, 230))
         btn_pad_x = _ms(12)
         btn_w = btn_surf.get_width() + btn_pad_x * 2
         btn_h = _ms(22)
@@ -54520,16 +55404,18 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
             row_rect.right - _ms(4) - btn_w,
             row_rect.y + (row_rect.h - btn_h) // 2,
             btn_w, btn_h)
-        pygame.draw.rect(surface, (60, 70, 90), btn_rect,
-                         border_radius=3)
-        pygame.draw.rect(surface, (140, 160, 200), btn_rect, 1,
-                         border_radius=3)
+        pygame.draw.rect(surface, (96, 44, 44) if _armed else (60, 70, 90),
+                         btn_rect, border_radius=3)
+        pygame.draw.rect(surface,
+                         (170, 90, 90) if _armed else (140, 160, 200),
+                         btn_rect, 1, border_radius=3)
         surface.blit(btn_surf,
             (btn_rect.x + btn_pad_x,
              btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
         click_rects.append((btn_rect,
             {"action": f"{action_prefix}_action",
-             "action_key": action_key}))
+             "action_key": action_key,
+             "confirm": bool(schema.get("confirm"))}))
 
     elif kind == "text":
         focused = (_subdialog_text_focus == (action_prefix, key))
@@ -54562,6 +55448,12 @@ def _draw_modal_row(surface, row_rect, kind, key, display_label,
                              (caret_x, box_rect.bottom - _ms(4)), 1)
         click_rects.append((box_rect.copy(),
             {"action": f"{action_prefix}_textfocus", "key": key}))
+
+
+# Two-click confirm and "done" feedback for action rows whose schema asks
+# for it (confirm / confirm_text / done_text): (action_key, time).
+_modal_action_armed = None
+_modal_action_done  = None
 
 
 def _dispatch_modal_row_action(payload, action_prefix):
@@ -54623,11 +55515,24 @@ def _dispatch_modal_row_action(payload, action_prefix):
         set_setting(key, options[next_idx])
         return True
     if suffix == "action":
+        global _modal_action_armed, _modal_action_done
         action_key = payload.get("action_key", "")
+        if payload.get("confirm"):
+            # First click arms; only a second click inside the window runs.
+            if not (_modal_action_armed
+                    and _modal_action_armed[0] == action_key
+                    and time.time() - _modal_action_armed[1] < 4.0):
+                _modal_action_armed = (action_key, time.time())
+                return True
+            _modal_action_armed = None
         handler = _SETTINGS_ACTIONS.get(action_key)
         if callable(handler):
             try:
-                handler()
+                _res = handler()
+                # A handler may return the text its button should show
+                # (e.g. what failed); otherwise the schema's done_text.
+                _modal_action_done = (action_key, time.time(),
+                                      _res if isinstance(_res, str) else None)
             except Exception as e:
                 print(f"[OmniWatch] modal action {action_key!r}: {e!r}")
         return True
@@ -54653,8 +55558,8 @@ _HEADER_MODAL_ROWS = [
     ("header_autohide",      "Auto-hide header",        "bool"),
     ("header_position",      "Header position",         "enum"),
     ("show_time",            "Show time",               "bool"),
-    ("clock_cycle_enabled",  "Cycle VT / OS time",      "bool"),
-    ("clock_cycle_sec",      "VT/OS cycle seconds",     "int"),
+    ("clock_cycle_enabled",  "Cycle VT / OS / JST time", "bool"),
+    ("clock_cycle_sec",      "Time cycle seconds",      "int"),
     ("vana_time_offset_min", "Adjust Vana'diel time",   "int"),
     ("show_weather",         "Show weather",            "bool"),
     ("show_events",          "Show events",             "bool"),
@@ -55847,8 +56752,10 @@ _SUBDIALOG_CONFIGS = {
             ("dps_sparkline",      "DPS sparkline",        "bool"),
             ("dps_track_party",    "Track party damage",   "bool"),
             ("dps_window_seconds", "Capture time",         "enum"),
+            ("open_dps_log_html",  "Open log (browser)",   "action"),
             ("open_dps_log_csv",   "Open CSV log",         "action"),
             ("open_dps_log_json",  "Open JSON log",        "action"),
+            ("clear_dps_logs",     "Clear logs",           "action"),
         ],
         "helpers": {},
     },
@@ -57323,6 +58230,10 @@ def draw_campaigns_modal(surface):
         if meta.get_width() > rect.w - 20:
             short = f"{ev['event_label']} in {countdown}"
             meta = banner_meta_font.render(short, True, (160, 170, 180))
+        if meta.get_width() > rect.w - 20:
+            # A narrow modal ("arrives at port" is the longest label):
+            # the countdown alone, so the line never runs past the box.
+            meta = banner_meta_font.render(countdown, True, (160, 170, 180))
         surface.blit(meta, (rect.x + 10, rect.y + tr_h - 16))
         # Whole-box click cycles to the next route. Recorded with
         # the mode_key so the dispatcher knows which list to advance.
@@ -70798,6 +71709,7 @@ while running:
                 if zone_info.get("zone_id") not in (None, zid):
                     _old_zid = zone_info.get("zone_id")
                     scanzone_tracks.clear()
+                    globals()["scanzone_game_track"] = None
                     scanzone_aliases.clear()
                     scanzone_zcache.clear()
                     scanzone_namecache.clear()
@@ -71163,6 +72075,27 @@ while running:
                                 pass
                 globals()["scanzone_radar"] = arr
                 continue
+            if tag == "SZTRACKREQ":
+                # A track was asked for (index) or cancelled (0), by the
+                # game's widescan or by the Tracker -- same packet either way.
+                try:
+                    _rq = int(value.split("|")[0])
+                except Exception:
+                    _rq = -1
+                if _rq == 0:
+                    if globals().get("scanzone_game_track"):
+                        print("[OmniWatch] track: stopped")
+                    globals()["scanzone_game_track"] = None
+                elif _rq > 0:
+                    _gt = globals().get("scanzone_game_track")
+                    if not _gt or _gt.get("index") != _rq:
+                        print("[OmniWatch] track: started on 0x%03X" % _rq)
+                        # "last" starts at the request, so a request the
+                        # server never answers expires like a stopped one.
+                        globals()["scanzone_game_track"] = {
+                            "index": _rq, "pos": None, "last": time.time(),
+                            "ended": False}
+                continue
             if tag == "SZTRACK":
                 tf = value.split("|")
                 if len(tf) >= 5:
@@ -71170,6 +72103,25 @@ while running:
                         tix = int(tf[0])
                     except Exception:
                         tix = -1
+                    try:
+                        _gst = int(tf[4])
+                    except Exception:
+                        _gst = 1
+                    _gt = globals().get("scanzone_game_track")
+                    if tix > 0 and _gst == 1:
+                        try:
+                            _gpos = (float(tf[1]), float(tf[2]))
+                        except Exception:
+                            _gpos = None
+                        if _gpos is not None:
+                            if not _gt or _gt.get("index") != tix:
+                                _gt = {"index": tix}
+                                globals()["scanzone_game_track"] = _gt
+                            _gt.update(pos=_gpos, last=time.time(),
+                                       ended=False)
+                    elif _gt and _gt.get("index") == tix:
+                        # The server says the stream stopped.
+                        _gt["ended"] = True
                     if tix == scanzone_track_index:
                         try:
                             ex = float(tf[1]); ey = float(tf[2])
@@ -73048,7 +74000,9 @@ while running:
     # 'DPS_EMPTY' message clears state without hiding the panel.
     try:
         while True:
-            ddata, _ = sock_dps.recvfrom(16384)
+            # 64 KB: a long fight's encounter log (every weaponskill and
+            # spell, plus gear) can outgrow the old 16 KB read.
+            ddata, _ = sock_dps.recvfrom(65535)
             raw = ddata.decode(errors="replace")
             _ok, raw = _mb_gate(raw, stream="dps")
             if not _ok:
@@ -73059,12 +74013,23 @@ while running:
             if raw == "TOGGLE_PANEL":
                 dps_panel_visible = not dps_panel_visible
                 continue
-            if raw == "DPS_EMPTY":
+            if raw.startswith("DPS_WINDOW|"):
+                try:
+                    _dps_window_from_lua(int(raw.split("|", 1)[1]))
+                except (ValueError, IndexError):
+                    pass
+                continue
+            if raw == "DPS_EMPTY" or raw.startswith("DPS_EMPTY|"):
                 dps_state = {}
                 dps_ws_state = {}
                 dps_mob_state = {}
                 dps_last_update_ts = time.time()
                 dps_history.clear()
+                if "|" in raw:
+                    try:
+                        _dps_window_check(int(raw.split("|", 1)[1]))
+                    except (ValueError, IndexError):
+                        pass
                 continue
             new_state = {}
             new_ws    = {}
@@ -73179,6 +74144,8 @@ while running:
                             "duration": float(fields[3]),
                             "by_src":   {},
                             "ws_per_src": {},
+                            # For the HTML log only (not the JSONL):
+                            "acts": [], "tp": None, "more": 0, "gear": {},
                         }
                     else:
                         _enc_in_progress = None
@@ -73224,6 +74191,43 @@ while running:
                         }
                     except (ValueError, IndexError) as e:
                         print(f"[OmniWatch DPS] ENC_WS parse error: {e!r} | {ln!r}")
+                elif tag == "ENC_ACT":
+                    # ENC_ACT|secs_into_fight|ws/miss/spell/resist|name|dmg|gear_id
+                    if _enc_in_progress is None or len(fields) < 6:
+                        continue
+                    try:
+                        _enc_in_progress["acts"].append({
+                            "t": float(fields[1]), "kind": fields[2],
+                            "name": fields[3], "value": int(fields[4]),
+                            "gear": int(fields[5]),
+                        })
+                    except (ValueError, IndexError) as e:
+                        print(f"[OmniWatch DPS] ENC_ACT parse error: {e!r} | {ln!r}")
+                elif tag == "ENC_TP":
+                    # ENC_TP|gear_id|swings|damage
+                    if _enc_in_progress is None or len(fields) < 4:
+                        continue
+                    try:
+                        _enc_in_progress["tp"] = {
+                            "gear": int(fields[1]), "swings": int(fields[2]),
+                            "damage": int(fields[3]),
+                        }
+                    except (ValueError, IndexError) as e:
+                        print(f"[OmniWatch DPS] ENC_TP parse error: {e!r} | {ln!r}")
+                elif tag == "ENC_MORE":
+                    if _enc_in_progress is not None and len(fields) >= 2:
+                        try:
+                            _enc_in_progress["more"] = int(fields[1])
+                        except ValueError:
+                            pass
+                elif tag == "ENC_GEAR":
+                    # ENC_GEAR|gear_id|<16 slot names, main..feet>
+                    if _enc_in_progress is None or len(fields) < 18:
+                        continue
+                    try:
+                        _enc_in_progress["gear"][int(fields[1])] = fields[2:18]
+                    except (ValueError, IndexError) as e:
+                        print(f"[OmniWatch DPS] ENC_GEAR parse error: {e!r} | {ln!r}")
                 elif tag == "ENCOUNTER_END":
                     if _enc_in_progress is not None:
                         try:
@@ -73243,6 +74247,12 @@ while running:
                       f"failure(s) in this packet:")
                 for line_num, reason, raw_ln in parse_failures[:5]:
                     print(f"  line {line_num}: {reason} | raw={raw_ln!r}")
+            if not new_state and _enc_only_packet(raw):
+                # A logged encounter with nothing live alongside it: the
+                # log is written, the panel keeps what it was showing.
+                continue
+            if new_state:
+                _dps_window_check(next(iter(new_state.values())).get("window"))
             dps_state    = new_state
             dps_ws_state = new_ws
             dps_mob_state= new_mob
@@ -75891,10 +76901,15 @@ while running:
             _return_keyboard_focus()
     _composer_focus_prev = _focus_now
 
+    _sdl_unstick_buttons()
+    _hw_click_watch()
     for event in pygame.event.get():
         # Canvas-space from here down. Identity today; the second
         # window's offset is applied inside this one call.
         event = _event_to_canvas(event)
+        # A click SDL swallowed comes through as a lone release; this
+        # turns it back into the full click.
+        event = _repair_swallowed_click(event)
 
         # A drag is in flight but no mouse button is held, so the
         # button-up never reached us -- switching virtual desktops
@@ -75914,8 +76929,11 @@ while running:
         if (event.type == pygame.MOUSEMOTION
                 and not _real_mouse_down(event)
                 and _drag_in_flight()):
+            # ow_canvas: this pos is already canvas-space, so the repost
+            # must not have the window offset added a second time.
             pygame.event.post(pygame.event.Event(
-                pygame.MOUSEBUTTONUP, {"pos": event.pos, "button": 1}))
+                pygame.MOUSEBUTTONUP, {"pos": event.pos, "button": 1,
+                                       "ow_canvas": True}))
             continue
 
         # The tag panel draws last, so it is asked first — and it is
