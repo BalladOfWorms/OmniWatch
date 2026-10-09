@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.14.2'
+_addon.version  = '1.15.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -2450,19 +2450,10 @@ function _ow_cfgwiz_open()
     -- Format: dotted-path=int, comma-separated. Examples:
     --   bards.self.all_songs=4,bards.self.carol=2,
     --   bards.joachim.all_songs=7,
-    --   corsairs.self.phantom_roll=5,
-    --   player.unity_rank=1
+    --   corsairs.self.phantom_roll=5
+    -- (Unity Rank is no longer sent: it comes from the game, see the
+    -- 0x061 reader.)
     local parts = {}
-
-    -- Player.unity_rank emitted FIRST so it sorts/reads at the top of
-    -- the payload. Default 1 (highest tier) when nothing is saved yet,
-    -- matching the loader's default for settings.player.rank. Clamp to
-    -- 1..11 to defend against a corrupt config file.
-    local ur = ow_user_config and ow_user_config.player
-               and tonumber(ow_user_config.player.unity_rank) or 1
-    if ur < 1 then ur = 1 end
-    if ur > 11 then ur = 11 end
-    parts[#parts+1] = string.format('player.unity_rank=%d', ur)
 
     local function emit_bard(key, t)
         for _, fk in ipairs(PW_BARD_FAMILY_KEYS) do
@@ -2832,6 +2823,184 @@ do
         pcall(function()
             udp_inv:send(_OW_MB_TAG('TAGS|' .. table.concat(parts, ';')))
         end)
+    end
+end
+
+-- ── Camera zoom (drives the XICamera addon) ──────────────────────────────
+-- The overlay's zoom pill asks for a camera distance; XICamera does the
+-- actual work. OmniWatch never touches camera memory itself -- XICamera
+-- owns those patch sites and keeps them working across client updates.
+--
+--   in :  CAMZOOM|<distance>
+--   out:  CAMZOOM|<installed 0/1>|<took -1/0/1>|<distance>
+--
+-- Only the normal camera distance is ever set. The battle (lock-on)
+-- distance is left exactly as the user has it.
+--
+-- A wheel spin asks for many distances in a second; each `xicamera d`
+-- makes XICamera rewrite its settings file, so requests are coalesced to
+-- one command per CZ_SEND_GAP and only the newest distance is sent.
+--
+-- XICamera answers every distance change with a chat line. While we are
+-- the one changing it, those lines are swallowed (see the 'incoming text'
+-- handler at the end of the file) so scrolling never fills the log; a
+-- distance typed by hand still prints as normal.
+--
+-- <took> is whether the last distance we sent actually landed: XICamera
+-- saves the distance it applied, so reading it back says whether the
+-- addon is there to hear us. -1 = nothing sent yet.
+do
+    local CZ_MIN, CZ_MAX = 3, 50
+    local CZ_SEND_GAP     = 0.08
+    local CZ_QUIET        = 3.0
+    local CZ_VERIFY_AFTER = 0.8
+    local CZ_REPORT_EVERY = 5.0
+
+    local cz_pending     = nil
+    local cz_last_send   = -100
+    local cz_quiet_until = 0
+    local cz_last_report = -100
+    local cz_verify_at   = nil
+    local cz_verify_val  = nil
+    local cz_echo        = false
+    local cz_took        = -1
+    local cz_dist        = nil
+
+    local function cz_fmt(v)
+        local s = string.format('%.1f', v)
+        return (s:gsub('%.0$', ''))
+    end
+
+    -- Where XICamera lives. Looked for beside OmniWatch first (from
+    -- windower.addon_path, the dependable one) and under windower_path
+    -- second; either its main file or its saved settings counts.
+    local cz_found = nil
+    local function cz_exists(path)
+        local f = io.open(path, 'r')
+        if f then f:close() return true end
+        return false
+    end
+    local function cz_find()
+        local roots = {}
+        local here = ADDON_PATH:gsub('[^/\\]+[/\\]$', '')
+        if here ~= '' and here ~= ADDON_PATH then
+            roots[#roots + 1] = here .. 'XICamera/'
+        end
+        if windower.windower_path then
+            roots[#roots + 1] = norm_path(windower.windower_path)
+                .. 'addons/XICamera/'
+        end
+        for _, r in ipairs(roots) do
+            if cz_exists(r .. 'XICamera.lua')
+                    or cz_exists(r .. 'data/settings.xml') then
+                return r
+            end
+        end
+        return nil
+    end
+    local function cz_root()
+        return cz_found or (norm_path(windower.windower_path or '')
+            .. 'addons/XICamera/')
+    end
+
+    local function cz_installed()
+        cz_found = cz_find()
+        return cz_found ~= nil
+    end
+
+    -- XICamera keeps its distance through Windower's config library,
+    -- which writes the character's own section only when it differs from
+    -- <global>. So: this character's section first, then <global>.
+    local function cz_read_saved()
+        local f = io.open(cz_root() .. 'data/settings.xml', 'r')
+        if not f then return nil end
+        local body = f:read('*a') or ''
+        f:close()
+        local function grab(sect)
+            if not sect then return nil end
+            return tonumber(sect:match(
+                '<cameraDistance>%s*([%d%.%-]+)%s*</cameraDistance>'))
+        end
+        local me = windower.ffxi.get_player and windower.ffxi.get_player()
+        local nm = me and me.name and me.name:lower()
+        local v
+        if nm and nm:match('^%w+$') then
+            v = grab(body:match('<' .. nm .. '>(.-)</' .. nm .. '>'))
+        end
+        return v or grab(body:match('<global>(.-)</global>'))
+    end
+
+    local function cz_report()
+        cz_last_report = os.clock()
+        local inst = cz_installed()
+        if inst and not cz_pending
+                and (os.clock() - cz_last_send) > CZ_QUIET then
+            -- Idle: follow the file, so a distance set some other way
+            -- (typed, a keybind with saving on, last session) shows up.
+            local saved = cz_read_saved()
+            if saved then cz_dist = saved end
+        end
+        local d = cz_dist and cz_fmt(cz_dist) or ''
+        pcall(function()
+            udp_inv:send(_OW_MB_TAG(string.format('CAMZOOM|%d|%d|%s',
+                inst and 1 or 0, cz_took, d)))
+        end)
+    end
+
+    _G._ow_camzoom_set = function(v)
+        v = tonumber(v)
+        if not v then return end
+        cz_pending = math.max(CZ_MIN, math.min(CZ_MAX, v))
+    end
+
+    _G._ow_camzoom_report_now = function()
+        cz_last_report = -100
+    end
+
+    -- True for XICamera's own "set camera distance to N" line while we
+    -- are the ones changing it. A predicate with no side effect beyond
+    -- noting the reply, so more than one handler can ask.
+    _G._ow_camzoom_eat = function(text)
+        if type(text) ~= 'string' or os.clock() > cz_quiet_until then
+            return false
+        end
+        local t = text:gsub('\31.', ''):gsub('\30.', '')
+        -- Matched without the "[XICamera] " prefix: older XICamera
+        -- (0.5) prints the bare line, newer prints it prefixed.
+        if t:find('set camera distance to', 1, true) then
+            cz_echo = true
+            return true
+        end
+        return false
+    end
+
+    _G._ow_camzoom_tick = function()
+        local now = os.clock()
+        if cz_pending and (now - cz_last_send) >= CZ_SEND_GAP then
+            local v = cz_pending
+            cz_pending = nil
+            cz_last_send = now
+            cz_quiet_until = now + CZ_QUIET
+            cz_dist = v
+            cz_echo = false
+            cz_verify_at = now + CZ_VERIFY_AFTER
+            cz_verify_val = v
+            windower.send_command('xicamera d ' .. cz_fmt(v))
+        end
+        if cz_verify_at and not cz_pending and now >= cz_verify_at then
+            local saved = cz_read_saved()
+            if cz_echo or (saved and math.abs(saved - cz_verify_val) < 0.01) then
+                cz_took = 1
+            else
+                cz_took = 0
+            end
+            cz_verify_at = nil
+            cz_report()
+            return
+        end
+        if (now - cz_last_report) >= CZ_REPORT_EVERY then
+            cz_report()
+        end
     end
 end
 
@@ -4083,6 +4252,46 @@ do
                 '[OW points] 0x061 matched %d of our known labels',
                 matched))
         end
+
+        -- Unity, from the same packet: leader, ranking and points are
+        -- packed into the 32 bits at 0x58 -- 5 bits leader id, 5 bits
+        -- rank, 17 bits points, low bits first. Decoded from the raw
+        -- bytes (fields.lua's labels have drifted between builds before,
+        -- see the EXP note above). Verified in game 2026-10-04: leader
+        -- 11 = Sylvie, rank 2 matched the in-game Unity ranking, and
+        -- fields.lua's 'Unity ID' / 'Unity Rank' decoded the same.
+        --
+        -- The rank is the weekly ranking of your Unity (1..11) -- what
+        -- Unity Concord gear scales with -- so it drives GearInfo's
+        -- settings.player.rank directly. It is saved as the last value
+        -- the game reported, so the gear math is right from the first
+        -- compute after a reload, before this packet comes round again.
+        pcall(function()
+            if #data < 0x5C then return end
+            local b0, b1, b2, b3 = data:byte(0x59, 0x5C)
+            local u = b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+            local uid  = u % 32
+            local rank = math.floor(u / 32) % 32
+            local pts  = math.floor(u / 1024) % 131072
+            local prev = _G._ow_unity_game
+            _G._ow_unity_game = { id = uid, rank = rank, points = pts }
+            if rank < 1 or rank > 11 then return end   -- no Unity yet
+            if not (prev and prev.id == uid and prev.rank == rank) then
+                local leaders = { 'Pieuje', 'Ayame', 'Invincible Shield',
+                    'Apururu', 'Maat', 'Aldo', 'Jakoh Wahcondalo',
+                    'Naja Salaheem', 'Flaviria', 'Yoran-Oran', 'Sylvie' }
+                ow_chat(207, string.format(
+                    '[OW] Unity: %s, ranked %d this week',
+                    leaders[uid] or ('leader ' .. uid), rank))
+            end
+            if type(ow_user_config) ~= 'table' then return end
+            ow_user_config.player = ow_user_config.player or {}
+            if tonumber(ow_user_config.player.unity_rank) ~= rank then
+                ow_user_config.player.unity_rank = rank
+                if ow_save_user_config then pcall(ow_save_user_config) end
+            end
+            if _ow_refresh_unity_rank then pcall(_ow_refresh_unity_rank) end
+        end)
     end)
 
     -- ── Points request injection ─────────────────────────────────────
@@ -8223,7 +8432,11 @@ function _ow_craft_build_synth(crystal_name, ingredients)
     return p
 end
 
+-- The last recipe Make sent, so Repeat can send it again.
+_ow_craft_last = nil
+
 function _ow_craft_issue_synth(item)
+    _ow_craft_last = item
     local p = _ow_craft_build_synth(item.crystal, item.ingredients)
     if type(p) == 'string' then
         _ow_craft_skipdel = true
@@ -8235,7 +8448,16 @@ function _ow_craft_issue_synth(item)
     end
 end
 
+-- Repeat the last recipe. Make sends its synthesis straight to the server,
+-- so the game itself never records it, and /lastsynth answered "no
+-- synthesis history exists" after every Make. Repeat now sends the
+-- recipe Make last used (fetching ingredients again the same way);
+-- /lastsynth is only the fallback when nothing has been made this session,
+-- for a synth done through the game's own menu.
 function _ow_craft_repeat()
+    if _ow_craft_last then
+        return _ow_craft_issue_synth(_ow_craft_last)
+    end
     windower.chat.input('/lastsynth')
 end
 
@@ -10871,6 +11093,25 @@ do
                 if e.drop_at and clock >= e.drop_at then
                     held[key] = nil
                     changed = true
+                else
+                    -- WHEN YOUR COPY ENDS, THEIRS HAS ENDED.
+                    --
+                    -- A trust's wear-off only arrives if you are in range
+                    -- when it happens; walk off (or be busy elsewhere) and
+                    -- it never comes, and the song sat on the trust until
+                    -- the hour-long age-out. A song or roll you used hit
+                    -- you and them from the same cast, so your own copy's
+                    -- end is theirs. Remember the latest end seen for
+                    -- your copy; once it has passed by a margin and no
+                    -- recast has refreshed this slot, drop it.
+                    local mine = TB.player_expiry(e.status, e.sname)
+                    if mine then
+                        e.mine_exp = mine
+                    elseif e.mine_exp and clock > e.mine_exp + 10
+                            and (e.t or 0) < os.time() - 10 then
+                        held[key] = nil
+                        changed = true
+                    end
                 end
             end
             if changed then TB.publish(id) end
@@ -11846,7 +12087,20 @@ do
             D.statdirty = true
             return
         end
-        if t ~= 0x01 then return end
+        -- Two kinds of packet put an item in a slot. 0x01 ("Work") is the
+        -- box as it stood: one per slot, eight in a row, on every open.
+        -- 0x06 ("Recv") is a NEW delivery: anything waiting behind the
+        -- eight slots is pulled into an empty one, one parcel per request,
+        -- and arrives as a pair -- the first an empty acknowledgement
+        -- (result 2), the second carrying the item (result 1). Reading only
+        -- 0x01 meant newly arrived parcels never showed; each one surfaced
+        -- only once a later 0x01 happened to repeat it, which looked like
+        -- the box loading one slot at a time.
+        if t == 0x06 then
+            if #data < 13 or data:byte(13) ~= 0x01 then return end
+        elseif t ~= 0x01 then
+            return
+        end
         local slot = p['Delivery Slot']
         if type(slot) ~= 'number' or slot < 0 or slot > DBC.LAST then return end
         local box = (D.open == 'out') and D.outbox or D.inbox
@@ -12194,6 +12448,28 @@ local function _ow_drain_inbound()
                 local bool_val = (lv == 'true' or lv == '1')
                 pcall(OW_Skillchains.set_setting, internal_key, bool_val)
             end
+            if skey == 'chat_autoenter' then
+                local lv = (sval or ''):lower()
+                local was = _G._ow_autoenter
+                _G._ow_autoenter = (lv == 'true' or lv == '1')
+                -- Switched on in the middle of a conversation: the line on
+                -- screen arrived while it was off, so the game is still
+                -- waiting on Enter for it and nothing new will come to
+                -- pass through. Press it once to get things moving. Only
+                -- when that last line really was waiting on Enter and was
+                -- not offering a choice -- Enter there would pick one.
+                if _G._ow_autoenter and not was and _G._ow_npc_waiting then
+                    _G._ow_npc_waiting = false
+                    local me = windower.ffxi.get_player()
+                    local t = windower.ffxi.get_mob_by_target('t')
+                    local skip = t and (t.name == 'Paintbrush of Souls'
+                                        or t.name == 'Geomantic Reservoir')
+                    if me and me.status == 4 and not skip then
+                        windower.send_command(
+                            'setkey enter down; wait 0.05; setkey enter up')
+                    end
+                end
+            end
             if skey == 'autora_enabled' then
                 local on = ((sval or ''):lower() == 'true')
                            or (sval == '1')
@@ -12265,10 +12541,12 @@ local function _ow_drain_inbound()
                 -- Reset the bards/corsairs sections first so removed
                 -- ally entries actually disappear (overlay sends only
                 -- what currently exists in its state). The player
-                -- section gets reset too so a stale unity_rank can't
-                -- linger after the user clears it via Skip; if the
-                -- overlay didn't send player.unity_rank we backfill
-                -- it to 1 below.
+                -- section's unity_rank belongs to the GAME now (the
+                -- 0x061 reader writes it), so it is carried across the
+                -- save untouched and anything the overlay sends for it
+                -- is ignored.
+                local _keep_ur = ow_user_config.player
+                    and ow_user_config.player.unity_rank
                 ow_user_config.bards = {self = {}}
                 ow_user_config.corsairs = {self = {}}
                 ow_user_config.geomancers = {self = {}}
@@ -12308,11 +12586,9 @@ local function _ow_drain_inbound()
                         ow_user_config.geomancers.self[fk] = 0
                     end
                 end
-                -- Backfill unity_rank to 1 (highest) if the overlay
-                -- didn't include it. Clamp 1..11 in case a malformed
-                -- packet ever sneaks through (the overlay validates
-                -- on its side, but defense-in-depth).
-                local ur = tonumber(ow_user_config.player.unity_rank) or 1
+                -- Restore the game-reported Unity rank (1 until the
+                -- game has reported one). Clamp 1..11 for safety.
+                local ur = tonumber(_keep_ur) or 1
                 if ur < 1 then ur = 1 end
                 if ur > 11 then ur = 11 end
                 ow_user_config.player.unity_rank = ur
@@ -12629,9 +12905,16 @@ local function _ow_drain_inbound()
             if _G._ow_force_full_resend then
                 pcall(_G._ow_force_full_resend)
             end
+            if _G._ow_camzoom_report_now then
+                pcall(_G._ow_camzoom_report_now)
+            end
 
         elseif head == 'TAGSET' then
             if _G._ow_tag_set then _G._ow_tag_set(rest) end
+
+        elseif head == 'CAMZOOM' then
+            -- Zoom pill: set XICamera's camera distance. "<distance>".
+            if _G._ow_camzoom_set then _G._ow_camzoom_set(rest) end
 
         elseif head == 'POOLACT' then
             -- Lot or pass a treasure pool slot from the overlay panel.
@@ -13248,7 +13531,7 @@ ow_safe_register('load', function()
     if not (ow_user_config and ow_user_config.setup_complete) then
         ow_chat(207,
             '[OmniWatch] First run: type //ow setup to configure your '
-            .. 'Song+ / Phantom Roll+ / Geomancy+ / Unity Rank values. '
+            .. 'Song+ / Phantom Roll+ / Geomancy+ values. '
             .. 'Or //ow setup skip to dismiss.')
     end
 end)
@@ -13281,7 +13564,7 @@ local PW_COMMANDS_HELP = {
                               .. 'escaped as \\xNN.'},
     {'debug',                 'Toggle diagnostic chat output (action packets, '
                               .. 'Bolter\'s rolls, gearswap state echoes).'},
-    {'setup',                 'Open the config overlay (Song+ / Phantom Roll+ / Geomancy+ / Unity Rank).'},
+    {'setup',                 'Open the config overlay (Song+ / Phantom Roll+ / Geomancy+).'},
     {'setup skip',            'Mark setup complete without opening the overlay.'},
     {'config',                'List current bard / cor config in chat.'},
     {'config <bard> <fam> <n>','Set bards.<bard>.<fam> = n in memory.'},
@@ -16311,10 +16594,10 @@ end
 -- Mirrors the bard/cor refreshers for Unity Rank. GearInfo's
 -- Gear_Processing.lua reads `settings.player.rank` to scale Unity
 -- Concord-augmented gear (formula at Gear_Processing.lua:57). The
--- _loader.lua sets settings.player.rank=1 at startup, but the wizard
--- is the user-facing knob that overrides it.
+-- _loader.lua sets settings.player.rank=1 at startup; the game's own
+-- Unity ranking (read from 0x061) overrides it.
 --
--- ow_user_config.player.unity_rank is what the cfgwiz writes;
+-- ow_user_config.player.unity_rank is what the 0x061 reader writes;
 -- this helper bridges that into settings.player.rank so the next
 -- compute walks the player's actual Unity rank rather than the
 -- default highest-tier (1) value.
@@ -21037,6 +21320,10 @@ end
 
 ow_safe_register('incoming text', function(original, modified, original_mode, modified_mode, blocked)
     if not original then return end
+    -- XICamera's reply to a zoom-pill change: blocked from the game log
+    -- by the handler at the end of the file, and kept out of our chat
+    -- panel here.
+    if _G._ow_camzoom_eat and _G._ow_camzoom_eat(original) then return end
 
     -- When _ow_text_capture is on, print every incoming text event
     -- with its mode byte and content. Use to identify what mode /check
@@ -26668,6 +26955,9 @@ ow_safe_register('prerender', function()
     if _G._ow_tag_tick then
         pcall(_G._ow_tag_tick)
     end
+    if _G._ow_camzoom_tick then
+        pcall(_G._ow_camzoom_tick)
+    end
     if _G._ow_pool_tick then
         pcall(_G._ow_pool_tick)
     end
@@ -28578,6 +28868,199 @@ windower.register_event('incoming chunk', function(id, data)
     end
 end)
 
+-- ── Play time ────────────────────────────────────────────────────────────
+-- The zone-in packet (0x00A) carries the character's total play time in
+-- seconds as a uint32 at 0xA0 (XiPackets / LandSandBoat: PlayTime, just
+-- after the name/certificate block and before DeadCounter). It is the same
+-- number /playtime prints, without sending /playtime. Sent as
+-- PLAYTIME|<seconds>|<os.time() when read>; the overlay counts up from
+-- there. Re-sent every 30s so an overlay started after the last zone line
+-- still gets it.
+_ow_playtime_last = nil
+
+local function _ow_playtime_send()
+    local p = _ow_playtime_last
+    if not p or not udp_zone then return end
+    pcall(function()
+        udp_zone:send(_OW_MB_TAG(string.format('PLAYTIME|%d|%d',
+            p.secs, p.at)))
+    end)
+end
+
+local function _ow_playtime_read(data)
+    if not data or #data < 0xA4 then return end
+    local secs = data:byte(0xA1) + data:byte(0xA2) * 256
+               + data:byte(0xA3) * 65536 + data:byte(0xA4) * 16777216
+    if secs <= 0 then return end
+    _ow_playtime_last = { secs = secs, at = os.time() }
+    _ow_playtime_send()
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    if id == 0x00A then _ow_playtime_read(data) end
+end)
+
+-- Loaded mid-session: the last zone packet is still cached by Windower.
+-- Its age is unknown, so it is not used -- an old reading stamped with
+-- "now" would under-count by however long ago that zone line was. The
+-- next zone line fills it in.
+do
+    local _pt_tick = 0
+    windower.register_event('prerender', function()
+        local c = os.clock()
+        if c - _pt_tick < 30 then return end
+        _pt_tick = c
+        _ow_playtime_send()
+    end)
+end
+
+-- ── Item level ───────────────────────────────────────────────────────────
+-- The character-status packet (0x061) carries the item level: the main
+-- job level at 0x0D and, at 0x55, how far your gear lifts you past it
+-- (LandSandBoat: ilvl = getItemLevelDifference; 16 at level 99 reads as
+-- item level 115). The server re-sends 0x061 on every equipment change,
+-- so this follows gear swaps. Sent as ILVL|<job level>|<difference>, and
+-- again every 30 s for an overlay started after the last change.
+_ow_ilvl_last = nil
+
+-- The same packet carries the Profile page of the Statistics panel:
+-- title (0x44), nation rank (0x46), home point zone (0x4A) and nation
+-- (0x50), sent as PROFILE|<title>|<nation>|<rank>|<home point>.
+_ow_profile_last = nil
+
+local function _ow_ilvl_send()
+    local v = _ow_ilvl_last
+    if not v or not udp_inv then return end
+    pcall(function()
+        udp_inv:send(_OW_MB_TAG(string.format('ILVL|%d|%d', v.lv, v.diff)))
+        if _ow_profile_last then
+            udp_inv:send(_OW_MB_TAG(_ow_profile_last))
+        end
+    end)
+end
+
+local function _ow_ilvl_read(data)
+    if not data or #data < 0x56 then return end
+    local lv, diff = data:byte(0x0E), data:byte(0x56)
+    if not lv or lv == 0 then return end
+    local same = _ow_ilvl_last and _ow_ilvl_last.lv == lv
+                 and _ow_ilvl_last.diff == diff
+    _ow_ilvl_last = { lv = lv, diff = diff }
+    pcall(function()
+        local tid = data:byte(0x45) + data:byte(0x46) * 256
+        local rank = data:byte(0x47) + data:byte(0x48) * 256
+        local hp = data:byte(0x4B) + data:byte(0x4C) * 256
+        local nat = data:byte(0x51)
+        local t = res.titles and res.titles[tid]
+        local z = res.zones and res.zones[hp]
+        local nn = ({[0] = "San d'Oria", [1] = 'Bastok', [2] = 'Windurst'})[nat]
+        local msg = string.format('PROFILE|%s|%s|%d|%s',
+            (t and t.en or ''):gsub('|', '/'), nn or '', rank,
+            (z and z.en or ''):gsub('|', '/'))
+        if msg ~= _ow_profile_last then
+            _ow_profile_last = msg
+            same = false
+        end
+    end)
+    if not same then _ow_ilvl_send() end
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    if id == 0x061 then _ow_ilvl_read(data) end
+end)
+
+do
+    -- Loaded mid-session: the last 0x061 is still the current one (it is
+    -- re-sent whenever anything on it changes), so read it straight away.
+    pcall(function()
+        if windower.packets and windower.packets.last_incoming then
+            _ow_ilvl_read(windower.packets.last_incoming(0x061))
+        end
+    end)
+    local _il_tick = 0
+    windower.register_event('prerender', function()
+        local c = os.clock()
+        if c - _il_tick < 30 then return end
+        _il_tick = c
+        _ow_ilvl_send()
+    end)
+end
+
+-- ── Job levels ───────────────────────────────────────────────────────────
+-- The job-info packet (0x01B) lists every job's level (0x49, 22 bytes in
+-- job-id order), your Mastery Rank (0x66), which jobs are mastered (a bit
+-- per job from 0x68, after one leading junk bit) and each job's master
+-- level (0x6D). Spending all 2100 job points also counts as mastered, for
+-- a client that has not set the bit yet. Sent as
+-- JOBS|<mastery rank>|WAR:<lv>:<ml>:<0|1>;MNK:... and again every 30 s.
+_ow_jobs_last = nil
+
+-- Wrapped in a function: the main chunk is at Lua's 200-local limit.
+;(function()
+local function _ow_jobs_send()
+    local v = _ow_jobs_last
+    if not v or not udp_inv then return end
+    pcall(function() udp_inv:send(_OW_MB_TAG(v)) end)
+end
+
+local function _ow_jobs_read(data)
+    if not data or #data < 0x6D + 22 then return end
+    local jp = nil
+    pcall(function()
+        local p = windower.ffxi.get_player()
+        jp = p and p.job_points
+    end)
+    local parts = {}
+    for j = 1, 22 do
+        local lv = data:byte(0x49 + j) or 0
+        if lv > 0 then
+            local ml = data:byte(0x6D + j) or 0
+            local fb = data:byte(0x68 + 1 + math.floor(j / 8)) or 0
+            local m = math.floor(fb / 2 ^ (j % 8)) % 2
+            local r = res.jobs[j]
+            local ens = r and r.ens or tostring(j)
+            if m == 0 and jp then
+                local e = jp[ens:lower()] or jp[ens]
+                local spent = e and tonumber(e.jp_spent or e.spent_jp or 0) or 0
+                if spent >= 2100 then m = 1 end
+            end
+            parts[#parts + 1] = string.format('%s:%d:%d:%d', ens, lv, ml, m)
+        end
+    end
+    if #parts == 0 then return end
+    local msg = string.format('JOBS|%d|%s', data:byte(0x67) or 0,
+                              table.concat(parts, ';'))
+    local same = (msg == _ow_jobs_last)
+    _ow_jobs_last = msg
+    if not same then _ow_jobs_send() end
+end
+
+windower.register_event('incoming chunk', function(id, data)
+    if id == 0x01B then _ow_jobs_read(data) end
+end)
+
+do
+    pcall(function()
+        if windower.packets and windower.packets.last_incoming then
+            _ow_jobs_read(windower.packets.last_incoming(0x01B))
+        end
+    end)
+    local _jb_tick = 0
+    windower.register_event('prerender', function()
+        local c = os.clock()
+        if c - _jb_tick < 30 then return end
+        _jb_tick = c
+        -- Re-read so the job-point fallback catches points spent since.
+        pcall(function()
+            if windower.packets and windower.packets.last_incoming then
+                _ow_jobs_read(windower.packets.last_incoming(0x01B))
+            end
+        end)
+        _ow_jobs_send()
+    end)
+end
+end)()
+
 windower.register_event('incoming chunk', function(id, data)
     if id ~= 0x057 or #data < 8 then return end
     local vmin = data:byte(5) + data:byte(6) * 256
@@ -29142,5 +29625,46 @@ local function _ow_fisher_boot()
     end
 end
 _ow_fisher_boot()
+
+-- AutoEnter (the chat panel's NPC tab): step through NPC dialogue without
+-- pressing Enter for each line, the way the Enternity addon does. NPC lines
+-- (modes 150 and 151) carry 0x7F 0x31 where the game waits for Enter;
+-- removing it lets the conversation run on. Left alone:
+--   * lines holding 0x1E 0x02 -- a choice is being offered, and running
+--     past it would skip the question;
+--   * talking to an NPC whose dialogue must be timed (Paintbrush of
+--     Souls) or that freezes when hurried (Geomantic Reservoir).
+-- Works on `modified`, so whatever another addon already did to the line
+-- (Battlemod hiding NPC words, say) is kept.
+local _ow_autoenter_skip = {
+    ['Paintbrush of Souls'] = true,
+    ['Geomantic Reservoir'] = true,
+}
+windower.register_event('incoming text', function(original, modified, mode)
+    if mode ~= 150 and mode ~= 151 then return end
+    -- Remember whether the newest NPC line is sitting on an Enter prompt
+    -- (and not a choice), so switching AutoEnter on mid-conversation knows
+    -- whether one press is needed to get going again.
+    local is_choice = original:find(string.char(0x1E, 0x02), 1, true) ~= nil
+    _G._ow_npc_waiting = (not is_choice)
+        and original:find(string.char(0x7F, 0x31), 1, true) ~= nil
+    if not _G._ow_autoenter then return end
+    if is_choice then return end
+    local t = windower.ffxi.get_mob_by_target('t')
+    if t and _ow_autoenter_skip[t.name] then return end
+    local out = (modified or original):gsub(string.char(0x7F, 0x31), '')
+    return out
+end)
+
+-- Swallow XICamera's "set camera distance to N" while the zoom pill is the
+-- one changing it (see the camera zoom block). Plain register_event, not
+-- ow_safe_register: blocking a line means returning true, and the safe
+-- wrapper discards return values. Registered last so nothing after it can
+-- answer for the same line.
+windower.register_event('incoming text', function(original)
+    if _G._ow_camzoom_eat and _G._ow_camzoom_eat(original) then
+        return true
+    end
+end)
 
 --python -m PyInstaller --onefile omniwatch.py

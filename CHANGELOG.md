@@ -1,5 +1,60 @@
 # Changelog
 
+## [1.15.0] — 2026-10-03
+
+### Added
+
+- **Camera zoom scale.** A slim vertical scale on the overlay shows how far out your camera is. Hover it and roll the mouse wheel to bring the camera closer or pull it further out than the game normally allows, which helps when a large mob fills the screen. The camera moves as you scroll, nothing is printed to chat, a small mark shows the game's normal distance, and the lock-on camera is left as it is. Drag it wherever you like, including to the other window (right-click while dragging, as with the panels), and tuck it against a screen edge; switch it off under **Settings ▸ Misc ▸ Camera zoom scale**. It works through the [XICamera](https://github.com/Hokuten85/XICamera) addon, and turns amber with a note on hover when XICamera isn't installed or loaded.
+
+- **More header hovers.** Hover the clock to see Vana'diel time, your own time and Japan time together, without waiting for the cycle to come round, with today's Vana'diel date beneath the Vana'diel time and your character's total **Playtime** at the bottom. Playtime keeps counting while you play and appears from your first zone line. Hover the points readout to see EXP, CP and Exemplar at once, each with its percentage to the next level, and hover the currency to see every currency in your cycle. In each, the one the header is showing is highlighted.
+
+- **Item level in the Equipment header.** At level 99 the header shows your item level, as `iLvl - 119`, and it follows you through every gear change.
+
+- **Your skills, job levels and profile on the Statistics panel.** Arrows at the right of the Statistics header step through four pages. **Skills** shows your combat and magic skills side by side, with capped skills in blue; only skills your jobs use are listed. **Job Levels** shows your Mastery Rank at the top, then every job you have unlocked with its level, its master level, and three gold stars once the job is mastered; your current job is highlighted. **Profile** shows your current title, your nation and rank, and your home point. The wheel scrolls a long list, and the panel remembers which page you left it on.
+
+- **Settings menu sections open one at a time.** The settings menu opens with General open and every other section folded to its heading. Click a heading to roll that section open; opening another section rolls the first one shut, and clicking an open heading folds it again.
+
+- **See where a warp lands before you go.** With the minimap open, hovering a destination in the travel menu, or having one waiting in the warp confirmation, shows that zone's map in the minimap. After you have used a Home Point or Survival Guide once, a gold marker shows exactly where it puts you. Hovering a city or zone heading, before you pick a point in it, shows that zone's map too, with a marker on every point there you have already used.
+
+- **Warp without confirming.** Settings → Misc → Warp has a new switch: with it on, picking a destination in the travel menu warps you straight away, with no Warp / Cancel step.
+
+- **NPC tab in the chat panel.** What NPCs say to you, in conversations, cutscenes and shops, now has its own tab between System and Gearswap instead of mixing into System. While a conversation is waiting on you, click the ▼ at the end of the chat panel to move it along, the same as pressing Enter in the game.
+
+- **AutoEnter.** The NPC tab's header has an AutoEnter switch. With it on, NPC conversations run on by themselves instead of waiting for Enter at every line; they still stop whenever you're offered a choice.
+
+- **Pan the minimap.** Hold the left button on the minimap and drag to look around the map; it springs back to you as soon as you move. To move the minimap window itself, drag it by its edge, hold Shift, or use Position mode.
+
+- **Other maps of the zone on the minimap.** Right-click the minimap for a list of the zone's maps, upstairs, downstairs and other sections, and pick one to look at it. A star marks the one you are in; picking it goes back to following you, as does changing zone.
+
+- **Items tab in the checklist: Atma, Key Items and Maps.** **Atma** lists all 145 atmas, grouped by the Abyssea zone they come from plus the three Synthetic sets. **Key Items** lists over 400 permanent key items from A to Z: warp runes, gate crystals, crafting tomes and skills, job gestures, chocographs, sheets of tunes and the rest. **Maps** lists all 79 maps you keep. All three tick themselves off as soon as the game shows you holding the item, and anything the game hasn't reported yet can be ticked by hand. Click any name to open its BG-wiki page.
+
+### Changed
+
+- **The update button names the version it offers.** When OmniWatch finds a newer release, the button in the settings menu reads `Update to v…` with that release's number, so you can see at a glance whether it is really newer than the version shown at the bottom of the menu.
+
+- **Unity rank comes from the game.** Unity Concord gear now scales with your Unity's actual weekly ranking, read straight from the game and kept up to date when the rankings change. The setup wizard no longer asks for it.
+
+- **Marketplace ▸ Sell listings have column headers** — Item, Expires and Asking — and every column lines up from row to row.
+
+### Fixed
+
+- **High-resolution maps take priority.** When a zone page has both a PNG and a GIF in data/maps, the minimap and Tracker now show the PNG, and your position and mob dots land in the right place on it at any image size.
+- **The Checklist and Campaigns windows only hold the display they're on.** With either one open on one display, the mouse wheel and clicks keep working on the other, so you can scroll the warp menu or use your panels there without closing it first.
+- **Busted rolls stay out of World.** Busting a roll with trusts or party members in range no longer puts a copy of the roll's target list in the chat panel's World tab; the bust and its penalty show with the rest of your roll output.
+- **Trust buffs clear when they end.** Songs and rolls you put on your trusts now leave their rows when your own copy wears off, even if you were out of range when theirs did.
+
+- **Repeat on the Craft tab works after Make.** Repeat makes your last recipe again instead of answering that no synthesis history exists.
+
+- **Craft fields can be typed over.** Clicking into the amount (or any Craft field) highlights what's there, so a new number replaces the old one; Ctrl+A highlights it too, and Backspace clears it.
+
+- **The Alerts panel remembers where you put it**, and carries the coloured stripe down its left edge like the other panels.
+
+- **The minimap and the Tracker's map show the floor you are on** in zones with an upstairs and a downstairs.
+
+- **The delivery box shows every parcel when it opens**, including ones that arrived since you last looked.
+
+- **Buttons in the second window answer every click.** A hotbar button on the second display fires on the first click, however quick the tap, instead of sometimes needing a second one.
+
 ## [1.14.2] — 2026-09-30
 
 ### Added

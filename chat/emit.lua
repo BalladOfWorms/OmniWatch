@@ -736,6 +736,12 @@ local DROPPED_CHAT_MODES = {
     -- zone with strangers' kills.
     [101] = true,   -- AoE ability target-list ("X uses → {6}: A, B, C")
                     --   — dup of 0x028 synth.
+    [102] = true,   -- the same target-list line for a busted roll
+                    --   ("[Wormfood] Bust! Chaos Roll → {6}: A, B, C"),
+                    --   sent once the roll reaches party members besides
+                    --   you. Dup of the 0x028 synth like 101; it was
+                    --   landing in World. The "Bust! → A, B (-9.76%
+                    --   Attack!)" result line is mode 1 and still shows.
     [104] = true,   -- mob TP-move MISS ("The Apex Raptor uses Ripper
                     --   Fang, but misses Wormfood"). Counterpart to the
                     --   mode-28 hit; battle_events synthesizes the miss
@@ -744,10 +750,8 @@ local DROPPED_CHAT_MODES = {
     [110] = true,   -- mob readies ability ("[Apex Raptor] Scythe Tail →
                     --   Wormfood") — dup of 0x028 synth; this is the mob-
                     --   ability line that was showing in System garbled.
-    [144] = true,   -- NPC dialog ("Yoskolo : Welcome to..."). Users
-                    --   see this in FFXI's own chat already and it
-                    --   doesn't need a separate panel slot. To route
-                    --   somewhere visible, remove this entry.
+    -- 144 (NPC dialog, "Yoskolo : Welcome to...") is no longer dropped:
+    -- it goes to the chat panel's NPC tab with the mode-150 dialogue.
 }
 
 function M.emit_chat(mode, sender_name, text)
