@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.15.1] — 2026-10-09
+
+### Added
+
+- **Other city districts on the minimap.** In a city, the minimap's right-click list of maps also has the city's other districts by name, so from Bastok Markets you can look at Port Bastok or the Metalworks. The same goes for San d'Oria, Windurst, Jeuno, Whitegate and Al Zahbi, and Adoulin.
+
+### Changed
+
+- **Hotbar buttons light up under the mouse.** Hovering a button brightens it and its border, so you can see which button a click will press before you press it.
+- **The minimap and party cards show when the mouse is on them.** The minimap's border brightens while the mouse is over it, so you know a drag, wheel or right-click is going to the map. On the party panel, the job, name and bars of the member under the mouse are outlined to show who a click will target, and a debuff icon under the mouse gets its own outline to show which status a click will cure.
+
+### Fixed
+
+- **Gear stats read every item you carry.** All your bags are read for gear stats, including weapon-slot items that have no combat skill, so the Equipment and Statistics panels and sim mode have your full inventory to work with.
+
 ## [1.15.0] — 2026-10-03
 
 ### Added

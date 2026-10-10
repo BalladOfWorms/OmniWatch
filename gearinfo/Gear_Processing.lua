@@ -282,8 +282,25 @@ function find_all_values(item)
 					-- edited_item[k] = tonumber(v)
 				-- end
 				if k == 'skill' then
-					local skill = res.skills:with('id', v ).en
-					edited_item[k] = skill
+					-- OmniWatch patch (2026-10-10): a Weapon-category item whose
+					-- skill id has no entry in res.skills (skill 0 on some
+					-- non-combat weapon-slot items, or an id the user's resources
+					-- don't know) made :with() return nil, and indexing .en threw
+					-- -- aborting parse_inventory for EVERY item after it. Leave
+					-- skill unset instead; get_equip_stats already treats a
+					-- missing skill as none. Logged once per item for diagnosis.
+					local sk = v and res.skills:with('id', v)
+					if sk and sk.en then
+						edited_item[k] = sk.en
+					elseif ow_chat then
+						_ow_gi_unknown_skill = _ow_gi_unknown_skill or {}
+						if not _ow_gi_unknown_skill[item.id] then
+							_ow_gi_unknown_skill[item.id] = true
+							pcall(ow_chat, 207, string.format(
+								'[OW/GI] %s (id %s): skill id %s not in res.skills, skipped',
+								tostring(item.en), tostring(item.id), tostring(v)))
+						end
+					end
 				end
 			end
 		end

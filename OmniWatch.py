@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.15.0 (2026-10-03)"
+OMNIWATCH_BUILD_STAMP = "v1.15.1 (2026-10-09)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.15.0"
+OMNIWATCH_VERSION = "1.15.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -12266,6 +12266,25 @@ def draw_party_target_hint(surface):
     mx, my = _mouse_pos()
     if _overlay_blocks_point((mx, my)):
         return
+    # Outline exactly what a click would act on: the job / name / bars
+    # side of a member targets them, and a debuff icon cures that one
+    # status. The status side otherwise stays plain (buff icons do
+    # nothing when clicked).
+    _hl = None
+    for _r, _m, _n, _p in party_name_click_rects:
+        if _r.collidepoint(mx, my):
+            _hl = _r
+            break
+    if _hl is None:
+        for _ent in globals().get("_party_buff_icon_rects") or ():
+            if len(_ent) >= 8 and _ent[7] and _ent[0].collidepoint(mx, my):
+                _hl = _ent[0].inflate(2, 2)
+                break
+    if _hl is not None:
+        _wash = pygame.Surface(_hl.size, pygame.SRCALPHA)
+        _wash.fill((150, 190, 240, 18))
+        surface.blit(_wash, _hl.topleft)
+        pygame.draw.rect(surface, (150, 190, 240), _hl, 1, border_radius=3)
     hover_name = None
     for rect, _midx, nm, _pid in party_name_click_rects:
         if rect.collidepoint(mx, my):
@@ -44781,10 +44800,37 @@ _minimap_stream_t = 0.0
 # the drag in progress: {start, pan0, moved}.
 _minimap_pan      = [0, 0]
 # Right-click menu of the zone's other maps (floors / sections). A map
-# picked there stays up until you pick "Where I am" or change zone:
-# _minimap_map_pick = (zone id, map index). _minimap_menu is the open
-# menu: {"pos": (x, y), "items": [(rect, value)]}.
+# picked there stays up until you pick the starred one or change zone:
+# _minimap_map_pick = (zone you are in, zone shown, map index). In a city
+# the menu also lists the city's other districts. _minimap_menu is the
+# open menu: {"pos": (x, y), "items": [(rect, value)]}.
 _minimap_map_pick = None
+_MINIMAP_CITY_GROUPS = (
+    (230, 231, 232, 233),               # San d'Oria
+    (234, 235, 236, 237),               # Bastok
+    (238, 239, 240, 241, 242),          # Windurst
+    (243, 244, 245, 246),               # Jeuno
+    (50, 48),                           # Whitegate, Al Zahbi
+    (256, 257),                         # Western / Eastern Adoulin
+)
+_minimap_zone_names = None
+
+
+def _minimap_zone_name(zid):
+    global _minimap_zone_names
+    if _minimap_zone_names is None:
+        _minimap_zone_names = {}
+        for _z, _n in globals().get("_WARP_ZONE_TABLE", ()) or ():
+            _minimap_zone_names.setdefault(int(_z), _n)
+    return _minimap_zone_names.get(int(zid), "Zone %d" % zid)
+
+
+def _minimap_area_zones(zid):
+    """The zone, then the rest of its city, for the maps menu."""
+    for _g in _MINIMAP_CITY_GROUPS:
+        if zid in _g:
+            return [zid] + [z for z in _g if z != zid]
+    return [zid]
 _minimap_menu     = None
 _minimap_pan_at   = None          # where you stood when the pan began
 _minimap_pan_drag = None
@@ -45315,15 +45361,20 @@ def draw_minimap_window(surface):
         global _minimap_map_pick
         if _minimap_map_pick and _minimap_map_pick[0] != zid:
             _minimap_map_pick = None          # new zone: back to auto
-        _picked = _minimap_map_pick[1] if _minimap_map_pick else None
-        if _picked is not None and _picked != mi:
+        _show_z = _minimap_map_pick[1] if _minimap_map_pick else zid
+        _picked = _minimap_map_pick[2] if _minimap_map_pick else None
+        if _picked is not None and (_picked != mi or _show_z != zid):
             mi = _picked
         else:
             _picked = None
-        msurf = _scanzone_map_surface(zid, mi)
-        if msurf is not None and pwx is not None and pwy is not None:
+            _show_z = zid
+        msurf = _scanzone_map_surface(_show_z, mi)
+        if msurf is not None and (_picked is not None or (
+                pwx is not None and pwy is not None)):
             iw, ih = msurf.get_size()
-            calib = _scanzone_calib_for(zid, mi, iw, ih)
+            calib = _scanzone_calib_for(_show_z, mi, iw, ih)
+            if calib is None and _picked is not None:
+                calib = (0.0, 0.0, 0.0, 0.0)  # centred only; no dots
             if calib:
                 A, B, C, D = calib
                 # Cover the LONGER side, like the Tracker's map view, so a
@@ -45581,8 +45632,12 @@ def draw_minimap_window(surface):
     if _picked is not None:
         # Showing a map other than the one you are on: say so, and how to
         # get back.
-        _lt = fnt_s.render("Map %d  \u00b7  right-click to change"
-                           % (_picked + 1), True, (240, 220, 160))
+        _lbl = ("Map %d" % (_picked + 1) if _show_z == zid else
+                (_minimap_zone_name(_show_z)
+                 + ("  Map %d" % (_picked + 1)
+                    if len(_minimap_zone_maps(_show_z)) > 1 else "")))
+        _lt = fnt_s.render(_lbl + "  \u00b7  right-click to change",
+                           True, (240, 220, 160))
         _strip = pygame.Rect(plot.x, plot.y, plot.width,
                              _lt.get_height() + 4)
         pygame.draw.rect(body, (18, 20, 26, 210), _strip)
@@ -45635,12 +45690,28 @@ def _minimap_draw_menu(surface):
     pwx, pwy, pwz = _minimap_here()
     here = _sz_effective_map_index(zid, zone_info.get("map_index", 0),
                                    pwx, pwy, pwz)
-    pick = (_minimap_map_pick[1] if _minimap_map_pick
-            and _minimap_map_pick[0] == zid else None)
+    pick = ((_minimap_map_pick[1], _minimap_map_pick[2])
+            if _minimap_map_pick and _minimap_map_pick[0] == zid else None)
     fnt = get_font("Consolas", 12)
     # The map you are on carries a star; picking it goes back to
-    # following you from floor to floor.
-    rows = [("Map %d" % (mi + 1), None if mi == here else mi) for mi in maps]
+    # following you from floor to floor. In a city the other districts
+    # follow, each by name.
+    # In a city every district is listed by name, your own included, so
+    # the list reads the same all the way down.
+    if len(_minimap_area_zones(zid)) > 1:
+        _own = _minimap_zone_name(zid)
+        rows = [((_own + ("  Map %d" % (mi + 1) if len(maps) > 1 else "")),
+                 None if mi == here else (zid, mi)) for mi in maps]
+    else:
+        rows = [("Map %d" % (mi + 1), None if mi == here else (zid, mi))
+                for mi in maps]
+    for _oz in _minimap_area_zones(zid)[1:]:
+        _om = _minimap_zone_maps(_oz)
+        for _mi in _om:
+            _nm = _minimap_zone_name(_oz)
+            if len(_om) > 1:
+                _nm += "  Map %d" % (_mi + 1)
+            rows.append((_nm, (_oz, _mi)))
     if not rows:
         rows.append(("(no maps for this zone)", "none"))
     rh = fnt.get_height() + 6
@@ -45691,8 +45762,21 @@ def _minimap_composite(surface, back, body, x, y, w, h):
                          (grip_r.right - 2 - _g * 3, grip_r.bottom - 2),
                          (grip_r.right - 2, grip_r.bottom - 2 - _g * 3))
     _minimap_rects["grip"] = grip_r.move(x, y)
-    pygame.draw.rect(body, COL_SLOT_BDR, body.get_rect(), 1,
-                     border_radius=MINIMAP_RADIUS)
+    # Under the mouse, the border brightens: the drag, wheel or right-click
+    # is going to the minimap, not the game behind it.
+    _mp = _mouse_pos()
+    _hov = pygame.Rect(x, y, w, h).collidepoint(_mp)
+    if _hov:
+        try:
+            _hov = not _overlay_blocks_point(_mp)
+        except Exception:
+            pass
+    if _hov:
+        pygame.draw.rect(body, (150, 190, 240), body.get_rect(), 2,
+                         border_radius=MINIMAP_RADIUS)
+    else:
+        pygame.draw.rect(body, COL_SLOT_BDR, body.get_rect(), 1,
+                         border_radius=MINIMAP_RADIUS)
 
     try:
         op = int(setting("minimap_opacity"))
@@ -45755,7 +45839,8 @@ def _minimap_handle_event(event):
         for _r, _val in _minimap_menu.get("items", []):
             if _r.collidepoint(*event.pos):
                 _minimap_map_pick = (None if _val is None else
-                                     (zone_info.get("zone_id", 0), _val))
+                                     (zone_info.get("zone_id", 0),
+                                      _val[0], _val[1]))
                 _minimap_pan[0] = _minimap_pan[1] = 0
                 break
         _box = _minimap_menu.get("box")
@@ -66304,9 +66389,11 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                         or entry["kind"] == "none"
                         or not entry["command"])
             hovered = rect.collidepoint(mx, my) and not is_inert
-            # is_hover drives the highlight, which stays tied to the
-            # unlocked state (its original drag-affordance role)…
-            is_hover = hovered and not locked
+            # The highlight shows in normal play too, so you can see which
+            # button the click will land on before you press. Held back
+            # only while a button is being dragged (the ghost is the
+            # feedback then).
+            is_hover = hovered and hotbar_drag is None
             # …but the tooltip must NOT be gated on locked: panels are
             # locked in normal play (lock stops panel dragging, not
             # button clicks), and that gate made the tooltip never show
@@ -66334,8 +66421,8 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                 cell_bg    = (28, 28, 36)
                 border_col = (60, 60, 70)
             elif is_hover:
-                cell_bg    = (62, 62, 78)
-                border_col = (180, 180, 200)
+                cell_bg    = (66, 70, 90)
+                border_col = (225, 230, 245)
             else:
                 cell_bg    = (44, 44, 54)
                 border_col = (100, 100, 115)
