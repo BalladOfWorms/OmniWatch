@@ -938,6 +938,13 @@ local _FOOD_STATS = {
     [5763] = {hp=30, str=5, vit=2, agi=3, ['int']=-2, attack={22,85}, ['ranged attack']={22,85}},
 }
 
+-- The curated entry for a food id (or nil). Live mode uses it too, so a
+-- food in this table counts the same in live and sim; foods not listed
+-- fall back to reading the item description.
+function M.food_entry(fid)
+    return fid and _FOOD_STATS[fid] or nil
+end
+
 -- Returns flat-stat additions from the active sim food, or empty table
 -- if no food. Keys are canonical OmniWatch stat names so the caller
 -- can add them directly to stats[]. `base` is the caller's pre-food

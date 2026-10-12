@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.15.1'
+_addon.version  = '1.15.2'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -474,6 +474,35 @@ end
 -- back to item_data.augments (which works for most cases).
 local _ok_extdata, extdata = pcall(require, 'extdata')
 if not _ok_extdata then extdata = nil end
+
+-- An augment list Windower couldn't really decode: it writes a line it
+-- doesn't recognise as "System: <n> ID: <n> Val: <n>", and the other
+-- lines of that same decode are then read from the wrong bytes too --
+-- a fishing rod (whose extdata is not augments at all) came out as
+-- "Pet: Magic dmg. taken -1%". Such a list is treated as no augments.
+function _ow_aug_sane(list)
+    if type(list) ~= 'table' then return list end
+    for _, a in ipairs(list) do
+        if type(a) == 'string' and a:find('^%s*System:%s*%d+%s+ID:') then
+            return nil
+        end
+    end
+    return list
+end
+
+-- Every decode in OmniWatch (and the vendored GearInfo, which shares this
+-- module) goes through extdata.decode, so the check is applied once here.
+if extdata and extdata.decode and not extdata._ow_wrapped then
+    local _raw_decode = extdata.decode
+    extdata.decode = function(...)
+        local ext = _raw_decode(...)
+        if type(ext) == 'table' and ext.augments then
+            ext.augments = _ow_aug_sane(ext.augments)
+        end
+        return ext
+    end
+    extdata._ow_wrapped = true
+end
 
 -- ── GearInfo resource tables (optional) ────────────────────────────────────
 -- These come from Sebyg666's GearInfo addon (BSD 2-Clause). They enumerate
@@ -11843,6 +11872,7 @@ do
             windower.packets.inject_incoming(0x4B, DLG[which] or DLG['in'])
         end)
         D.open = which
+        D.open_at = os.clock()
         D.opening = false
         D.dirty = true
         D.statdirty = true
@@ -12067,9 +12097,13 @@ do
         if not ok or type(p) ~= 'table' then return end
         local t = p.Type
         if D.log then
-            D.say(string.format('IN type=%s slot=%s item=%s count=%s',
+            local hex = {}
+            for i = 1, math.min(#data, 20) do
+                hex[#hex + 1] = string.format('%02X', data:byte(i))
+            end
+            D.say(string.format('IN type=%s slot=%s item=%s count=%s  %s',
                 tostring(t), tostring(p['Delivery Slot']), tostring(p.Item),
-                tostring(p.Count)))
+                tostring(p.Count), table.concat(hex, ' ')))
         end
         if t == 0x0E or t == 0x0D then
             -- 0xFA here is the server's reopen-limit "busy". The box is
@@ -12083,6 +12117,13 @@ do
             D.statdirty = true
             return
         elseif t == 0x0F then
+            -- A close that lands while we are switching boxes, or just
+            -- after we reopened, is the server answering OUR close, not
+            -- the player shutting the box. Taking it at face value marked
+            -- an open box as closed, so leaving the tab never closed it.
+            if D.opening or (os.clock() - (D.open_at or -99)) < 2.0 then
+                return
+            end
             D.open = nil
             D.statdirty = true
             return
@@ -12120,6 +12161,18 @@ do
             box[slot] = nil
         end
         D.dirty = true
+    end)
+
+    -- With the log on, also record the delivery-box packets the GAME
+    -- itself sends, so a capture shows the client's own requests for
+    -- newly arrived parcels as well as ours.
+    windower.register_event('outgoing chunk', function(id, data, modified, injected)
+        if id ~= 0x4D or not D.log or injected then return end
+        local hex = {}
+        for i = 1, math.min(#data, 16) do
+            hex[#hex + 1] = string.format('%02X', data:byte(i))
+        end
+        D.say('OUT(game) ' .. table.concat(hex, ' '))
     end)
 
     -- ── commands from the overlay ───────────────────────────────────────
@@ -12466,7 +12519,7 @@ local function _ow_drain_inbound()
                                         or t.name == 'Geomantic Reservoir')
                     if me and me.status == 4 and not skip then
                         windower.send_command(
-                            'setkey enter down; wait 0.05; setkey enter up')
+                            'setkey enter down; wait 0.15; setkey enter up')
                     end
                 end
             end
@@ -13459,8 +13512,10 @@ local function _ow_prune_buff_sources()
     end
     -- Food buff drop check: 251 is the standard Food buff id. When it
     -- drops, clear cached food stats so we stop contributing them.
+    pcall(_ow_food_check, active[251] and true or false)
     if _ow_food_item_id ~= 0 and not active[251] then
         _ow_food_stats = {}
+        _ow_food_pct   = {}
         _ow_food_item_id = 0
     end
     -- Phantom Roll drop: each roll produces a buff with the roll's name
@@ -15469,6 +15524,14 @@ ow_safe_register('addon command', function(command, ...)
                         tostring(t.cached_patt or '-'),
                         tostring(t.cached_def  or '-'),
                         tostring(t.cached_pacc or '-')))
+                    if t.rejected_value then
+                        ow_chat(207, string.format(
+                            '[OW]   skipped as implausible (%d so far): %s=%s, from:',
+                            t.rejected_count or 0,
+                            tostring(t.rejected_field),
+                            tostring(t.rejected_value)))
+                        ow_chat(207, '[OW]   ' .. tostring(t.rejected_hex))
+                    end
                 end
             elseif sub == 'request' or sub == 'fetch' then
                 -- v2 module is a passive listener — there's no request
@@ -15511,6 +15574,13 @@ ow_safe_register('addon command', function(command, ...)
                     ow_chat(207, string.format(
                         '[OW]   ages: att=%.1fs acc=%.1fs',
                         s.cache_age_s, s.pacc_age_s))
+                    if s.rejected_value then
+                        ow_chat(207, string.format(
+                            '[OW]   skipped as implausible: %d (last %s=%s; '
+                            .. '//ow serverstats trace shows the packet)',
+                            s.rejected_count or 0, tostring(s.rejected_field),
+                            tostring(s.rejected_value)))
+                    end
                 else
                     ow_chat(207,
                         '[OW]   cached: (no sample yet)')
@@ -19822,7 +19892,150 @@ end)
 -- its description into _ow_food_stats. Cleared on zone change or when
 -- the food buff (id 251 typically) drops.
 _ow_food_stats   = {}     -- key → numeric bonus (e.g. 'accuracy' → 6)
+_ow_food_pct     = {}     -- key → {pct, cap} for "Accuracy +11% (Max. 105)"
 _ow_food_item_id = 0      -- last food item id we recorded
+
+-- Parse one food description line. Percentage lines with a cap
+-- ("Accuracy +11% (Max. 105)", "Attack +23% (Max. 150)") are a share of
+-- the stat, not a flat bonus, so they go to _ow_food_pct and are applied
+-- against the computed stat later; everything else is flat as before.
+function _ow_food_parse_line(line)
+    local name, pct, cap = line:match('^%s*(.-)%s*([%+%-]%d+)%%%s*%(%s*[Mm]ax%.?%s*(%d+)%s*%)')
+    if name and name ~= '' then
+        local key = name:lower():gsub('%.', ''):gsub('%s+$', '')
+        _ow_food_pct[key] = {tonumber(pct), tonumber(cap)}
+        return
+    end
+    ow_parse_desc_line(_ow_food_stats, line)
+end
+
+-- Add n points of a primary attribute to stats, with the combat stats it
+-- feeds, at the same rates the Boost status overlay uses. n may be
+-- negative (taking a real food's attributes back out when sim mode puts
+-- a different food in its place).
+function _ow_apply_attr_delta(stats, cell, n)
+    if not n or n == 0 then return end
+    stats[cell] = (stats[cell] or 0) + n
+    if cell == 'str' then
+        local msk = (Gear_info and Gear_info['main'] and Gear_info['main'].skill) or ''
+        local mul = (msk == '' or msk == 'Hand-to-Hand') and 0.75 or 1.0
+        stats['attack']        = (stats['attack']        or 0) + math.floor(n * mul)
+        stats['attack2']       = (stats['attack2']       or 0) + math.floor(n * 0.5)
+        stats['ranged attack'] = (stats['ranged attack'] or 0) + n
+    elseif cell == 'dex' then
+        local d = math.floor(n * 0.75)
+        stats['accuracy']  = (stats['accuracy']  or 0) + d
+        stats['accuracy2'] = (stats['accuracy2'] or 0) + d
+    elseif cell == 'agi' then
+        stats['ranged accuracy'] = (stats['ranged accuracy'] or 0) + math.floor(n * 0.75)
+        stats['evasion']         = (stats['evasion']         or 0) + math.floor(n / 2)
+    elseif cell == 'int' then
+        stats['magic accuracy']     = (stats['magic accuracy']     or 0) + math.floor(n / 2)
+        stats['magic attack bonus'] = (stats['magic attack bonus'] or 0) + math.floor(n / 2)
+    elseif cell == 'vit' then
+        stats['defense'] = (stats['defense'] or 0) + math.floor(n * 1.5)
+    elseif cell == 'mnd' then
+        stats['magic def. bonus'] = (stats['magic def. bonus'] or 0) + math.floor(n / 2)
+    end
+end
+
+_ow_food_pending = nil    -- {id, t}: a usable item just used
+_ow_food_had     = nil    -- whether the food effect was up last check
+
+-- Make item `id` the current food: read its stats (sim mode's curated
+-- table first, else the item description) into the food tables.
+function _ow_food_apply(id)
+    local desc = res.item_descriptions and res.item_descriptions[id]
+    local helptext = (desc and (desc.english or desc.en)) or ''
+    _ow_food_stats, _ow_food_pct = {}, {}
+    _ow_food_item_id = id
+    -- The sim's curated table holds verified percent/cap values; a
+    -- food listed there counts exactly as it does in sim mode. Other
+    -- foods are read from their description.
+    local entry = _sim and _sim.food_entry and _sim.food_entry(id)
+    if entry then
+        for k, v in pairs(entry) do
+            if type(v) == 'table' then
+                _ow_food_pct[k] = {v[1], v[2]}
+            else
+                _ow_food_stats[k] = v
+            end
+        end
+    else
+        for line in helptext:gmatch('[^\r\n]+') do
+            _ow_food_parse_line(line)
+        end
+    end
+    _ow_serverstats_dirty = true
+end
+
+-- ── Food cache: survives a reload ───────────────────────────────────
+-- The food is only learned at the moment you eat. To keep it across a
+-- reload (and the moment after a zone, when the buff list can read empty
+-- for a tick), the food id and the time it was eaten are saved per
+-- character. When the food effect is up but OmniWatch doesn't know which
+-- food it is, the saved one is used -- if it could still be running.
+function _ow_food_cache_path()
+    local p = windower.ffxi.get_player()
+    local name = (p and p.name) or ''
+    if name == '' then return nil end
+    return ow_user_config_dir() .. '/food_' .. name .. '.lua'
+end
+
+function _ow_food_cache_save(id, eaten_at)
+    local path = _ow_food_cache_path()
+    if not path then return end
+    local f = io.open(path, 'w')
+    if not f then return end
+    f:write(string.format('return {id = %d, eaten_at = %d}\n', id, eaten_at))
+    f:close()
+end
+
+-- The saved food id if it can still be running, else nil. A food not in
+-- the duration table is allowed 3 hours, the longest any food lasts.
+function _ow_food_cache_load(now)
+    local path = _ow_food_cache_path()
+    if not path then return nil end
+    local chunk = loadfile(path)
+    if not chunk then return nil end
+    local ok, c = pcall(chunk)
+    if not (ok and type(c) == 'table' and tonumber(c.id) and tonumber(c.eaten_at)) then
+        return nil
+    end
+    local mins = (_ow_food_duration_known and _ow_food_duration_known(c.id)) or 180
+    if (now or os.time()) - c.eaten_at > mins * 60 then return nil end
+    return c.id
+end
+
+-- Called from the 2 Hz buff check with whether the food effect is up.
+-- When it comes up, the item used just before it is the food. If the
+-- effect is up and no item was just used (a reload, or back from a zone),
+-- the saved food is restored.
+function _ow_food_check(food_up)
+    if food_up and not _ow_food_had and _ow_food_pending
+       and (os.clock() - _ow_food_pending.t) < 30 then
+        local id = _ow_food_pending.id
+        _ow_food_apply(id)
+        pcall(_ow_food_cache_save, id, os.time())
+        if OW_ServerStats and OW_ServerStats.invalidate then
+            pcall(OW_ServerStats.invalidate, 'food')
+        end
+        local r = res.items[id]
+        ow_chat(207, string.format('[OW] food: %s (id=%d)',
+            tostring(r and (r.english or r.en) or '?'), id))
+    elseif food_up and (_ow_food_item_id or 0) == 0 and not _ow_food_restored then
+        _ow_food_restored = true          -- one try per food-up spell
+        local okc, id = pcall(_ow_food_cache_load)
+        if okc and id then
+            _ow_food_apply(id)
+            local r = res.items[id]
+            ow_chat(207, string.format('[OW] food restored: %s (id=%d)',
+                tostring(r and (r.english or r.en) or '?'), id))
+        end
+    end
+    if food_up then _ow_food_pending = nil else _ow_food_restored = false end
+    _ow_food_had = food_up and true or false
+end
 
 -- ── Recast panel config ───────────────────────────────────────────────────
 -- Hand-edit OW_RECAST_CONFIG below to control which spells/abilities show
@@ -19952,6 +20165,11 @@ local OW_FOOD_DURATION_MIN = {
 
 local function ow_food_duration_min(item_id)
     return OW_FOOD_DURATION_MIN[item_id] or OW_FOOD_DEFAULT_MIN
+end
+-- Known duration only (nil when the food isn't in the table). Global so
+-- the food cache, defined earlier in the file, can reach it.
+function _ow_food_duration_known(item_id)
+    return OW_FOOD_DURATION_MIN[item_id]
 end
 
 -- ── Buff timer config ─────────────────────────────────────────────────────
@@ -21189,24 +21407,12 @@ ow_safe_register('outgoing chunk', function(id, data)
     local item = windower.ffxi.get_items(bag, slot)
     if not (item and item.id and item.id ~= 0) then return end
     local r = res.items[item.id]
-    if not r or r.type ~= 7 then return end   -- 7 = Food
-    -- Parse the description for stat lines.
-    local desc = res.item_descriptions and res.item_descriptions[item.id]
-    local helptext = (desc and desc.english) or ''
-    if helptext == '' then return end
-    -- Reset the food table — eating a new food replaces the old buff.
-    _ow_food_stats = {}
-    _ow_food_item_id = item.id
-    for line in helptext:gmatch('[^\r\n]+') do
-        ow_parse_desc_line(_ow_food_stats, line)
-    end
-    if _ow_cast_debug then
-        local cnt = 0
-        for _ in pairs(_ow_food_stats) do cnt = cnt + 1 end
-        ow_chat(207, string.format(
-            '[OW] food eaten: %s (id=%d, %d stat lines)',
-            r.english or '?', item.id, cnt))
-    end
+    if not r or r.type ~= 7 then return end   -- 7 = usable item
+    -- Type 7 covers every usable item -- Echo Drops and Remedies as well
+    -- as food -- so using one must not overwrite the food we have. The
+    -- item is only REMEMBERED here; it becomes the food when the food
+    -- effect (buff 251) actually appears, in _ow_food_commit below.
+    _ow_food_pending = {id = item.id, t = os.clock()}
 end)
 
 ow_safe_register('zone change', function()
@@ -21214,8 +21420,8 @@ ow_safe_register('zone change', function()
     _ow_bolters_value = 0
     _ow_buff_sources = {}
     _ow_roll_state   = {}
-    _ow_food_stats   = {}
-    _ow_food_item_id = 0
+    -- Food is NOT cleared here: the food effect carries across zones, and
+    -- the buff-drop check (buff 251 gone) is what ends it.
     -- Drop the 0x063 self-buff snapshot: after a zone the buff list
     -- repopulates from scratch, and without clearing this the repopulate
     -- would diff as a flurry of "afflicted with" lines for debuffs that
@@ -22309,7 +22515,7 @@ function ow_get_item_augments(bag, idx)
             if not augs and ext.augments then augs = ext.augments end
         end
     end
-    if not augs and item.augments then augs = item.augments end
+    if not augs and item.augments then augs = _ow_aug_sane(item.augments) end
     if type(augs) ~= 'table' then return nil end
     local cleaned = {}
     for _, a in ipairs(augs) do
@@ -25436,12 +25642,32 @@ function ow_send_stats(stats)
     -- already includes food's stat contribution as part of the gear+buff
     -- delta. For everything else (acc/att/etc), food is purely additive
     -- and we add it on top of the gear sum.
-    do
+    -- A food picked in sim mode REPLACES the live one rather than
+    -- stacking on it: only one food effect can be up at a time.
+    local _sim_food_on = _sim and _sim.is_active and _sim.is_active()
+                         and _sim.get_food and _sim.get_food()
+    if not _sim_food_on then
         local SKIP = {str=true,dex=true,vit=true,agi=true,
                       ['int']=true,mnd=true,chr=true}
         for k, v in pairs(_ow_food_stats) do
             if not SKIP[k] then
                 stats[k] = (stats[k] or 0) + v
+            end
+        end
+        -- Percentage foods: pct of the computed stat, up to the cap. The
+        -- off-hand counterpart gets its own share (food applies to both
+        -- hands).
+        local PAIR = {accuracy = 'accuracy2', attack = 'attack2'}
+        for k, pc in pairs(_ow_food_pct) do
+            local pct, cap = pc[1], pc[2]
+            for _, key in ipairs({k, PAIR[k]}) do
+                local base = stats[key]
+                if base and base > 0 then
+                    local add = math.floor(base * pct / 100)
+                    if cap and add > cap then add = cap end
+                    if cap and add < -cap then add = -cap end
+                    stats[key] = base + add
+                end
             end
         end
     end
@@ -26445,10 +26671,25 @@ function ow_send_stats(stats)
     -- the same way it would in-game (multiple separate sources, all
     -- additive).
     if sim_on and _sim and _sim.get_food_stats then
+        local ATTR = {'str','dex','vit','agi','int','mnd','chr'}
+        local ok_e, entry = pcall(_sim.food_entry, _sim.get_food and _sim.get_food())
+        -- Attributes first, with the attack/accuracy etc. they feed. The
+        -- real food's attributes are already inside the stats the game
+        -- reports, and the sim food replaces it, so they come back out.
+        if ok_e and type(entry) == 'table' then
+            local real = (_ow_food_item_id ~= 0) and _ow_food_stats or {}
+            for _, a in ipairs(ATTR) do
+                local sim_v  = (type(entry[a]) == 'number') and entry[a] or 0
+                local real_v = (type(real[a])  == 'number') and real[a]  or 0
+                _ow_apply_attr_delta(stats, a, sim_v - real_v)
+            end
+        end
+        local SKIP_ATTR = {str=true,dex=true,vit=true,agi=true,
+                           ['int']=true,mnd=true,chr=true}
         local ok_f, food_stats = pcall(_sim.get_food_stats, stats)
         if ok_f and type(food_stats) == 'table' then
             for k, v in pairs(food_stats) do
-                if type(v) == 'number' then
+                if type(v) == 'number' and not SKIP_ATTR[k] then
                     -- Acc/Att food bonuses apply to both hands and ranged.
                     -- Same rule as Honor March: a flat bonus from a single
                     -- food source bumps every weapon-slot acc/att in unison.
@@ -26730,7 +26971,21 @@ function ow_send_stats(stats)
             -- populated yet (e.g. just after a job change before the
             -- next 0x063 sub-type 384 arrives). Skipping the override
             -- in that case lets the client-computed value stand.
-            if ss.pacc and ss.pacc > 0 then
+            -- The server's figure is taken only inside a range a real
+            -- character can reach. It has been seen sending 29999 (the
+            -- same number on two unrelated gear sets, so a placeholder
+            -- rather than a total); taking that as truth also scaled
+            -- off-hand and ranged accuracy by the same wild ratio. Out of
+            -- range, the client-computed accuracy stands and the value is
+            -- logged once per distinct number.
+            if ss.pacc and ss.pacc >= 10000 then
+                if _ow_ss_bad_pacc ~= ss.pacc then
+                    _ow_ss_bad_pacc = ss.pacc
+                    ow_chat(207, string.format(
+                        '[OW.SS] ignored server accuracy %s (kept %s)',
+                        tostring(ss.pacc), tostring(stats['accuracy'])))
+                end
+            elseif ss.pacc and ss.pacc > 0 then
                 local client_pacc = stats['accuracy'] or 0
                 local server_pacc = ss.pacc
                 stats['accuracy'] = server_pacc
@@ -27374,7 +27629,7 @@ ow_safe_register('prerender', function()
                             end
                             if not _aug_src and #augs == 0
                                     and item_data and item_data.augments then
-                                _aug_src = item_data.augments
+                                _aug_src = _ow_aug_sane(item_data.augments)
                             end
                             if _aug_src then
                                 for _, a in ipairs(_aug_src) do
@@ -29652,7 +29907,14 @@ windower.register_event('incoming text', function(original, modified, mode)
     if is_choice then return end
     local t = windower.ffxi.get_mob_by_target('t')
     if t and _ow_autoenter_skip[t.name] then return end
-    local out = (modified or original):gsub(string.char(0x7F, 0x31), '')
+    local out, n = (modified or original):gsub(string.char(0x7F, 0x31), '')
+    if n > 0 and ow_chat then
+        -- One log line per prompt skipped, so a conversation that stalls
+        -- shows which NPC and which line it stopped on.
+        pcall(ow_chat, 207, string.format('[OW] AutoEnter: skipped prompt (mode %d, %s): %s',
+            mode, tostring(t and t.name or '?'),
+            (out:gsub('[%c\128-\255]', ''):sub(1, 60))))
+    end
     return out
 end)
 

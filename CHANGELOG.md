@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.15.2] — 2026-10-10
+
+### Added
+
+- **Help and community links in the settings menu.** A new row above the update button has an **ISSUES** button, which opens OmniWatch's GitHub issues page for bug reports and requests, and a **DISCORD** button, which opens the invite to the OmniWatch Discord.
+- **Chat tabs can clear themselves.** Right-click a tab and click **Auto-clear** to step through 5, 15, 30, 60 and 120 minutes. The tab then keeps only the lines from that long ago onward, dropping the oldest as they pass the limit. A tab you have scrolled up in waits until you're back at the bottom, and the choice is saved per tab. Tabs you haven't opened clear on time too, and their unread count goes down with the lines; to keep unseen lines until you open the tab instead, turn off **Auto-clear unread lines** under **Settings ▸ Chat Panel**.
+
+### Fixed
+
+- **The Filters window opens on top.** The chat panel's Filters button opens the filter window above OmniWatch's panels, including in full screen. If it is already open, clicking Filters again brings it back to the top.
+- **The update button takes you to the new release.** Clicking `Update to v…` opens that release's GitHub page in your default browser.
+- **Accuracy always shows your real figure.** Acc1, Acc2 and ranged accuracy on the Statistics panel stay accurate at all times.
+- **Food counts in full on the Statistics panel.** Foods that raise a stat by a percentage, such as Accuracy +11% (Max. 105), add their real share of the stat up to the cap, to both hands, and food keeps counting after you zone, after reloading OmniWatch, and when you use other items such as Echo Drops.
+- **Sim mode's food replaces the food you've eaten.** Picking a food in sim mode now shows that food alone, the way the game allows one food at a time, a food on sim mode's list counts the same in live and sim, and a sim food's STR, DEX, AGI and other attributes raise the attack, accuracy and other stats they feed.
+- **The delivery box shows every parcel.** Everything waiting in your inbox appears at once, the way the game's own box shows it, so you can leave an item in the box and still collect the ones behind it.
+- **Item cards show only real augments.** Items whose stored data isn't augments, such as fishing rods, show just their own stats, on the card and in your totals.
+- **Gear stats read every item you carry.** All your bags are read for gear stats, including weapon-slot items that have no combat skill, so the Equipment and Statistics panels and sim mode have your full inventory to work with.
+
 ## [1.15.1] — 2026-10-09
 
 ### Added
@@ -10,10 +28,6 @@
 
 - **Hotbar buttons light up under the mouse.** Hovering a button brightens it and its border, so you can see which button a click will press before you press it.
 - **The minimap and party cards show when the mouse is on them.** The minimap's border brightens while the mouse is over it, so you know a drag, wheel or right-click is going to the map. On the party panel, the job, name and bars of the member under the mouse are outlined to show who a click will target, and a debuff icon under the mouse gets its own outline to show which status a click will cure.
-
-### Fixed
-
-- **Gear stats read every item you carry.** All your bags are read for gear stats, including weapon-slot items that have no combat skill, so the Equipment and Statistics panels and sim mode have your full inventory to work with.
 
 ## [1.15.0] — 2026-10-03
 

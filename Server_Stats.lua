@@ -15,8 +15,10 @@ HOW IT WORKS
   reality including all gear, buffs (rolls, songs, food), and any
   hidden bonuses the client doesn't model.
 
-  Incoming 0x063 packets at size 156 (sub-type 5) carry primary
-  accuracy (pAcc) at offset 138. These fire less often than 0x061
+  (CORRECTED 2026-10-11: pAcc below is disabled -- the offset-138 value
+  is not accuracy; see CONFIG.pacc_enabled.)
+  Incoming 0x063 packets at size 156 (sub-type 5) were thought to carry
+  primary accuracy (pAcc) at offset 138. These fire less often than 0x061
   (typically on login, zone change, or equipment-screen interaction)
   but provide the same authoritative data for accuracy.
 
@@ -78,13 +80,17 @@ end
 
 -- ── Configuration ────────────────────────────────────────────────────────
 local CONFIG = {
-    -- 0x061 ("Char Stats") — primary attack and defense.
-    -- The packet has a "subtype" indicator at offset 8 (u16 LE). The
-    -- value 384 (0x0180) is the COMPREHENSIVE layout that contains
-    -- pAtt at offset 48 and def at offset 50. Other subtypes can have
-    -- different fields at those same offsets (sometimes aAtt, eva,
-    -- or zeros). To avoid caching the wrong stat, we ONLY accept
-    -- subtype 384.
+    -- 0x061 ("Char Stats") — primary attack and defense at offsets 48
+    -- and 50 (Windower's field list: Attack 0x30, Defense 0x32).
+    --
+    -- NOTE 2026-10-11: the u16 at offset 8 is the character's MAX MP,
+    -- not a subtype -- so this filter only ever passes for a character
+    -- with exactly 384 max MP, and in practice the server attack/defense
+    -- override almost never runs. That is deliberately LEFT AS IT IS:
+    -- OmniWatch's own calculation has proven accurate, and the server
+    -- packet is only sent on status changes, not every gear swap. Removing
+    -- the filter would put server attack/defense on the panel during
+    -- rolls for everyone -- a behaviour change, not a fix.
     pkt_stats_id      = 0x061,
     offset_subtype    = 8,
     subtype_with_patt = 384,
@@ -98,6 +104,16 @@ local CONFIG = {
     -- with disc_a (offset 4-5 as u16 LE) == 5 carries pAcc at
     -- offset 138. All other 0x063 sub-types have zeros or unrelated
     -- data at that offset. We require both filters to match.
+    --
+    -- DISABLED 2026-10-11: the value at offset 138 is NOT accuracy. On a
+    -- user's captures it read 1085 -- exactly the DEFENSE in the 0x061 of
+    -- the same moment -- and did not move when Grape Daifuku (+80
+    -- accuracy) went up. The packet is a list of 6-byte entries, so a
+    -- fixed offset lands on different entries as the list changes; that
+    -- is where the 29999 readings came from. Packets are still traced
+    -- for //ow serverstats trace, but no accuracy is taken from them;
+    -- OmniWatch calculates accuracy itself.
+    pacc_enabled      = false,
     pkt_acc_id        = 0x063,
     pkt_acc_size      = 156,
     pkt_acc_disc_off  = 4,
@@ -108,6 +124,15 @@ local CONFIG = {
     -- as a zero/junk byte from a partial-update packet variant. 50 is
     -- well below any realistic player attack/acc value at endgame.
     sanity_floor = 50,
+    -- And the most a real character's attack, defense or accuracy can
+    -- reach. 0x063 has been seen carrying 29999 at the pAcc offset, the
+    -- same number on two unrelated gear sets -- a placeholder, not a
+    -- total. Anything at or above this is skipped AND the cached value is
+    -- dropped: a fresh packet means something changed, so the old figure
+    -- is no longer trustworthy either. OmniWatch then shows its own
+    -- calculation until the next good reading. The raw packet is kept
+    -- for //ow serverstats trace.
+    sanity_ceiling = 10000,
 }
 
 -- ── State ────────────────────────────────────────────────────────────────
@@ -126,6 +151,12 @@ local state = {
     pacc_packets_seen = 0,     -- 0x063 seen at expected size
     pacc_captures_made = 0,    -- 0x063 captures with real pAcc
     pacc_skipped       = 0,    -- 0x063 too small / sanity floor
+    -- The last implausible value skipped (at or above sanity_ceiling),
+    -- with the packet it came in, for //ow serverstats.
+    rejected_value     = nil,
+    rejected_field     = nil,
+    rejected_hex       = nil,
+    rejected_count     = 0,
     -- Last-seen packet snapshots, used by //ow serverstats trace to
     -- diagnose proc-miss issues. We keep just the most recent of each
     -- packet ID — enough to inspect "what did the server actually
@@ -195,16 +226,9 @@ local function on_incoming_chunk(id, data)
             state.last_0x061_at = os.clock()
         end
 
-        -- Filter by subtype: only the comprehensive layout (subtype 384)
-        -- has pAtt at off=48 and def at off=50 reliably. Other subtypes
-        -- can have different stats at those same offsets which would
-        -- corrupt the cache if we accepted them. Filter rejects any
-        -- 0x061 whose subtype byte at offset 8 isn't 384.
         local subtype = read_u16_le(data, CONFIG.offset_subtype)
         if subtype ~= CONFIG.subtype_with_patt then
             state.skipped_partial = state.skipped_partial + 1
-            log(string.format('0x061 wrong subtype=%s (want %d), skipping',
-                tostring(subtype), CONFIG.subtype_with_patt))
             return
         end
 
@@ -217,14 +241,30 @@ local function on_incoming_chunk(id, data)
             state.skipped_partial = state.skipped_partial + 1
             return
         end
+        if patt >= CONFIG.sanity_ceiling or def >= CONFIG.sanity_ceiling then
+            state.skipped_partial = state.skipped_partial + 1
+            state.rejected_value = (patt >= CONFIG.sanity_ceiling) and patt or def
+            state.rejected_field = (patt >= CONFIG.sanity_ceiling) and 'pAtt' or 'def'
+            state.rejected_hex   = state.last_0x061_hex
+            state.rejected_count = state.rejected_count + 1
+            log(string.format('0x061 implausible %s=%d, dropped cache',
+                state.rejected_field, state.rejected_value))
+            state.cached_patt = nil
+            state.cached_def  = nil
+            state.cached_at   = 0
+            if state.on_capture then
+                pcall(state.on_capture, nil, nil, state.cached_pacc)
+            end
+            return
+        end
 
         state.cached_patt = patt
         state.cached_def  = def
         state.cached_at   = os.clock()
         state.captures_made = state.captures_made + 1
 
-        log(string.format('0x061 captured pAtt=%d def=%d (#%d, subtype=%d)',
-            patt, def, state.captures_made, subtype))
+        log(string.format('0x061 captured pAtt=%d def=%d (#%d)',
+            patt, def, state.captures_made))
 
         if state.on_capture then
             pcall(state.on_capture, patt, def, state.cached_pacc)
@@ -263,9 +303,24 @@ local function on_incoming_chunk(id, data)
             state.last_0x063_at = os.clock()
         end
 
+        if not CONFIG.pacc_enabled then return end
         local pacc = read_u16_le(data, CONFIG.offset_pacc)
         if not pacc or pacc < CONFIG.sanity_floor then
             state.pacc_skipped = state.pacc_skipped + 1
+            return
+        end
+        if pacc >= CONFIG.sanity_ceiling then
+            state.pacc_skipped   = state.pacc_skipped + 1
+            state.rejected_value = pacc
+            state.rejected_field = 'pAcc'
+            state.rejected_hex   = state.last_0x063_hex
+            state.rejected_count = state.rejected_count + 1
+            log(string.format('0x063 implausible pAcc=%d, dropped cache', pacc))
+            state.cached_pacc    = nil
+            state.cached_pacc_at = 0
+            if state.on_capture then
+                pcall(state.on_capture, state.cached_patt, state.cached_def, nil)
+            end
             return
         end
 
@@ -365,6 +420,10 @@ local function trace()
         cached_patt    = state.cached_patt,
         cached_def     = state.cached_def,
         cached_pacc    = state.cached_pacc,
+        rejected_value = state.rejected_value,
+        rejected_field = state.rejected_field,
+        rejected_hex   = state.rejected_hex,
+        rejected_count = state.rejected_count,
     }
 end
 
@@ -385,6 +444,9 @@ local function status()
         pacc_packets_seen  = state.pacc_packets_seen,
         pacc_captures_made = state.pacc_captures_made,
         pacc_skipped       = state.pacc_skipped,
+        rejected_value     = state.rejected_value,
+        rejected_field     = state.rejected_field,
+        rejected_count     = state.rejected_count,
     }
 end
 

@@ -17,14 +17,18 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.15.1 (2026-10-09)"
+OMNIWATCH_BUILD_STAMP = "v1.15.2 (2026-10-10)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.15.1"
+OMNIWATCH_VERSION = "1.15.2"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
+# Community links behind the settings menu's ISSUES / DISCORD buttons.
+OMNIWATCH_ISSUES_URL   = (f"https://github.com/{OMNIWATCH_GITHUB_OWNER}"
+                          f"/{OMNIWATCH_GITHUB_REPO}/issues")
+OMNIWATCH_DISCORD_URL  = "https://discord.gg/9ac5cjgGz7"
 print("=" * 70)
 print(f"  OmniWatch build: {OMNIWATCH_BUILD_STAMP}")
 print(f"  If this banner doesn't appear, the rebuild used a stale .py")
@@ -4963,6 +4967,123 @@ _chat_tab_line_total = {}
 # switches to that tab.
 chat_tab_unread = {i: 0 for i in range(len(chat_tab_names))}
 
+# ── Per-tab auto-clear ──────────────────────────────────────────────
+# Lines in a tab older than its chosen age are dropped, oldest first,
+# so the tab keeps a rolling window (e.g. the last 15 minutes) rather
+# than emptying all at once. Set per tab from its right-click popup;
+# stored in settings["chat_autoclear_min"] as {tab name: minutes}.
+_CHAT_AUTOCLEAR_STEPS = (0, 5, 15, 30, 60, 120)
+_chat_autoclear_last  = 0.0      # time of the last sweep
+
+
+def _chat_autoclear_minutes(tab_idx):
+    """Auto-clear age for a tab in minutes; 0 = off."""
+    try:
+        m = (settings.get("chat_autoclear_min") or {}).get(
+            chat_tab_names[tab_idx][0], 0)
+        return int(m) if int(m) in _CHAT_AUTOCLEAR_STEPS else 0
+    except Exception:
+        return 0
+
+
+def _chat_autoclear_cycle(tab_idx):
+    """Step a tab's auto-clear to the next choice (Off -> 5 -> ... -> 120
+    -> Off) and save it."""
+    cur = _chat_autoclear_minutes(tab_idx)
+    nxt = _CHAT_AUTOCLEAR_STEPS[
+        (_CHAT_AUTOCLEAR_STEPS.index(cur) + 1) % len(_CHAT_AUTOCLEAR_STEPS)]
+    table = dict(settings.get("chat_autoclear_min") or {})
+    name = chat_tab_names[tab_idx][0]
+    if nxt:
+        table[name] = nxt
+    else:
+        table.pop(name, None)
+    set_setting("chat_autoclear_min", table)
+    print(f"[chat-tab] auto-clear for {name!r}: "
+          f"{str(nxt) + ' min' if nxt else 'off'}")
+    return nxt
+
+
+_chat_tab_seen_at = {}          # tab -> last time it was the active tab
+
+
+def _chat_autoclear_tick(now=None):
+    """Drop lines older than each tab's auto-clear age. Runs at most
+    every 5 s. The tab on screen is left alone while you are scrolled
+    up in it, so lines don't vanish while you read them. A line that
+    shows in more than one tab goes from all of them, the same as
+    Clear Tab.
+
+    Lines you haven't seen yet (they arrived while their tab was in the
+    background) go too when "Auto-clear unread lines" is on, and the
+    tab's unread count and highlight drop to match; with it off they
+    wait until you open the tab."""
+    global _chat_autoclear_last
+    now = time.time() if now is None else now
+    _chat_tab_seen_at[chat_active_tab] = now
+    if now - _chat_autoclear_last < 5.0:
+        return 0
+    _chat_autoclear_last = now
+    take_unread = bool(setting("chat_autoclear_unread"))
+    rules = []
+    for i in range(len(chat_tab_names)):
+        m = _chat_autoclear_minutes(i)
+        if not m:
+            continue
+        if i == chat_active_tab and chat_tab_scroll.get(i, 0):
+            continue
+        # Keep-unread: nothing newer than the last look is dropped.
+        seen = (now if (take_unread or i == chat_active_tab)
+                else _chat_tab_seen_at.get(i, 0.0))
+        rules.append((i, chat_tab_filters[i],
+                      min(now - m * 60.0, seen)))
+    if not rules or not chat_events:
+        return 0
+    touched = set()
+
+    def _expired(ev):
+        t = ev.get("_rx") or ev.get("ts") or now
+        for i, pred, cutoff in rules:
+            if t >= cutoff:
+                continue
+            try:
+                if pred(ev):
+                    touched.add(i)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    kept = [ev for ev in chat_events if not _expired(ev)]
+    dropped = len(chat_events) - len(kept)
+    if not dropped:
+        return 0
+    chat_events.clear()
+    chat_events.extend(kept)
+    # Every tab re-counts its lines on the next frame.
+    for i in range(len(chat_tab_names)):
+        _chat_tab_line_total[i] = None
+    # A background tab's unread count can't exceed the unseen lines it
+    # still holds; once nothing unseen is left, its highlight goes too.
+    for i in range(len(chat_tab_names)):
+        if i == chat_active_tab or not chat_tab_unread.get(i):
+            continue
+        seen = _chat_tab_seen_at.get(i, 0.0)
+        left = 0
+        pred = chat_tab_filters[i]
+        for ev in kept:
+            if (ev.get("_rx") or ev.get("ts") or 0) > seen:
+                try:
+                    if pred(ev):
+                        left += 1
+                except Exception:
+                    pass
+        if left < chat_tab_unread[i]:
+            chat_tab_unread[i] = left
+        if not chat_tab_unread[i]:
+            _chat_tab_focus_pulse.pop(i, None)
+    return dropped
+
 # ── Focus words/phrases (ported from OmniChat) ───────────────────────
 # User-defined strings (edited in the Filters GUI's footer, persisted
 # under _meta.focus_phrases in the routing JSON). When a chat event's
@@ -7018,15 +7139,68 @@ def load_chat_routing_for_job(job):
         _chat_routing_perjob = {}
 
 
-def _launch_routing_gui():
-    """Launch the standalone routing config GUI.
+_ROUTING_GUI_TITLE = "OmniWatch Chat Routing"
 
-    Looks for omniwatch_routing_gui.exe alongside OmniWatch.exe first
-    (the deployed case), falls back to running the .py script directly
-    (the development case). Detached subprocess — doesn't block the
-    overlay.
+
+def _raise_routing_gui():
+    """If the Filters window is already open, lift it above OmniWatch
+    and return True. OmniWatch's own windows are always-on-top (and in
+    full screen cover the monitor), so the Filters window joins that
+    layer too; the newest always-on-top window sits highest."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.windll.user32
+        hwnd = u32.FindWindowW(None, _ROUTING_GUI_TITLE)
+        if not hwnd:
+            return False
+        u32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                     ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int,
+                                     wintypes.UINT]
+        u32.ShowWindow(wintypes.HWND(hwnd), 9)          # SW_RESTORE
+        # HWND_TOPMOST; SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        u32.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(-1),
+                         0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040)
+        print("[OmniWatch] Filters window already open; brought to front")
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] could not raise Filters window: {e!r}")
+        return False
+
+
+def _routing_gui_env():
+    """Environment for the Filters window's process.
+
+    OmniWatch.exe and omniwatch_routing_gui.exe are both PyInstaller
+    builds. A frozen app passes its own unpack-folder variables down to
+    anything it starts, and a second frozen exe that inherits them tries
+    to run out of OmniWatch's folder instead of its own and exits before
+    it draws a window. PYINSTALLER_RESET_ENVIRONMENT tells the child's
+    loader to start clean; the old variables are dropped too, for
+    loaders that predate that switch."""
+    env = dict(os.environ)
+    for k in list(env):
+        if k == "_MEIPASS2" or k.startswith("_PYI_"):
+            env.pop(k, None)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def _launch_routing_gui():
+    """Open the Filters window (the standalone routing config GUI).
+
+    Raises it if it is already open. Otherwise looks for
+    omniwatch_routing_gui.exe alongside OmniWatch.exe first (the deployed
+    case), then the .py script (the development case). Detached
+    subprocess with a clean environment -- doesn't block the overlay.
+    Every outcome is printed to the session log.
     """
     import subprocess
+    if _raise_routing_gui():
+        return
     # Resolve "alongside this binary" — handle both PyInstaller-frozen
     # OmniWatch.exe (sys.executable points to it) and source-running
     # case (sys.executable is python.exe, so use __file__'s dir).
@@ -7037,28 +7211,27 @@ def _launch_routing_gui():
 
     exe_path = os.path.join(base_dir, "omniwatch_routing_gui.exe")
     py_path  = os.path.join(base_dir, "omniwatch_routing_gui.py")
-
+    # DETACHED_PROCESS so closing OmniWatch won't kill the GUI.
+    flags = 0x00000008 if sys.platform == "win32" else 0
     try:
         if os.path.exists(exe_path):
-            # Detached launch — DETACHED_PROCESS so closing OmniWatch
-            # won't kill the GUI. Windows-only flag; on other OSes
-            # subprocess.Popen with start_new_session=True is equivalent.
-            flags = 0x00000008 if sys.platform == "win32" else 0
             subprocess.Popen([exe_path], creationflags=flags,
-                             cwd=base_dir, close_fds=True)
+                             cwd=base_dir, close_fds=True,
+                             env=_routing_gui_env())
             print(f"[OmniWatch] Launched {exe_path}")
-        elif os.path.exists(py_path):
-            # Dev fallback: run the .py directly.
-            flags = 0x00000008 if sys.platform == "win32" else 0
+        elif os.path.exists(py_path) and not getattr(sys, "frozen", False):
+            # Dev fallback: run the .py with the same Python. (A frozen
+            # OmniWatch.exe has no python.exe to hand it to.)
             subprocess.Popen([sys.executable, py_path],
                              creationflags=flags, cwd=base_dir,
-                             close_fds=True)
+                             close_fds=True, env=_routing_gui_env())
             print(f"[OmniWatch] Launched {py_path} via Python")
         else:
-            print(f"[OmniWatch] Routing GUI not found. Tried:\n"
-                  f"  {exe_path}\n  {py_path}")
+            print(f"[OmniWatch] Filters window not found -- "
+                  f"omniwatch_routing_gui.exe should sit beside "
+                  f"OmniWatch.exe. Looked for:\n  {exe_path}")
     except Exception as e:
-        print(f"[OmniWatch] Failed to launch routing GUI: {e}")
+        print(f"[OmniWatch] Failed to launch routing GUI: {e!r}")
 
 
 # Build the per-tab predicates from the factory. One predicate per
@@ -7478,6 +7651,7 @@ def _ingest_chat_packet(raw, stream_label):
                 segs = _build_cast_segments(txt)
                 if segs:
                     ev["segments"] = segs
+        ev["_rx"] = time.time()     # arrival time, for tab auto-clear
         chat_events.append(ev)
         if stream_label == "text":
             chat_recv_text += 1
@@ -10043,6 +10217,111 @@ def request_icon_extract(item_id):
                             _cmd_addr())
     except Exception as e:
         print(f"[OmniWatch] icon request failed for {item_id}: {e!r}")
+
+
+_icon_tierless_cache = {}
+
+
+def _icon_strip_background(raw, tol=150):
+    """Copy of an item icon with its built-in background made see-through.
+
+    +1..+4 gear carries its tier colour (silver, blue, gold, green) as a
+    solid background inside the icon, which hides the equipment panel's
+    tier fade. This removes it like a paint-bucket fill from outside:
+    starting at the border, it clears every connected pixel close to the
+    border's median colour, so the item itself is never holed even where
+    it shares that colour. Pixels near the limit are only partly cleared,
+    which softens the edge instead of leaving a hard fringe."""
+    from collections import deque
+    w, h = raw.get_size()
+    try:
+        out = raw.convert_alpha()
+    except pygame.error:
+        out = raw.copy()
+    border = ([(x, y) for x in range(w) for y in (0, h - 1)]
+              + [(x, y) for y in range(1, h - 1) for x in (0, w - 1)])
+    edge = sorted(raw.get_at(p_)[:3] for p_ in border)
+    if not edge:
+        return out
+    ref = tuple(sorted(c[i] for c in edge)[len(edge) // 2] for i in range(3))
+
+    def _d(c):
+        return abs(c[0] - ref[0]) + abs(c[1] - ref[1]) + abs(c[2] - ref[2])
+
+    q = deque(p_ for p_ in border if _d(raw.get_at(p_)) < tol)
+    seen = set(q)
+    while q:
+        x, y = q.popleft()
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if (0 <= nx < w and 0 <= ny < h and (nx, ny) not in seen
+                    and _d(raw.get_at((nx, ny))) < tol):
+                seen.add((nx, ny))
+                q.append((nx, ny))
+    lo, span = tol * 0.6, tol * 0.4
+    for x, y in seen:
+        c = out.get_at((x, y))
+        a = int(255 * min(1.0, max(0.0, (_d(c) - lo) / span)))
+        out.set_at((x, y), (c.r, c.g, c.b, min(a, c.a)))
+    return out
+
+
+_icon_bg_tier_cache = {}
+
+
+def _icon_bg_tier(item_id):
+    """The upgrade tier the icon's own background shows: 0 for the usual
+    dark background, 1 silver, 2 blue, 3 gold, 4 green.
+
+    Read from the picture rather than the name, because not every piece
+    framed in a tier colour has "+N" at the end of its name. Cached."""
+    v = _icon_bg_tier_cache.get(item_id)
+    if v is not None:
+        return v
+    v = 0
+    raw = load_icon_surface(item_id)
+    if raw is not None:
+        try:
+            import colorsys
+            w, h = raw.get_size()
+            border = ([(x, y) for x in range(w) for y in (0, h - 1)]
+                      + [(x, y) for y in range(1, h - 1) for x in (0, w - 1)])
+            px = [raw.get_at(p_)[:3] for p_ in border]
+            med = tuple(sorted(c[i] for c in px)[len(px) // 2]
+                        for i in range(3))
+            hh, ss, vv = colorsys.rgb_to_hsv(*[c / 255.0 for c in med])
+            deg = hh * 360
+            if vv >= 0.45:                      # dark = no tier frame
+                if ss < 0.25:
+                    v = 1                       # silver
+                elif 180 <= deg <= 260:
+                    v = 2                       # blue
+                elif 25 <= deg <= 75:
+                    v = 3                       # gold
+                elif 80 <= deg <= 170:
+                    v = 4                       # green
+        except Exception:
+            v = 0
+    _icon_bg_tier_cache[item_id] = v
+    return v
+
+
+def get_icon_tierless(item_id, size):
+    """get_icon_scaled() with the tier background removed (see above).
+    Falls back to the ordinary icon if anything goes wrong."""
+    key = (item_id, size)
+    s = _icon_tierless_cache.get(key)
+    if s is not None:
+        return s
+    raw = load_icon_surface(item_id)
+    if raw is None:
+        return None
+    try:
+        s = pygame.transform.smoothscale(_icon_strip_background(raw),
+                                         (size, size))
+    except Exception:
+        return get_icon_scaled(item_id, size)
+    _icon_tierless_cache[key] = s
+    return s
 
 
 def get_icon_scaled(item_id, size):
@@ -12681,6 +12960,18 @@ SETTINGS_SCHEMA = [
                    "only — no effect on macOS/Linux.",
     },
     {
+        "key":     "panel_shading",
+        "label":   "(internal) panel shading",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Panels, tooltips, stat cells and settings windows "
+                   "get a soft grey-to-black fade from the bottom-left "
+                   "corner, and worn gear sits on its +1..+4 tier "
+                   "colour. Off = the plain flat backgrounds.",
+    },
+    {
         "key":     "open_crash_log",
         "label":   "Open log folder",
         "kind":    "button",
@@ -12690,6 +12981,23 @@ SETTINGS_SCHEMA = [
         "help":    "Open the folder containing crash logs and per-"
                    "session log files. Useful when reporting bugs — "
                    "send me the most recent session_*.log.",
+    },
+    {
+        # Community links: two buttons on one row, always shown, sitting
+        # directly above the Update button. A "buttons" list replaces the
+        # usual single button_text/action pair; each (text, action) pair
+        # draws its own pill, right to left in list order reversed.
+        "key":     "open_links",
+        "label":   "Help & community",
+        "kind":    "button",
+        "buttons": [("ISSUES", "open_issues_page"),
+                    ("DISCORD", "open_discord_invite")],
+        "section": "_Bottom",
+        "applies": "python",
+        "action":  "open_issues_page",
+        "help":    "ISSUES opens OmniWatch's GitHub issues page, where "
+                   "bugs and requests are reported. DISCORD opens the "
+                   "invite to the OmniWatch Discord.",
     },
     {
         # Update-available button. Only rendered when the startup update
@@ -12776,6 +13084,20 @@ SETTINGS_SCHEMA = [
         "applies": "python",
         "help":    "Indices of chat tabs the user has right-click "
                    "hidden. Cleared via 'Show all tabs' in the header.",
+    },
+    {
+        # Per-tab auto-clear, set from the tab's right-click popup.
+        # {tab name: minutes}; a tab not listed (or 0) never clears.
+        # Keyed by the tab's NAME rather than its place in the strip,
+        # so adding a tab later can't move a setting onto another tab.
+        "key":     "chat_autoclear_min",
+        "label":   "(internal) chat tab auto-clear minutes",
+        "kind":    "json",
+        "default": {},
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Minutes after which a chat tab's lines are cleared, "
+                   "per tab. Set by right-clicking a tab.",
     },
     {
         "key":     "show_clock",
@@ -13966,6 +14288,16 @@ SETTINGS_SCHEMA = [
                    "All) instead of just the active character.",
     },
     {
+        "key":     "chat_autoclear_unread",
+        "label":   "(internal) auto-clear unread lines",
+        "kind":    "bool",
+        "default": True,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Tab auto-clear also takes lines you haven't looked "
+                   "at yet, and their unread count goes with them.",
+    },
+    {
         "key":     "chat_autoenter",
         "label":   "(internal) AutoEnter",
         "kind":    "bool",
@@ -15021,15 +15353,19 @@ def set_setting(key, value):
     apply_setting_side_effects(key, coerced)
     return coerced
 
-def dispatch_setting_action(key):
+def dispatch_setting_action(key, action=None):
     """Run a button-kind setting's action. Looks up the action name in
     the schema and routes to the matching handler. Each action is just
-    a python function; add new ones below as new buttons are needed."""
+    a python function; add new ones below as new buttons are needed.
+    `action` names one pill of a multi-button row ("buttons" list); it
+    must be one of that row's own actions."""
     schema = SETTINGS_BY_KEY.get(key)
     if not schema or schema.get("kind") != "button":
         print(f"[OmniWatch] dispatch_setting_action: not a button: {key!r}")
         return
-    action = schema.get("action")
+    _allowed = [a for _t, a in (schema.get("buttons") or ())]
+    if not (action and action in _allowed):
+        action = schema.get("action")
     handler = _SETTINGS_ACTIONS.get(action)
     if handler is None:
         print(f"[OmniWatch] no handler for setting action {action!r}")
@@ -15169,16 +15505,54 @@ def _open_crash_log_folder():
             return
     _open_path(folder, "crash log folder")
 
+def _ow_open_url(url, what="page"):
+    """Open `url` in the user's default browser.
+
+    Windows' shell handler (os.startfile) goes FIRST: it is exactly what
+    clicking a link anywhere else in Windows does, so the URL always
+    reaches the default browser. webbrowser.open comes second because,
+    in an overlay started from the game, it can pick a browser by its
+    own rules and bring it up without the address. `cmd start` is the
+    last resort. The URL is printed either way, so the session log
+    always holds it even if every opener fails."""
+    opened = False
+    if hasattr(os, "startfile"):
+        try:
+            os.startfile(url)              # type: ignore[attr-defined]
+            opened = True
+        except Exception:
+            pass
+    if not opened:
+        try:
+            opened = bool(webbrowser.open(url, new=2, autoraise=True))
+        except Exception:
+            opened = False
+    if not opened and os.name == "nt":
+        try:
+            import subprocess
+            subprocess.Popen(f'cmd /c start "" "{url}"', shell=True)
+            opened = True
+        except Exception:
+            pass
+    print(f"[OmniWatch] {'opened' if opened else 'could not open'} "
+          f"{what}: {url}")
+    return opened
+
 def _open_update_page():
     """Open the latest-release page in the browser. Falls back to the
     repo's releases page if the specific URL wasn't captured."""
     url = _update_html_url or (
         f"https://github.com/{OMNIWATCH_GITHUB_OWNER}/"
         f"{OMNIWATCH_GITHUB_REPO}/releases/latest")
-    try:
-        webbrowser.open(url, new=2)
-    except Exception as e:
-        print(f"[OmniWatch] could not open update page: {e!r}")
+    _ow_open_url(url, "update page")
+
+def _open_issues_page():
+    """GitHub Issues — where bug reports go."""
+    _ow_open_url(OMNIWATCH_ISSUES_URL, "issues page")
+
+def _open_discord_invite():
+    """The OmniWatch Discord invite."""
+    _ow_open_url(OMNIWATCH_DISCORD_URL, "Discord invite")
 
 def _apply_always_on_top(enabled, name="main"):
     """Pin (or unpin) the OmniWatch window above all other windows.
@@ -16325,6 +16699,8 @@ _SETTINGS_ACTIONS = {
     "clear_dps_logs":          _clear_dps_logs,
     "open_crash_log_folder":   _open_crash_log_folder,
     "open_update_page":        _open_update_page,
+    "open_issues_page":        _open_issues_page,
+    "open_discord_invite":     _open_discord_invite,
     "restart_overlay":         _restart_overlay,
     "toggle_setup_mode":       _toggle_setup_mode,
     "open_hotbar_editor":      _open_hotbar_editor,
@@ -31427,12 +31803,9 @@ def draw_ally_panel(surface, x, y, member, scale=1.0,
     # group by the caller in that case.
     _ctop, _cbot = corners
     _r = max(3, int(PARTY_CORNER * (d["s"] if "s" in d else 1.0)))
-    pygame.draw.rect(
-        surface, COL_PANEL, (x, y, pw, rh),
-        border_top_left_radius=_r if _ctop else 0,
-        border_top_right_radius=_r if _ctop else 0,
-        border_bottom_left_radius=_r if _cbot else 0,
-        border_bottom_right_radius=_r if _cbot else 0)
+    _panel_fade(surface, (x, y, pw, rh),
+                (_r if _ctop else 0, _r if _ctop else 0,
+                 _r if _cbot else 0, _r if _cbot else 0))
     if _ctop and _cbot:
         pygame.draw.rect(surface, COL_BORDER, (x, y, pw, rh), 1,
                          border_radius=_r)
@@ -31589,7 +31962,7 @@ def draw_recast_panel(surface, x, y, entries, scale=1.0, locked=False):
     gap   = d["bar_gap"]
 
     # Panel background.
-    pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, ph), border_radius=4)
+    _panel_fade(surface, (x, y, pw, ph), 4)
     pygame.draw.rect(surface, COL_BORDER, (x, y, pw, ph), 1, border_radius=4)
     draw_accent_stripe(surface, x, y, ph, ACCENT_RECAST)
 
@@ -33637,7 +34010,7 @@ def draw_pupatt_window(surface):
 
     panel = pygame.Rect(x, y, w, h)
     _pupatt_win_rect = panel
-    pygame.draw.rect(surface, COL_PANEL, panel, border_radius=4)
+    _panel_fade(surface, panel, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel, 1, border_radius=4)
     pygame.draw.rect(surface, COL_EV_HEADER, (x + 1, y + 1, w - 2, title_h - 1),
                      border_radius=3)
@@ -34262,7 +34635,7 @@ def draw_brdset_window(surface):
 
     panel = pygame.Rect(x, y, w, h)
     _brdset_win_rect = panel
-    pygame.draw.rect(surface, COL_PANEL, panel, border_radius=4)
+    _panel_fade(surface, panel, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel, 1, border_radius=4)
     pygame.draw.rect(surface, COL_EV_HEADER, (x + 1, y + 1, w - 2, title_h - 1),
                      border_radius=3)
@@ -34978,8 +35351,7 @@ def draw_magesets_window(surface):
     _magesets_win_rect = pygame.Rect(x0, y0, W, H)
 
     draw_panel_shadow(surface, _magesets_win_rect, radius=6)
-    pygame.draw.rect(surface, (24, 26, 34), _magesets_win_rect,
-                     border_radius=6)
+    _panel_fade(surface, _magesets_win_rect, 6, flat=(24, 26, 34))
     _magesets_title_rect = pygame.Rect(x0, y0, W, title_h)
     pygame.draw.rect(surface, (34, 38, 52), _magesets_title_rect,
                      border_top_left_radius=6, border_top_right_radius=6)
@@ -35512,7 +35884,7 @@ def draw_blusets_window(surface):
 
     # ── Frame ──
     draw_panel_shadow(surface, _blusets_win_rect, radius=6)
-    pygame.draw.rect(surface, (24, 26, 34), _blusets_win_rect, border_radius=6)
+    _panel_fade(surface, _blusets_win_rect, 6, flat=(24, 26, 34))
     _blusets_title_rect = pygame.Rect(x0, y0, W, title_h)
     pygame.draw.rect(surface, (34, 38, 52), _blusets_title_rect,
                      border_top_left_radius=6, border_top_right_radius=6)
@@ -36499,8 +36871,7 @@ def draw_trustsets_window(surface):
     _trustsets_win_rect = pygame.Rect(x0, y0, W, H)
 
     draw_panel_shadow(surface, _trustsets_win_rect, radius=6)
-    pygame.draw.rect(surface, (24, 26, 34), _trustsets_win_rect,
-                     border_radius=6)
+    _panel_fade(surface, _trustsets_win_rect, 6, flat=(24, 26, 34))
     _trustsets_title_rect = pygame.Rect(x0, y0, W, title_h)
     pygame.draw.rect(surface, (34, 38, 52), _trustsets_title_rect,
                      border_top_left_radius=6, border_top_right_radius=6)
@@ -38188,7 +38559,7 @@ def draw_synergy_window(surface):
 
     panel_r = pygame.Rect(x, y, full_w, h)
     _syn_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL,    panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
@@ -38618,7 +38989,7 @@ def draw_skillup_window(surface):
 
     panel_r = pygame.Rect(x, y, full_w, h)
     _skillup_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
@@ -41157,7 +41528,7 @@ def draw_ah_window(surface):
 
     panel_r = pygame.Rect(x, y, w, h)
     _ah_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
@@ -41852,6 +42223,90 @@ def _vanaday_next_times(now=None):
     return out
 
 
+_tip_bg_cache = {}
+_TIP_BG_DARK = (8, 8, 11)          # what the fade ends on
+_TIP_BG_GREY = (70, 72, 80)        # the lit corner (bottom-left)
+
+
+def _tip_bg(w, h, radius=4, alpha=235, flat=(0, 0, 0)):
+    """Tooltip background: grey in the bottom-left corner fading
+    diagonally to black, clipped to a rounded rect. Cached by size.
+
+    With Panel shading off (Display settings) this is the plain `flat`
+    colour instead -- each caller passes the background it had before
+    the fade -- or None when the caller had no fill at all."""
+    w, h = max(1, int(w)), max(1, int(h))
+    shaded = bool(setting("panel_shading"))
+    if not shaded and flat is None:
+        return None
+    key = (w, h, radius, alpha, None if shaded else tuple(flat))
+    g = _tip_bg_cache.get(key)
+    if g is not None:
+        return g
+    if not shaded:
+        g = pygame.Surface((w, h), pygame.SRCALPHA)
+        g.fill(tuple(flat[:3]) + (255,))
+        mask = pygame.Surface((w, h), pygame.SRCALPHA)
+        _m = (255, 255, 255, alpha)
+        if isinstance(radius, tuple):
+            tl, tr, bl, br = radius
+            pygame.draw.rect(mask, _m, (0, 0, w, h),
+                             border_top_left_radius=tl,
+                             border_top_right_radius=tr,
+                             border_bottom_left_radius=bl,
+                             border_bottom_right_radius=br)
+        else:
+            pygame.draw.rect(mask, _m, (0, 0, w, h), border_radius=radius)
+        g.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        if len(_tip_bg_cache) > 160:
+            _tip_bg_cache.clear()
+        _tip_bg_cache[key] = g
+        return g
+    seed = _tip_bg_cache.get("seed")
+    if seed is None:                    # the gradient itself, built once
+        n = 48
+        seed = pygame.Surface((n, n))
+        d, c = _TIP_BG_DARK, _TIP_BG_GREY
+        for yy in range(n):
+            for xx in range(n):
+                t = (xx + (n - 1 - yy)) / (2.0 * (n - 1))   # 0 at bottom-left
+                k = max(0.0, 1.0 - t) ** 2
+                seed.set_at((xx, yy), (int(d[0] + (c[0] - d[0]) * k),
+                                       int(d[1] + (c[1] - d[1]) * k),
+                                       int(d[2] + (c[2] - d[2]) * k)))
+    g = pygame.Surface((w, h), pygame.SRCALPHA)
+    g.blit(pygame.transform.smoothscale(seed, (w, h)), (0, 0))
+    mask = pygame.Surface((w, h), pygame.SRCALPHA)
+    if isinstance(radius, tuple):
+        tl, tr, bl, br = radius
+        pygame.draw.rect(mask, (255, 255, 255, alpha), (0, 0, w, h),
+                         border_top_left_radius=tl,
+                         border_top_right_radius=tr,
+                         border_bottom_left_radius=bl,
+                         border_bottom_right_radius=br)
+    else:
+        pygame.draw.rect(mask, (255, 255, 255, alpha), (0, 0, w, h),
+                         border_radius=radius)
+    g.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    if len(_tip_bg_cache) > 160:
+        _tip_bg_cache.clear()
+    _tip_bg_cache["seed"] = seed
+    _tip_bg_cache[key] = g
+    return g
+
+
+def _panel_fade(surface, rect, radius=4, alpha=255, flat=None):
+    """Paint a panel background with the corner fade (see _tip_bg).
+    `flat` is the panel's plain colour for when shading is off
+    (default COL_PANEL)."""
+    r = pygame.Rect(rect)
+    if r.w > 0 and r.h > 0:
+        g = _tip_bg(r.w, r.h, radius, alpha,
+                    COL_PANEL if flat is None else flat)
+        if g is not None:
+            surface.blit(g, r.topleft)
+
+
 def draw_vanaday_tooltip(surface, mx, my, screen_w, screen_h):
     """The hover: the week ahead, and when each day comes round."""
     fnt = get_font("Consolas", 12)
@@ -41869,7 +42324,7 @@ def draw_vanaday_tooltip(surface, mx, my, screen_w, screen_h):
     x = min(mx + 14, screen_w - w - 4)
     y = min(my + 16, screen_h - h - 4)
     panel = pygame.Rect(x, y, w, h)
-    pygame.draw.rect(surface, (18, 20, 26), panel, border_radius=4)
+    surface.blit(_tip_bg(panel.w, panel.h, 4, 255, (18, 20, 26)), panel.topleft)
     pygame.draw.rect(surface, (92, 104, 128), panel, 1, border_radius=4)
     surface.blit(fnt_b.render(title, True, (226, 228, 236)), (x + 7, y + 4))
     ry = y + 20
@@ -41897,7 +42352,7 @@ def draw_moon_tooltip(surface, mx, my, screen_w, screen_h):
     x = min(mx + 14, screen_w - w - 4)
     y = min(my + 16, screen_h - h - 4)
     panel = pygame.Rect(x, y, w, h)
-    pygame.draw.rect(surface, (18, 20, 26), panel, border_radius=4)
+    surface.blit(_tip_bg(panel.w, panel.h, 4, 255, (18, 20, 26)), panel.topleft)
     pygame.draw.rect(surface, (92, 104, 128), panel, 1, border_radius=4)
     surface.blit(fnt_b.render(title, True, (226, 228, 236)), (x + 7, y + 4))
     ry = y + 20
@@ -41940,7 +42395,7 @@ def draw_header_tooltip(surface, mx, my, title, rows, screen_w, screen_h):
     x = min(mx + 14, screen_w - w - 4)
     y = min(my + 16, screen_h - h - 4)
     panel = pygame.Rect(x, y, w, h)
-    pygame.draw.rect(surface, (18, 20, 26), panel, border_radius=4)
+    surface.blit(_tip_bg(panel.w, panel.h, 4, 255, (18, 20, 26)), panel.topleft)
     pygame.draw.rect(surface, (92, 104, 128), panel, 1, border_radius=4)
     surface.blit(fnt_b.render(title, True, (226, 228, 236)), (x + 7, y + 4))
     ry = y + 20
@@ -42393,7 +42848,7 @@ def draw_alerts_window(surface):
     _alerts_draw_pos = [x, y]
     panel = pygame.Rect(x, y, w, h)
     _alerts_rects["panel"] = panel
-    pygame.draw.rect(surface, COL_PANEL, panel, border_radius=4)
+    _panel_fade(surface, panel, 4)
     if ghost:
         # Dimmed, and labelled, so it is clear this is placement rather
         # than a live alert.
@@ -42975,8 +43430,9 @@ def _dbox_leave():
     """Leaving the tab (or closing the window) closes the game's box too --
     the whole reason the AH window's own pop-up was a nuisance."""
     _dbox_blur()
-    if dbox_state.get("open"):
-        _dbox_send("close")
+    # Always ask: the lua's idea of "open" can lag a box switch by a
+    # moment, and a close for a box that is already shut does nothing.
+    _dbox_send("close")
     dbox_state["open"] = ""
 
 
@@ -43799,7 +44255,7 @@ def draw_craft_window(surface):
 
     panel_r = pygame.Rect(x, y, full_w, h)
     _craft_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL,    panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
@@ -44600,7 +45056,7 @@ def draw_pool_window(surface):
 
     panel_r = pygame.Rect(x, y, w, h)
     _pool_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_POOL)
@@ -45299,8 +45755,7 @@ def draw_minimap_window(surface):
     plot = pygame.Rect(2, 2, w - 4, h - 4)
     mpos_scr = _mouse_pos()
     mpos = (mpos_scr[0] - x, mpos_scr[1] - y)       # body-local cursor
-    pygame.draw.rect(back, COL_PANEL, back.get_rect(),
-                     border_radius=MINIMAP_RADIUS)
+    _panel_fade(back, back.get_rect(), MINIMAP_RADIUS)
     cxp, cyp = plot.centerx, plot.centery
     # A pan in progress follows the cursor every frame, read from Windows,
     # not from mouse-move events: with the game in front those don't
@@ -45789,6 +46244,72 @@ def _minimap_composite(surface, back, body, x, y, w, h):
     _minimap_apply_mask(body, w, h, 100)
     surface.blit(back, (x, y))
     surface.blit(body, (x, y))
+
+
+def _minimap_input_blocked():
+    """Should the minimap yield this event to a window above it?
+
+    The same rule the hotbar follows. `_dev_panel_input_blocked` says yes
+    whenever the Settings menu, the inventory, the sim window or a
+    Configure box is open ANYWHERE, so with one of those up on the other
+    side of the screen the minimap would not zoom, pan or drag. What
+    matters is whether something is drawn over the point you are using:
+
+      - a pan, move or resize already under way keeps going;
+      - a modal with a dimmed backdrop blocks the window it is in -- the
+        Checklist / Campaigns wherever they sit, the settings boxes on the
+        main window -- and leaves the other window alone;
+      - otherwise the minimap is blocked only where an open window
+        overlaps the cursor.
+    """
+    if not _dev_panel_input_blocked():
+        return False
+    if (globals().get("_minimap_pan_drag") is not None
+            or _minimap_drag_off is not None or _minimap_resizing):
+        return False
+    try:
+        pos = _mouse_pos()
+        # The Checklist and Campaigns are windows: they dim and block only
+        # the window they are in (the hotbar's rule, _modal_window_has).
+        if checklist_modal_open and _modal_window_has(
+                globals().get("_checklist_modal_rect"), *pos):
+            return True
+        if campaigns_modal_open and _modal_window_has(
+                globals().get("_campaigns_modal_rect"), *pos):
+            return True
+        # The settings boxes and the other dimmed modals always open on
+        # the main window (_ui_screen), so they block that window only.
+        if ((sim_import_open or clock_modal_open or profile_name_modal_open
+                or currency_settings_modal_open or party_settings_modal_open
+                or display_settings_modal_open or header_settings_modal_open
+                or inventory_settings_modal_open
+                or statistics_settings_modal_open or alert_editor_open)
+                and _viewport_containing(*pos) == "main"):
+            return True
+        pr = _minimap_rects.get("panel")
+        if pr is None or not pr.collidepoint(pos):
+            return True                 # not ours to take
+        covers = []
+        if settings_menu_open:
+            covers.append(globals().get("settings_menu_panel_rect"))
+        if inventory_dropdown_open:
+            _g = _inventory_panel_geometry()
+            covers.append(pygame.Rect(*_g) if _g else None)
+        if char_view_dropdown_open:
+            covers.append(globals().get("char_view_dropdown_panel_rect"))
+        if sim_window_open:
+            covers.append(globals().get("sim_window_bounds_rect"))
+        for _sst in _subdialog_states.values():
+            if _sst.get("open"):
+                covers.append(_sst.get("panel_rect"))
+        for c in covers:
+            # Open but not drawn yet: assume it covers, as the Configure
+            # box check does, so nothing leaks through on its first frame.
+            if c is None or c.collidepoint(pos):
+                return True
+    except Exception:
+        return True
+    return False
 
 
 def _minimap_handle_event(event):
@@ -46919,7 +47440,7 @@ def draw_alert_box(surface):
 
     panel_r = pygame.Rect(x, y, w, h)
     _alert_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_ALERT)
@@ -47320,7 +47841,7 @@ def draw_alert_editor(surface):
         surface.blit(backdrop, (_vx, _vy))
     _alert_rects["ed:backdrop"] = pygame.Rect(_vx, _vy, _vw, _vh)
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     _alert_rects["ed:panel"] = panel
 
@@ -47616,7 +48137,7 @@ def draw_fisher_window(surface):
 
     panel_r = pygame.Rect(x, y, full_w, h)
     _fisher_rects["panel"] = panel_r
-    pygame.draw.rect(surface, COL_PANEL, panel_r, border_radius=4)
+    _panel_fade(surface, panel_r, 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
@@ -48890,7 +49411,7 @@ def draw_scanzone_window(surface):
     # later-drawn window uses -- that convention is what lets the hotbar
     # tooltip know it is covered. Cheap to keep, easy to forget.
     _sz_rects["panel"] = pygame.Rect(x, y, w, h)
-    pygame.draw.rect(surface, COL_PANEL,    (x, y, w, h), border_radius=4)
+    _panel_fade(surface, (x, y, w, h), 4)
     pygame.draw.rect(surface, COL_SLOT_BDR, (x, y, w, h), 1, border_radius=4)
     try:
         draw_accent_stripe(surface, x, y, h, ACCENT_DEV)
@@ -50496,7 +51017,7 @@ def draw_cheatsheet_window(surface):
     y = max(_vy, min(int(cheatsheet_pos[1]), _vy + _vh - win_h))
     cheatsheet_pos[0], cheatsheet_pos[1] = x, y
 
-    pygame.draw.rect(surface, COL_PANEL,  (x, y, win_w, win_h), border_radius=5)
+    _panel_fade(surface, (x, y, win_w, win_h), 5)
     pygame.draw.rect(surface, COL_BORDER, (x, y, win_w, win_h), 1, border_radius=5)
     draw_accent_stripe(surface, x, y, win_h, ACCENT_CHEATSHEET,
                        w=max(2, int(3 * d["s"])))
@@ -51146,8 +51667,35 @@ def _warp_destinations_for(net):
             zone_nodes = [(z, {"label": z, "zone": z, "sub": None})
                           for z in zones]
             return _warp_region_wrap(zone_nodes)
+    elif net == "ab":
+        # The Abyssea network means different things depending on where
+        # you stand. At a town teleporter (Ports, Ru'Lude, Heavens Tower)
+        # superwarp takes you to an entry zone's Cavernous Maw; beside a
+        # Maw in an entry zone it enters Abyssea; only inside Abyssea do
+        # the numbered confluxes apply. Same zone ids superwarp uses.
+        try:
+            zid = int(zone_info.get("zone_id") or 0)
+        except (TypeError, ValueError):
+            zid = 0
+        if zid in _ABY_TOWN_ZONES:
+            return [{"label": "%s Maw" % lab, "zone": t}
+                    for lab, t in _ABY_MAW_TARGETS]
+        if zid in _ABY_ENTRY_ZONES:
+            return [{"label": "Enter Abyssea", "zone": "enter"}]
     cfg = _warp_load_config()
     return cfg.get(net, {}).get("destinations", [])
+
+
+# Abyssea by zone id (from superwarp's abyssea map): the town zones whose
+# teleport NPCs send you to a Maw, and the entry zones holding the Maws.
+_ABY_TOWN_ZONES = {232, 236, 240, 246, 243, 242}
+_ABY_ENTRY_ZONES = {102, 108, 117, 118, 103, 104, 107, 106, 112, 126}
+_ABY_MAW_TARGETS = (
+    ("La Theine", "la theine"), ("Konschtat", "konschtat"),
+    ("Tahrongi", "tahrongi"), ("Vunkerl", "vunkerl"),
+    ("Misareaux", "misareaux"), ("Attohwa", "attohwa"),
+    ("Altepa", "altepa"), ("Uleguerand", "uleguerand"),
+    ("Grauberg", "grauberg"))
 
 def _warp_is_near():
     """Return {net: bool} for every network in WARP_NETWORKS. Treats the
@@ -51334,6 +51882,17 @@ def draw_warp_menu(surface):
     for net in WARP_NETWORKS:
         n = cfg.get(net, {})
         netlabel = n.get("label", net)
+        if net == "ab":
+            # The Abyssea row offers Maws in town and the entry at a Maw,
+            # so don't call it "Conflux" there.
+            try:
+                _abz = int(zone_info.get("zone_id") or 0)
+            except (TypeError, ValueError):
+                _abz = 0
+            if _abz in _ABY_TOWN_ZONES:
+                netlabel = "Abyssea Maw"
+            elif _abz in _ABY_ENTRY_ZONES:
+                netlabel = "Abyssea"
         near = near_map.get(net, False)
         width_cands.append(netlabel + "    out of range")
         if not near:
@@ -53309,9 +53868,8 @@ def draw_inventory_dropdown(surface):
         return
     panel_x, panel_y, panel_w, panel_h = geom
 
-    pygame.draw.rect(surface, (28, 28, 36),
-                     (panel_x, panel_y, panel_w, panel_h),
-                     border_radius=4)
+    _panel_fade(surface, (panel_x, panel_y, panel_w, panel_h), 4,
+                flat=(28, 28, 36))
     pygame.draw.rect(surface, (140, 140, 160),
                      (panel_x, panel_y, panel_w, panel_h), 1,
                      border_radius=4)
@@ -55345,7 +55903,7 @@ def _item_card_render(iid, fallback_name, card, augs, ic):
     out = pygame.Surface((w, h), pygame.SRCALPHA)
     x = y = 0
     box = pygame.Rect(0, 0, w, h)
-    pygame.draw.rect(out, (27, 28, 42), box, border_radius=5)
+    out.blit(_tip_bg(w, h, 5, 255, (27, 28, 42)), (0, 0))
     pygame.draw.rect(out, (118, 126, 156), box, 1, border_radius=5)
     pygame.draw.rect(out, (48, 52, 74), box.inflate(-4, -4), 1,
                      border_radius=4)
@@ -56033,8 +56591,7 @@ def draw_sim_window(surface):
     sim_window_bounds_rect = pygame.Rect(wx, wy, ww, wh)
 
     # Background + border.
-    pygame.draw.rect(surface, SIM_WIN_BG, (wx, wy, ww, wh),
-                     border_radius=4)
+    _panel_fade(surface, (wx, wy, ww, wh), 4, flat=SIM_WIN_BG)
     pygame.draw.rect(surface, SIM_WIN_BORDER, (wx, wy, ww, wh), 1,
                      border_radius=4)
 
@@ -57006,7 +57563,7 @@ def draw_sim_import_modal(surface):
 
     # Panel
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (70, 110, 95), panel, 1, border_radius=6)
 
     title_font = _chat_get_font("body", 15) if "_chat_get_font" in globals() else pygame.font.SysFont("Arial", 15)
@@ -57195,7 +57752,7 @@ def draw_currency_settings_modal(surface):
 
     # Panel.
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     # Re-register the panel itself as a click-eater so panel-internal
     # clicks that miss a control don't fall through to the backdrop
@@ -57470,7 +58027,7 @@ def draw_party_settings_modal(surface):
 
     # Panel.
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     # Swallow panel-internal misclicks so they don't dismiss the
     # modal via the backdrop catch.
@@ -57722,6 +58279,7 @@ _DISPLAY_MODAL_ROWS = [
     # of what was asked for. A direct bool toggle on show_hide_nub
     # makes the row do exactly what its label says.
     ("show_hide_nub",          "Show toggle nub (eye)",  "bool"),
+    ("panel_shading",          "Panel shading (corner fade)", "bool"),
 ]
 
 
@@ -57768,7 +58326,7 @@ def draw_display_settings_modal(surface):
 
     # Panel.
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     display_settings_modal_rects.append(
         (panel, {"action": "disp_panel_bg"}))
@@ -58396,7 +58954,7 @@ def draw_header_settings_modal(surface):
         (pygame.Rect(0, 0, sw, sh), {"action": "head_backdrop"}))
 
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     header_settings_modal_rects.append(
         (panel, {"action": "head_panel_bg"}))
@@ -58499,7 +59057,7 @@ def draw_inventory_settings_modal(surface):
         (pygame.Rect(0, 0, sw, sh), {"action": "inv_backdrop"}))
 
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     inventory_settings_modal_rects.append(
         (panel, {"action": "inv_panel_bg"}))
@@ -58637,7 +59195,7 @@ def draw_statistics_settings_modal(surface):
         (pygame.Rect(0, 0, sw, sh), {"action": "stats_backdrop"}))
 
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     statistics_settings_modal_rects.append(
         (panel, {"action": "stats_panel_bg"}))
@@ -58840,7 +59398,7 @@ def draw_clock_modal(surface):
         (pygame.Rect(0, 0, sw, sh), {"action": "clock_backdrop"}))
 
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     clock_modal_rects.append((panel, {"action": "clock_panel_bg"}))
 
@@ -59191,7 +59749,7 @@ def draw_profile_name_modal(surface):
         (pygame.Rect(0, 0, sw, sh), {"action": "pn_backdrop"}))
 
     panel = pygame.Rect(mx, my, mw, mh)
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     profile_name_modal_rects.append((panel, {"action": "pn_panel_bg"}))
 
@@ -59465,8 +60023,14 @@ _SUBDIALOG_CONFIGS = {
             ("chat_font_size",     "Font size",       "enum"),
             ("show_chat_composer", "Show input bar",  "bool"),
             ("global_typing",      "Type anywhere",   "bool"),
+            ("chat_autoclear_unread", "Auto-clear unread lines", "bool"),
         ],
         "helpers": {
+            "chat_autoclear_unread":
+                "For tabs with Auto-clear set (right-click a tab). On: "
+                "old lines go on time even if you never opened the tab, "
+                "and its unread count drops with them. Off: lines you "
+                "haven't seen yet wait until you open the tab.",
             "global_typing":
                 "Route your typing into the input bar above while FFXI "
                 "has focus, instead of into the game. Needs the input "
@@ -59703,7 +60267,7 @@ def _draw_subdialog(surface, state_key):
 
     panel = pygame.Rect(mx, my, mw, mh)
     state["panel_rect"] = panel
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     state["rects"].append(
         (panel, {"action": f"{state_key}_panel_bg"}))
@@ -59864,7 +60428,7 @@ def draw_checklist_modal(surface):
     # Panel.
     panel = pygame.Rect(mx, my, mw, mh)
     _checklist_modal_rect = panel
-    pygame.draw.rect(surface, (24, 28, 36), panel, border_radius=6)
+    _panel_fade(surface, panel, 6, flat=(24, 28, 36))
     pygame.draw.rect(surface, (110, 130, 170), panel, 1, border_radius=6)
     # Swallow misclicks inside panel so they don't reach the backdrop.
     _checklist_click_rects.append(
@@ -61960,8 +62524,7 @@ def draw_settings_menu(surface):
         settings_menu_scroll = overflow
 
     # Background panel.
-    pygame.draw.rect(surface, (28, 28, 36), (mx, my, w, h),
-                     border_radius=4)
+    _panel_fade(surface, (mx, my, w, h), 4, flat=(28, 28, 36))
     pygame.draw.rect(surface, (140, 140, 160), (mx, my, w, h), 1,
                      border_radius=4)
     settings_menu_panel_rect = pygame.Rect(mx, my, w, h)
@@ -62268,52 +62831,63 @@ def draw_settings_menu(surface):
                 # override the default "OPEN" label via "button_text"
                 # — used by entries where "open" doesn't fit (e.g.
                 # "Restart overlay" feels more like GO than OPEN).
-                btn_text = schema.get("button_text", "OPEN")
-                btn_surf = value_font.render(btn_text, True, (40, 40, 50))
-                btn_w = max(btn_min_w, btn_surf.get_width() + btn_pad)
-                btn_h = ctrl_h
-                btn_rect = pygame.Rect(
-                    ctrl_x_right - btn_w,
-                    row_rect.y + (row_h - btn_h) // 2,
-                    btn_w, btn_h)
-                # Hover-lift like the toggle pills.
-                is_btn_hover = btn_rect.collidepoint(*mouse_pos)
-                # CONFIGURE buttons get a light-blue tint so they
-                # visually distinguish themselves from the action
-                # buttons (OPEN / RESET / EDIT / PICK) — they do
-                # something fundamentally different (open a
-                # subdialog) so deserve a distinct color. EXIT is
-                # red to mark it as a destructive / one-way action
-                # — clicking it ends the session. The "Open log
-                # folder" button gets a light-purple tint as a
-                # one-off — it does its own thing (spawns an
-                # explorer window on the log dir) and the color
-                # makes it easy to spot when reporting bugs.
-                if btn_text == "CONFIGURE":
-                    btn_color = ((170, 210, 240) if is_btn_hover
-                                  else (140, 185, 220))
-                elif btn_text == "EXIT":
-                    btn_color = ((230, 110, 110) if is_btn_hover
-                                  else (200, 80, 80))
-                elif btn_text == "UPDATE":
-                    # Green to read as a positive, available action —
-                    # distinct from the red EXIT directly below it.
-                    btn_color = ((120, 210, 130) if is_btn_hover
-                                  else (90, 180, 105))
-                elif schema.get("key") == "open_crash_log":
-                    btn_color = ((195, 175, 225) if is_btn_hover
-                                  else (170, 145, 205))
-                else:
-                    btn_color = ((200, 180, 130) if is_btn_hover
-                                  else (180, 160, 110))
-                pygame.draw.rect(surface, btn_color, btn_rect,
-                                 border_radius=radius_pill)
-                surface.blit(btn_surf,
-                             (btn_rect.x + (btn_w - btn_surf.get_width()) // 2,
-                              btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
-                settings_menu_rects.append((btn_rect, {
-                    "kind": "action", "key": schema["key"],
-                }))
+                # A "buttons" list draws several pills on one row,
+                # laid right to left; the last pair sits rightmost.
+                _btn_list = schema.get("buttons") or [
+                    (schema.get("button_text", "OPEN"), None)]
+                _btn_right = ctrl_x_right
+                for btn_text, _btn_act in reversed(_btn_list):
+                    btn_surf = value_font.render(btn_text, True, (40, 40, 50))
+                    btn_w = max(btn_min_w, btn_surf.get_width() + btn_pad)
+                    btn_h = ctrl_h
+                    btn_rect = pygame.Rect(
+                        _btn_right - btn_w,
+                        row_rect.y + (row_h - btn_h) // 2,
+                        btn_w, btn_h)
+                    _btn_right = btn_rect.x - round(6 * g)
+                    # Hover-lift like the toggle pills.
+                    is_btn_hover = btn_rect.collidepoint(*mouse_pos)
+                    # CONFIGURE buttons get a light-blue tint so they
+                    # visually distinguish themselves from the action
+                    # buttons (OPEN / RESET / EDIT / PICK) — they do
+                    # something fundamentally different (open a
+                    # subdialog) so deserve a distinct color. EXIT is
+                    # red to mark it as a destructive / one-way action
+                    # — clicking it ends the session. The "Open log
+                    # folder" button gets a light-purple tint as a
+                    # one-off — it does its own thing (spawns an
+                    # explorer window on the log dir) and the color
+                    # makes it easy to spot when reporting bugs.
+                    if btn_text == "CONFIGURE":
+                        btn_color = ((170, 210, 240) if is_btn_hover
+                                      else (140, 185, 220))
+                    elif btn_text == "EXIT":
+                        btn_color = ((230, 110, 110) if is_btn_hover
+                                      else (200, 80, 80))
+                    elif btn_text == "UPDATE":
+                        # Green to read as a positive, available action —
+                        # distinct from the red EXIT directly below it.
+                        btn_color = ((120, 210, 130) if is_btn_hover
+                                      else (90, 180, 105))
+                    elif btn_text == "DISCORD":
+                        # Discord's own blurple, lightened for the dark text.
+                        btn_color = ((170, 178, 250) if is_btn_hover
+                                      else (140, 150, 240))
+                    elif schema.get("key") == "open_crash_log":
+                        btn_color = ((195, 175, 225) if is_btn_hover
+                                      else (170, 145, 205))
+                    else:
+                        btn_color = ((200, 180, 130) if is_btn_hover
+                                      else (180, 160, 110))
+                    pygame.draw.rect(surface, btn_color, btn_rect,
+                                     border_radius=radius_pill)
+                    surface.blit(btn_surf,
+                                 (btn_rect.x + (btn_w - btn_surf.get_width()) // 2,
+                                  btn_rect.y + (btn_h - btn_surf.get_height()) // 2))
+                    settings_menu_rects.append((btn_rect, {
+                        "kind": "action", "key": schema["key"],
+                        "action": _btn_act,
+                    }))
             cy += row_h
         if _part:
             del settings_menu_rects[_r0:]
@@ -62437,7 +63011,7 @@ def dispatch_settings_menu_click(mx, my):
                     new_idx = (idx + action["delta"]) % len(opts)
                     set_setting(action["key"], opts[new_idx])
             elif akind == "action":
-                dispatch_setting_action(action["key"])
+                dispatch_setting_action(action["key"], action.get("action"))
             elif akind == "collapse_toggle":
                 _settings_toggle_section(action.get("section") or "")
             return True
@@ -63190,7 +63764,7 @@ def draw_dps_panel(surface, x, y, scale=1.0, locked=False):
     head_h = d["head_h"]
     pw, ph = dps_panel_size(scale)
 
-    pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, ph), border_radius=4)
+    _panel_fade(surface, (x, y, pw, ph), 4)
     pygame.draw.rect(surface, COL_BORDER, (x, y, pw, ph), 1, border_radius=4)
     draw_accent_stripe(surface, x, y, ph, ACCENT_DPS)
 
@@ -64766,7 +65340,7 @@ def draw_skillchain_panel(surface, x, y, scale=1.0, locked=False):
     pad = d["pad"]; rh = d["row_h"]
     pw, ph = skillchain_panel_size(scale)
 
-    pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, ph), border_radius=4)
+    _panel_fade(surface, (x, y, pw, ph), 4)
     pygame.draw.rect(surface, COL_BORDER, (x, y, pw, ph), 1, border_radius=4)
 
     # Header strip — matches stats/equipment panel style: a darker
@@ -64977,12 +65551,16 @@ def draw_chat_tab_rclick_popup(surface):
     # targets, and the actionable button below.
     hdr_text  = f"Tab: {tab_label}"
     btn_text  = "Hide tab"
+    _ac_min   = _chat_autoclear_minutes(_chat_tab_rclick_tab)
+    ac_text   = ("Auto-clear: %d min" % _ac_min) if _ac_min \
+                else "Auto-clear: Off"
     hdr_w     = title_font.size(hdr_text)[0]
-    btn_w     = title_font.size(btn_text)[0]
+    btn_w     = max(title_font.size(btn_text)[0],
+                    title_font.size("Auto-clear: 120 min")[0])
     pad       = 8
     row_h     = 20
     panel_w   = max(hdr_w, btn_w) + pad * 2 + 6
-    panel_h   = row_h * 2 + pad
+    panel_h   = row_h * 3 + pad
     # Keep the popup on-screen — clamp to surface bounds.
     sw, sh = _ui_edge()
     px = min(max(0, ax), sw - panel_w)
@@ -65019,6 +65597,27 @@ def draw_chat_tab_rclick_popup(surface):
     _chat_tab_rclick_rects.append(
         (btn_rect, {"action": "rclick_hide_tab"}))
 
+    # "Auto-clear" row: each click steps Off -> 5 -> 15 -> 30 -> 60 ->
+    # 120 min -> Off. Lit while set, so a tab with it on is easy to spot.
+    ac_rect = pygame.Rect(px + pad - 2, py + row_h * 2 + 2,
+                          panel_w - (pad - 2) * 2, row_h - 2)
+    ac_hov = ac_rect.collidepoint(mouse_pos)
+    if _ac_min:
+        ac_bg = (60, 100, 70) if ac_hov else (44, 78, 54)
+        ac_bd = (120, 190, 135)
+    else:
+        ac_bg = (60, 70, 90) if ac_hov else (40, 46, 56)
+        ac_bd = (110, 120, 140)
+    pygame.draw.rect(surface, ac_bg, ac_rect, border_radius=2)
+    pygame.draw.rect(surface, ac_bd, ac_rect, 1, border_radius=2)
+    ac_surf = title_font.render(ac_text, True,
+        (240, 245, 240) if ac_hov else (210, 215, 210))
+    surface.blit(ac_surf,
+        (ac_rect.x + (ac_rect.w - ac_surf.get_width()) // 2,
+         ac_rect.y + (ac_rect.h - ac_surf.get_height()) // 2))
+    _chat_tab_rclick_rects.append(
+        (ac_rect, {"action": "rclick_autoclear"}))
+
 
 def dispatch_chat_tab_rclick_popup_click(mx, my, button=1):
     """Handle a left-click while the tab right-click popup is open.
@@ -65047,6 +65646,11 @@ def dispatch_chat_tab_rclick_popup_click(mx, my, button=1):
             # Click on the popup chrome but not a button — eat it
             # but keep the popup open so the user can still click
             # the Hide button. Same UX as a desktop context menu.
+            return True
+        if what == "rclick_autoclear":
+            # Step the choice and keep the popup open, so a few clicks
+            # walk to the time wanted.
+            _chat_autoclear_cycle(target_tab)
             return True
         if what == "rclick_hide_tab":
             _current = list(settings.get("hidden_chat_tabs") or [])
@@ -65086,6 +65690,7 @@ def draw_chat_panel(surface, x, y, locked=False):
     global _chat_clickable_senders
 
     pw, ph = chat_panel_size()
+    _chat_autoclear_tick()
 
     # Reset per-frame clickable-sender hit-test list. Populated inside
     # the message-rendering loop below whenever a sender name is blitted
@@ -65095,9 +65700,8 @@ def draw_chat_panel(surface, x, y, locked=False):
     _chat_clickable_senders = []
 
     # Background
-    bg_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
-    bg_surf.fill(CHAT_BG_COLOR)
-    surface.blit(bg_surf, (x, y))
+    _panel_fade(surface, (x, y, pw, ph), 0, CHAT_BG_COLOR[3],
+                flat=CHAT_BG_COLOR)
 
     # Header strip
     hdr_h = 18
@@ -66276,7 +66880,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
         page_dict    = None
 
     # Outer frame, matching DPS / buff panels.
-    pygame.draw.rect(surface, COL_PANEL,  (x, y, pw, ph), border_radius=4)
+    _panel_fade(surface, (x, y, pw, ph), 4)
     pygame.draw.rect(surface, COL_BORDER, (x, y, pw, ph), 1, border_radius=4)
     draw_accent_stripe(surface, x, y, ph, ACCENT_BUTTONS)
 
@@ -66438,6 +67042,21 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                                 for c, b in zip(_cc, (44, 44, 54)))
                     cell_bg = (tuple(min(255, c + 28) for c in _cc)
                                if is_hover else _cc)
+            # A truly blank slot (nothing assigned, no label) lets the
+            # panel's corner fade show through: no fill, just a faint
+            # outline so the grid is still readable. Kept as before in
+            # the hotbar editor, where you are placing buttons, and with
+            # Panel shading off. A slot with a label or icon keeps its
+            # fill so it stays readable.
+            _see_thru = (is_inert and not hotbar_edit_mode
+                         and setting("panel_shading")
+                         and not (entry is not None
+                                  and ((entry.get("label") or "").strip()
+                                       or entry.get("icon"))))
+            if _see_thru:
+                pygame.draw.rect(surface, (46, 48, 58), rect, 1,
+                                 border_radius=3)
+                continue
             pygame.draw.rect(surface, cell_bg, rect, border_radius=3)
             # An engaged action (singing, menu open, AutoRA armed) gets a
             # thicker bright border. Deliberately a border and not a
@@ -68996,7 +69615,7 @@ def draw_tag_panel(surface):
     px = _clamp_win_x(px, w)
     py = _clamp_win_y(py, h, px)
     _tag_draw_pos = [px, py]
-    pygame.draw.rect(surface, COL_PANEL, (px, py, w, h), border_radius=4)
+    _panel_fade(surface, (px, py, w, h), 4)
     pygame.draw.rect(surface, COL_BORDER, (px, py, w, h), 1, border_radius=4)
     draw_accent_stripe(surface, px, py, h, ACCENT_PARTY)
     surface.blit(f_small.render("TAGGED" + (" — example" if setup_mode
@@ -69997,7 +70616,7 @@ def draw_target_card(surface, x, y, info, mob_ref, mobdb_entry,
     card = pygame.Surface((w, h), pygame.SRCALPHA)
 
     # Background
-    pygame.draw.rect(card, COL_TC_BG,     (0, 0, w, h), border_radius=6)
+    _panel_fade(card, (0, 0, w, h), 6, flat=COL_TC_BG)
     pygame.draw.rect(card, COL_TC_BORDER, (0, 0, w, h), 1, border_radius=6)
 
     # ── Title strip: "TARGET  12.4y" ──────────────────────────────────────
@@ -72408,7 +73027,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
         if is_hidden:
             tmp = pygame.Surface((cw, ch), pygame.SRCALPHA)
             pygame.draw.rect(tmp, (45, 50, 60, 80), (0, 0, cw, ch), 1)
-            lbl_color = ELEM_COLOR.get(key, (160, 170, 185))
+            lbl_color = ELEM_COLOR.get(key, (210, 216, 228))
             lbl = f_label.render(label, True, lbl_color)
             tmp.blit(lbl, ((cw - lbl.get_width()) // 2, 1))
             val = _resolve_stat_value(key, stats)
@@ -72422,8 +73041,11 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                              (cx + 4, cy + 4),
                              (cx + cw - 4, cy + ch - 4), 1)
         else:
+            _cbg = _tip_bg(cw, ch, 0, 255, None)  # corner fade
+            if _cbg is not None:
+                surface.blit(_cbg, (cx, cy))
             pygame.draw.rect(surface, (45, 50, 60), (cx, cy, cw, ch), 1)
-            lbl_color = ELEM_COLOR.get(key, (160, 170, 185))
+            lbl_color = ELEM_COLOR.get(key, (210, 216, 228))
             lbl = f_label.render(label, True, lbl_color)
             surface.blit(lbl, (cx + (cw - lbl.get_width()) // 2, cy + 1))
             val = _resolve_stat_value(key, stats)
@@ -72465,6 +73087,9 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
             target = tmp
             pygame.draw.rect(tmp, (45, 50, 60, 80), (0, 0, cw, ch), 1)
         else:
+            _cbg = _tip_bg(cw, ch, 0, 255, None)  # corner fade
+            if _cbg is not None:
+                target.blit(_cbg, (cx, cy))
             pygame.draw.rect(target, (45, 50, 60), (cx, cy, cw, ch), 1)
 
         # Origin for drawing — temp surface uses (0,0) origin, real
@@ -72473,7 +73098,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
         oy = 0 if is_hidden else cy
 
         # Label "Resist" at top.
-        r_lbl = f_label.render("Resist", True, (160, 170, 185))
+        r_lbl = f_label.render("Resist", True, (210, 216, 228))
         target.blit(r_lbl, (ox + (cw - r_lbl.get_width()) // 2, oy + 1))
 
         if active:
@@ -72518,7 +73143,7 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
         if is_hidden:
             tmp = pygame.Surface((cw, ch), pygame.SRCALPHA)
             pygame.draw.rect(tmp, (45, 50, 60, 80), (0, 0, cw, ch), 1)
-            sp_lbl = f_label.render("SPEED", True, (160, 170, 185))
+            sp_lbl = f_label.render("SPEED", True, (210, 216, 228))
             tmp.blit(sp_lbl, ((cw - sp_lbl.get_width()) // 2, 1))
             sp_val = _resolve_stat_value("movement speed", stats)
             sp_txt, sp_col = _fmt_stat_value("movement speed", sp_val)
@@ -72531,8 +73156,11 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                              (cx + 4, cy + 4),
                              (cx + cw - 4, cy + ch - 4), 1)
         else:
+            _cbg = _tip_bg(cw, ch, 0, 255, None)  # corner fade
+            if _cbg is not None:
+                surface.blit(_cbg, (cx, cy))
             pygame.draw.rect(surface, (45, 50, 60), (cx, cy, cw, ch), 1)
-            sp_lbl = f_label.render("SPEED", True, (160, 170, 185))
+            sp_lbl = f_label.render("SPEED", True, (210, 216, 228))
             surface.blit(sp_lbl,
                          (cx + (cw - sp_lbl.get_width()) // 2, cy + 1))
             sp_val = _resolve_stat_value("movement speed", stats)
@@ -72857,6 +73485,56 @@ def draw_stats_panel(surface, x, y, job, stats, scale=1.0, setup_mode=False):
                 surface.blit(ghost, (cur_mx - gw // 2, cur_my - gh // 2))
 
 
+_equip_glow_cache = {}
+
+# Slot background tint by upgrade tier, matching the game's own item
+# frames: plain gear grey, +1 silver, +2 blue, +3 gold, +4 green.
+_EQUIP_TIER_COLS = {
+    0: (150, 150, 155),
+    1: (205, 212, 225),
+    2: ( 90, 145, 235),
+    3: (230, 185,  70),
+    4: ( 95, 205, 110),
+}
+_EQUIP_TIER_RE = re.compile(r"\+([1-4])\s*$")
+
+
+def _equip_tier(name):
+    """0 for plain gear, N for a name ending in +N (1-4)."""
+    m = _EQUIP_TIER_RE.search(name or "")
+    return int(m.group(1)) if m else 0
+
+
+def _equip_slot_glow(px, tier=0):
+    """Background for a filled equipment cell, cached by size+tier.
+
+    The tier colour sits in the bottom-left corner and fades diagonally to
+    black toward the top-right, inside a plain white border."""
+    key = (px, tier)
+    g = _equip_glow_cache.get(key)
+    if g is None:
+        r, gg, b = _EQUIP_TIER_COLS.get(tier, _EQUIP_TIER_COLS[0])
+        base = (10, 10, 14)
+        peak = 0.55                                   # corner strength
+        g = pygame.Surface((px, px))
+        g.fill(base)
+        span = max(1, 2 * (px - 1))
+        for yy in range(px):
+            for xx in range(px):
+                t = (xx + (px - 1 - yy)) / span       # 0 at bottom-left
+                k = peak * max(0.0, 1.0 - t) ** 2
+                g.set_at((xx, yy), (int(base[0] + (r - base[0]) * k),
+                                    int(base[1] + (gg - base[1]) * k),
+                                    int(base[2] + (b - base[2]) * k)))
+        # The border is the same white for every tier: a blue or gold
+        # outline read as "this slot is selected". The tier shows in the
+        # corner fade only.
+        pygame.draw.rect(g, (225, 228, 235), (0, 0, px, px), 1)
+        pygame.draw.rect(g, (70, 72, 80), (1, 1, px - 2, px - 2), 1)
+        _equip_glow_cache[key] = g
+    return g
+
+
 def draw_equip_viewer(surface, x, y, slots, scale=1.0):
     """Draw a 4x4 equipment grid starting at (x, y), scaled by `scale`.
 
@@ -73077,7 +73755,22 @@ def draw_equip_viewer(surface, x, y, slots, scale=1.0):
         pygame.draw.rect(surface, COL_SLOT_BDR, (sx, sy, cell_px, cell_px), 1)
 
         if item_id:
-            icon = get_icon_scaled(item_id, icon_px)
+            # Worn gear sits on its tier colour (grey, or +1..+4 silver,
+            # blue, gold, green, as the game frames them): a corner fade to
+            # black with a border in the same colour. Under the icon.
+            _tier = _equip_tier((equip_rich_view.get(i) or {}).get("name"))
+            _shade = setting("panel_shading")
+            if _shade:
+                # The icon's own frame colour wins over the name: some
+                # tier-framed gear has no "+N" in its name.
+                _tier = _icon_bg_tier(item_id) or _tier
+            if _shade:
+                surface.blit(_equip_slot_glow(cell_px, _tier), (sx, sy))
+            # +1..+4 icons carry their tier colour as a solid background,
+            # which would cover the fade; take it out so the fade shows.
+            icon = (get_icon_tierless(item_id, icon_px)
+                    if (_shade and _tier) else
+                    get_icon_scaled(item_id, icon_px))
             if icon is not None:
                 # Centre icon in the cell.
                 ix = sx + (cell_px - icon_px) // 2
@@ -73172,9 +73865,7 @@ def draw_help_tooltip(surface, mx, my, lines, screen_w, screen_h):
     if ty + total_h > screen_h:
         ty = max(_ui_view()[1], screen_h - total_h - 2)
 
-    shadow = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
-    shadow.fill((0, 0, 0, 220))
-    surface.blit(shadow, (tx, ty))
+    surface.blit(_tip_bg(total_w, total_h, 4, 220), (tx, ty))
     pygame.draw.rect(surface, (120, 80, 80),
                      (tx, ty, total_w, total_h), 1, border_radius=4)
 
@@ -73496,9 +74187,7 @@ def draw_item_tooltip(surface, mx, my, info, screen_w, screen_h):
     if ty + total_h > screen_h:
         ty = max(_ui_view()[1], screen_h - total_h - 2)
 
-    panel = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
-    panel.fill((0, 0, 0, 215))
-    surface.blit(panel, (tx, ty))
+    surface.blit(_tip_bg(total_w, total_h, 4, 215), (tx, ty))
     pygame.draw.rect(surface, (80, 80, 100),
                      (tx, ty, total_w, total_h), 1, border_radius=4)
 
@@ -73661,9 +74350,7 @@ def draw_ability_tooltip(surface, mx, my, entry, screen_w, screen_h):
     if ty + total_h > screen_h:
         ty = max(_ui_view()[1], screen_h - total_h - 2)
 
-    shadow = pygame.Surface((total_w, total_h), pygame.SRCALPHA)
-    shadow.fill((0, 0, 0, 215))
-    surface.blit(shadow, (tx, ty))
+    surface.blit(_tip_bg(total_w, total_h, 4, 215), (tx, ty))
     pygame.draw.rect(surface, (80, 80, 100),
                      (tx, ty, total_w, total_h), 1, border_radius=4)
 
@@ -74991,7 +75678,7 @@ while running:
             # that can run several hundred chars; truncating them
             # silently drops fields, which manifested as "the wizard
             # only remembers all_songs."
-            if tag not in ("CFGWIZ", "SZSCAN", "SZWIDE", "SZTRACK", "SZRADAR", "SZLAMP", "NYZUL", "OMEN", "SORTIEGIL", "SYNERGY", "CRAFT", "AH", "SKILLUP", "GSDISP") and len(value) > 64:
+            if tag not in ("CFGWIZ", "SZSCAN", "SZWIDE", "SZTRACK", "SZRADAR", "SZLAMP", "NYZUL", "OMEN", "SORTIEGIL", "SYNERGY", "CRAFT", "AH", "SKILLUP", "GSDISP", "DBOX") and len(value) > 64:
                 value = value[:64]
             if tag == "CRAFT":
                 cf = value.split("|")
@@ -77943,10 +78630,9 @@ while running:
             _lx0, _lx1 = max(0, _stk_d["plate_x_off"] - _lgap), _stk_w
         else:
             _lx0, _lx1 = 0, max(40, _stk_d["buff_x_off"] - _lgap)
-        pygame.draw.rect(
-            screen, tuple(min(255, c + 6) for c in COL_PANEL),
-            (_stack_x + _lx0, _stack_y0, max(1, _lx1 - _lx0), _stack_h),
-            border_radius=_lr)
+        _panel_fade(screen,
+                    (_stack_x + _lx0, _stack_y0, max(1, _lx1 - _lx0), _stack_h),
+                    _lr, flat=tuple(min(255, c + 6) for c in COL_PANEL))
         pygame.draw.rect(
             screen, COL_BORDER,
             (_stack_x + _lx0, _stack_y0, max(1, _lx1 - _lx0), _stack_h),
@@ -78252,16 +78938,13 @@ while running:
             # worked while nothing else was tinted, and it made one row
             # look like it had a state the others did not.
             _base = tuple(min(255, c + 6) for c in COL_PANEL)
-            pygame.draw.rect(
-                screen, _base, (px + x0, py, max(1, x1 - x0), rh),
-                border_top_left_radius=(_r if (_first or not _party_stack)
-                                        and rounded_l else 0),
-                border_top_right_radius=(_r if (_first or not _party_stack)
-                                         and rounded_r else 0),
-                border_bottom_left_radius=(_r if (_last or not _party_stack)
-                                           and rounded_l else 0),
-                border_bottom_right_radius=(_r if (_last or not _party_stack)
-                                            and rounded_r else 0))
+            _panel_fade(
+                screen, (px + x0, py, max(1, x1 - x0), rh),
+                (_r if (_first or not _party_stack) and rounded_l else 0,
+                 _r if (_first or not _party_stack) and rounded_r else 0,
+                 _r if (_last or not _party_stack) and rounded_l else 0,
+                 _r if (_last or not _party_stack) and rounded_r else 0),
+                flat=_base)
 
         if _party_stack:
             # One list, not six cards: square where rows meet, rounded
@@ -80297,9 +80980,10 @@ while running:
                 and _alerts_handle_event(event)):
             # Alerts panel: drag, add, dismiss, remove.
             pass
-        elif (not _dev_panel_input_blocked()
+        elif (not _minimap_input_blocked()
                 and _minimap_handle_event(event)):
-            # Minimap: drag, resize, zoom.
+            # Minimap: drag, resize, zoom. Gated on what actually covers
+            # it, not on whether anything at all is open (see the helper).
             pass
         elif (not _dev_panel_input_blocked()
                 and _pool_handle_event(event)):
@@ -82254,10 +82938,15 @@ while running:
             # conversation can be stepped from the panel.
             if _chat_continue_rect is not None \
                and _chat_continue_rect.collidepoint(mx, my):
+                # Held for 0.15 s: a 50 ms tap can fall between two of
+                # the game's input polls at a low frame rate and never
+                # be seen.
                 try:
                     sock_cmd_out.sendto(
-                        b"setkey enter down; wait 0.05; setkey enter up",
+                        b"setkey enter down; wait 0.15; setkey enter up",
                         _cmd_addr())
+                    print(f"[OmniWatch] dialogue \u25bc clicked -> Enter "
+                          f"sent to {_cmd_addr()}")
                 except Exception as _e:
                     print(f"[OmniWatch] dialogue continue failed: {_e}")
                 continue

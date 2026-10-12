@@ -99,6 +99,13 @@ function check_buffs()
 				this_buff['ja_haste'] = 52
 			end
 		elseif buff.id == 353 then -- Hasso
+			-- OmniWatch patch: an empty slot has no name, and :lower() on
+			-- nil stopped the whole buff pass (every buff after Hasso lost
+			-- its stats) whenever hands, legs or feet were bare.
+			local function _slot_en(slot)
+				local it = player.equipment and player.equipment[slot]
+				return (it and it.en and it.en:lower()) or ''
+			end
 			this_buff['ja_haste'] = 103
 			this_buff['Accuracy'] = 10
 			if player.main_job:upper() == 'SAM' then
@@ -106,40 +113,40 @@ function check_buffs()
 				if str > 14 then str =14 end
 				this_buff['STR'] = str
 			end
-			if player.sub_job:upper() == 'SAM' then
+			if player.sub_job and player.sub_job:upper() == 'SAM' then
 				local str = math.floor(player.sub_job_level / 7)
 				if str > 14 then str =14 end
 				this_buff['STR'] = str
 			end
-			if player.equipment.hands.en:lower() == "wakido kote" then	
+			if _slot_en('hands') == "wakido kote" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 10
-			elseif player.equipment.hands.en:lower() == "wakido kote +1" then	
+			elseif _slot_en('hands') == "wakido kote +1" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 20
-			elseif player.equipment.hands.en:lower() == "wakido kote +2" then	
+			elseif _slot_en('hands') == "wakido kote +2" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
-			elseif player.equipment.hands.en:lower() == "wakido kote +3" then	
+			elseif _slot_en('hands') == "wakido kote +3" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 40
-			elseif player.equipment.hands.en:lower() == "wakido kote +4" then	
+			elseif _slot_en('hands') == "wakido kote +4" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 40
 			end
-			if player.equipment.legs.en:lower() == "unkai haidate +1" then	
+			if _slot_en('legs') == "unkai haidate +1" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 15
-			elseif player.equipment.legs.en:lower() == "unkai haidate +2" then	
+			elseif _slot_en('legs') == "unkai haidate +2" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 25
-			elseif player.equipment.legs.en:lower() == "kasuga haidate" then	
+			elseif _slot_en('legs') == "kasuga haidate" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 25
-			elseif player.equipment.legs.en:lower() == "kasuga haidate +1" then	
+			elseif _slot_en('legs') == "kasuga haidate +1" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
-			elseif player.equipment.legs.en:lower() == "kasuga haidate +2" then	
+			elseif _slot_en('legs') == "kasuga haidate +2" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
-			elseif player.equipment.legs.en:lower() == "kasuga haidate +3" then	
+			elseif _slot_en('legs') == "kasuga haidate +3" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 30
 			end
-			if player.equipment.feet.en:lower() == "wakido sune. +2" then	
+			if _slot_en('feet') == "wakido sune. +2" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 10
-			elseif player.equipment.feet.en:lower() == "wakido sune. +3" then	
+			elseif _slot_en('feet') == "wakido sune. +3" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 20
-			elseif player.equipment.feet.en:lower() == "wakido sune. +4" then	
+			elseif _slot_en('feet') == "wakido sune. +4" then	
 				this_buff['ja_haste'] = this_buff['ja_haste'] + 20
 			end
 		elseif buff.id == 604 then -- mighty guard
@@ -165,7 +172,10 @@ function check_buffs()
 		local trust_names = L{"Cornelia", 'Kupofried', 'Brygid', 'KuyinHathdenna', 'Moogle', 'Sakura', 'StarSibyl'}
 		
 		for member_name, v in pairs(member_table) do
-			if trust_names:contains(member_name) and v.mob.distance:sqrt() < 12.5 then
+			-- OmniWatch patch: a member out of the zone has no mob entry.
+			if not (v.mob and v.mob.distance) then
+				-- nothing to measure; skip this member
+			elseif trust_names:contains(member_name) and v.mob.distance:sqrt() < 12.5 then
 				if v.indi and v.indi.id and v.indi.id and v.indi.id == 817 and Geo_Spells[v.indi.id].buff.id == buff.id and duplicate_id and not table.containskey(duplicate_id, v.indi.id) then -- cornelia
 					this_buff['ma_haste'] = 204
 					this_buff['Accuracy'] = 30

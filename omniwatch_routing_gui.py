@@ -697,6 +697,7 @@ class App:
         pygame.freetype.init()
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         pygame.display.set_caption("OmniWatch Chat Routing")
+        _bring_to_front()
         self.font       = pygame.freetype.SysFont("Segoe UI", 13)
         self.font_small = pygame.freetype.SysFont("Segoe UI", 11)
         self.font_bold  = pygame.freetype.SysFont("Segoe UI", 13, bold=True)
@@ -1714,8 +1715,54 @@ class App:
         pygame.quit()
 
 
+def _bring_to_front():
+    """Open above OmniWatch. OmniWatch's windows are always-on-top, and
+    in full screen they cover the whole monitor, so an ordinary window
+    opens underneath them and Alt-Tab cannot lift it out. Joining the
+    always-on-top layer puts this window above them, since the newest
+    always-on-top window sits highest. Windows only; failures ignored."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        hwnd = pygame.display.get_wm_info().get("window")
+        if not hwnd:
+            return
+        u32 = ctypes.windll.user32
+        u32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                     ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int,
+                                     wintypes.UINT]
+        u32.ShowWindow(wintypes.HWND(hwnd), 9)          # SW_RESTORE
+        # HWND_TOPMOST; SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        u32.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(-1),
+                         0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040)
+        u32.SetForegroundWindow(wintypes.HWND(hwnd))
+    except Exception:
+        pass
+
+
+def _error_log_path():
+    try:
+        return _settings_dir() / "routing_gui_error.log"
+    except Exception:
+        return Path("routing_gui_error.log")
+
+
 def main():
-    App().run()
+    # Started detached, this window has no console, so a crash would
+    # otherwise vanish without a trace. Write it beside the routing JSONs.
+    try:
+        App().run()
+    except Exception:
+        import traceback
+        try:
+            with open(_error_log_path(), "a", encoding="utf-8") as f:
+                f.write(traceback.format_exc() + "\n")
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

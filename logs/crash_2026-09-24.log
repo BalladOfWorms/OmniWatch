@@ -1,0 +1,24 @@
+2026-09-24 13:19:19 [event:addon command] ...reEnix/SquareEnix/Windower/addons/libs/resources.lua:33: Cannot find resource file "quests".
+      Try forcing an update by deleting the following directory, then restart Windower:
+      C:/Program Files (x86)/SquareEnix/SquareEnix/Windower/updates/
+    stack traceback:
+    	[C]: in function 'assert'
+    	...reEnix/SquareEnix/Windower/addons/libs/resources.lua:33: in function <...reEnix/SquareEnix/Windower/addons/libs/resources.lua:28>
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:10970: in function '_ow_quest_name'
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:11011: in function '_ow_questcap_dump'
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:13224: in function <...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:13176>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:392: in function <...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:386>
+2026-09-24 13:59:55 [event:addon command] ...reEnix/SquareEnix/Windower/addons/libs/resources.lua:33: Cannot find resource file "quests".
+      Try forcing an update by deleting the following directory, then restart Windower:
+      C:/Program Files (x86)/SquareEnix/SquareEnix/Windower/updates/
+    stack traceback:
+    	[C]: in function 'assert'
+    	...reEnix/SquareEnix/Windower/addons/libs/resources.lua:33: in function <...reEnix/SquareEnix/Windower/addons/libs/resources.lua:28>
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:10970: in function '_ow_quest_name'
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:11011: in function '_ow_questcap_dump'
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:13224: in function <...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:13176>
+    	(tail call): ?
+    	[C]: in function 'xpcall'
+    	...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:392: in function <...x/SquareEnix/Windower/addons/OmniWatch/OmniWatch.lua:386>
