@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.15.2'
+_addon.version  = '1.15.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -7983,8 +7983,12 @@ end
 ow_safe_register('outgoing chunk', function(id, data)
     if id == 0x036 then
         local ok, p = pcall(packets.parse, 'outgoing', data)
-        if ok and p and windower.ffxi.get_mob_name then
-            local nm = windower.ffxi.get_mob_name(p['Target'])
+        if ok and p and p['Target'] then
+            -- windower.ffxi has no get_mob_name; the name comes off the
+            -- mob record. (Guarding on the missing call meant a furnace
+            -- trade was never recognised and no session ever started.)
+            local mob = windower.ffxi.get_mob_by_id(p['Target'])
+            local nm = mob and mob.name
             if nm == 'Synergy Furnace' then
                 _ow_syn_part1 = true
             end
@@ -8073,11 +8077,20 @@ ow_safe_register('incoming chunk', function(id, data)
     if id ~= 0x113 then return end
     local ok, p = pcall(packets.parse, 'incoming', data)
     if not ok or not p then return end
-    local f = {p['Syngery Fewell (Fire)'],      p['Syngery Fewell (Ice)'],
-               p['Syngery Fewell (Wind)'],      p['Syngery Fewell (Earth)'],
-               p['Syngery Fewell (Lightning)'], p['Syngery Fewell (Water)'],
-               p['Syngery Fewell (Light)'],     p['Syngery Fewell (Dark)']}
-    for k = 1, 8 do f[k] = tonumber(f[k]) or 0 end
+    -- Field labels differ between Windower versions ("Syngery" is the
+    -- historical misspelling); take whichever is present, and send nothing
+    -- if neither is -- a row of zeros would wipe the real counts the
+    -- 0x05C reader sent.
+    local els = {'Fire', 'Ice', 'Wind', 'Earth', 'Lightning', 'Water',
+                 'Light', 'Dark'}
+    local f, found = {}, false
+    for k = 1, 8 do
+        local v = p['Syngery Fewell (' .. els[k] .. ')']
+        if v == nil then v = p['Synergy Fewell (' .. els[k] .. ')'] end
+        if v ~= nil then found = true end
+        f[k] = tonumber(v) or 0
+    end
+    if not found then return end
     _ow_syn_send('SYNERGY|fewell|' .. table.concat(f, '|'))
 end)
 
@@ -19766,6 +19779,93 @@ ow_safe_register('incoming chunk', function(id, data)
             -- songs we observed. Songs we observed but didn't have a
             -- prev entry for stay absent from new_timers — reconcile
             -- will create them fresh from pending_meta.
+            -- Songs sharing one buff id (all Marches are 214, Madrigals,
+            -- Minuets, Carols and the rest likewise) are told apart by WHEN
+            -- they landed. Each song cast on us is recorded with the
+            -- moment it landed and its duration, which predicts when it runs
+            -- out; the server gives each slot its real expiry. Sorting both
+            -- by end time pairs every slot with the song that made it, so a
+            -- name always travels with its own timer -- even when the
+            -- cast-order queue missed a cast, or a refresh reshuffled slots.
+            -- Needs one recent cast record per slot; otherwise the queue's
+            -- naming above stands.
+            do
+                local by_bid = {}
+                for i = 1, 32 do
+                    local e = bd[i]
+                    if e and e.id and (_ow_song_land or {})[e.id] then
+                        by_bid[e.id] = by_bid[e.id] or {}
+                        local t = by_bid[e.id]
+                        t[#t + 1] = i
+                    end
+                end
+                local nowc = os.clock()
+                for bid, idxs in pairs(by_bid) do
+                    local n = #idxs
+                    if n >= 2 then
+                        -- newest landing per song name
+                        local best = {}
+                        for _, src in ipairs(_ow_song_land[bid] or {}) do
+                            local nm, cc = src.name, tonumber(src.cc)
+                            if nm and nm ~= '' and cc then
+                                local dur = tonumber(src.dur) or 0
+                                -- skip songs that must already have worn off
+                                if dur <= 0 or cc + dur > nowc - 5 then
+                                    if not best[nm] or cc > best[nm].cc then
+                                        best[nm] = { name = nm, cc = cc, dur = dur }
+                                    end
+                                end
+                            end
+                        end
+                        local srcs = {}
+                        for _, v in pairs(best) do srcs[#srcs + 1] = v end
+                        table.sort(srcs, function(a, b) return a.cc > b.cc end)
+                        if #srcs >= n then
+                            -- the n most recent are the ones on us now
+                            local use, have_all = {}, true
+                            for k = 1, n do
+                                use[k] = srcs[k]
+                                if use[k].dur <= 0 then have_all = false end
+                            end
+                            local slots = {}
+                            for _, i in ipairs(idxs) do
+                                local slot = i - 1
+                                local ex = _ow_buff_slot_expires_at[slot]
+                                if not ex then have_all = false end
+                                slots[#slots + 1] = { i = i, slot = slot,
+                                    key = ex or (bd[i].time or 0) }
+                            end
+                            -- With every expiry known, match predicted end
+                            -- times; otherwise fall back to landing order
+                            -- against the slot's own time stamp.
+                            for _, u in ipairs(use) do
+                                u.key = have_all and (u.cc + u.dur) or u.cc
+                            end
+                            table.sort(slots, function(a, b) return a.key < b.key end)
+                            table.sort(use, function(a, b) return a.key < b.key end)
+                            for k = 1, n do
+                                local sl, nm = slots[k], use[k].name
+                                local e = bd[sl.i]
+                                if e.full_name ~= nm then
+                                    if _ow_buff_debug then
+                                        ow_chat(207, string.format(
+                                            '[OW] song by time bid=%d slot=%d: %s -> %s',
+                                            bid, sl.slot, tostring(e.full_name), nm))
+                                    end
+                                    e.full_name = nm
+                                    local a = _ow_buff_assoc[bid]
+                                              and _ow_buff_assoc[bid][e.time or 0]
+                                    if a then a.full_name = nm end
+                                    if new_timers[sl.slot] then
+                                        new_timers[sl.slot].name = nm
+                                    end
+                                end
+                                _ow_buff_slot_fullname[sl.slot] = nm
+                            end
+                        end
+                    end
+                end
+            end
             _ow_buff_timers = new_timers
             -- Force a stats recompute when the SONG ATTRIBUTION changes.
             -- The fast-poll stat gate keys off p.buffs (buff_ids only), so
@@ -21077,6 +21177,31 @@ ow_events.on('buff_gain', function(data)
             if mob and mob.name then
                 caster_name = mob.name:lower()
             end
+        end
+    end
+    -- Every bard song landing on us, by buff id: its name, the moment it
+    -- landed and how long it lasts. Songs that share a buff id (Marches,
+    -- Madrigals, Minuets, Carols, Etudes...) are told apart by these in
+    -- the 0x063 reconcile, which pairs each slot's server expiry with the
+    -- landing that made it.
+    if source == 'song' or source == 'song_other' then
+        local dn = tostring(nm or '')
+        if dn:sub(1, 1) == '~' then dn = dn:sub(2) end
+        if dn ~= '' and tonumber(final_dur) then
+            _ow_song_land = _ow_song_land or {}
+            local L = _ow_song_land[buff_id] or {}
+            _ow_song_land[buff_id] = L
+            local rec = nil
+            for _, r in ipairs(L) do
+                if r.name == dn then rec = r; break end
+            end
+            if not rec then
+                rec = { name = dn }
+                L[#L + 1] = rec
+            end
+            rec.cc  = os.clock()
+            rec.dur = tonumber(final_dur)
+            while #L > 12 do table.remove(L, 1) end
         end
     end
     _ow_buff_pending_meta[buff_id] = {
@@ -29356,6 +29481,12 @@ local function _ow_fisher_boot()
     if not ok_data or type(data) ~= 'table' then
         ow_chat(167, '[OmniWatch] Fisher engine disabled: '
             .. 'Fisher_data.lua missing from the addon folder.')
+        _ow_fisher_start = function ()
+            if windower and windower.add_to_chat then
+                windower.add_to_chat(167, '[OmniWatch fishing] can\'t start: '
+                    .. 'Fisher_data.lua is missing from the OmniWatch addon folder.')
+            end
+        end
     else
     local coroutine = require('coroutine')
     local math = require('math')
@@ -29401,11 +29532,30 @@ local function _ow_fisher_boot()
         local mode = level or MESSAGE_INFO
         if settings.debug_messages or mode ~= MESSAGE_DEBUG then
             ow_chat(mode, string.format('[fisher] %s', text))
+            -- Starting, stopping and why are shown in game too: written
+            -- only to the log, a start that stopped itself at once
+            -- ("no bait set to use", "invalid equipment") looked like the
+            -- button simply did nothing.
+            if (mode == MESSAGE_WARN or mode == MESSAGE_ERROR
+                    or settings.debug_messages)
+                    and windower and windower.add_to_chat then
+                windower.add_to_chat(mode,
+                    string.format('[OmniWatch fishing] %s', text))
+            end
+        end
+    end
+
+    -- Tell the overlay fishing is no longer running, so the Fishing tab's
+    -- switch and the hotbar slot go back to off by themselves.
+    local function report_off()
+        if udp_gs then
+            pcall(function() udp_gs:send('FISHER|off') end)
         end
     end
 
     local function stop_fishing(reason)
         if session.running then
+            report_off()
             session.running = false
             session.coroutine_key = math.random()
             if reason then
@@ -29623,6 +29773,31 @@ local function _ow_fisher_boot()
     end
 
     local function start_fishing(catch_limit)
+        local _pl = windower.ffxi.get_player()
+        if session.running then
+            message('already fishing', MESSAGE_WARN)
+            return
+        end
+        if not (_pl and _pl.status == 0) then
+            message('can\'t start: stand idle first (not engaged, '
+                .. 'resting, seated or already fishing)', MESSAGE_ERROR)
+            report_off()
+            return
+        end
+        if not next(session.bait_by_id) then
+            message(string.format('can\'t start: no bait recognised in "%s" '
+                .. '-- check the Bait field (bait names, comma separated)',
+                tostring(_last_bait_csv)), MESSAGE_ERROR)
+            report_off()
+            return
+        end
+        if not next(session.item_by_id) then
+            message(string.format('can\'t start: nothing recognised to catch '
+                .. 'in "%s" -- check the Catch field (fish names, or "all fish")',
+                tostring(_last_catch_csv)), MESSAGE_ERROR)
+            report_off()
+            return
+        end
         if not session.running and windower.ffxi.get_player().status == 0 then
             session.running = true
             local coroutine_key = math.random()
@@ -29713,40 +29888,93 @@ local function _ow_fisher_boot()
     end
 
     -- Bait / catch lists come from the dev box as comma-separated names.
+    -- Names are matched without regard to capitals, against every name
+    -- table Fisher_data provides AND the names on its hookable-item list,
+    -- so a fish is found whichever table it happens to live in.
+    local _name_maps = nil
+    local function name_maps()
+        if _name_maps then return _name_maps end
+        local function lower_map(t)
+            local m = {}
+            if type(t) == 'table' then
+                for n, id in pairs(t) do
+                    if type(n) == 'string' then m[n:lower()] = id end
+                end
+            end
+            return m
+        end
+        local bait = lower_map(data.bait_by_name)
+        local fish = lower_map(data.fish_by_name)
+        local item = lower_map(data.item_by_name)
+        -- Everything that can be hooked, by its own name.
+        local hook = {}
+        for _, it in ipairs(data.item_fishing_parameters or {}) do
+            if type(it) == 'table' and it.name and it.id then
+                hook[tostring(it.name):lower()] = it.id
+            end
+        end
+        _name_maps = { bait = bait, fish = fish, item = item, hook = hook }
+        return _name_maps
+    end
+
+    local function count_keys(t)
+        local n = 0
+        for _ in pairs(t) do n = n + 1 end
+        return n
+    end
+
     local function set_bait(csv)
         session.bait_by_id = {}
-        if not csv then return end
+        if not csv or csv == '' then return end
+        local maps, missing, shown = name_maps(), {}, {}
         for raw in string.gmatch(csv, '[^,]+') do
             local name = raw:gsub('^%s+', ''):gsub('%s+$', ''):lower()
             if #name > 0 then
                 if name == 'all' or name == 'all bait' then
-                    for n, id in pairs(data.bait_by_name) do session.bait_by_id[id] = n end
+                    for n, id in pairs(maps.bait) do session.bait_by_id[id] = n end
+                    shown[#shown + 1] = 'all bait'
                 else
-                    local id = data.bait_by_name[name]
-                    if id then session.bait_by_id[id] = name end
+                    local id = maps.bait[name]
+                    if id then
+                        session.bait_by_id[id] = name
+                        shown[#shown + 1] = name
+                    else missing[#missing + 1] = name end
                 end
             end
         end
+        message('bait: ' .. ((#shown > 0) and table.concat(shown, ', ') or 'none')
+            .. ((#missing > 0) and ('  (not found: ' .. table.concat(missing, ', ') .. ')') or ''),
+            (#missing > 0) and MESSAGE_ERROR or MESSAGE_WARN)
     end
 
     local function set_catch(csv)
         session.item_by_id = {}
-        if not csv then return end
+        if not csv or csv == '' then return end
+        local maps, missing, shown = name_maps(), {}, {}
         for raw in string.gmatch(csv, '[^,]+') do
             local name = raw:gsub('^%s+', ''):gsub('%s+$', ''):lower()
             if #name > 0 then
                 if name == 'all' or name == 'all fish' then
-                    for n, id in pairs(data.fish_by_name) do session.item_by_id[id] = n end
-                elseif name == 'all item' then
-                    for n, id in pairs(data.item_by_name) do
+                    local src = next(maps.fish) and maps.fish or maps.hook
+                    for n, id in pairs(src) do session.item_by_id[id] = n end
+                    shown[#shown + 1] = 'all fish'
+                elseif name == 'all item' or name == 'all items' then
+                    for n, id in pairs(maps.item) do
                         if id < 80000 then session.item_by_id[id] = n end
                     end
+                    shown[#shown + 1] = 'all items'
                 else
-                    local id = data.fish_by_name[name] or data.item_by_name[name]
-                    if id then session.item_by_id[id] = name end
+                    local id = maps.fish[name] or maps.item[name] or maps.hook[name]
+                    if id then
+                        session.item_by_id[id] = name
+                        shown[#shown + 1] = name
+                    else missing[#missing + 1] = name end
                 end
             end
         end
+        message('catch: ' .. ((#shown > 0) and table.concat(shown, ', ') or 'none')
+            .. ((#missing > 0) and ('  (not found: ' .. table.concat(missing, ', ') .. ')') or ''),
+            (#missing > 0) and MESSAGE_ERROR or MESSAGE_WARN)
     end
 
     ow_safe_register('login', function ()

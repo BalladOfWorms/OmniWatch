@@ -1,11 +1,40 @@
 # Changelog
 
+## [1.15.3] — 2026-10-12
+
+### Added
+
+- **For-sale counts on the Marketplace's Buy list.** Every item you search for or browse shows how many are up on the auction house right now in an **Available** column, singles on the single row and stacks on the stack row, without clicking **$**. Items with some up have their name in green. The list has column titles (Item, Available, Level, History), and clicking a row adds it to your buy queue. The counts arrive a moment after the list and refresh every couple of minutes.
+- **Fishing, Crafting and Synergy on the hotbar.** Three new hotbar actions: **Fishing** starts and stops auto-fishing, **Crafting** makes the recipe picked on the Crafting tab (or repeats your last synth) and pauses or resumes a run in progress, and **Synergy** opens and closes the Synergy tab. Each slot lights up while its fishing, crafting run or tab is active.
+- **Odometer.** A small panel showing how far you've run and how far you are from where you started, with a compass arrow and direction (north up, like the minimap). Resting, changing zone or warping within a zone starts it over, and so does its **RESET** button. Turn it on under **Settings ▸ Misc ▸ Odometer**, or with the **Odometer** hotbar action.
+- **A Clear button on the Fishing tab** empties Bait, Catch and Catch limit in one click.
+- **Select text in the Crafting and Fishing boxes.** Drag across a box to highlight part of it, double-click to take a word, or use Shift+arrows and Ctrl+A. Typing or Backspace replaces the highlight, the arrow keys move the caret, and Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste. Copy, cut and paste also work in OmniWatch's other text boxes, such as the Marketplace search.
+- **Abyssea landing spots on the minimap.** Like Home Points, each Maw, conflux and Abyssea entrance you have warped to shows its landing spot on the minimap when you point at it in the travel menu.
+
+### Changed
+
+- **Marketplace item cards open from the item's name.** Pointing at an item's name brings up its card, and the rest of the row (counts, prices, buttons) stays clear to read and click. This applies across the Buy, Sell, Bazaar and Delivery tabs.
+- **Sales history for singles and stacks together.** Clicking **$** on anything sold both singly and in stacks lists recent sales for both, under Singles and Stacks headings, from whichever row you clicked.
+
+### Fixed
+
+- **Inside Abyssea, the travel menu lists only your zone's confluxes.** The eight confluxes of the Abyssea zone you're in are listed by name, the ones you can actually reach from there.
+- **The Synergy tab picks up your furnace session.** Trading to a Synergy Furnace and starting a session now brings up the tab's readouts and controls, and the fewell counts stay correct as your currencies update.
+- **Fishing settings keep what you type.** The Bait, Catch and number fields on the Fishing tab, and the Crafting tab's search and count boxes, take your typing with Keep game focus on, and what you type is kept when you press Enter or Tab, click another field or click away. Escape still cancels.
+- **Each bard song keeps its own name and timer.** Songs that share a status, such as Victory, Advancing and Honor March, or two Madrigals, Minuets or Carols, each show their own name on the party panel and the buff timers, matched to the right time left, whoever sang them.
+
 ## [1.15.2] — 2026-10-10
 
 ### Added
 
 - **Help and community links in the settings menu.** A new row above the update button has an **ISSUES** button, which opens OmniWatch's GitHub issues page for bug reports and requests, and a **DISCORD** button, which opens the invite to the OmniWatch Discord.
 - **Chat tabs can clear themselves.** Right-click a tab and click **Auto-clear** to step through 5, 15, 30, 60 and 120 minutes. The tab then keeps only the lines from that long ago onward, dropping the oldest as they pass the limit. A tab you have scrolled up in waits until you're back at the bottom, and the choice is saved per tab. Tabs you haven't opened clear on time too, and their unread count goes down with the lines; to keep unseen lines until you open the tab instead, turn off **Auto-clear unread lines** under **Settings ▸ Chat Panel**.
+- **Panel shading.** Panels, tooltips, item cards, the settings windows, the hotbars and each cell of the Statistics panel have a soft grey glow in the bottom-left corner that fades to black. Blank hotbar slots let the shading show through, keeping just a faint outline, and look as before while you edit the hotbar. Turn it off with **Panel shading** under **Settings ▸ Display**.
+- **Gear tiers on the Equipment panel.** With panel shading on, each worn piece sits on the colour of its upgrade tier, the way the game frames it: grey for regular gear, then silver, blue, gold and green for +1 to +4. The coloured backing on +1 to +4 icons gives way to the shading, so every slot matches.
+
+### Changed
+
+- **Stat names on the Statistics panel are brighter**, so they're easier to read at a glance.
 
 ### Fixed
 
@@ -17,6 +46,8 @@
 - **The delivery box shows every parcel.** Everything waiting in your inbox appears at once, the way the game's own box shows it, so you can leave an item in the box and still collect the ones behind it.
 - **Item cards show only real augments.** Items whose stored data isn't augments, such as fishing rods, show just their own stats, on the card and in your totals.
 - **Gear stats read every item you carry.** All your bags are read for gear stats, including weapon-slot items that have no combat skill, so the Equipment and Statistics panels and sim mode have your full inventory to work with.
+- **The travel menu offers the Abyssea Maws in town.** At the Abyssea teleporters in the ports, Ru'Lude Gardens and Heavens Tower, the menu lists the nine Maws you can be sent to, and beside a Maw it offers to enter Abyssea. The confluxes are listed once you're inside.
+- **The minimap answers with another window open.** You can zoom, pan, drag and click the minimap while the inventory, a settings box, the checklist or another window is open elsewhere or on the other display.
 
 ## [1.15.1] — 2026-10-09
 

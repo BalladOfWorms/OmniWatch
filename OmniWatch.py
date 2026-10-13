@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.15.2 (2026-10-10)"
+OMNIWATCH_BUILD_STAMP = "v1.15.3 (2026-10-12)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.15.2"
+OMNIWATCH_VERSION = "1.15.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -3139,6 +3139,28 @@ def _clipboard_text():
         return ""
     txt = txt.replace("\x00", "")
     return "".join(c for c in txt if c == " " or ord(c) >= 32).strip()
+
+
+def _clipboard_put(text):
+    """Put plain text on the clipboard (Ctrl+C / Ctrl+X in a text field).
+    Best effort: a build without a usable scrap module just doesn't copy."""
+    if not text:
+        return
+    try:
+        pygame.scrap.init()
+    except Exception:
+        pass
+    putter = getattr(pygame.scrap, "put_text", None)
+    if callable(putter):
+        try:
+            putter(text)
+            return
+        except Exception:
+            pass
+    try:
+        pygame.scrap.put(pygame.SCRAP_TEXT, text.encode("utf-8"))
+    except Exception:
+        pass
 
 
 # Config file for just the gear-root path (kept separate from the main
@@ -9127,7 +9149,7 @@ def _overlay_blocks_point(pos):
 _LATER_PANEL_RECT_DICTS = (
     "_tag_rects",
     "_alert_rects", "_pool_rects", "_ah_rects", "_craft_rects",
-    "_minimap_rects",
+    "_minimap_rects", "_odo_rects",
     "_syn_rects", "_fisher_rects", "_skillup_rects", "_sz_rects",
     # The GearSwap rows. This one already published its envelope and was
     # simply never listed -- and the pad is designed to sit directly above
@@ -12395,6 +12417,10 @@ HOTBAR_ACTIONS = [
     ("autora",     "Auto ranged attack", "_hb_toggle_autora"),
     ("magebuff",   "Cast buff set",      "_mage_cast_invoke"),
     ("minimap",    "Minimap",            "_toggle_minimap"),
+    ("odometer",   "Odometer",           "_toggle_odometer"),
+    ("fish",       "Fishing (start/stop)", "_hb_toggle_fishing"),
+    ("craft",      "Crafting (start/stop)", "_hb_toggle_crafting"),
+    ("synergy",    "Synergy panel",      "_hb_toggle_synergy"),
 ]
 HOTBAR_ACTION_KEYS   = [a[0] for a in HOTBAR_ACTIONS]
 HOTBAR_ACTION_LABELS = {a[0]: a[1] for a in HOTBAR_ACTIONS}
@@ -12414,6 +12440,46 @@ def _hb_toggle_autora():
     set_setting("autora_enabled", not bool(setting("autora_enabled")))
 
 
+def _hb_toggle_fishing():
+    """Start or stop auto-fishing -- the Fishing tab's "Fishing on"
+    switch, through set_setting so the bait / catch push and the addon
+    message are exactly what the tab sends."""
+    set_setting("fisher_enabled", not bool(setting("fisher_enabled")))
+
+
+def _hb_toggle_crafting():
+    """Crafting from the hotbar. While synths are queued it pauses or
+    resumes them; otherwise it makes the recipe picked on the Crafting
+    tab (at the tab's count), or repeats the last synth when none is."""
+    global _hb_action_note
+    if int(craft_state.get("qlen") or 0) > 0:
+        _craft_send("resume" if craft_state.get("paused") else "pause")
+        return
+    if craft_sel and craft_sel in craft_recipes:
+        rc = craft_recipes[craft_sel]
+        _craft_send("make|%d|%s|%s|%s" % (
+            _craft_apply_count(), craft_sel, rc.get("crystal", ""),
+            ";".join(rc.get("ingredients", []))))
+    elif craft_state.get("last"):
+        _craft_send("repeat|%d" % _craft_apply_count())
+    else:
+        mx, my = _mouse_pos()
+        _hb_action_note = {"text": "Pick a recipe on the Crafting tab first",
+                           "until": time.time() + 3.0, "x": mx, "y": my}
+
+
+def _hb_toggle_synergy():
+    """Open or close the Synergy tab. Synergy has no automatic run -- the
+    furnace is worked from the tab's own buttons -- so the slot brings
+    the tab up (and puts it away) rather than starting anything."""
+    global craftsyn_open, craftsyn_tab
+    if craftsyn_open and craftsyn_tab == "synergy":
+        craftsyn_open = False
+    else:
+        craftsyn_open = True
+        craftsyn_tab = "synergy"
+
+
 def _hb_action_is_on(key):
     """True while an action is engaged, so its slot can light up rather
     than firing blind. A hotbar cell can't relabel itself the way the
@@ -12430,6 +12496,15 @@ def _hb_action_is_on(key):
             return bool(setting("autora_enabled"))
         if key == "minimap":
             return bool(globals().get("minimap_open"))
+        if key == "odometer":
+            return bool(setting("show_odometer"))
+        if key == "fish":
+            return bool(setting("fisher_enabled"))
+        if key == "craft":
+            return (int(craft_state.get("qlen") or 0) > 0
+                    and not craft_state.get("paused"))
+        if key == "synergy":
+            return bool(craftsyn_open and craftsyn_tab == "synergy")
     except Exception:
         return False
     return False
@@ -14775,6 +14850,28 @@ SETTINGS_SCHEMA = [
                    "sessions.",
     },
     {
+        "key":     "odometer_settings",
+        "label":   "Odometer",
+        "kind":    "button",
+        "button_text": "CONFIGURE",
+        "section": "Misc",
+        "applies": "python",
+        "action":  "open_odometer_settings",
+        "help":    "A small panel showing how far you have run and which "
+                   "way you are from where you started. Resting, changing "
+                   "zone or its RESET button starts it over.",
+    },
+    {
+        "key":     "show_odometer",
+        "label":   "(internal) odometer shown",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Whether the odometer panel is up. Set from its "
+                   "Configure box or a hotbar slot.",
+    },
+    {
         "key":     "show_alerts",
         "label":   "(internal) alerts panel shown",
         "kind":    "bool",
@@ -15017,8 +15114,11 @@ def _coerce_setting(schema, raw):
             if "max" in schema:
                 v = min(schema["max"], v)
             return v
-        if kind == "string":
-            return str(raw)
+        if kind in ("string", "text"):
+            # "text" is the free-typed kind (the Fishing bait and catch
+            # lists). It was missing here, so every value fell through to
+            # the default "" -- typed text vanished the moment it was saved.
+            return "" if raw is None else str(raw)
         if kind == "enum":
             options = schema.get("options", [])
             # chat_main_char holds a character name whose validity depends
@@ -16743,6 +16843,7 @@ _SETTINGS_ACTIONS = {
     "open_auction":            lambda: _toggle_ah_panel(),
     "open_treasure":           lambda: _toggle_pool_panel(),
     "open_minimap_settings":   lambda: _open_subdialog("minimap"),
+    "open_odometer_settings":  lambda: _open_subdialog("odometer"),
     "open_alerts_settings":    lambda: _open_subdialog("alerts"),
     "edit_alert_sections":     lambda: _open_alert_editor(),
     "open_autora":             lambda: _open_autora(),
@@ -16831,6 +16932,21 @@ def apply_setting_side_effects(key, value):
         global _dps_window_custom
         _dps_window_custom = None
     schema = SETTINGS_BY_KEY.get(key, {})
+    if key == "fisher_enabled" and value:
+        # The addon only hears a Fishing setting when it changes, and keeps
+        # none of them across a reload -- so a bait and catch entered last
+        # session were saved here but unknown there, and the engine stopped
+        # at once with "no bait". Send the whole set before switching on.
+        for _fk, _l, _kd in _FISHER_FIELDS:
+            if _fk == "fisher_enabled":
+                continue
+            try:
+                _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                _s.sendto(("SETTING|%s|%s" % (_fk, setting(_fk)))
+                          .encode("utf-8"), _cmd_addr())
+                _s.close()
+            except Exception:
+                pass
     if schema.get("applies") in ("lua", "both"):
         try:
             payload = f"SETTING|{key}|{value}"
@@ -30297,6 +30413,7 @@ def save_layout():
             # sees. All three are window arrangement, so they ride the
             # layout with everything else.
             "minimap_pos":     list(globals().get("minimap_pos", [40, 320])),
+            "odo_pos":         list(globals().get("odo_pos") or [40, 540]),
             "minimap_size":    list(globals().get("minimap_size", [250, 190])),
             "minimap_zoom":    float(globals().get("minimap_zoom", 1.0)),
             # AH sales-history popup; None = centred, the default.
@@ -30590,7 +30707,8 @@ def load_layout():
         for _key, _dflt in (("craftsyn_pos", [260, 200]),
                             ("pool_pos", [300, 240]),
                             ("alerts_pos", [70, 150]),
-                            ("minimap_pos", [40, 320])):
+                            ("minimap_pos", [40, 320]),
+                            ("odo_pos", [40, 540])):
             _v = data.get(_key)
             if isinstance(_v, list) and len(_v) == 2:
                 try:
@@ -39365,6 +39483,24 @@ class _TextField:
             self.cursor = len(text)
             self._reset_blink()
             return text, "handled"
+        if ctrl and event.key in (pygame.K_c, pygame.K_x):
+            lo, hi = self._selection()
+            if lo != hi:
+                _clipboard_put(text[lo:hi])
+                if event.key == pygame.K_x:
+                    return self._replace_selection(text, ""), "changed"
+            return text, "handled"
+        if ctrl and event.key == pygame.K_v:
+            try:
+                incoming = "".join(
+                    ch for ch in _clipboard_text()
+                    if ch.isprintable()
+                    and (self.allowed is None or ch in self.allowed))
+            except Exception:
+                incoming = ""
+            if incoming:
+                return self._replace_selection(text, incoming), "changed"
+            return text, "handled"
         if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
             return text, "submit"
         if event.key == pygame.K_ESCAPE:
@@ -39491,6 +39627,14 @@ _AH_STRIPE = (26, 30, 38)   # alternating row shade for AH lists
 _AH_MAX_W, _AH_MAX_H = 1500, 1100
 _ah_rects = {}
 _ah_item_tip_rects = []   # [(rect, item_id)] for hover tooltips
+
+
+def _ah_name_tip(font, text, x, y, h, item_id):
+    """Register an item card hover over just the drawn NAME, not the whole
+    row, so the card doesn't cover the row's buttons and numbers."""
+    w = font.size(text)[0] if text else 0
+    if w > 0:
+        _ah_item_tip_rects.append((pygame.Rect(x, y, w, h), item_id))
 _ah_text_tip_rects = []   # [(rect, [lines])] for plain-text hover tips
 
 # How long a listing stays up before the auction house hands it back: thirty
@@ -40331,13 +40475,16 @@ def _ah_fetch_combined(item_id, stack):
                 return
             items = None
             if cat is not None:
-                items = _ah_cat_cache.get(cat)
+                items = (_ah_cat_cache.get(cat)
+                     if time.time() - _ah_cat_cache_t.get(cat, 0) <= _AH_COUNT_FRESH
+                     else None)
                 if items is None:
                     _ah_hist_emit("Checking %s\u2026" % catname)
                     items = _ahsrch_query_category(ip, port, cat,
                                                    timeout=8.0)["items"]
                     _ah_note_search_ok()
                     _ah_cat_cache[cat] = items
+                    _ah_cat_cache_t[cat] = time.time()
             if items is None:
                 _ah_hist_emit([
                     ("%s " % name, (235, 205, 120)),
@@ -40351,11 +40498,31 @@ def _ah_fetch_combined(item_id, stack):
                     ("%s " % name, (235, 205, 120)),
                     ("(%d) \u2014 %s Singles, %s Stacks For Sale"
                      % (item_id, sd, kd), (190, 198, 212))])
-            res = _ahsrch_parse_history(_ahsrch_query_history(ip, port, item_id, stack))
-            _ah_note_search_ok()
-            if not res.get("ok") or not res["sales"]:
-                _ah_hist_emit([("    no recent sales found", (150, 156, 168))])
-            else:
+            # Anything that can be sold as a stack gets both histories,
+            # singles then stacks. The category listing says whether it
+            # stacks (0xFFFFFFFF in the stack column = no stack form);
+            # without one, the item's own stack size decides.
+            stackable = None
+            if items is not None and item_id in items:
+                stackable = items[item_id][1] != 0xFFFFFFFF
+            if stackable is None:
+                _ss = int((inv_card_cache.get(item_id) or {}).get("stack") or 0)
+                for _it in ah_state.get("items") or []:
+                    if _it.get("id") == item_id:
+                        _ss = max(_ss, int(_it.get("ssize") or 0))
+                stackable = _ss > 1
+            kinds = (0, 1) if stackable else (stack,)
+            for _kind in kinds:
+                if len(kinds) > 1:
+                    _ah_hist_emit([("  %s" % ("Stacks" if _kind else "Singles"),
+                                    (140, 200, 230))])
+                res = _ahsrch_parse_history(
+                    _ahsrch_query_history(ip, port, item_id, _kind))
+                _ah_note_search_ok()
+                if not res.get("ok") or not res["sales"]:
+                    _ah_hist_emit([("    no recent sales found",
+                                    (150, 156, 168))])
+                    continue
                 for sale in reversed(res["sales"]):
                     _ah_hist_emit([
                         ("    %s  -  %s > %s  -  " % (
@@ -40757,6 +40924,73 @@ _AH_CATMAP_B64 = (
 
 _AH_CATMAP = None          # lazily-decoded {itemid: aH category}
 _ah_cat_cache = {}         # {cat: {itemid: (single, stack)}} for this session
+_ah_cat_cache_t = {}       # {cat: time.time() of that category's last fetch}
+_ah_count_busy = False     # the list-wide count fetch is running
+_AH_COUNT_FRESH = 120.0    # seconds a category's counts are shown as current
+
+
+def _ah_prefetch_counts(items):
+    """Fetch for-sale counts for every row in the Buy list.
+
+    The search server answers one request per AH category with the single
+    and stack count of EVERY item in it, so a whole list costs one quick
+    request per category it spans -- the same request the $ button makes,
+    which is why its count comes back before the price history. Runs in
+    the background, oldest-first, skipping categories fetched in the last
+    two minutes."""
+    global _ah_count_busy
+    cats = []
+    nowt = time.time()
+    for it in items or ():
+        try:
+            c = _ah_item_cat(int(it["id"]))
+        except Exception:
+            c = None
+        if (c and c not in cats
+                and nowt - _ah_cat_cache_t.get(c, 0) > _AH_COUNT_FRESH):
+            cats.append(c)
+    if not cats or _ah_count_busy:
+        return
+    _ah_count_busy = True
+
+    def _worker():
+        global _ah_count_busy
+        try:
+            ip, port = _ah_resolve_server()
+            if not ip:
+                return
+            for c in cats[:12]:
+                try:
+                    got = _ahsrch_query_category(ip, port, c,
+                                                 timeout=8.0)["items"]
+                except OSError as e:
+                    _ah_note_search_error(e)
+                    break
+                _ah_note_search_ok()
+                _ah_cat_cache[c] = got
+                _ah_cat_cache_t[c] = time.time()
+        except Exception:
+            pass
+        finally:
+            _ah_count_busy = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _ah_row_count(it):
+    """(text, colour) for a Buy-list row's for-sale count, or None while
+    it is still being fetched / the item has no category on file."""
+    try:
+        c = _ah_item_cat(int(it["id"]))
+    except Exception:
+        return None
+    got = _ah_cat_cache.get(c) if c else None
+    if got is None:
+        return None
+    sa, st = got.get(int(it["id"]), (0xFFFFFFFF, 0xFFFFFFFF))
+    n = st if it.get("stack") else sa
+    n = 0 if n == 0xFFFFFFFF else n
+    return (str(n), (140, 214, 150) if n else (110, 116, 128))
 
 
 def _ah_catmap():
@@ -41444,12 +41678,15 @@ def _ah_fetch_avail(item_id, stack):
             if not ip:
                 _ah_hist_emit("AH: search server not found. Use /search in-game once, then retry.")
                 return
-            items = _ah_cat_cache.get(cat)
+            items = (_ah_cat_cache.get(cat)
+                     if time.time() - _ah_cat_cache_t.get(cat, 0) <= _AH_COUNT_FRESH
+                     else None)
             if items is None:
                 _ah_hist_emit("AH: checking %s listings\u2026" % catname)
                 items = _ahsrch_query_category(ip, port, cat, timeout=8.0)["items"]
                 _ah_note_search_ok()
                 _ah_cat_cache[cat] = items
+                _ah_cat_cache_t[cat] = time.time()
             sa, st = items.get(item_id, (0, 0xFFFFFFFF))
             sd = "n/a" if sa == 0xFFFFFFFF else str(sa)
             kd = "n/a" if st == 0xFFFFFFFF else str(st)
@@ -41782,10 +42019,27 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
         else:
             items.sort(key=lambda it: it["name"].lower())
         ih = 15
-        ivis = max(1, (items_r.height - 4) // ih)
+        # Column positions, measured from the right edge: item name takes
+        # what is left over.
+        _hist_w, _lv_w, _av_w = 48, 44, 64
+        _hist_x = items_r.right - 4 - _hist_w
+        _lv_x = _hist_x - _lv_w
+        _av_x = _lv_x - _av_w
+        _hdr_h = 16
+        _hc = (120, 128, 142)
+        surface.blit(fnt_s.render("Item", True, _hc), (items_r.x + 6, items_r.y + 2))
+        for _lab, _cx, _cw in (("Available", _av_x, _av_w),
+                               ("Level", _lv_x, _lv_w),
+                               ("History", _hist_x, _hist_w)):
+            _ls = fnt_s.render(_lab, True, _hc)
+            surface.blit(_ls, (_cx + (_cw - _ls.get_width()) // 2, items_r.y + 2))
+        pygame.draw.line(surface, (48, 54, 66),
+                         (items_r.x + 3, items_r.y + _hdr_h),
+                         (items_r.right - 4, items_r.y + _hdr_h))
+        ivis = max(1, (items_r.height - 4 - _hdr_h) // ih)
         ioff = max(0, min(ah_state["items_scroll"], max(0, len(items) - ivis)))
         ah_state["items_scroll"] = ioff
-        iy = items_r.y + 3
+        iy = items_r.y + _hdr_h + 2
         if not items:
             surface.blit(fnt_s.render("search for an item\u2026", True,
                                       (120, 128, 142)), (items_r.x + 6, iy))
@@ -41793,21 +42047,29 @@ def _ah_draw_buy(surface, area, fnt, fnt_b, fnt_s, btn, field):
             irow = pygame.Rect(items_r.x + 2, iy, items_r.width - 4, ih)
             if (ioff + _vi) % 2:
                 pygame.draw.rect(surface, _AH_STRIPE, irow)
+            # How many are up right now (singles on a single row, stacks on
+            # a stack row), from the category counts fetched with the list.
+            _cnt = _ah_row_count(it)
+            _up = bool(_cnt and _cnt[0] != "0")
             nm = it["name"]
-            while nm and fnt_s.size(nm)[0] > items_r.width - 70:
+            while nm and fnt_s.size(nm)[0] > _av_x - irow.x - 10:
                 nm = nm[:-1]
-            surface.blit(fnt_s.render(nm, True, (206, 212, 224)), (irow.x + 4, irow.y))
+            surface.blit(fnt_s.render(nm, True,
+                                      (140, 214, 150) if _up else (206, 212, 224)),
+                         (irow.x + 4, irow.y))
+            if _cnt:
+                _cs = fnt_s.render(_cnt[0], True, _cnt[1])
+                surface.blit(_cs, (_av_x + (_av_w - _cs.get_width()) // 2, irow.y))
             _lv = it.get("level", 0)
             if _lv:
-                _lvs = fnt_s.render("Lv%d" % _lv, True, (150, 162, 184))
-                surface.blit(_lvs, (irow.right - 32 - _lvs.get_width(), irow.y))
-            surface.blit(fnt_s.render("+", True, (150, 210, 160)),
-                         (irow.right - 12, irow.y))
-            _hb = pygame.Rect(irow.right - 28, irow.y, 14, ih)
-            surface.blit(fnt_s.render("$", True, (224, 196, 120)), (_hb.x + 3, irow.y))
+                _lvs = fnt_s.render(str(_lv), True, (150, 162, 184))
+                surface.blit(_lvs, (_lv_x + (_lv_w - _lvs.get_width()) // 2, irow.y))
+            _hb = pygame.Rect(_hist_x + (_hist_w - 16) // 2, irow.y, 16, ih)
+            _ds = fnt_s.render("$", True, (224, 196, 120))
+            surface.blit(_ds, (_hb.x + (_hb.width - _ds.get_width()) // 2, irow.y))
             _ah_rects["hist:%d:%d" % (it["id"], it.get("stack", 0))] = _hb
             _ah_rects["item:%d:%d" % (it["id"], it.get("stack", 0))] = irow
-            _ah_item_tip_rects.append((irow, it["id"]))
+            _ah_name_tip(fnt_s, nm, irow.x + 4, irow.y, ih, it["id"])
             iy += ih
     surface.set_clip(iclip)
 
@@ -41931,7 +42193,7 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
         surface.blit(_cs, (_hbx.x - 4 - _cs.get_width(), row.y))
         _ah_rects["hist:%d:0" % it["id"]] = _hbx
         _ah_rects["sellitem:%d" % it["id"]] = row
-        _ah_item_tip_rects.append((row, it["id"]))
+        _ah_name_tip(fnt_s, nm, row.x + 4, row.y, ih, it["id"])
         iy += ih
     surface.set_clip(iclip)
     _ah_rects["sellinv"] = inv_r
@@ -42058,7 +42320,6 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
                                           else 0)] = _hb
                 _nr = pygame.Rect(row.x, row.y, max(1, _name_end - row.x), 14)
                 _ah_rects["salefx:%d" % _sid] = _nr
-                _ah_item_tip_rects.append((_nr, _sid))
             surface.blit(fnt_s.render(stat, True, col), (_st_x, row.y))
             _ps = fnt_s.render(_ah_fmt_gil(sl.get("price", 0)), True, col)
             surface.blit(_ps, (_ask_r - _ps.get_width(), row.y))
@@ -42098,6 +42359,8 @@ def _ah_draw_sell(surface, area, fnt, fnt_b, fnt_s, btn, field):
             surface.blit(fnt_s.render(nm, True, col if stat != "On auction"
                                       else (200, 206, 218)),
                          (row.x + 4, row.y))
+            if _sid > 0:
+                _ah_name_tip(fnt_s, nm, row.x + 4, row.y, 14, _sid)
         else:
             surface.blit(fnt_s.render("%d. (empty)" % (slot + 1), True,
                                       (96, 102, 114)), (row.x + 4, row.y))
@@ -43243,7 +43506,7 @@ def _ah_draw_bazaar(surface, area, fnt, fnt_b, fnt_s, btn, field):
                            else (150, 162, 184))
         surface.blit(_rs, (row.right - 6 - _rs.get_width(), row.y))
         _ah_rects["bz:item:%d" % it["slot"]] = row
-        _ah_item_tip_rects.append((row, it["id"]))
+        _ah_name_tip(fnt_s, nm, row.x + 4, row.y, ih, it["id"])
         iy += ih
     surface.set_clip(clip)
     _ah_rects["bz:list"] = list_r
@@ -43310,8 +43573,7 @@ def _ah_draw_bazaar(surface, area, fnt, fnt_b, fnt_s, btn, field):
             nm += "\u2026"
         surface.blit(fnt_s.render(nm, True, (206, 212, 224)),
                      (row.x + 4, row.y + 1))
-        _ah_item_tip_rects.append((pygame.Rect(row.x, row.y, rm.x - row.x,
-                                               rh - 1), r["id"]))
+        _ah_name_tip(fnt_s, nm, row.x + 4, row.y, rh - 1, r["id"])
         ry += rh
     surface.set_clip(clip)
     _ah_rects["bz:listed"] = top_r
@@ -43551,9 +43813,8 @@ def _ah_draw_dbox(surface, area, fnt, fnt_b, fnt_s, btn, field):
         surface.blit(fnt_s.render(label, True, (206, 212, 224)),
                      (row.x + 4, row.y + 1))
         if not it.get("gil") and int(it.get("id", 0) or 0) > 0:
-            _ah_item_tip_rects.append((pygame.Rect(row.x, row.y,
-                                                  act_r.x - row.x, rh - 1),
-                                       int(it["id"])))
+            _ah_name_tip(fnt_s, label, row.x + 4, row.y, rh - 1,
+                         int(it["id"]))
         ry += rh
     _ah_rects["db:slots"] = box_r
 
@@ -43639,7 +43900,7 @@ def _ah_draw_dbox(surface, area, fnt, fnt_b, fnt_s, btn, field):
         _cs = fnt_s.render("x%d" % it["count"], True, (150, 162, 184))
         surface.blit(_cs, (row.right - 6 - _cs.get_width(), row.y))
         _ah_rects["db:pick:%d" % it["slot"]] = row
-        _ah_item_tip_rects.append((row, it["id"]))
+        _ah_name_tip(fnt_s, nm, row.x + 4, row.y, ih, it["id"])
         iy += ih
     surface.set_clip(clip)
     _ah_rects["db:list"] = list_r
@@ -44275,32 +44536,22 @@ def draw_craft_window(surface):
     _craft_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
     _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _craft_rects, fnt_b)
 
-    def field(rect, text, focused, placeholder=""):
-        pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=3)
-        pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
-                         rect, 1, border_radius=3)
-        show = text if text else placeholder
-        col = (225, 225, 230) if text else (120, 128, 142)
-        t = fnt.render(show, True, col)
-        if focused and craft_sel_all and text:
-            # Highlighted: typing replaces it, Backspace clears it.
-            pygame.draw.rect(surface, (60, 90, 150),
-                             (rect.x + 4, rect.centery - t.get_height() // 2,
-                              t.get_width() + 2, t.get_height()))
-            t = fnt.render(show, True, (245, 245, 250))
-        surface.blit(t, (rect.x + 5, rect.centery - t.get_height() // 2))
-        if focused and not (craft_sel_all and text):
-            cx = rect.x + 5 + (fnt.render(text, True, col).get_width()
-                               if text else 0)
-            pygame.draw.line(surface, (220, 220, 230),
-                             (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
+    def field(key, rect, text, placeholder=""):
+        # The shared _TextField: caret, mouse/shift selection, copy/paste.
+        focused = (craft_focus == key)
+        tf = _craft_tf(key)
+        if focused and not tf.focused:
+            tf.focused = True
+        elif not focused and tf.focused:
+            tf.blur()
+        tf.draw(surface, rect, text, fnt, placeholder, bg=(20, 22, 28))
 
     cy = y + title_h + tab_h + pad
     # search field + Recipe/Ingredient mode toggle
     _tgl_w = 68
     sr = pygame.Rect(x + pad, cy, w - 2 * pad - _tgl_w - 4, fld_h)
     _ing = craft_search_mode == "ingredient"
-    field(sr, craft_query, craft_focus == "search",
+    field("search", sr, craft_query,
           "search ingredients\u2026" if _ing else "search recipes\u2026")
     _craft_rects["search"] = sr
     tgl_r = pygame.Rect(sr.right + 4, cy, _tgl_w, fld_h)
@@ -44406,7 +44657,7 @@ def draw_craft_window(surface):
 
     # count + Make + Repeat
     cnt_r = pygame.Rect(x + pad, cy, 44, fld_h)
-    field(cnt_r, craft_count, craft_focus == "count", "1")
+    field("count", cnt_r, craft_count, "1")
     _craft_rects["count"] = cnt_r
     mk_r = pygame.Rect(cnt_r.right + 6, cy, 120, fld_h)
     rp_r = pygame.Rect(mk_r.right + 6, cy, (x + w - pad) - (mk_r.right + 6), fld_h)
@@ -44468,7 +44719,7 @@ def draw_craft_window(surface):
     _craft_rects["delay_dn"] = dm_r
     _craft_rects["delay_up"] = dpl_r
     fd_r = pygame.Rect(dpl_r.right + 8, cy, (x + w - pad) - (dpl_r.right + 8) - 44, fld_h)
-    field(fd_r, craft_state["food"], craft_focus == "food", "food item")
+    field("food", fd_r, craft_state["food"], "food item")
     _craft_rects["food"] = fd_r
     fs_r = pygame.Rect(fd_r.right + 4, cy, 40, fld_h)
     _craft_btn(surface, fs_r, "Set", fnt_s, (44, 48, 58), (196, 202, 214))
@@ -44479,7 +44730,7 @@ def draw_craft_window(surface):
     jg_lbl = fnt_s.render("Jiggle", True, (170, 176, 188))
     surface.blit(jg_lbl, (x + pad, cy + 4))
     jf_r = pygame.Rect(x + pad + 44, cy, (x + w - pad) - (x + pad + 44) - 44, fld_h)
-    field(jf_r, craft_state["jiggle"], craft_focus == "jiggle", "(off) e.g. escape")
+    field("jiggle", jf_r, craft_state["jiggle"], "(off) e.g. escape")
     _craft_rects["jiggle"] = jf_r
     js_r = pygame.Rect(jf_r.right + 4, cy, 40, fld_h)
     _craft_btn(surface, js_r, "Set", fnt_s, (44, 48, 58), (196, 202, 214))
@@ -44511,6 +44762,39 @@ def _craft_apply_count(default=1):
     except Exception:
         return default
 
+_CRAFT_FIELD_LIMITS = {"search": (60, None), "count": (4, "0123456789"),
+                       "food": (40, None), "jiggle": (40, None)}
+
+
+def _craft_tf(key):
+    """The persistent _TextField behind one Crafting-tab box."""
+    f = _text_fields.get("craft_" + key)
+    if f is None:
+        n, allowed = _CRAFT_FIELD_LIMITS.get(key, (60, None))
+        f = _TextField(max_length=n, allowed=allowed)
+        _text_fields["craft_" + key] = f
+    return f
+
+
+def _craft_field_get(key):
+    if key == "search":
+        return craft_query
+    if key == "count":
+        return craft_count
+    return craft_state.get(key, "") or ""
+
+
+def _craft_field_set(key, value):
+    global craft_query, craft_count
+    if key == "search":
+        craft_query = value
+        _craft_filter()
+    elif key == "count":
+        craft_count = value
+    elif key in ("food", "jiggle"):
+        craft_state[key] = value
+
+
 def _craft_handle_event(event):
     global craft_sel_all
     global craftsyn_open, craftsyn_tab, _craft_drag_off, craft_query, craft_focus
@@ -44529,68 +44813,25 @@ def _craft_handle_event(event):
         return False
     r = _craft_rects
 
-    # text entry when a field is focused
-    if event.type == pygame.KEYDOWN and craft_focus:
-        if event.key == pygame.K_ESCAPE:
-            craft_focus = ""
-            craft_sel_all = False
-            return True
-        # Ctrl+A highlights the whole field.
-        if event.key == pygame.K_a and (event.mod & pygame.KMOD_CTRL):
-            craft_sel_all = True
-            return True
-        # With the field highlighted, Backspace/Delete clear it and a
-        # typed character replaces it.
-        if craft_sel_all and event.key in (pygame.K_BACKSPACE,
-                                           pygame.K_DELETE):
-            craft_sel_all = False
-            if craft_focus == "search":
-                craft_query = ""; _craft_filter()
-            elif craft_focus == "count":
-                craft_count = ""
-            elif craft_focus in ("food", "jiggle"):
-                craft_state[craft_focus] = ""
-            return True
-        if craft_sel_all and event.key not in (pygame.K_RETURN,
-                                               pygame.K_KP_ENTER):
-            _ch0 = event.unicode
-            if _ch0 and 32 <= ord(_ch0) < 127 and not (
-                    craft_focus == "count" and not _ch0.isdigit()):
-                if craft_focus == "search":
-                    craft_query = ""
-                elif craft_focus == "count":
-                    craft_count = ""
-                elif craft_focus in ("food", "jiggle"):
-                    craft_state[craft_focus] = ""
-            craft_sel_all = False
-        if event.key == pygame.K_RETURN:
-            if craft_focus == "food":
+    # text entry when a field is focused -- the shared _TextField does
+    # the editing (caret, mouse/shift selection, Ctrl+A/C/X/V).
+    if craft_focus and event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+        _k = craft_focus
+        tf = _craft_tf(_k)
+        tf.focused = True
+        new, act = tf.handle_event(event, _craft_field_get(_k))
+        if act == "changed":
+            _craft_field_set(_k, new)
+        elif act == "submit":
+            if _k == "food":
                 _craft_send("food|" + craft_state["food"])
-            elif craft_focus == "jiggle":
+            elif _k == "jiggle":
                 _craft_send("jiggle|" + craft_state["jiggle"])
+            tf.blur()
             craft_focus = ""
-            return True
-        if event.key == pygame.K_BACKSPACE:
-            if craft_focus == "search":
-                craft_query = craft_query[:-1]; _craft_filter()
-            elif craft_focus == "count":
-                craft_count = craft_count[:-1]
-            elif craft_focus == "food":
-                craft_state["food"] = craft_state["food"][:-1]
-            elif craft_focus == "jiggle":
-                craft_state["jiggle"] = craft_state["jiggle"][:-1]
-            return True
-        ch = event.unicode
-        if ch and 32 <= ord(ch) < 127:
-            if craft_focus == "search":
-                craft_query += ch; _craft_filter()
-            elif craft_focus == "count" and ch.isdigit():
-                craft_count = (craft_count + ch)[:4]
-            elif craft_focus == "food":
-                craft_state["food"] += ch
-            elif craft_focus == "jiggle":
-                craft_state["jiggle"] += ch
-            return True
+        elif act == "cancel":
+            tf.blur()
+            craft_focus = ""
         return True
 
     if event.type == pygame.MOUSEWHEEL:
@@ -44620,11 +44861,21 @@ def _craft_handle_event(event):
         for key in ("search", "count", "food", "jiggle"):
             rr = r.get(key)
             if rr and rr.collidepoint(mx, my):
-                # Clicking into a field highlights what's in it, so a new
-                # amount can be typed straight over the old one. A second
-                # click on the focused field drops the highlight.
-                craft_sel_all = (craft_focus != key)
+                # Press places the caret; dragging highlights, a
+                # double-click takes a word. The count box still takes
+                # its whole number on the first click so a new amount
+                # types straight over it.
+                if craft_focus and craft_focus != key:
+                    _craft_tf(craft_focus).blur()
+                _was = craft_focus
                 craft_focus = key
+                tf = _craft_tf(key)
+                _field_begin_drag(tf, _craft_field_get(key), mx, rr,
+                                  lambda _kk=key: _craft_field_get(_kk),
+                                  key="craft_" + key)
+                if key == "count" and _was != key:
+                    tf.select_all(_craft_field_get(key))
+                    globals()["_field_drag"] = None
                 return True
         # result selection
         for rect, nm in r.get("hits", []):
@@ -45220,6 +45471,208 @@ def _pool_handle_event(event):
     return False
 
 
+# ── Odometer ─────────────────────────────────────────────────────────────
+# How far you have run since the last reset, and where you are now from
+# where you started: a straight-line distance, a compass point and an
+# arrow (north up, like the minimap). Positions come from the same feed as
+# the minimap -- x is east, y is north -- and the climb is ignored, so it
+# reads like the map. Resting, a zone change, a warp inside the zone (a
+# jump no one can run) or the RESET button start the count over. Tracking
+# runs whether or not the panel is up, so a rest still resets it.
+odo_pos = globals().get("odo_pos") or [40, 540]
+_odo_draw_pos = [0, 0]
+_odo_rects = {}
+_odo_drag_off = None
+_odo = {"zone": None, "start": None, "last": None, "ran": 0.0,
+        "last_t": 0.0, "resting": False}
+_ODO_JUMP_YALMS_PER_SEC = 40.0   # faster than any mount: a warp, not a run
+_ODO_W = 196
+_ODO_POINTS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+               "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+
+
+def _toggle_odometer():
+    set_setting("show_odometer", not bool(setting("show_odometer")))
+
+
+def _odo_reset_here():
+    """Start the count over from where you stand (hotbar / RESET)."""
+    _odo_reset(_odo.get("last"))
+
+
+def _odo_reset(pos=None):
+    _odo["start"] = pos
+    _odo["last"] = pos
+    _odo["ran"] = 0.0
+    _odo["last_t"] = time.time()
+
+
+def _odo_self_status():
+    for _m in (party_data or []):
+        if _m.get("name", "") == player_self_name:
+            return _m.get("status", -1)
+    return -1
+
+
+def _odo_tick():
+    """Fold the newest position into the count. Called once a frame."""
+    try:
+        zid = zone_info.get("zone_id", 0)
+        hx, hy, _hz = _minimap_here()
+    except Exception:
+        return
+    if not zid or hx is None or hy is None:
+        return
+    pos = (float(hx), float(hy))
+    now = time.time()
+    resting = (_odo_self_status() == 33)
+    if zid != _odo["zone"] or _odo["start"] is None:
+        _odo["zone"] = zid
+        _odo_reset(pos)
+    elif resting and not _odo["resting"]:
+        _odo_reset(pos)
+    else:
+        lx, ly = _odo["last"]
+        step = math.hypot(pos[0] - lx, pos[1] - ly)
+        dt = max(0.05, now - _odo["last_t"])
+        if step > max(6.0, _ODO_JUMP_YALMS_PER_SEC * dt):
+            _odo_reset(pos)                  # warped, not ran
+        elif step >= 0.05:
+            _odo["ran"] += step
+            _odo["last"] = pos
+            _odo["last_t"] = now
+        else:
+            _odo["last_t"] = now
+    _odo["resting"] = resting
+
+
+def _odo_compass(dx, dy):
+    """Bearing in degrees (0 = north, clockwise) and the 16-point name."""
+    deg = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
+    return deg, _ODO_POINTS[int((deg + 11.25) // 22.5) % 16]
+
+
+def draw_odometer_window(surface):
+    _odo_rects.clear()
+    _odo_tick()
+    if not setting("show_odometer"):
+        return
+    pad, title_h = 8, 20
+    w = _ODO_W
+    arrow_d = 44
+    h = title_h + pad + arrow_d + pad + 20 + pad
+    fnt = get_font("Consolas", 12)
+    fnt_b = get_font("Consolas", 12, bold=True)
+    fnt_s = get_font("Consolas", 11)
+    x = _clamp_win_x(odo_pos[0], w)
+    y = _clamp_win_y(odo_pos[1], h, x)
+    _odo_draw_pos[0], _odo_draw_pos[1] = x, y
+
+    panel_r = pygame.Rect(x, y, w, h)
+    _odo_rects["panel"] = panel_r
+    _panel_fade(surface, panel_r, 4)
+    pygame.draw.rect(surface, COL_SLOT_BDR, panel_r, 1, border_radius=4)
+    pygame.draw.rect(surface, COL_EV_HEADER,
+                     (x + 1, y + 1, w - 2, title_h - 1), border_radius=3)
+    ts = fnt_b.render("Odometer", True, COL_EV_TITLE)
+    surface.blit(ts, (x + 8, y + (title_h - ts.get_height()) // 2))
+    close_r = pygame.Rect(x + w - 18, y + 3, 15, 14)
+    pygame.draw.rect(surface, (70, 40, 40), close_r, border_radius=3)
+    xs = fnt_b.render("x", True, (220, 180, 180))
+    surface.blit(xs, (close_r.x + (15 - xs.get_width()) // 2,
+                      close_r.y + (14 - xs.get_height()) // 2))
+    _odo_rects["close"] = close_r
+    _odo_rects["title"] = pygame.Rect(x, y, w - 22, title_h)
+
+    # Distances. Setup mode with nothing run yet shows an example.
+    ran = _odo["ran"]
+    dx = dy = 0.0
+    if _odo["start"] and _odo["last"]:
+        dx = _odo["last"][0] - _odo["start"][0]
+        dy = _odo["last"][1] - _odo["start"][1]
+    if setup_mode and ran <= 0:
+        ran, dx, dy = 312.4, 131.0, 140.0
+    away = math.hypot(dx, dy)
+
+    # Compass dial with an arrow from where you started to where you are.
+    cy0 = y + title_h + pad
+    cx_c = x + pad + arrow_d // 2
+    cy_c = cy0 + arrow_d // 2
+    rad = arrow_d // 2 - 1
+    pygame.draw.circle(surface, (18, 20, 26), (cx_c, cy_c), rad)
+    pygame.draw.circle(surface, (90, 100, 120), (cx_c, cy_c), rad, 1)
+    nlab = fnt_s.render("N", True, (150, 158, 172))
+    surface.blit(nlab, (cx_c - nlab.get_width() // 2, cy_c - rad + 1))
+    if away >= 1.0:
+        deg, pt = _odo_compass(dx, dy)
+        a = math.radians(deg)
+        ux, uy = math.sin(a), -math.cos(a)      # screen: y grows down
+        tip = (cx_c + ux * (rad - 6), cy_c + uy * (rad - 6))
+        tail = (cx_c - ux * (rad - 10), cy_c - uy * (rad - 10))
+        pygame.draw.line(surface, (232, 196, 110), tail, tip, 3)
+        px_, py_ = -uy, ux
+        head = [tip,
+                (tip[0] - ux * 8 + px_ * 5, tip[1] - uy * 8 + py_ * 5),
+                (tip[0] - ux * 8 - px_ * 5, tip[1] - uy * 8 - py_ * 5)]
+        pygame.draw.polygon(surface, (232, 196, 110), head)
+        dir_txt = "%s  %d°" % (pt, int(round(deg)) % 360)
+    else:
+        pygame.draw.circle(surface, (232, 196, 110), (cx_c, cy_c), 3)
+        dir_txt = "at start"
+
+    tx = x + pad + arrow_d + 10
+    lab_c, val_c = (150, 158, 172), (230, 232, 238)
+    surface.blit(fnt_s.render("Ran", True, lab_c), (tx, cy0 + 1))
+    rv = fnt_b.render("%.1f y" % ran, True, val_c)
+    surface.blit(rv, (x + w - pad - rv.get_width(), cy0))
+    surface.blit(fnt_s.render("Away", True, lab_c), (tx, cy0 + 16))
+    av = fnt_b.render("%.1f y" % away, True, val_c)
+    surface.blit(av, (x + w - pad - av.get_width(), cy0 + 15))
+    dv = fnt.render(dir_txt, True, (232, 196, 110))
+    surface.blit(dv, (x + w - pad - dv.get_width(), cy0 + 30))
+
+    by = cy0 + arrow_d + pad
+    reset_r = pygame.Rect(x + w - pad - 60, by, 60, 18)
+    _craft_btn(surface, reset_r, "RESET", fnt_s, (58, 44, 44),
+               (222, 180, 180))
+    _odo_rects["reset"] = reset_r
+    surface.blit(fnt_s.render("rest resets", True, COL_LABEL_DIM),
+                 (x + pad, by + 3))
+
+
+def _odo_handle_event(event):
+    global _odo_drag_off
+    if not setting("show_odometer"):
+        return False
+    r = _odo_rects
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        mx, my = event.pos
+        if r.get("close") and r["close"].collidepoint(mx, my):
+            set_setting("show_odometer", False)
+            return True
+        if r.get("reset") and r["reset"].collidepoint(mx, my):
+            _odo_reset_here()
+            return True
+        if r.get("title") and r["title"].collidepoint(mx, my):
+            odo_pos[0], odo_pos[1] = _odo_draw_pos
+            _odo_drag_off = (mx - odo_pos[0], my - odo_pos[1])
+            return True
+        if r.get("panel") and r["panel"].collidepoint(mx, my):
+            return True
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _odo_drag_off is not None:
+            _odo_drag_off = None
+            try:
+                save_layout()
+            except Exception:
+                pass
+    if event.type == pygame.MOUSEMOTION and _odo_drag_off is not None:
+        odo_pos[0] = event.pos[0] - _odo_drag_off[0]
+        odo_pos[1] = event.pos[1] - _odo_drag_off[1]
+        return True
+    return False
+
+
 
 # === MINIMAP BEGIN ===
 # ── Minimap ──────────────────────────────────────────────────────────────
@@ -45554,8 +46007,49 @@ def _warp_zone_id(zone, sub=None):
     return _warp_zone_ids.get(_warp_norm(zone))
 
 
+# Abyssea destinations name the area ("la theine"), not a zone, so they
+# need their own lookup. A Maw sits in the entry zone outside; a conflux
+# (the area plus its number) is inside the Abyssea zone itself.
+_ABY_AREA_ZONES = {
+    #  area        entry zone (its Maw)   Abyssea zone
+    "latheine":   (102, 132),   # La Theine Plateau
+    "konschtat":  (108, 15),    # Konschtat Highlands
+    "tahrongi":   (117, 45),    # Tahrongi Canyon
+    "attohwa":    (118, 215),   # Buburimu Peninsula
+    "misareaux":  (103, 216),   # Valkurm Dunes
+    "vunkerl":    (104, 217),   # Jugner Forest
+    "altepa":     (107, 218),   # South Gustaberg
+    "uleguerand": (112, 253),   # Xarcabard
+    "grauberg":   (106, 254),   # North Gustaberg
+}
+
+
+def _warp_dest_zid(net, zone, sub=None, group=False):
+    """Zone id a warp destination lands in. Abyssea needs its own rules
+    (see _ABY_AREA_ZONES); everything else goes by zone name."""
+    if net == "ab":
+        z = _warp_norm(zone)
+        if z == "enter":
+            here = zone_info.get("zone_id")
+            for _ent, _aby in _ABY_AREA_ZONES.values():
+                if _ent == here:
+                    return _aby
+            return None
+        base = z.rstrip("0123456789")
+        pair = _ABY_AREA_ZONES.get(base)
+        if pair:
+            # A numbered conflux, or a heading of conflux rows, is inside
+            # Abyssea; a bare area name is the Maw outside.
+            return pair[1] if (base != z or group) else pair[0]
+    return _warp_zone_id(zone, sub)
+
+
 def _warp_landing_key(net, zone, sub):
-    return "%s|%s|%s" % (net or "", _warp_norm(zone), sub or "")
+    z = _warp_norm(zone)
+    if net == "ab" and z == "enter":
+        # One "Enter Abyssea" row serves every Maw; keep a landing per Maw.
+        z = "enter%s" % (zone_info.get("zone_id") or "")
+    return "%s|%s|%s" % (net or "", z, sub or "")
 
 
 def _warp_landings_get():
@@ -45575,7 +46069,7 @@ def _warp_landings_get():
 def _warp_landing_arm(net, zone, sub):
     """[Warp] was clicked: watch for where it puts us."""
     global _warp_landing_pending
-    zid = _warp_zone_id(zone, sub)
+    zid = _warp_dest_zid(net, zone, sub)
     if not zid:
         _warp_landing_pending = None
         return
@@ -45627,7 +46121,7 @@ def _warp_preview_target():
         return None
     zone = src.get("zone") or ""
     sub = src.get("sub")
-    zid = _warp_zone_id(zone, sub)
+    zid = _warp_dest_zid(src.get("net"), zone, sub, bool(src.get("group")))
     if not zid:
         return None
     lands = _warp_landings_get()
@@ -45637,6 +46131,9 @@ def _warp_preview_target():
         # A zone heading: no single landing, but pin every point in the
         # zone you have already landed at.
         pre = "%s|%s|" % (src.get("net") or "", _warp_norm(zone))
+        if src.get("net") == "ab":
+            # Conflux rows are keyed "la theine 1", "la theine 2"...
+            pre = pre[:-1]
         for k, land in lands.items():
             if (k.startswith(pre) and isinstance(land, list)
                     and len(land) >= 4 and land[0] == zid):
@@ -48104,6 +48601,17 @@ _FISHER_KIND = {k: kd for k, _l, kd in _FISHER_FIELDS}
 def _fisher_clear_rects():
     _fisher_rects.clear()
 
+def _fisher_tf(key):
+    """The persistent _TextField behind one Fishing-tab box."""
+    f = _text_fields.get("fisher_" + key)
+    if f is None:
+        _int = _FISHER_KIND.get(key) == "int"
+        f = _TextField(max_length=6 if _int else 200,
+                       allowed="0123456789" if _int else None)
+        _text_fields["fisher_" + key] = f
+    return f
+
+
 def _fisher_commit_focus():
     """Write the focused field's buffer back through set_setting (pushes to
     Lua). Called on Enter, on blur, and before any tab / close action."""
@@ -48111,6 +48619,8 @@ def _fisher_commit_focus():
     key = fisher_focus
     if key and key in fisher_buf:
         set_setting(key, fisher_buf.get(key, ""))
+    if key:
+        _fisher_tf(key).blur()
     fisher_focus = ""
 
 def draw_fisher_window(surface):
@@ -48127,7 +48637,7 @@ def draw_fisher_window(surface):
     fnt_b = get_font("Consolas", 12, bold=True)
     fnt_s = get_font("Consolas", 11)
     fld_h = 20
-    n = len(_FISHER_FIELDS)
+    n = len(_FISHER_FIELDS) + 1          # + the Clear row
     h = title_h + tab_h + pad + n * (fld_h + 4) + pad
     _cs_n = sum(1 for _n, _v, _c in skillup_skills if _skillup_is_craft(_n))
     h = max(h, title_h + 8 + 18 + max(_cs_n, 1) * 14 + pad)
@@ -48156,16 +48666,14 @@ def draw_fisher_window(surface):
     _fisher_rects["title"] = pygame.Rect(x, y, full_w - 22, title_h)
     _craftsyn_draw_tabs(surface, x, y + title_h, w, tab_h, _fisher_rects, fnt_b)
 
-    def field(rect, text, focused):
-        pygame.draw.rect(surface, (20, 22, 28), rect, border_radius=3)
-        pygame.draw.rect(surface, (195, 160, 80) if focused else (90, 100, 120),
-                         rect, 1, border_radius=3)
-        t = fnt.render(text, True, (225, 225, 230))
-        surface.blit(t, (rect.x + 5, rect.centery - t.get_height() // 2))
-        if focused:
-            cx = rect.x + 5 + t.get_width()
-            pygame.draw.line(surface, (220, 220, 230),
-                             (cx + 1, rect.y + 3), (cx + 1, rect.bottom - 3), 1)
+    def field(key, rect, text):
+        # The shared _TextField: caret, mouse/shift selection, copy/paste.
+        tf = _fisher_tf(key)
+        if fisher_focus == key and not tf.focused:
+            tf.focused = True
+        elif fisher_focus != key and tf.focused:
+            tf.blur()
+        tf.draw(surface, rect, text, fnt, bg=(20, 22, 28))
 
     cy = y + title_h + tab_h + pad
     lbl_w = 150
@@ -48184,9 +48692,16 @@ def draw_fisher_window(surface):
             else:
                 v = setting(key)
                 txt = "" if v is None else str(v)
-            field(rect, txt, fisher_focus == key)
+            field(key, rect, txt)
             _fisher_rects["edit:" + key] = rect
         cy += fld_h + 4
+
+    # Clear: empties what you typed (Bait, Catch, Catch limit) in one go.
+    clr = pygame.Rect(x + pad + lbl_w, cy, 80, fld_h)
+    _craft_btn(surface, clr, "Clear", fnt_s, (58, 44, 44), (222, 180, 180))
+    _fisher_rects["clear"] = clr
+    surface.blit(fnt_s.render("bait, catch, limit", True, (130, 136, 150)),
+                 (clr.right + 8, cy + 4))
 
     _draw_craftsyn_skills(surface, x + 467, y + title_h, y + h - pad, right_w)
 
@@ -48202,27 +48717,42 @@ def _fisher_handle_event(event):
             return True
     if not (craftsyn_open and craftsyn_tab == "fisher"):
         return False
-    if event.type == pygame.KEYDOWN and fisher_focus:
-        if event.key == pygame.K_ESCAPE:
-            fisher_focus = ""
-            return True
-        if event.key == pygame.K_RETURN:
+    if fisher_focus and event.type in (pygame.KEYDOWN, pygame.TEXTINPUT):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+            # Tab moves to the next field, keeping what was typed.
+            _keys = [k for k, _l, kd in _FISHER_FIELDS if kd != "bool"]
+            _cur = fisher_focus
             _fisher_commit_focus()
+            if _cur in _keys:
+                _nk = _keys[(_keys.index(_cur) + 1) % len(_keys)]
+                fisher_focus = _nk
+                _v = setting(_nk)
+                fisher_buf[_nk] = "" if _v is None else str(_v)
+                _fisher_tf(_nk).select_all(fisher_buf[_nk])
             return True
-        if event.key == pygame.K_BACKSPACE:
-            fisher_buf[fisher_focus] = fisher_buf.get(fisher_focus, "")[:-1]
-            return True
-        ch = event.unicode
-        if ch and ch.isprintable():
-            if _FISHER_KIND.get(fisher_focus) == "int" and not ch.isdigit():
-                return True
-            fisher_buf[fisher_focus] = fisher_buf.get(fisher_focus, "") + ch
+        tf = _fisher_tf(fisher_focus)
+        tf.focused = True
+        new, act = tf.handle_event(event, fisher_buf.get(fisher_focus, ""))
+        if act == "changed":
+            fisher_buf[fisher_focus] = new
+        elif act == "submit":
+            _fisher_commit_focus()
+        elif act == "cancel":
+            tf.blur()
+            fisher_focus = ""
         return True
     r = _fisher_rects
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
         mx, my = event.pos
         if r.get("close") and r["close"].collidepoint(mx, my):
             _fisher_commit_focus(); craftsyn_open = False
+            return True
+        if r.get("clear") and r["clear"].collidepoint(mx, my):
+            fisher_focus = ""
+            for _ck, _cv in (("fisher_bait", ""), ("fisher_catch", ""),
+                             ("fisher_catch_limit", 0)):
+                fisher_buf.pop(_ck, None)
+                set_setting(_ck, _cv)
             return True
         for _tk in ("craft", "synergy", "fisher"):
             _tr = r.get("tab:" + _tk)
@@ -48239,10 +48769,17 @@ def _fisher_handle_event(event):
             else:
                 rr = r.get("edit:" + key)
                 if rr and rr.collidepoint(mx, my):
-                    _fisher_commit_focus()
-                    fisher_focus = key
-                    v = setting(key)
-                    fisher_buf[key] = "" if v is None else str(v)
+                    # Press places the caret; dragging highlights, a
+                    # double-click takes a word.
+                    if fisher_focus != key:
+                        _fisher_commit_focus()
+                        fisher_focus = key
+                        v = setting(key)
+                        fisher_buf[key] = "" if v is None else str(v)
+                    _field_begin_drag(_fisher_tf(key), fisher_buf[key], mx,
+                                      rr,
+                                      lambda _kk=key: fisher_buf.get(_kk, ""),
+                                      key="fisher_" + key)
                     return True
         if r.get("title") and r["title"].collidepoint(mx, my):
             _fisher_drag_off = (mx - craftsyn_pos[0], my - craftsyn_pos[1])
@@ -48250,6 +48787,10 @@ def _fisher_handle_event(event):
         if r.get("panel") and r["panel"].collidepoint(mx, my):
             _fisher_commit_focus()
             return True
+        # A click anywhere else keeps what was typed, then lets the
+        # click carry on to whatever is there.
+        if fisher_focus:
+            _fisher_commit_focus()
     if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
         if _fisher_drag_off is not None:
             _fisher_drag_off = None
@@ -51682,6 +52223,16 @@ def _warp_destinations_for(net):
                     for lab, t in _ABY_MAW_TARGETS]
         if zid in _ABY_ENTRY_ZONES:
             return [{"label": "Enter Abyssea", "zone": "enter"}]
+        # Inside Abyssea a conflux only reaches the others in the same
+        # zone, so list just this zone's eight.
+        for _area, (_ent, _aby) in _ABY_AREA_ZONES.items():
+            if zid == _aby:
+                _m = next(((l, t) for l, t in _ABY_MAW_TARGETS
+                           if _warp_norm(t) == _area), None)
+                if _m:
+                    return [{"label": "%s #%d" % (_m[0], i),
+                             "zone": "%s %d" % (_m[1], i)}
+                            for i in range(1, 9)]
     cfg = _warp_load_config()
     return cfg.get(net, {}).get("destinations", [])
 
@@ -52031,7 +52582,7 @@ def draw_warp_menu(surface):
                                  border_radius=3)
                 # A group that is itself a zone (a city above its Home
                 # Points) previews that zone's map too.
-                if _warp_zone_id(glabel):
+                if _warp_dest_zid(net, glabel, None, True):
                     _warp_menu_hover = {"net": net, "zone": glabel,
                                         "sub": None, "label": glabel,
                                         "group": True}
@@ -55107,6 +55658,7 @@ def _inv_ahhist_start(item_id, item_name):
                                                timeout=8.0)["items"]
                 _ah_note_search_ok()
                 _ah_cat_cache[cat] = items
+                _ah_cat_cache_t[cat] = time.time()
                 pop["on_ah"] = items.get(iid, (0xFFFFFFFF, 0xFFFFFFFF))
             except OSError as e:
                 pop["on_ah"] = None
@@ -60063,6 +60615,19 @@ _SUBDIALOG_CONFIGS = {
                 "kept either way.",
         },
     },
+    "odometer": {
+        "title":    "Odometer",
+        "subtitle": "How far you have run, and which way you are from "
+                    "where you started.",
+        "rows": [
+            ("show_odometer", "Show odometer", "bool"),
+        ],
+        "helpers": {
+            "show_odometer":
+                "Resting, changing zone, a warp within the zone or the "
+                "panel's RESET button starts the count over.",
+        },
+    },
     "minimap": {
         "title":    "Minimap",
         "subtitle": "The minimap window, what it plots, and how solid "
@@ -60323,6 +60888,17 @@ def _dispatch_subdialog(state_key, mx, my):
     state = _subdialog_states.get(state_key)
     if state is None or not state["open"]:
         return False
+    # Clicking anywhere but the field being typed in keeps the text.
+    if _subdialog_text_focus is not None:
+        _hit_same = False
+        for rect, action in state["rects"]:
+            if (rect.collidepoint(mx, my)
+                    and action.get("action", "").endswith("textfocus")
+                    and action.get("key") == _subdialog_text_focus[1]):
+                _hit_same = True
+                break
+        if not _hit_same:
+            _subdialog_text_commit()
     for rect, action in reversed(state["rects"]):
         if not rect.collidepoint(mx, my):
             continue
@@ -60342,6 +60918,20 @@ def _dispatch_subdialog(state_key, mx, my):
     return False
 
 
+def _subdialog_text_commit():
+    """Save a Configure box text row's buffer and drop focus. Used for
+    every way of leaving the field except Escape, so a click elsewhere or
+    closing the box keeps what was typed."""
+    global _subdialog_text_focus
+    if _subdialog_text_focus is not None:
+        try:
+            set_setting(_subdialog_text_focus[1],
+                        _subdialog_text_buffer.strip())
+        except Exception:
+            pass
+    _subdialog_text_focus = None
+
+
 def _subdialog_text_handle_event(event):
     """Route keystrokes into a focused subdialog 'text' row (e.g. the
     Fisher bait/catch fields). Returns True if consumed. Characters come
@@ -60353,12 +60943,11 @@ def _subdialog_text_handle_event(event):
     sk, key = _subdialog_text_focus
     st = _subdialog_states.get(sk)
     if st is None or not st.get("open"):
-        _subdialog_text_focus = None
+        _subdialog_text_commit()
         return False
     if event.type == pygame.KEYDOWN:
-        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            set_setting(key, _subdialog_text_buffer.strip())
-            _subdialog_text_focus = None
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_TAB):
+            _subdialog_text_commit()
         elif event.key == pygame.K_ESCAPE:
             _subdialog_text_focus = None
         elif event.key == pygame.K_BACKSPACE:
@@ -75716,6 +76305,19 @@ while running:
                     del craft_log[:-30]
                 continue
 
+            if tag == "FISHER":
+                # The addon's fishing stopped (interrupted, out of bait,
+                # refused to start...). Put the switch back to off here
+                # too -- written directly, not through set_setting, which
+                # would only send a stop to an engine already stopped.
+                if value.split("|")[0] == "off" and setting("fisher_enabled"):
+                    settings["fisher_enabled"] = False
+                    try:
+                        save_settings()
+                    except Exception:
+                        pass
+                continue
+
             if tag == "SYNERGY":
                 # DEV Synergy engine stream. value = "<sub>|<...>":
                 #   start|<id>|<index>|<zone>|<menu>
@@ -76122,6 +76724,7 @@ while running:
                                              "level": _lv, "ssize": _ss, "stack": 1})
                     ah_state["items"] = _its
                     ah_state["items_scroll"] = 0
+                    _ah_prefetch_counts(_its)
                 elif ahead == "txn":
                     if len(af) >= 4:
                         try:
@@ -80276,12 +80879,15 @@ while running:
         draw_ah_window(screen)
         draw_pool_window(screen)
         draw_minimap_window(screen)
+        draw_odometer_window(screen)
         alerts_maybe_tick()
         draw_alerts_window(screen)
     else:
         _ah_clear_rects()
         _pool_clear_rects()
         _minimap_clear_rects()
+        _odo_rects.clear()
+        _odo_tick()
     # ── DEV · SkillUp (hidden; sentinel-gated) ──
     if not display_hidden:
         draw_skillup_window(screen)
@@ -80797,7 +81403,15 @@ while running:
                        or (hotbar_edit_mode
                            and hotbar_focused_field is not None)
                        # Simulation slot-picker filter box.
-                       or (sim_window_open and sim_slot_filter_focused))
+                       or (sim_window_open and sim_slot_filter_focused)
+                       # Fishing / Crafting tab fields and the text rows
+                       # in Configure boxes. Missing here, so with
+                       # keep-game-focus on their keystrokes went to the
+                       # game and the field never saw them.
+                       or (craftsyn_open
+                           and ((craftsyn_tab == "fisher" and fisher_focus)
+                                or (craftsyn_tab == "craft" and craft_focus)))
+                       or _subdialog_text_focus is not None)
                       and not _gt_capturing_active)
     if setting("no_focus_steal"):
         if _focus_now and not _composer_focus_prev:
@@ -80984,6 +81598,10 @@ while running:
                 and _minimap_handle_event(event)):
             # Minimap: drag, resize, zoom. Gated on what actually covers
             # it, not on whether anything at all is open (see the helper).
+            pass
+        elif (not _dev_panel_input_blocked()
+                and _odo_handle_event(event)):
+            # Odometer panel: drag, reset, close.
             pass
         elif (not _dev_panel_input_blocked()
                 and _pool_handle_event(event)):
