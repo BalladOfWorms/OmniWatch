@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.15.3 (2026-10-12)"
+OMNIWATCH_BUILD_STAMP = "v1.16.0 (2026-10-31)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.15.3"
+OMNIWATCH_VERSION = "1.16.0"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -7675,6 +7675,7 @@ def _ingest_chat_packet(raw, stream_label):
                     ev["segments"] = segs
         ev["_rx"] = time.time()     # arrival time, for tab auto-clear
         chat_events.append(ev)
+        _mw_chat_capture(ev)
         if stream_label == "text":
             chat_recv_text += 1
         else:
@@ -10855,6 +10856,1161 @@ def _chardir(name):
         return USER_DIR
     return p
 
+# ── MobileWatch gear snapshot ───────────────────────────────────────────
+# The lua sends MWG|... lines whenever inventory, equipment or job changes
+# (see _ow_send_mw_gear). They are assembled here per character and saved
+# as mobilewatch_gear.json in that character's folder, which is what the
+# phone's Character tab reads:
+#
+#   {"version": 1, "character": ..., "updated": <unix>,
+#    "main_job": "WHM", "sub_job": "SCH", "job_levels": {"WHM": 99, ...},
+#    "bags": {"8": "Wardrobe", ...},
+#    "items": [{"id", "bag", "idx", "augs": [...]}, ...],
+#    "job_gear": {"WHM": {"main": {"id", "bag", "idx", "augs"}, ...}, ...}}
+#
+# items is everything owned that can be equipped, every job, every bag;
+# the phone filters it by job and slot from its own item data. job_gear is
+# what was last worn on each job: the current job's entry is replaced by
+# every snapshot, and the others are carried over from the file, so a job
+# keeps showing its gear after you change away from it.
+MW_GEAR_FILE = "mobilewatch_gear.json"
+_mw_gear_staging = {}    # character -> snapshot being assembled
+_MW_GEAR_SLOTS = ("main", "sub", "range", "ammo", "head", "neck",
+                  "left_ear", "right_ear", "body", "hands",
+                  "left_ring", "right_ring", "back", "waist", "legs", "feet")
+
+
+def _mw_gear_ingest(raw):
+    """Handle one MWG|... line, still carrying its @character@ tag.
+    Returns True when the line was ours (the caller then skips it)."""
+    sender, payload = "", raw
+    if raw.startswith("@"):
+        end = raw.find("@", 1)
+        if end == -1:
+            return False
+        sender, payload = raw[1:end], raw[end + 1:]
+    if not payload.startswith("MWG|"):
+        return False
+    if not sender:
+        return True          # not logged in yet: nothing to file it under
+    try:
+        kind, _, body = payload[4:].partition("|")
+        if kind == "BEGIN":
+            f = body.split("|")
+            levels = {}
+            for ent in (f[2] if len(f) > 2 else "").split(","):
+                job, _, lvl = ent.partition(":")
+                if job and lvl.isdigit():
+                    levels[job] = int(lvl)
+            _mw_gear_staging[sender] = {
+                "main_job": f[0] if f else "",
+                "sub_job": f[1] if len(f) > 1 else "",
+                "job_levels": levels, "bags": {}, "items": [], "eq": {},
+                "inv": [], "caps": {}, "gil": None,
+            }
+            return True
+        st = _mw_gear_staging.get(sender)
+        if st is None:
+            return True      # a snapshot whose BEGIN we missed: drop it
+        if kind == "BAGS":
+            for ent in body.split(";"):
+                bid, _, name = ent.partition(":")
+                if bid.isdigit() and name:
+                    st["bags"][bid] = name
+        elif kind == "ITEM":
+            for rec in body.split("\x1e"):
+                f = rec.split("\x1f")
+                if len(f) < 3:
+                    continue
+                try:
+                    it = {"id": int(f[0]), "bag": int(f[1]), "idx": int(f[2])}
+                except ValueError:
+                    continue
+                augs = [a for a in f[3:] if a]
+                if augs:
+                    it["augs"] = augs
+                st["items"].append(it)
+        elif kind == "INV":
+            # Every item with its stack count, gear or not (Inventory section).
+            for rec in body.split("\x1e"):
+                f = rec.split("\x1f")
+                if len(f) >= 4 and all(x.isdigit() for x in f[:4]):
+                    st["inv"].append({"id": int(f[0]), "bag": int(f[1]),
+                                      "idx": int(f[2]), "n": int(f[3])})
+        elif kind == "CAP":
+            for ent in body.split(";"):
+                f = ent.split(":")
+                if len(f) == 3 and all(x.isdigit() for x in f):
+                    st["caps"][f[0]] = [int(f[1]), int(f[2])]
+        elif kind == "GIL":
+            if body.strip().isdigit():
+                st["gil"] = int(body.strip())
+        elif kind == "EQ":
+            for ent in body.split(";"):
+                f = ent.split(":")
+                if len(f) == 3 and f[1].isdigit() and f[2].isdigit():
+                    st["eq"][f[0]] = (int(f[1]), int(f[2]))
+        elif kind == "END":
+            _mw_gear_staging.pop(sender, None)
+            _mw_gear_save(sender, st)
+    except Exception as e:
+        print(f"[OmniWatch] MobileWatch gear snapshot error: {e!r}")
+    return True
+
+
+def _mw_gear_save(character, st):
+    path = os.path.join(_chardir(character), MW_GEAR_FILE)
+    old = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            old = json.load(fh)
+    except Exception:
+        old = {}
+    by_loc = {(it["bag"], it["idx"]): it for it in st["items"]}
+    worn = {}
+    for slot in _MW_GEAR_SLOTS:
+        loc = st["eq"].get(slot)
+        it = by_loc.get(loc) if loc else None
+        if it:
+            worn[slot] = dict(it)
+    job_gear = dict(old.get("job_gear") or {})
+    if st["main_job"]:
+        job_gear[st["main_job"]] = worn
+    snap = {
+        "version": 1,
+        "character": character,
+        "main_job": st["main_job"],
+        "sub_job": st["sub_job"],
+        "job_levels": st["job_levels"],
+        "bags": st["bags"],
+        "items": sorted(st["items"], key=lambda i: (i["bag"], i["idx"])),
+        "job_gear": job_gear,
+        # The Inventory section: every item with its count, each bag's
+        # used / max, and gil. An older Lua sends none of it; the last
+        # copy is kept rather than blanked.
+        "inventory": sorted(st.get("inv") or [], key=lambda i: (i["bag"], i["idx"]))
+                     if st.get("inv") else old.get("inventory") or [],
+        "bag_caps": st.get("caps") or old.get("bag_caps") or {},
+        "gil": st["gil"] if st.get("gil") is not None else old.get("gil"),
+        # What the Statistics panel last read on each job (see
+        # _mw_stats_note). Kept across gear saves; only the stats tick
+        # rewrites it.
+        "job_stats": old.get("job_stats") or {},
+    }
+    # Unchanged apart from the clock: leave the file (and its timestamp)
+    # alone, so "updated" means the gear actually changed.
+    if {k: v for k, v in old.items() if k != "updated"} == snap:
+        return
+    snap["updated"] = int(time.time())
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(snap, fh, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[OmniWatch] could not save {MW_GEAR_FILE}: {e!r}")
+
+
+# ── Statistics for the phone ───────────────────────────────────────────
+# The phone adds up gear itself, but it can't see base stats, skills,
+# traits, merits, Job Points or buffs. So each job's Statistics panel
+# values ride along in the gear snapshot, with the gear that was worn
+# when they were read: the phone shows these numbers for that gear and
+# moves them by the difference its own gear sums find for any other set.
+# Written at most every 30 s per character, never while the sim is
+# steering the numbers, and only once that job's gear has been saved.
+_mw_stats_last = {}
+_mw_stats_said = set()
+
+
+def _mw_stats_note(name, main, sub, stats, force=False):
+    """Save this job's numbers for the phone. True when they're saved (or
+    already were). `force` skips the 30 s spacing: Sync jobs asks for
+    each job once, the moment it's ready."""
+    try:
+        if not name or not main or not stats:
+            return False
+        # Sim mode is on exactly while its window is open (sim_state keeps
+        # the last picks after it closes, so it says nothing about now).
+        if sim_window_open:
+            return False
+        now = time.time()
+        if not force and now - _mw_stats_last.get(name, 0) < 30:
+            return False
+        path = os.path.join(_chardir(name), MW_GEAR_FILE)
+        if not os.path.isfile(path):
+            return False
+        with open(path, encoding="utf-8") as fh:
+            snap = json.load(fh)
+        main = str(main).upper()
+        worn = (snap.get("job_gear") or {}).get(main)
+        if worn is None:
+            return False
+        keys = {c[0] for c in STATS_CELLS if not c[0].startswith("_")}
+        keep = {k: v for k, v in stats.items()
+                if k in keys and isinstance(v, (int, float))}
+        entry = {"sub": str(sub or "").upper(), "stats": keep, "worn": worn}
+        _mw_stats_last[name] = now
+        js = dict(snap.get("job_stats") or {})
+        if js.get(main) == entry:
+            return True
+        js[main] = entry
+        snap["job_stats"] = js
+        snap["updated"] = int(now)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(snap, fh, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+        if main not in _mw_stats_said:
+            _mw_stats_said.add(main)
+            print(f"[OmniWatch] phone stats saved for {name} {main}/{entry['sub']}")
+        return True
+    except Exception as e:
+        print(f"[OmniWatch] phone stats: {e!r}")
+        return False
+
+
+# ── Marketplace for the phone ────────────────────────────────────────────
+# What the phone's Marketplace tab shows and does: your auction house sale
+# slots and your bazaar, listing on either, and taking things back. It is
+# the AH window's own Sell and Bazaar tabs over the link: the same state
+# (ah_state, inventory_state) and the same requests to the game, so the two
+# never disagree. Runs on the main loop (_mw_on_main), which owns that state.
+#   GET  /mw/v1/market  -> the state below
+#   POST /mw/v1/market  {"action": ...}: refresh | sell id single price |
+#        cancel slot | bazaar id price (0 takes it out) | search q |
+#        queue_add id stack qty start max inc | queue_del index | buy_start |
+#        buy_stop | log_clear | dbox_open box | dbox_close | dbox_refresh |
+#        dbox_take slot | dbox_return slot | dbox_all |
+#        dbox_send to mode (item: slot id) amount
+def _mw_market_state():
+    now = time.time()
+    sales = []
+    for sl in ah_state.get("sales") or []:
+        st = sl.get("status") or ""
+        if not st or st.lower() in ("empty", ""):
+            continue
+        left = None
+        t0 = _ah_listing_unix(sl.get("ts"))
+        if t0 is not None and st == "On auction":
+            left = max(0, int(t0 + _AH_LISTING_LIFE - now))
+        sales.append({"slot": sl.get("slot"), "status": st,
+                      "name": sl.get("name") or "", "id": sl.get("id") or 0,
+                      "count": sl.get("count") or 1,
+                      "price": sl.get("price") or 0, "left": left})
+    baz_inv = _baz_inventory(listable_only=True, use_find=False)
+    # Buy: the search results with what's up for sale (single, stack), when
+    # the search server has said.
+    buy = []
+    for it in (ah_state.get("items") or [])[:200]:
+        row = {"id": it["id"], "name": it["name"], "level": it.get("level", 0),
+               "stack": it.get("stack", 0), "ssize": it.get("ssize", 1)}
+        try:
+            got = _ah_cat_cache.get(_ah_item_cat(int(it["id"])), {}).get(int(it["id"]))
+        except Exception:
+            got = None
+        if got:
+            row["avail"] = got[1] if it.get("stack") else got[0]
+        buy.append(row)
+    def box(side):
+        return [dict(v, slot=k) for k, v in sorted((dbox_state.get(side) or {}).items())]
+    send_inv = []
+    for it in inventory_state.get("inventory", []) or []:
+        try:
+            iid, slot = int(it.get("id", 0)), int(it.get("slot", 0))
+        except (TypeError, ValueError):
+            continue
+        if iid > 0 and slot > 0:
+            send_inv.append({"slot": slot, "id": iid,
+                             "name": it.get("name") or ("item %d" % iid),
+                             "count": int(it.get("count", 1) or 1)})
+    send_inv.sort(key=lambda r: r["name"].lower())
+    return {
+        "character": _mb_lock_target() or player_self_name or "",
+        "gil": currency_state.get("gil"),
+        "search": ah_state.get("search", ""),
+        "buy": buy,
+        "queue": [{"id": q["id"], "name": q["name"], "qty": q["qty"],
+                   "start": q["start"], "max": q["max"], "inc": q["inc"],
+                   "stack": q.get("stack", 0), "status": q.get("status", "")}
+                  for q in ah_state.get("queue") or []],
+        "running": bool(ah_state.get("running")),
+        "dbox": {"open": dbox_state.get("open", ""), "busy": bool(dbox_state.get("busy")),
+                 "box": dbox_state.get("box", "in"), "note": dbox_state.get("note", ""),
+                 "in": box("in"), "out": box("out"), "inv": send_inv},
+        "sales": sales,
+        "ah_inv": [dict(it) for it in ah_state.get("inv") or []],
+        "bazaar": [r for r in _baz_inventory(listable_only=False, use_find=False)
+                   if r["bazaar"] > 0],
+        "bazaar_inv": [r for r in baz_inv if r["bazaar"] <= 0],
+        "log": list(ah_state.get("results") or [])[-6:],
+        "log_seq": _ah_log_seq,
+    }
+
+
+def _mw_market_act(body):
+    act = body.get("action")
+    try:
+        if act == "search":
+            ah_state["search"] = str(body.get("q") or "").strip()[:40]
+            ah_state["browse"] = False
+            _ah_run_search()
+            return None
+        if act == "queue_add":
+            iid, stack = int(body.get("id")), 1 if int(body.get("stack", 0)) else 0
+            vals = {k: max(0, int(body.get(k))) for k in ("qty", "start", "max", "inc")}
+            if iid <= 0 or vals["qty"] < 1 or vals["max"] < 1:
+                return "bad_request"
+            for q in ah_state["queue"]:
+                if q["id"] == iid and q.get("stack", 0) == stack:
+                    q.update(vals)
+                    return None
+            src = next((it for it in ah_state.get("items") or []
+                        if it["id"] == iid and it.get("stack", 0) == stack), None)
+            name = (src or {}).get("name") or str(body.get("name") or iid)
+            ah_state["queue"].append(dict(vals, id=iid, name=name, status="",
+                                          stack=stack,
+                                          ssize=int((src or {}).get("ssize", 1) or 1)))
+            return None
+        if act == "queue_del":
+            i = int(body.get("index"))
+            if ah_state["running"] or not 0 <= i < len(ah_state["queue"]):
+                return "bad_request"
+            ah_state["queue"].pop(i)
+            return None
+        if act == "buy_start":
+            if not ah_state["running"] and ah_state["queue"]:
+                _ah_buy_start()
+            return None
+        if act == "buy_stop":
+            _ah_send("stop")
+            return None
+        if act == "log_clear":
+            ah_state["results"] = []
+            return None
+        if act == "dbox_open":
+            _dbox_open("out" if body.get("box") == "out" else "in")
+            return None
+        if act == "dbox_close":
+            _dbox_leave()
+            return None
+        if act == "dbox_refresh":
+            _dbox_send("refresh")
+            return None
+        if act in ("dbox_take", "dbox_return"):
+            _dbox_send("%s|%d" % (act[5:], int(body.get("slot"))))
+            return None
+        if act == "dbox_all":
+            _dbox_send("takeall" if dbox_state.get("box") == "in" else "returnall")
+            return None
+        if act == "dbox_send":
+            to = "".join(c for c in str(body.get("to") or "") if c.isalpha())[:15]
+            amount = int(body.get("amount") or 0)
+            if len(to) < 3 or amount < 1:
+                return "bad_request"
+            if body.get("mode") == "gil":
+                _dbox_send("gil|%d|%s" % (amount, to))
+            else:
+                _dbox_send("send|%d|%d|%d|%s" % (int(body.get("slot")),
+                                                 int(body.get("id")), amount, to))
+            return None
+        if act == "refresh":
+            _ah_send("inv")
+            _ah_send("sales")
+        elif act == "sell":
+            iid, price = int(body.get("id")), int(body.get("price"))
+            single = 1 if int(body.get("single", 1)) else 0
+            if iid <= 0 or price <= 0:
+                return "bad_request"
+            _ah_send("sell|%d|%d|%d" % (iid, single, price))
+        elif act == "cancel":
+            _ah_send("cancel|%d" % int(body.get("slot")))
+        elif act == "bazaar":
+            iid, price = int(body.get("id")), int(body.get("price"))
+            if iid <= 0 or price < 0:
+                return "bad_request"
+            _inv_send_bazaar(iid, price)
+        else:
+            return "bad_request"
+    except (TypeError, ValueError):
+        return "bad_request"
+    return None
+
+
+# ── Sync jobs (asked for by the phone) ──────────────────────────────────
+# The addon walks every job (changing jobs itself, at the Mog House
+# moogle) and says MWJS|snap
+# once each job's gear is on and its numbers have settled; that job is
+# saved here at once. The phone starts it and reads the progress:
+#   POST /mw/v1/jobsync {"action": "start"|"cancel"}, GET /mw/v1/jobsync
+_mw_js = {"state": "idle", "done": 0, "total": 0, "job": "", "error": "",
+          "skipped": [], "saved": [], "name": "", "t": 0.0}
+_mw_js_lock = threading.Lock()
+
+
+def _mw_js_status():
+    with _mw_js_lock:
+        st = dict(_mw_js)
+        st["skipped"] = list(st["skipped"])
+        st["saved"] = list(st["saved"])
+    # Asked, and the game never answered: the addon isn't loaded, or is
+    # older than this.
+    if st["state"] == "starting" and time.time() - st["t"] > 15:
+        with _mw_js_lock:
+            _mw_js.update(state="error", error="The game didn't answer. "
+                          "Is OmniWatch loaded in the game?")
+        st.update(state="error", error=_mw_js["error"])
+    st.pop("t", None)
+    return st
+
+
+def _mw_js_start():
+    with _mw_js_lock:
+        if _mw_js["state"] in ("starting", "running"):
+            return
+    name = current_char_name or player_self_name or ""
+    subs = {}
+    try:
+        with open(os.path.join(_chardir(name), MW_GEAR_FILE),
+                  encoding="utf-8") as fh:
+            for job, e in ((json.load(fh).get("job_stats")) or {}).items():
+                sub = str((e or {}).get("sub") or "").upper()
+                if job.isalpha() and sub.isalpha():
+                    subs[job.upper()] = sub
+    except Exception:
+        pass
+    with _mw_js_lock:
+        _mw_js.update(state="starting", done=0, total=0, job="", error="",
+                      skipped=[], saved=[], name=name, t=time.time())
+    arg = ",".join(f"{j}={s}" for j, s in sorted(subs.items()))
+    try:
+        sock_cmd_out.sendto(f"MWJOBSYNC|start|{arg}".encode("utf-8"),
+                            _cmd_addr())
+    except Exception as e:
+        with _mw_js_lock:
+            _mw_js.update(state="error", error=f"Couldn't reach the game ({e})")
+
+
+def _mw_js_cancel():
+    try:
+        sock_cmd_out.sendto(b"MWJOBSYNC|cancel", _cmd_addr())
+    except Exception:
+        pass
+
+
+def _mw_js_note(raw):
+    """An MWJS| progress line from the addon. True when it was one."""
+    end = raw.find("@", 1) if raw.startswith("@") else -1
+    sender, body = (raw[1:end], raw[end + 1:]) if end > 0 else ("", raw)
+    if not body.startswith("MWJS|"):
+        return False
+    f = body.split("|")
+    kind = f[1] if len(f) > 1 else ""
+    with _mw_js_lock:
+        if kind == "begin":
+            _mw_js.update(state="running", total=int(f[2]) if len(f) > 2
+                          and f[2].isdigit() else 0, done=0)
+            if sender:
+                _mw_js["name"] = sender
+        elif kind == "job" and len(f) >= 5:
+            _mw_js.update(state="running", job=f"{f[3]}/{f[4]}",
+                          done=max(0, int(f[2]) - 1) if f[2].isdigit() else 0)
+        elif kind == "skip" and len(f) >= 4:
+            _mw_js["skipped"].append(f"{f[2]} ({f[3]})")
+        elif kind in ("done", "cancelled"):
+            _mw_js.update(state=kind, job="", done=_mw_js["total"]
+                          if kind == "done" else _mw_js["done"])
+        elif kind == "error":
+            _mw_js.update(state="error", error=f[2] if len(f) > 2 else "")
+    if kind == "snap" and len(f) >= 3:
+        name = sender or _mw_js.get("name") or player_self_name
+        main = f[2]
+        sub = f[3] if len(f) > 3 else ""
+        ok = (player_self_name == name and str(player_self_mjob).upper() == main
+              and _mw_stats_note(name, main, sub, dict(player_stats), force=True))
+        with _mw_js_lock:
+            if ok:
+                _mw_js["saved"].append(main)
+            else:
+                _mw_js["skipped"].append(f"{main} (stats not ready)")
+            _mw_js["done"] = min(_mw_js["total"], _mw_js["done"] + 1)
+    return True
+
+
+# ── Work the phone hands the main loop ────────────────────────────────
+# The phone link answers on its own threads, but the checklist is drawn
+# from the main loop, so a change to it is queued here and run between
+# frames; the request waits for the answer.
+_mw_main_jobs = _collections.deque()
+
+
+def _mw_run_main_jobs():
+    while _mw_main_jobs:
+        fn, box, done = _mw_main_jobs.popleft()
+        try:
+            box["value"] = fn()
+        except Exception as e:
+            box["error"] = repr(e)
+        done.set()
+
+
+def _mw_on_main(fn, timeout=5.0):
+    box, done = {}, threading.Event()
+    _mw_main_jobs.append((fn, box, done))
+    if not done.wait(timeout):
+        return None, "busy"
+    return box.get("value"), box.get("error")
+
+
+# ── Quest ticks shared with the phone ──────────────────────────────────
+# The phone's Quests tab files ticks by the quest log's eleven sections;
+# the checklist splits some of those across several tabs. Syncing is a
+# union both ways: a tick on either side ends up on both, and nothing is
+# ever unticked by a sync. Matched by quest name, case-insensitively.
+_MW_QUEST_AREAS = {
+    "quests_sandy": "sandoria", "quests_bastok": "bastok",
+    "quests_windy": "windurst", "quests_jeuno": "jeuno",
+    "quests_selbina": "other_areas", "quests_mhaura": "other_areas",
+    "quests_tavnazia": "other_areas", "quests_moghouse": "other_areas",
+    "quests_moggarden": "other_areas", "quests_other": "other_areas",
+    "quests_outlands": "outlands", "quests_ahturhgan": "aht_urhgan",
+    "quests_crystalwar": "crystal_war", "quests_aby_vision": "abyssea",
+    "quests_aby_scars": "abyssea", "quests_aby_heroes": "abyssea",
+    "quests_adoulin": "adoulin", "quests_coalition": "coalition",
+}
+
+
+def _mw_quest_sync(phone_ticks):
+    """Runs on the main loop. Adds the phone's ticks the checklist lacks,
+    then returns every checklist quest tick by phone section."""
+    added = unmatched = 0
+    masters = {c: {str(q).lower() for q in _QUEST_CATEGORY_MASTERS.get(c, ())}
+               for c in _MW_QUEST_AREAS}
+    for area, names in (phone_ticks or {}).items():
+        cats = [c for c, a in _MW_QUEST_AREAS.items() if a == area]
+        for n in names or ():
+            n = str(n).strip().lower()
+            cat = next((c for c in cats if n in masters[c]), None)
+            if cat is None:
+                unmatched += 1
+                continue
+            sets = checklist_known.setdefault(cat, {"auto": set(), "manual": set()})
+            if n in sets.get("auto", set()) or n in sets.setdefault("manual", set()):
+                continue
+            sets["manual"].add(n)
+            added += 1
+    if added:
+        _checklist_save()
+    out = {}
+    for cat, area in _MW_QUEST_AREAS.items():
+        st = checklist_known.get(cat) or {}
+        got = set(st.get("manual") or ()) | set(st.get("auto") or ())
+        if got:
+            out.setdefault(area, set()).update(got)
+    return {"character": current_char_name or "", "added": added,
+            "unmatched": unmatched,
+            "ticks": {a: sorted(v) for a, v in out.items()}}
+
+
+def _mw_checklist_sync(phone_cats):
+    """Runs on the main loop. Missions (keyed by mission id, "1-1") and
+    mounts (keyed by name), stored on both sides under the checklist's
+    own category keys. Same rules as quests: union both ways, never an
+    untick. Mounts OmniWatch has seen you own come back too (its auto
+    ticks), so the phone learns them."""
+    allowed = {c: {str(mid).lower() for mid, _ in m}
+               for c, m in _MISSION_CATEGORY_MASTERS.items()}
+    allowed["mounts"] = {str(n).lower() for n in _MOUNTS_MASTER} or None
+    phone_cats = dict(phone_cats or {})
+    t_added, t_unmatched, t_names = _mw_trust_sync(phone_cats.pop("trusts", None))
+    added, unmatched = t_added, t_unmatched
+    for cat, ids in phone_cats.items():
+        if cat not in allowed:
+            unmatched += len(ids or ())
+            continue
+        valid = allowed[cat]
+        sets = checklist_known.setdefault(cat, {"auto": set(), "manual": set()})
+        for i in ids or ():
+            i = str(i).strip().lower()
+            if not i or len(i) > 60 or (valid is not None and i not in valid):
+                unmatched += 1
+                continue
+            if i in sets.get("auto", set()) or i in sets.setdefault("manual", set()):
+                continue
+            sets["manual"].add(i)
+            added += 1
+    if added:
+        _checklist_save()
+    out = {}
+    for cat in allowed:
+        st = checklist_known.get(cat) or {}
+        got = set(st.get("manual") or ()) | set(st.get("auto") or ())
+        if got:
+            out[cat] = sorted(got)
+    if t_names:
+        out["trusts"] = t_names
+    return {"character": current_char_name or "", "added": added,
+            "unmatched": unmatched, "cats": out}
+
+
+def _mw_trust_sync(phone_names):
+    """Trusts for the phone's Trusts tab. The phone's ticks (by trust
+    name) become manual ticks here when this list knows them; what comes
+    back is every trust ticked here, owned in game (auto) or by hand, as
+    the names each one goes by (its name, alter ego and key, plus the
+    short forms), so the phone can match them against its own names."""
+    db = (_trusts_db or {}).get("trusts", {}) or {}
+    st = checklist_known.setdefault("trusts", {"auto": set(), "manual": set()})
+    added = unmatched = 0
+    for n in phone_names or ():
+        n = str(n).strip()
+        if not n or len(n) > 60:
+            continue
+        rec = lookup_trust(n)
+        key = next((k for k, v in db.items() if v is rec), None) if rec is not None else None
+        if key is None:
+            unmatched += 1
+            continue
+        if key in st.get("auto", set()) or key in st.setdefault("manual", set()):
+            continue
+        st["manual"].add(key)
+        added += 1
+    if added:
+        _checklist_save()
+    names = set()
+    for k in set(st.get("auto") or ()) | set(st.get("manual") or ()):
+        names.add(str(k).lower())
+        rec = db.get(k)
+        if not isinstance(rec, dict):
+            continue
+        for f in (rec.get("name"), rec.get("alter_ego")):
+            f = str(f or "").strip()
+            if not f:
+                continue
+            names.add(f.lower())
+            names.add(re.sub(r"\bangel\s+", "", f, flags=re.IGNORECASE).lower())
+            w = f.split()
+            if len(w) > 2:
+                names.add((w[0] + " " + w[-1]).lower())
+    return added, unmatched, sorted(names)
+
+
+# ── MobileWatch link (the phone's way in) ───────────────────────────────
+# A small web server inside the overlay that hands the MobileWatch phone
+# app the gear snapshots above. The phone reaches it on this PC's address
+# (same Wi-Fi, or over Tailscale), and every request has to carry the
+# pairing code shown in Settings > MobileWatch (above Exit), so nothing else on
+# the network can read your inventory.
+#
+#   GET /mw/v1/hello           -> {"app", "version", "characters": [{"name", "updated"}]}
+#   GET /mw/v1/gear/<name>     -> that character's mobilewatch_gear.json
+#   GET /mw/v1/chat?since=&boot=&wait=  -> phone chat lines after `since`,
+#                                 plus the chat blacklist; with wait=N it
+#                                 holds up to N s for a new line first
+#   POST /mw/v1/chat/send      {"ch", "to", "text"} -> says it in game
+#   POST /mw/v1/blocked        {"add": [...], "remove": [...]} -> the chat
+#                                 panel's blacklist, shared with the phone
+#   POST /mw/v1/quests         {"ticks": {section: [names]}} -> merges the
+#                                 phone's quest ticks into the checklist and
+#                                 returns the checklist's, by section
+#   GET/POST /mw/v1/market     your AH sale slots and bazaar, and listing,
+#                                 cancelling and pricing them (see
+#                                 _mw_market_state)
+#   POST /mw/v1/jobsync        {"action": "start"|"cancel"} -> walks every
+#                                 job in game (at the Mog House moogle)
+#                                 saving each one's stats; GET reads progress
+#   POST /mw/v1/checklist      {"cats": {key: [ids]}} -> the same for
+#                                 missions (missions_*), mounts and trusts
+#
+# The code travels in an X-OmniWatch-Code header. The gear reply carries
+# an ETag of the snapshot's "updated" stamp, so a phone that already has
+# it gets a 304 and no body.
+MOBILELINK_FILE = "mobilelink.json"
+MOBILELINK_PORTS = range(47321, 47331)   # first free one is used
+_ML_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I
+_ml_state = {"code": "", "port": 0, "error": "", "last_contact": 0.0,
+             "server": None}
+
+
+def _mobilelink_load_code():
+    """The pairing code, made once and kept, so a paired phone stays
+    paired across restarts. New code = every phone has to pair again."""
+    path = os.path.join(USER_DIR, MOBILELINK_FILE)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            code = str(json.load(fh).get("code", ""))
+        if len(code) == 8 and all(c in _ML_CODE_CHARS for c in code):
+            return code
+    except Exception:
+        pass
+    return _mobilelink_new_code()
+
+
+def _mobilelink_new_code():
+    import secrets
+    code = "".join(secrets.choice(_ML_CODE_CHARS) for _ in range(8))
+    try:
+        path = os.path.join(USER_DIR, MOBILELINK_FILE)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"code": code}, fh)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[OmniWatch] could not save {MOBILELINK_FILE}: {e!r}")
+    _ml_state["code"] = code
+    _ml_state["last_contact"] = 0.0
+    return code
+
+
+def _mobilelink_code_display():
+    c = _ml_state.get("code", "")
+    return f"{c[:4]}-{c[4:]}" if len(c) == 8 else ""
+
+
+def _mobilelink_code_ok(sent):
+    want = _ml_state.get("code", "")
+    got = "".join(ch for ch in str(sent or "").upper() if ch.isalnum())
+    import hmac
+    return bool(want) and hmac.compare_digest(got, want)
+
+
+def _mobilelink_gear_path(name):
+    """A character's snapshot path, or None. Built by hand rather than
+    through _chardir, which would create a folder for whatever name a
+    request happened to send."""
+    safe = "".join(c for c in str(name) if c.isalnum())
+    if not safe:
+        return None
+    path = os.path.join(USER_DIR, safe, MW_GEAR_FILE)
+    return path if os.path.isfile(path) else None
+
+
+def _mobilelink_characters():
+    out = []
+    try:
+        for entry in sorted(os.listdir(USER_DIR)):
+            if entry.lower() in _NON_CHAR_DIRS:
+                continue
+            path = _mobilelink_gear_path(entry)
+            if not path:
+                continue
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    upd = int(json.load(fh).get("updated", 0))
+            except Exception:
+                upd = 0
+            out.append({"name": entry, "updated": upd})
+    except Exception:
+        pass
+    return out
+
+
+def _mobilelink_addresses():
+    """This PC's IPv4 addresses a phone could use: home network first,
+    then a Tailscale address if this PC runs Tailscale itself."""
+    found = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None,
+                                       socket.AF_INET):
+            found.append(info[4][0])
+    except Exception:
+        pass
+    try:
+        # The address Windows would route out of. No packet is sent.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("192.0.2.1", 9))
+        found.insert(0, probe.getsockname()[0])
+        probe.close()
+    except Exception:
+        pass
+    out = []
+    for ip in found:
+        if ip.startswith(("127.", "169.254.", "0.")) or ip in out:
+            continue
+        out.append(ip)
+    return sorted(out, key=lambda ip: (ip.startswith("100."), 0))
+
+
+def _mobilelink_make_handler():
+    import http.server
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        server_version = "OmniWatch"
+
+        def log_message(self, *args):
+            pass
+
+        def _send(self, status, body=b"", ctype="application/json",
+                  headers=None):
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if body and self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _json(self, status, obj, headers=None):
+            self._send(status, json.dumps(obj).encode("utf-8"),
+                       headers=headers)
+
+        def do_GET(self):
+            path = urllib.parse.urlsplit(self.path).path.rstrip("/")
+            if not path.startswith("/mw/v1/"):
+                return self._json(404, {"error": "not_found"})
+            if not _mobilelink_code_ok(self.headers.get("X-OmniWatch-Code")):
+                time.sleep(0.5)      # slows guessing to a crawl
+                return self._json(401, {"error": "bad_code"})
+            _ml_state["last_contact"] = time.time()
+            if path == "/mw/v1/hello":
+                return self._json(200, {
+                    "app": "OmniWatch",
+                    "version": OMNIWATCH_VERSION,
+                    "characters": _mobilelink_characters(),
+                })
+            if path == "/mw/v1/chat":
+                q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                try:
+                    since = int((q.get("since") or ["0"])[0])
+                    boot = int((q.get("boot") or ["0"])[0])
+                except ValueError:
+                    since, boot = 0, 0
+                if boot != _mw_chat_boot:
+                    since = 0       # a new run: send everything it has
+                try:
+                    wait = max(0.0, min(25.0, float((q.get("wait") or ["0"])[0])))
+                except ValueError:
+                    wait = 0.0
+                # The phone's tell alerts park a request here instead of
+                # asking every few seconds: it returns the moment a line
+                # arrives, or empty after `wait` seconds.
+                if wait > 0:
+                    with _mw_chat_cond:
+                        _mw_chat_cond.wait_for(lambda: _mw_chat_seq > since,
+                                               timeout=wait)
+                out = _mw_chat_since(since)
+                out["blocked"] = sorted(_chat_blacklist or ())
+                return self._json(200, out)
+            if path == "/mw/v1/jobsync":
+                return self._json(200, _mw_js_status())
+            if path == "/mw/v1/market":
+                val, err = _mw_on_main(_mw_market_state)
+                if err or val is None:
+                    return self._json(503, {"error": err or "busy"})
+                return self._json(200, val)
+            if path.startswith("/mw/v1/gear/"):
+                name = urllib.parse.unquote(path[len("/mw/v1/gear/"):])
+                gp = _mobilelink_gear_path(name)
+                if not gp:
+                    return self._json(404, {"error": "no_snapshot"})
+                try:
+                    with open(gp, "rb") as fh:
+                        body = fh.read()
+                    tag = '"%d"' % int(json.loads(body).get("updated", 0))
+                except Exception:
+                    return self._json(503, {"error": "busy"})
+                if self.headers.get("If-None-Match") == tag:
+                    return self._send(304, headers={"ETag": tag})
+                return self._send(200, body, headers={"ETag": tag})
+            return self._json(404, {"error": "not_found"})
+
+        do_HEAD = do_GET
+
+        def do_POST(self):
+            path = urllib.parse.urlsplit(self.path).path.rstrip("/")
+            if path not in ("/mw/v1/chat/send", "/mw/v1/blocked", "/mw/v1/quests",
+                            "/mw/v1/checklist", "/mw/v1/jobsync",
+                            "/mw/v1/market"):
+                return self._json(404, {"error": "not_found"})
+            if not _mobilelink_code_ok(self.headers.get("X-OmniWatch-Code")):
+                time.sleep(0.5)
+                return self._json(401, {"error": "bad_code"})
+            _ml_state["last_contact"] = time.time()
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n <= 0 or n > (262144 if path in ("/mw/v1/quests", "/mw/v1/checklist") else 4096):
+                    return self._json(400, {"error": "bad_request"})
+                body = json.loads(self.rfile.read(n).decode("utf-8"))
+            except Exception:
+                return self._json(400, {"error": "bad_request"})
+            if path == "/mw/v1/market":
+                if not isinstance(body, dict):
+                    return self._json(400, {"error": "bad_request"})
+                val, err = _mw_on_main(lambda: _mw_market_act(body))
+                if err:
+                    return self._json(503, {"error": err})
+                if val:
+                    return self._json(400, {"error": val})
+                return self._json(200, {"ok": True})
+            if path == "/mw/v1/jobsync":
+                act = body.get("action") if isinstance(body, dict) else None
+                if act == "start":
+                    _mw_js_start()
+                elif act == "cancel":
+                    _mw_js_cancel()
+                else:
+                    return self._json(400, {"error": "bad_request"})
+                return self._json(200, _mw_js_status())
+            if path == "/mw/v1/checklist":
+                cats = body.get("cats") if isinstance(body, dict) else None
+                if not isinstance(cats, dict):
+                    return self._json(400, {"error": "bad_request"})
+                val, err = _mw_on_main(lambda: _mw_checklist_sync(cats))
+                if err or val is None:
+                    return self._json(503, {"error": err or "busy"})
+                return self._json(200, val)
+            if path == "/mw/v1/quests":
+                ticks = body.get("ticks") if isinstance(body, dict) else None
+                if not isinstance(ticks, dict):
+                    return self._json(400, {"error": "bad_request"})
+                val, err = _mw_on_main(lambda: _mw_quest_sync(ticks))
+                if err or val is None:
+                    return self._json(503, {"error": err or "busy"})
+                return self._json(200, val)
+            if path == "/mw/v1/blocked":
+                def names(k):
+                    v = body.get(k) if isinstance(body, dict) else None
+                    return [n.strip() for n in (v or []) if isinstance(n, str)
+                            and n.strip().isalpha() and 2 <= len(n.strip()) <= 15][:50]
+                for n in names("add"):
+                    _chat_blacklist_add(n)
+                for n in names("remove"):
+                    _chat_blacklist_remove(n)
+                return self._json(200, {"blocked": sorted(_chat_blacklist or ())})
+            err = _mw_chat_send(body.get("ch"), body.get("to"), body.get("text"))
+            if err:
+                return self._json(400, {"error": err})
+            return self._json(200, {"ok": True})
+
+    return _Handler
+
+
+def _mobilelink_start():
+    """Start the phone link in the background. A failure only costs the
+    phone link: it is reported in the MobileWatch box, never raised."""
+    if _ml_state.get("server") is not None:
+        return
+    try:
+        import http.server
+        _ml_state["code"] = _mobilelink_load_code()
+        handler = _mobilelink_make_handler()
+        last_err = None
+        for port in MOBILELINK_PORTS:
+            try:
+                srv = http.server.ThreadingHTTPServer(("0.0.0.0", port),
+                                                      handler)
+            except OSError as e:
+                last_err = e
+                continue
+            srv.daemon_threads = True
+            _ml_state.update(server=srv, port=port, error="")
+            threading.Thread(target=srv.serve_forever, name="mobilelink",
+                             daemon=True).start()
+            return
+        _ml_state["error"] = f"no free port ({last_err})"
+    except Exception as e:
+        _ml_state["error"] = repr(e)
+    print(f"[OmniWatch] MobileWatch link not started: {_ml_state['error']}")
+
+
+# ── Phone chat (MobileWatch Chat tab) ─────────────────────────────────────
+# Tell, shout, yell and both linkshells, kept from the moment OmniWatch
+# starts, for the phone to read. Classified with the panel's own
+# _chat_classify_event, so a line lands on the same channel here as it does
+# in the chat panel. Gone when OmniWatch closes, which is the point: chat
+# from a game that isn't running means nothing.
+_MW_CHAT_CHANNELS = {"chat_tell": "tell", "chat_shout": "shout",
+                     "chat_yell": "yell", "chat_ls1": "ls1", "chat_ls2": "ls2"}
+_mw_chat_lines = _collections.deque(maxlen=1500)
+_mw_chat_seq = 0
+_mw_chat_lock = threading.Lock()
+_mw_chat_cond = threading.Condition(_mw_chat_lock)   # wakes parked phone requests
+# Changes every run, so a phone holding an old run's numbers starts over.
+_mw_chat_boot = int(time.time() * 1000) & 0x7FFFFFFF
+_MW_TELL_IN_R = re.compile(r"^([A-Za-z]{3,15})>>\s?")
+_MW_TELL_OUT_R = re.compile(r"^>>([A-Za-z]{3,15})\s?:")
+
+
+def _mw_chat_capture(ev):
+    global _mw_chat_seq
+    try:
+        if (ev.get("source") or "chat") != "chat":
+            return
+        actor, channel = _chat_classify_event(ev)
+        key = _MW_CHAT_CHANNELS.get(channel)
+        if not key:
+            return
+        text = (ev.get("text") or "").strip()
+        if not text:
+            return
+        line = {"ch": key, "t": int(ev.get("_rx") or time.time()),
+                "text": text, "self": actor == "self"}
+        if key == "tell":
+            m = _MW_TELL_IN_R.match(text)
+            if m:
+                line["from"] = m.group(1)
+            else:
+                m = _MW_TELL_OUT_R.match(text)
+                if m:
+                    line["to"] = m.group(1)
+                    line["self"] = True
+        with _mw_chat_cond:
+            _mw_chat_seq += 1
+            line["seq"] = _mw_chat_seq
+            _mw_chat_lines.append(line)
+            _mw_chat_cond.notify_all()
+    except Exception as e:
+        print(f"[OmniWatch] phone chat capture: {e!r}")
+
+
+# ── Disconnect alerts ─────────────────────────────────────────────────────
+# Each logged-in character's addon sends DC|hb every 5 s while the server's
+# packets keep arriving. When they stop with no goodbye first (DC|bye: a
+# logout or shutdown you asked for, or OmniWatch unloaded), the character
+# dropped: the connection went, or the game closed or crashed. DC|lost is
+# the addon seeing the game go back to the title screen unasked. Either way
+# the phone gets "<name> disconnected" through its chat feed, as an "alert"
+# line its alert service turns into a notification.
+_DC_SILENCE_S = 90          # zoning can go quiet for a while; this can't be one
+_dc_state = {}              # name -> {"last", "bye", "alerted", "gap"}
+_dc_next_tick = 0.0
+
+
+def _dc_note(raw):
+    """A DC| line from some character's addon. True when it was one."""
+    end = raw.find("@", 1)
+    if not raw.startswith("@") or end < 2 or not raw[end + 1:].startswith("DC|"):
+        return False
+    name, kind = raw[1:end], raw[end + 4:].strip()
+    now = time.time()
+    st = _dc_state.setdefault(name, {"last": 0.0, "bye": 0.0,
+                                     "alerted": False, "gap": 0.0})
+    if kind == "hb":
+        if st["last"] and not st["alerted"]:
+            gap = now - st["last"]
+            # The longest quiet spell seen, for setting _DC_SILENCE_S.
+            if gap > 15 and gap > st["gap"]:
+                st["gap"] = gap
+                print(f"[OmniWatch] disconnect watch: {name} was quiet "
+                      f"for {gap:.0f} s (longest yet)")
+        st.update(last=now, bye=0.0, alerted=False)
+    elif kind == "bye":
+        st["bye"] = now
+    elif kind == "lost":
+        if not st["bye"] and not st["alerted"] and st["last"]:
+            _dc_alert(name)
+            st["alerted"] = True
+    return True
+
+
+def _dc_tick():
+    """Main loop, about once a second: who has gone quiet too long."""
+    global _dc_next_tick
+    now = time.time()
+    if now < _dc_next_tick:
+        return
+    _dc_next_tick = now + 1.0
+    for name, st in _dc_state.items():
+        if (st["last"] and not st["alerted"] and not st["bye"]
+                and now - st["last"] > _DC_SILENCE_S):
+            _dc_alert(name)
+            st["alerted"] = True
+
+
+def _dc_alert(name):
+    global _mw_chat_seq
+    text = f"{name} disconnected"
+    print(f"[OmniWatch] {text}")
+    with _mw_chat_cond:
+        _mw_chat_seq += 1
+        _mw_chat_lines.append({"ch": "alert", "t": int(time.time()),
+                               "text": text, "self": False,
+                               "seq": _mw_chat_seq})
+        _mw_chat_cond.notify_all()
+
+
+def _mw_chat_since(since):
+    with _mw_chat_lock:
+        lines = [l for l in _mw_chat_lines if l["seq"] > since]
+        return {"boot": _mw_chat_boot, "seq": _mw_chat_seq, "lines": lines}
+
+
+_MW_CHAT_SEND = {"tell": "/t ", "reply": "/r ", "shout": "/sh ",
+                 "yell": "/yell ", "ls1": "/l ", "ls2": "/l2 "}
+_MW_CHAT_MAX = 150
+
+
+def _mw_chat_clean(text):
+    """What the phone sent, made safe to hand the game. Printable ASCII
+    only (the chat line takes no emoji, and curly quotes come back as
+    straight ones), and no ';', which Windower treats as the end of one
+    command and the start of the next."""
+    t = str(text or "")
+    for a, b in (("\u2018", "'"), ("\u2019", "'"), ("\u201c", '"'),
+                 ("\u201d", '"'), ("\u2026", "..."), ("\u2013", "-"),
+                 ("\u2014", "-")):
+        t = t.replace(a, b)
+    t = "".join(c for c in t if 32 <= ord(c) < 127).replace(";", ",")
+    return " ".join(t.split())[:_MW_CHAT_MAX]
+
+
+def _mw_chat_send(ch, to, text):
+    """Send a line on one of the phone's channels. Returns an error code
+    or None. Only chat ever goes out: the channel picks the command, and
+    a message can't smuggle in a command of its own."""
+    prefix = _MW_CHAT_SEND.get(str(ch or ""))
+    if not prefix:
+        return "bad_channel"
+    body = _mw_chat_clean(text)
+    if not body:
+        return "empty"
+    if ch == "tell":
+        name = "".join(c for c in str(to or "") if c.isalpha())[:15]
+        if len(name) < 3:
+            return "no_target"
+        payload = "input /t " + name + " " + body
+    else:
+        payload = "input " + prefix + body
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.sendto(payload.encode("utf-8"), _cmd_addr())
+        s.close()
+    except Exception as e:
+        print(f"[OmniWatch] phone chat send failed: {e!r}")
+        return "send_failed"
+    return None
+
+
+def _mobilelink_info_lines():
+    """Live lines for the MobileWatch Configure box: (text, colour)."""
+    if _ml_state.get("error") or not _ml_state.get("port"):
+        return [("The phone link could not start:", (235, 150, 150)),
+                (_ml_state.get("error") or "not started", (200, 160, 160))]
+    lines = [("In MobileWatch, enter one address and the code:",
+              (175, 180, 195))]
+    addrs = _mobilelink_addresses() or ["(no network address found)"]
+    for ip in addrs:
+        lines.append((f"  Address   {ip}:{_ml_state['port']}",
+                      (220, 220, 230)))
+    lines.append((f"  Code      {_mobilelink_code_display()}",
+                  (230, 205, 120)))
+    last = _ml_state.get("last_contact") or 0
+    if last:
+        ago = int(time.time() - last)
+        when = ("just now" if ago < 60 else
+                f"{ago // 60} min ago" if ago < 3600 else
+                f"{ago // 3600} h ago")
+        lines.append((f"Phone last connected {when}.", (150, 200, 160)))
+    else:
+        lines.append(("No phone has connected yet.", (150, 155, 170)))
+    return lines
+
+
+_mobilelink_start()
+
+
 def _rebuild_path_constants():
     """Re-bind all per-character file path globals to point at the
     active_view_char's subfolder. Called once at startup and again
@@ -11950,11 +13106,16 @@ def region_for_zone(zone_id):
 #     "label":   string shown on the button. "" hides label, icon-only.
 #     "icon":    optional filename inside icons/ui/, e.g. "discord.png".
 #                "" or null means no icon (label only).
-#     "kind":    "windower" | "action" | "shell" | "url" | "file" | "none"
+#     "kind":    "windower" | "toggle" | "action" | "shell" | "url" | "file" | "none"
 #     "command": the thing to run, semantics depend on kind:
 #                  windower → slash-style command without leading "//",
 #                             e.g. "send all /follow Wormfood" or
 #                             "ow dps reset"
+#                  toggle   → windower command that alternates with
+#                             "command_off" (blank = derived: "lua l X"
+#                             pairs with "lua u X", anything else
+#                             re-sends itself). "toggle_on" remembers
+#                             which way the next press goes.
 #                  action   → key of a built-in OmniWatch action from
 #                             HOTBAR_ACTIONS ("sing", "calltrust", …).
 #                             These are things with no slash command at
@@ -12009,7 +13170,8 @@ _BUTTONS_DEFAULT = {
 # The kinds a hotbar button can be. Defined HERE rather than beside the
 # editor because _normalize_button_entry (just below) validates against
 # it and runs at import time via `buttons_config = load_buttons_config()`.
-HOTBAR_KINDS = ["windower", "action", "page", "shell", "url", "file", "none"]
+HOTBAR_KINDS = ["windower", "toggle", "action", "page", "shell", "url",
+                "file", "none"]
 
 
 def _normalize_button_entry(raw):
@@ -12028,13 +13190,53 @@ def _normalize_button_entry(raw):
     color = str(raw.get("color", "") or "")
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
         color = ""
-    return {
+    out = {
         "label":   str(raw.get("label",   "") or ""),
         "icon":    str(raw.get("icon",    "") or ""),
         "kind":    kind,
         "command": str(raw.get("command", "") or ""),
         "color":   color,
     }
+    if kind == "toggle":
+        out["command_off"] = str(raw.get("command_off", "") or "")
+        out["toggle_on"] = bool(raw.get("toggle_on", False))
+    return out
+
+
+_LUA_LOAD_RE = re.compile(r"^\s*/*\s*lua\s+(?:l|load)\s+(.+?)\s*$", re.I)
+_LUA_UNLOAD_RE = re.compile(r"^\s*/*\s*lua\s+(?:u|unload)\s+(.+?)\s*$", re.I)
+
+
+def _toggle_off_command(entry):
+    """What a toggle button sends to switch OFF: its own Off command, or
+    one worked out from the On command -- "lua l X" pairs with "lua u X"
+    (and the other way round). Anything else re-sends the On command,
+    which suits commands that toggle by themselves."""
+    off = (entry.get("command_off") or "").strip()
+    if off:
+        return off
+    on = (entry.get("command") or "").strip()
+    m = _LUA_LOAD_RE.match(on)
+    if m:
+        return "lua u " + m.group(1)
+    m = _LUA_UNLOAD_RE.match(on)
+    if m:
+        return "lua l " + m.group(1)
+    return on
+
+
+def _shift_down():
+    """Shift held right now, whichever window has the keyboard."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+        except Exception:
+            pass
+    try:
+        return bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+    except Exception:
+        return False
 
 def _empty_button():
     return {"label": "", "icon": "", "kind": "none", "command": "",
@@ -12736,6 +13938,24 @@ def dispatch_button(idx):
         print(f"[OmniWatch] button '{label}' has no command bound; "
               f"ignoring click")
         return
+    if kind == "toggle":
+        # Flip first, then send the command for the side we flipped to.
+        # Shift+click only flips -- for putting the button back in step
+        # when the addon was loaded or unloaded some other way.
+        turning_on = not entry.get("toggle_on", False)
+        entry["toggle_on"] = turning_on
+        try:
+            save_buttons_config()
+        except Exception:
+            pass
+        if _shift_down():
+            print(f"[OmniWatch] button '{label}' -> toggle marked "
+                  f"{'on' if turning_on else 'off'} (nothing sent)")
+            return
+        cmd = cmd if turning_on else _toggle_off_command(entry)
+        kind = "windower"
+        print(f"[OmniWatch] button '{label}' -> toggle "
+              f"{'on' if turning_on else 'off'}")
     try:
         if kind == "windower":
             # <pc> -> the party member last clicked in the panel. FFXI
@@ -13105,6 +14325,18 @@ SETTINGS_SCHEMA = [
                     "All panels render with mock data so you can "
                     "position them without being in combat. Lock "
                     "follows automatically — exit setup to re-lock.",
+    },
+    {
+        # Bottom of the menu, right above Exit.
+        "key":     "open_mobilelink",
+        "label":   "MobileWatch",
+        "kind":    "button",
+        "button_text": "OPEN",
+        "section": "_Bottom",
+        "applies": "python",
+        "action":  "open_mobilelink",
+        "help":    "Pair the MobileWatch phone app with this PC: shows "
+                   "the address and code to enter on the phone.",
     },
     {
         # At the bottom of the settings dropdown: clean exit.
@@ -14957,6 +16189,20 @@ SETTINGS_SCHEMA = [
                    "watch their HP and time-of-death, drop coordinate pins, "
                    "and see targets on a zone map. Toggle any time with "
                    "Ctrl+Shift+G.",
+    },
+    {
+        "key":     "mobilelink_new_code",
+        "label":   "(internal) new pairing code",
+        "kind":    "button",
+        "button_text": "NEW CODE",
+        "confirm": True,
+        "confirm_text": "Unpair phones?",
+        "done_text": "Done",
+        "section": "_Hidden",
+        "applies": "python",
+        "action":  "mobilelink_new_code",
+        "help":    "Make a new pairing code. Every paired phone has to "
+                   "enter the new one.",
     },
     {
         "key":     "open_autora",
@@ -16847,6 +18093,8 @@ _SETTINGS_ACTIONS = {
     "open_alerts_settings":    lambda: _open_subdialog("alerts"),
     "edit_alert_sections":     lambda: _open_alert_editor(),
     "open_autora":             lambda: _open_autora(),
+    "open_mobilelink":         lambda: _open_subdialog("mobilelink"),
+    "mobilelink_new_code":     lambda: (_mobilelink_new_code(), None)[1],
 }
 
 
@@ -39731,6 +40979,16 @@ def _ah_send(sub):
 def _ah_run_search():
     _ah_send("search|%s|" % ah_state["search"])
 
+def _ah_buy_start():
+    """Start buying down the queue (the Start button, and the phone's)."""
+    _ah_send("buy|%.1f|%s" % (
+        ah_state["throttle"],
+        ";".join("%d~%d~%d~%d~%d~%d" % (q["id"], q["qty"],
+                 q["start"], q["max"], q["inc"],
+                 1 if q.get("stack") else 0)
+                 for q in ah_state["queue"])))
+
+
 def _ah_add_to_queue(item):
     st = int(item.get("stack", 0))
     for q in ah_state["queue"]:
@@ -41742,7 +43000,12 @@ def _ah_open_ffxiah(item_id):
     except Exception:
         pass
 
+_ah_log_seq = 0     # every line ever logged, so the phone can tell new from old
+
+
 def _ah_log(line):
+    global _ah_log_seq
+    _ah_log_seq += 1
     ah_state["results"].append(line)
     if len(ah_state["results"]) > 300:
         ah_state["results"] = ah_state["results"][-300:]
@@ -44380,12 +45643,7 @@ def _ah_handle_event(event):
                 if ah_state["running"]:
                     _ah_send("stop")
                 else:
-                    _ah_send("buy|%.1f|%s" % (
-                        ah_state["throttle"],
-                        ";".join("%d~%d~%d~%d~%d~%d" % (q["id"], q["qty"],
-                                 q["start"], q["max"], q["inc"],
-                                 1 if q.get("stack") else 0)
-                                 for q in ah_state["queue"])))
+                    _ah_buy_start()
                 return True
         if prev_edit:
             _ah_commit_edit()
@@ -60469,6 +61727,20 @@ def handle_profile_name_modal_keydown(event):
 # ──────────────────────────────────────────────────────────────────────
 
 _SUBDIALOG_CONFIGS = {
+    "mobilelink": {
+        "title":    "MobileWatch",
+        "subtitle": "Lets the MobileWatch phone app see this PC's "
+                    "characters and gear.",
+        # Live text drawn above the rows (see _draw_subdialog).
+        "info":     lambda: _mobilelink_info_lines(),
+        "rows": [
+            ("mobilelink_new_code", "Pairing code", "action"),
+        ],
+        "helpers": {
+            "mobilelink_new_code":
+                "A new code unpairs every phone until it is entered again.",
+        },
+    },
     "autora": {
         "title":    "AutoRA",
         "subtitle": "Auto-repeat ranged attacks (/shoot) while engaged.",
@@ -60802,6 +62074,14 @@ def _draw_subdialog(surface, state_key):
     helpers = cfg.get("helpers", {}) or {}
     title   = cfg["title"]
     subtitle = cfg.get("subtitle", "")
+    # Optional live text: a callable returning [(text, (r, g, b)), ...],
+    # drawn between the subtitle and the rows.
+    info_lines = []
+    if callable(cfg.get("info")):
+        try:
+            info_lines = list(cfg["info"]() or [])
+        except Exception as e:
+            info_lines = [(f"({e!r})", (235, 150, 150))]
 
     g = _menu_g()
     def _ms(v):
@@ -60816,7 +62096,8 @@ def _draw_subdialog(surface, state_key):
     rows_total_h = sum(
         row_h + (helper_h if helpers.get(key) else 0)
         for key, _, _ in rows)
-    mh = title_block_h + rows_total_h + close_block_h
+    info_h = (len(info_lines) * _ms(18) + _ms(8)) if info_lines else 0
+    mh = title_block_h + info_h + rows_total_h + close_block_h
     mh = min(mh, sh - 40)
     mx = (sw - mw) // 2
     my = (sh - mh) // 2
@@ -60851,6 +62132,13 @@ def _draw_subdialog(surface, state_key):
         cy_y += sub_surf.get_height() + _ms(10)
     else:
         cy_y += _ms(10)
+
+    for _txt, _col in info_lines:
+        surface.blit(label_font.render(str(_txt), True, _col),
+                     (mx + pad, cy_y))
+        cy_y += _ms(18)
+    if info_lines:
+        cy_y += _ms(8)
 
     mouse_pos = _mouse_pos()
     for key, label, kind in rows:
@@ -65156,6 +66444,38 @@ def _chat_blacklist_add(name):
         print(f"[OmniWatch] blacklist add failed for {name_clean!r}: {e!r}")
 
 
+def _chat_blacklist_remove(name):
+    """Take `name` off the chat blacklist, live and in
+    omniwatch_chat_routing.json (_meta.blacklist), matching any case.
+    The phone's Unblock lands here, so a name unblocked on either side
+    is unblocked on both. No-op when it isn't there."""
+    name_clean = (name or "").strip()
+    if not name_clean:
+        return
+    global _chat_blacklist
+    low = name_clean.lower()
+    _chat_blacklist = {n for n in (_chat_blacklist or ()) if n != low}
+    try:
+        path = os.path.join(SETTINGS_DIR, "omniwatch_chat_routing.json")
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        meta = data.get("_meta") if isinstance(data, dict) else None
+        cur = meta.get("blacklist") if isinstance(meta, dict) else None
+        if not isinstance(cur, list):
+            return
+        keep = [n for n in cur if not (isinstance(n, str) and n.strip().lower() == low)]
+        if len(keep) == len(cur):
+            return
+        meta["blacklist"] = sorted(keep, key=str.lower)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"[OmniWatch] blacklist remove: {name_clean}")
+    except Exception as e:
+        print(f"[OmniWatch] blacklist remove failed for {name_clean!r}: {e!r}")
+
+
 def _chat_open_name_context_menu(name, actor_class, anchor_pos):
     """Open the right-click context menu for a chat sender name.
 
@@ -67651,9 +68971,11 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
             # thicker bright border. Deliberately a border and not a
             # background swap, so the user's own colour choice survives.
             _engaged = (entry is not None
-                        and entry.get("kind") == "action"
-                        and _hb_action_is_on(
-                            (entry.get("command") or "").strip().lower()))
+                        and ((entry.get("kind") == "action"
+                              and _hb_action_is_on(
+                                  (entry.get("command") or "").strip().lower()))
+                             or (entry.get("kind") == "toggle"
+                                 and bool(entry.get("toggle_on")))))
             if _engaged:
                 pygame.draw.rect(surface, (120, 225, 140), rect, 2,
                                  border_radius=3)
@@ -67758,7 +69080,7 @@ def _hotbar_editor_blur():
     """Drop focus and any selection on both boxes. The fields outlive the
     editor, so without this a reopened editor still shows last time's
     highlight."""
-    for _n in ("label", "command"):
+    for _n in ("label", "command", "command_off"):
         _f = _hotbar_editor_field(_n)
         _f.focused = False
         _f.anchor = None
@@ -67798,8 +69120,12 @@ def hotbar_editor_handle_keydown(event):
     if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_TAB):
         field.focused = False
         field.anchor = None
-        hotbar_focused_field = (
-            "command" if hotbar_focused_field == "label" else "label")
+        _order = ["label", "command"]
+        if (hotbar_edit_draft or {}).get("kind") == "toggle":
+            _order.append("command_off")
+        _cur = (hotbar_focused_field if hotbar_focused_field in _order
+                else "label")
+        hotbar_focused_field = _order[(_order.index(_cur) + 1) % len(_order)]
         nxt = _hotbar_editor_field(hotbar_focused_field)
         nxt.focused = True
         nxt.anchor = None
@@ -68035,6 +69361,9 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
     fy    = hotbar_y + hotbar_h + 4
     form_w = hotbar_w
     form_h = HOTBAR_EDIT_FORM_H
+    if (isinstance(hotbar_edit_slot, int) and hotbar_edit_draft is not None
+            and hotbar_edit_draft.get("kind") == "toggle"):
+        form_h += HOTBAR_EDIT_FIELD_H + 6 + 16     # Off row + its hint
     _fx = hotbar_x
     if hotbar_editor_pos is not None:
         # Clamped for drawing only, and every click target below is built
@@ -68233,10 +69562,31 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
                                                  "delta": -1}))
             hotbar_editor_rects.append((_anext, {"kind": "action_step",
                                                  "delta": 1}))
+        elif hotbar_edit_draft.get("kind", "none") == "toggle":
+            _draw_field_label("On cmd", cy)
+            _draw_text_input("command", cy)
+            cy += HOTBAR_EDIT_FIELD_H + 6
+            _draw_field_label("Off cmd", cy)
+            _draw_text_input("command_off", cy)
+            if not (hotbar_edit_draft.get("command_off") or "").strip():
+                # Show what a blank Off box will send.
+                _auto = _toggle_off_command(hotbar_edit_draft)
+                if _auto:
+                    _as = field_font.render("auto: " + _auto, True,
+                                            (110, 114, 132))
+                    surface.blit(_as, (control_x + 6,
+                                       cy + (HOTBAR_EDIT_FIELD_H
+                                             - _as.get_height()) // 2))
         else:
             _draw_field_label("Command", cy)
             _draw_text_input("command", cy)
         cy += HOTBAR_EDIT_FIELD_H + 6
+        if kind_val == "toggle":
+            _th = field_font.render(
+                "lit = on \u00b7 shift+click flips without sending",
+                True, (150, 152, 170))
+            surface.blit(_th, (control_x, cy - 2))
+            cy += 16
 
         # Format hint for the page kind — "2:Songs" isn't guessable, and
         # the Command box is the only place it can be typed.
@@ -75559,6 +76909,8 @@ _composer_focus_prev = False   # keep-game-focus edge tracker
 
 while running:
     screen.fill(COL_BG)
+    _mw_run_main_jobs()     # phone requests that touch overlay state
+    _dc_tick()              # characters that dropped out of the game
 
     # Reset clickable hyperlink regions — they'll be rebuilt as we draw.
     click_targets.clear()
@@ -75914,6 +77266,7 @@ while running:
                 new_stats[key] = val
             player_stats.clear()
             player_stats.update(new_stats)
+            _mw_stats_note(new_name, new_mj, new_sj, new_stats)
             player_self_name = new_name
             player_self_mjob = new_mj
             player_self_sjob = new_sj
@@ -77358,6 +78711,17 @@ while running:
             idata, _ = sock_inv.recvfrom(16384)
             raw = idata.decode(errors="replace").strip()
             if not raw:
+                continue
+            # MobileWatch gear snapshots are kept for EVERY character, so
+            # they're taken before the multibox gate below drops the ones
+            # from a character that isn't on screen.
+            if "MWG|" in raw[:40] and _mw_gear_ingest(raw):
+                continue
+            # Disconnect watch: every character's heartbeat, likewise.
+            if "@DC|" in raw[:40] and _dc_note(raw):
+                continue
+            # Sync jobs progress, from whichever character is running it.
+            if "MWJS|" in raw[:40] and _mw_js_note(raw):
                 continue
             # Multibox: inventory/currency/points/etc. display packets are
             # tagged with the sending character; drop a non-locked char's so

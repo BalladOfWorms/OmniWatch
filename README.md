@@ -299,8 +299,8 @@ Tracked rings (item ids in parentheses, cooldown after each):
 | Dem Ring | 26177 | 10 min |
 | Holla Ring | 26176 | 10 min |
 | Mea Ring | 26178 | 10 min |
-| Echad Ring | 27556 | 2 hr — instant Adoulin warp |
-| Trizek Ring | 27557 | 2 hr — instant Ru'Lude warp |
+| Echad Ring | 27556 | 2 hr — Exp. points +150% |
+| Trizek Ring | 27557 | 2 hr — Cap. points +150% |
 | Reraise Ring | 26169 | 20 hr — single-charge reraise |
 | Endorsement Ring | 28469 | 2 hr — exp/cp bonus |
 | Emporox's Ring | 28470 | 2 hr — sparks bonus |

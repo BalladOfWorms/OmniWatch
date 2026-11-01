@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.16.0] — 2026-10-31
+
+### Added
+
+- **MobileWatch link.** OmniWatch can now talk to the MobileWatch phone app, at home or away over Tailscale. Press **OPEN** on the new **MobileWatch** row at the bottom of the settings menu, just above Exit, to see this PC's addresses and a pairing code, then enter one address and the code in MobileWatch's Settings. Only a phone with the code can connect, and **NEW CODE** in the same box unpairs every phone at once. Once paired, MobileWatch can:
+  - **Show your gear.** Everything you can equip, in every bag, with its augments, plus your job levels, kept up to date as your bags change. MobileWatch matches the GearSwap sets on your phone to the pieces you own.
+  - **Show your Statistics panel.** Each job's Statistics panel numbers are kept for the phone, so MobileWatch's stats start from your real totals: base stats, skills, traits, merits and Job Points included.
+  - **Sync every job's stats at once.** **Sync jobs** in MobileWatch's Settings has your character change through every job you've leveled, and saves each job's numbers for the phone. It finishes back on the job you started on. Your character has to be in the Mog House, next to the Moogle. No other addon is needed.
+  - **Show your inventory.** Every bag with its items and counts, how full each bag is, and your gil.
+  - **Use the auction house, your bazaar and the delivery box.** MobileWatch's Marketplace tab works like OmniWatch's auction house window. **Buy:** search, then queue bids that rise to the most you'll pay. **Sell:** your auction house listings with time left, and your bazaar. List single or stack, take a listing back or collect its gil, and add, reprice or remove bazaar items. **Delivery:** take from your inbox, return from your outbox, and send items or gil. The auction house and delivery box need your character in a town with an auction house; bazaar prices can be set anywhere.
+  - **Show and send chat.** Your tells, shouts, yells and both linkshells since OmniWatch started, and you can reply on any of them from the phone.
+  - **Send tell alerts.** The phone gets a notification within a second or two of someone sending you a tell.
+  - **Send disconnect alerts.** If a character drops out of the game without logging out, because the connection was lost or the game closed or crashed, the phone gets a "<name> disconnected" notification. Logging out or shutting down yourself, or unloading OmniWatch, doesn't set it off.
+  - **Share your chat blacklist.** Blocking someone in MobileWatch adds them to the chat panel's blacklist, and anyone blacklisted in OmniWatch is hidden on the phone too.
+  - **Sync your checklist.** Quest, mission, mount and trust ticks sync both ways with MobileWatch's Quests, Missions, Mounts and Trusts tabs: a tick on either side ends up on both. Mounts and trusts you own come across automatically.
+- **Toggle buttons on the hotbar.** A new **toggle** kind in the hotbar editor gives a button an **On cmd** and an **Off cmd**, and each press alternates between them. Leave **Off cmd** blank for `lua l <addon>` and the button unloads it with `lua u <addon>` (the editor shows what it will send). Any other command on its own is sent again, which suits commands that switch themselves on and off. The button is lit while it's on, and remembers its state between sessions. If you load or unload the addon some other way, **Shift+click** the button to flip it back in step without sending anything.
+
 ## [1.15.3] — 2026-10-12
 
 ### Added

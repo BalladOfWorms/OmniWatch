@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.15.3'
+_addon.version  = '1.16.0'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -5649,6 +5649,7 @@ end
 function _ow_mark_inv_dirty()
     _ow_inv_snap_dirty = true
     _ow_inv_id_to_loc  = nil
+    _ow_mw_gear_dirty  = true
 end
 
 -- Force the next inventory snapshot to send immediately, bypassing the
@@ -5661,6 +5662,219 @@ function _ow_force_inv_resend()
     _ow_inv_snap_last_sent = 0
     _ow_inv_snap_dirty     = true
     _ow_inv_id_to_loc      = nil
+end
+
+-- ── MobileWatch gear snapshot ──────────────────────────────────────────────
+-- Everything this character owns that can be equipped, in every bag, with
+-- each copy's augment lines, plus job levels and what is worn right now.
+-- The overlay keeps it per character (mobilewatch_gear.json) for the phone's
+-- Character tab. Unlike SIM_INV it is not tied to sim mode and is not
+-- filtered to the current job: the phone picks by job and slot itself,
+-- from its own item data, so one snapshot answers every job.
+--
+--   MWG|BEGIN|<main job>|<sub job>|<JOB:lvl,JOB:lvl,...>
+--   MWG|BAGS|<bag id>:<name>;...
+--   MWG|ITEM|<rec>\x1e<rec>...    rec = id \x1f bag \x1f idx [\x1f augment]...
+--   MWG|EQ|<slot>:<bag>:<idx>;...  (0:0 for an empty slot)
+--   MWG|END
+--
+-- Every line is tagged with the sending character, so several logged-in
+-- clients each keep their own file. Sent when inventory, equipment or job
+-- changes, at most every few seconds.
+--
+-- Globals, not locals: the main chunk is at Lua 5.1's 200-local limit.
+_ow_mw_gear_dirty = true      -- prime: send once after load
+_ow_mw_gear_last  = 0
+_ow_mw_gear_job   = nil       -- last job sent; a change re-sends
+
+-- The bags gear can actually be worn or stored in. Temporary items and
+-- the recycle bin are left out.
+_OW_MW_GEAR_SKIP_BAGS = { temporary = true, recycle = true }
+
+-- Resolve one cleaned augment string the same way the sim AUG stream does:
+-- "Path: A" on REMA / Unity / JSE gear becomes its real stat lines.
+function _ow_mw_resolve_aug(item_id, s)
+    local pkey = s:lower():match('^(path:%s*%a)')
+    if not pkey then return { s } end
+    local nkey = pkey:gsub('%s+', ' ')
+    local resolved = ow_path_augments and ow_path_augments[item_id]
+                     and ow_path_augments[item_id][nkey]
+    if not resolved and Unity_rank and Unity_rank[item_id]
+            and type(Unity_rank[item_id].augments) == 'table' then
+        resolved = Unity_rank[item_id].augments
+    end
+    if not resolved and ow_unity_augments
+            and type(ow_unity_augments[item_id]) == 'table' then
+        resolved = ow_unity_augments[item_id]
+    end
+    if type(resolved) == 'table' and #resolved > 0 then
+        local out = {}
+        for _, rs in ipairs(resolved) do
+            if rs and rs ~= '' then out[#out + 1] = tostring(rs) end
+        end
+        if #out > 0 then return out end
+    end
+    return { s }
+end
+
+function _ow_send_mw_gear()
+    if not res or not res.items or not res.bags then return end
+    local p = windower.ffxi.get_player()
+    if not p or not p.name or p.name == '' then return end
+    local function send(line)
+        pcall(function() udp_inv:send(_OW_MB_TAG(line)) end)
+    end
+
+    -- Job levels. windower keys player.jobs by job abbreviation; accept a
+    -- numeric job id too, so a build that keys it the other way still works.
+    local lv = {}
+    if type(p.jobs) == 'table' then
+        for k, v in pairs(p.jobs) do
+            local name = k
+            if type(k) == 'number' then
+                name = res.jobs and res.jobs[k] and res.jobs[k].ens or nil
+            end
+            local n = tonumber(v)
+            if name and n and n > 0 then
+                lv[#lv + 1] = tostring(name):upper() .. ':' .. n
+            end
+        end
+    end
+    table.sort(lv)
+    local main = (p.main_job or ''):upper()
+    send('MWG|BEGIN|' .. main .. '|' .. (p.sub_job or ''):upper()
+         .. '|' .. table.concat(lv, ','))
+    _ow_mw_gear_job = main
+
+    local bag_names = {}
+    for _, bag in pairs(res.bags) do
+        local key = (bag.en or ''):lower():gsub('%s+', '')
+        if not _OW_MW_GEAR_SKIP_BAGS[key] then
+            bag_names[#bag_names + 1] = bag.id .. ':'
+                .. tostring(bag.en or ''):gsub('[;:|]', '')
+        end
+    end
+    send('MWG|BAGS|' .. table.concat(bag_names, ';'))
+
+    local RS, US, MAX_PKT = string.char(30), string.char(31), 12000
+    local recs, buf_len = {}, 0
+    local function flush()
+        if #recs > 0 then
+            send('MWG|ITEM|' .. table.concat(recs, RS))
+            recs, buf_len = {}, 0
+        end
+    end
+    -- Every item in every bag, gear or not, with its stack count, for the
+    -- phone's Inventory section; and each bag's used / max slots.
+    local inv, inv_len, caps = {}, 0, {}
+    local function flush_inv()
+        if #inv > 0 then
+            send('MWG|INV|' .. table.concat(inv, RS))
+            inv, inv_len = {}, 0
+        end
+    end
+    for _, bag in pairs(res.bags) do
+        local key = (bag.en or ''):lower():gsub('%s+', '')
+        local bag_items = (not _OW_MW_GEAR_SKIP_BAGS[key])
+                          and windower.ffxi.get_items(bag.id) or nil
+        if bag_items and bag_items.enabled ~= false then
+            local used = 0
+            for slot_idx, it in pairs(bag_items) do
+                if type(it) == 'table' and type(slot_idx) == 'number'
+                        and it.id and it.id > 0 and it.id ~= 65535 then
+                    used = used + 1
+                    local irec = it.id .. US .. bag.id .. US .. slot_idx
+                                 .. US .. (tonumber(it.count) or 1)
+                    if inv_len + #irec + 1 > MAX_PKT then flush_inv() end
+                    inv[#inv + 1] = irec
+                    inv_len = inv_len + #irec + 1
+                end
+            end
+            if tonumber(bag_items.max) and bag_items.max > 0 then
+                caps[#caps + 1] = bag.id .. ':' .. used .. ':' .. bag_items.max
+            end
+        end
+        if bag_items then
+            for slot_idx, it in pairs(bag_items) do
+                if type(it) == 'table' and type(slot_idx) == 'number'
+                        and it.id and it.id > 0 then
+                    local meta = res.items[it.id]
+                    if meta and type(meta.slots) == 'table'
+                            and next(meta.slots) ~= nil then
+                        local fields = { tostring(it.id), tostring(bag.id),
+                                         tostring(slot_idx) }
+                        local augs = ow_get_item_augments
+                                     and ow_get_item_augments(bag.id, slot_idx)
+                        if type(augs) == 'table' then
+                            for _, a in ipairs(augs) do
+                                local s = tostring(a):gsub('^[^%w%+%-]+', '')
+                                                     :gsub('^%s+', '')
+                                                     :gsub('%s+$', '')
+                                if s ~= '' and s ~= 'none' then
+                                    for _, line in ipairs(
+                                            _ow_mw_resolve_aug(it.id, s)) do
+                                        if line ~= '' then
+                                            fields[#fields + 1] =
+                                                line:gsub('[\30\31|]', '')
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        local rec = table.concat(fields, US)
+                        if buf_len + #rec + 1 > MAX_PKT then flush() end
+                        recs[#recs + 1] = rec
+                        buf_len = buf_len + #rec + 1
+                    end
+                end
+            end
+        end
+    end
+    flush()
+    flush_inv()
+    send('MWG|CAP|' .. table.concat(caps, ';'))
+    local all = windower.ffxi.get_items()
+    if all and tonumber(all.gil) then
+        send('MWG|GIL|' .. tostring(all.gil))
+    end
+
+    local eq = windower.ffxi.get_items('equipment')
+    if eq then
+        local parts = {}
+        for _, sn in ipairs({ 'main', 'sub', 'range', 'ammo', 'head', 'neck',
+                              'left_ear', 'right_ear', 'body', 'hands',
+                              'left_ring', 'right_ring', 'back', 'waist',
+                              'legs', 'feet' }) do
+            local idx, bag = eq[sn], eq[sn .. '_bag']
+            if idx and idx ~= 0 and bag then
+                parts[#parts + 1] = string.format('%s:%d:%d', sn, bag, idx)
+            else
+                parts[#parts + 1] = sn .. ':0:0'
+            end
+        end
+        send('MWG|EQ|' .. table.concat(parts, ';'))
+    end
+
+    send('MWG|END')
+end
+
+-- Called from prerender. Sends when something changed, no more than once
+-- every few seconds so a burst of item moves becomes one snapshot.
+function _ow_mw_gear_tick(now)
+    if not _ow_mw_gear_dirty then
+        -- A job change arrives as its own packets, but checking here as
+        -- well costs one table read and catches every route to it.
+        local p = windower.ffxi.get_player()
+        local job = p and p.main_job and p.main_job:upper() or nil
+        if job and _ow_mw_gear_job and job ~= _ow_mw_gear_job then
+            _ow_mw_gear_dirty = true
+        end
+    end
+    if _ow_mw_gear_dirty and (now - _ow_mw_gear_last) >= 3.0 then
+        _ow_mw_gear_dirty = false
+        _ow_mw_gear_last  = now
+        pcall(_ow_send_mw_gear)
+    end
 end
 
 -- ── BLU Spellsets engine ───────────────────────────────────────────────────
@@ -12309,6 +12523,14 @@ local function _ow_drain_inbound()
                         _ow_mark_inv_dirty()       -- re-push live equipment
                     end
                 end
+            end
+        elseif head == 'MWJOBSYNC' then
+            -- Sync jobs, asked for by the phone through the overlay.
+            local act, arg = rest:match('^(%a+)|?(.*)$')
+            if act == 'start' then
+                _G._ow_js_start(arg)
+            elseif act == 'cancel' and _G._ow_js then
+                _G._ow_js.cancel = true
             end
         elseif head == 'SIM_IMPORT' then
             -- Import a named set from an arbitrary gear file into the sim.
@@ -19983,6 +20205,10 @@ ow_safe_register('incoming chunk', function(id, data)
     if id == 0x01D or id == 0x01E or id == 0x01F or id == 0x020 then
         if _ow_mark_inv_dirty then _ow_mark_inv_dirty() end
     end
+    -- Equip / job change: only the MobileWatch gear snapshot cares.
+    if id == 0x050 or id == 0x01B then
+        _ow_mw_gear_dirty = true
+    end
 end)
 
 -- Clear everything on zone change.
@@ -27390,6 +27616,9 @@ ow_safe_register('prerender', function()
         end
     end
 
+    -- MobileWatch gear snapshot (always on; self-throttled).
+    pcall(_ow_mw_gear_tick, now)
+
     -- Party data at 10 Hz
     if now - last_send >= 0.1 then
         last_send = now
@@ -30156,5 +30385,270 @@ windower.register_event('incoming text', function(original)
         return true
     end
 end)
+
+-- ── Disconnect watch (MobileWatch disconnect alerts) ──────────────────────
+-- Every 5 s, while the server's packets keep arriving, tell the overlay this
+-- character is still here (DC|hb). The overlay raises "<name> disconnected"
+-- when those stop: the connection dropped (no more server packets) or the
+-- game closed or crashed (no more addon). A logout or shutdown you asked for
+-- says goodbye first (DC|bye, on the client's 0x0E7 exit request), and so
+-- does unloading OmniWatch, so neither alerts. Heading back to the title
+-- screen with no goodbye is a dropped connection: DC|lost, at once.
+-- Kept on _G: the main chunk is close to Lua's limit of 200 locals.
+_G._ow_dc = {last_hb = 0, bye_at = 0, name = ''}
+function _G._ow_dc_send(kind)
+    local d = _G._ow_dc
+    if d.name == '' or not _G._ow_udp_inv then return end
+    pcall(function() _G._ow_udp_inv:send('@' .. d.name .. '@DC|' .. kind) end)
+end
+ow_safe_register('incoming chunk', function()
+    local d = _G._ow_dc
+    local now = os.time()
+    if now - d.last_hb < 5 then return end
+    d.last_hb = now
+    -- A logout takes 30 s; still here well after the request, it was
+    -- cancelled (moving cancels it), so carry on.
+    if d.bye_at > 0 then
+        if now - d.bye_at < 45 then return end
+        d.bye_at = 0
+    end
+    local info = windower.ffxi.get_info()
+    if not (info and info.logged_in) then return end
+    local p = windower.ffxi.get_player()
+    if p and p.name then d.name = p.name end
+    _G._ow_dc_send('hb')
+end)
+ow_safe_register('outgoing chunk', function(id)
+    if id == 0x0E7 then
+        _G._ow_dc.bye_at = os.time()
+        _G._ow_dc_send('bye')
+    end
+end)
+ow_safe_register('logout', function()
+    if _G._ow_dc.bye_at == 0 then _G._ow_dc_send('lost') end
+    _G._ow_dc.bye_at = os.time()
+end)
+ow_safe_register('unload', function()
+    _G._ow_dc_send('bye')
+end)
+
+-- ── Sync jobs (MobileWatch Settings > Connection) ─────────────────────────
+-- The phone keeps each job's Statistics panel numbers, which the game only
+-- reports for the job you're on. This walks every job you have levels in,
+-- changing jobs itself the way the moogle's menu does (the same 0x100
+-- request Sammeh's JobChange addon sends, so that addon isn't needed), lets
+-- GearSwap put that job's gear on and the panel
+-- settle, then tells the overlay to save that job for the phone (MWJS|snap).
+-- It ends back on the job and sub you started on. Asked for by the overlay
+-- (MWJOBSYNC|start|BLU=NIN,WAR=SAM,... gives each job the sub last used on
+-- it; MWJOBSYNC|cancel stops after the job in hand). Progress goes back as
+-- MWJS| lines. Ticks every 0.5 s through coroutine.schedule.
+-- Kept on _G: the main chunk is close to Lua's limit of 200 locals.
+_G._ow_js = nil
+
+-- Starter jobs to park the sub on when it's in the way (main and sub can't
+-- be the same job), as JobChange does.
+_G._OW_JS_TEMP = {'NIN', 'DNC', 'WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF'}
+
+-- The job id for 'BLU', if this character has levels in it.
+function _G._ow_js_job_id(p, job)
+    if not job or job == '' then return nil end
+    local lv = p.jobs and (p.jobs[job] or p.jobs[job:lower()])
+    if not lv or tonumber(lv) == nil or tonumber(lv) <= 0 then return nil end
+    for id, j in pairs(res.jobs) do
+        if j.ens == job then return id end
+    end
+end
+
+-- Ask the server for a main or sub job change. False when this character
+-- can't take that job.
+function _G._ow_js_change(p, job, is_main)
+    local id = _G._ow_js_job_id(p, job)
+    if not id then return false end
+    local pk = packets.new('outgoing', 0x100,
+        {[(is_main and 'Main' or 'Sub') .. ' Job'] = id})
+    packets.inject(pk)
+    return true
+end
+
+-- A job the sub can sit on for a moment: leveled, and neither of these.
+function _G._ow_js_temp(p, a, b)
+    for _, j in ipairs(_G._OW_JS_TEMP) do
+        if j ~= a and j ~= b and _G._ow_js_job_id(p, j) then return j end
+    end
+end
+
+-- The Mog House moogle, if it's close enough to change jobs with
+-- (mob.distance is squared: 36 is 6 yalms).
+function _G._ow_js_moogle()
+    for _, m in pairs(windower.ffxi.get_mob_array() or {}) do
+        if m.valid_target and m.name == 'Moogle' and (m.distance or 999) < 36 then
+            return m
+        end
+    end
+end
+
+function _G._ow_js_say(...)
+    local line = 'MWJS|' .. table.concat({...}, '|')
+    pcall(function() _G._ow_udp_inv:send(_OW_MB_TAG(line)) end)
+end
+
+function _G._ow_js_start(arg)
+    if _G._ow_js then return end
+    local info = windower.ffxi.get_info()
+    local p = windower.ffxi.get_player()
+    if not (info and info.logged_in and p) then
+        _G._ow_js_say('error', 'The game is not logged in.')
+        return
+    end
+    if not info.mog_house then
+        _G._ow_js_say('error', 'Must be in Mog House.')
+        return
+    end
+    if not _G._ow_js_moogle() then
+        _G._ow_js_say('error', 'Stand next to your Moogle.')
+        return
+    end
+    local subs = {}
+    for job, sub in tostring(arg or ''):gmatch('(%a+)=(%a+)') do
+        subs[job:upper()] = sub:upper()
+    end
+    local orig_main = (p.main_job or ''):upper()
+    local orig_sub = (p.sub_job or ''):upper()
+    local jobs = {}
+    if type(p.jobs) == 'table' then
+        for k, v in pairs(p.jobs) do
+            local name = k
+            if type(k) == 'number' then
+                name = res.jobs and res.jobs[k] and res.jobs[k].ens or nil
+            end
+            name = name and tostring(name):upper()
+            if name and (tonumber(v) or 0) > 0 and name ~= orig_main then
+                jobs[#jobs + 1] = name
+            end
+        end
+    end
+    table.sort(jobs)
+    local queue = {}
+    for _, j in ipairs(jobs) do
+        local sub = subs[j] or orig_sub
+        if sub == j or sub == '' then
+            sub = (orig_main ~= j) and orig_main or orig_sub
+        end
+        queue[#queue + 1] = {main = j, sub = sub}
+    end
+    -- The job you started on goes last, with its own sub: that's where
+    -- the run ends.
+    if orig_main ~= '' then
+        queue[#queue + 1] = {main = orig_main, sub = orig_sub}
+    end
+    _G._ow_js = {queue = queue, i = 0, phase = 'next', n = 0,
+                 orig_main = orig_main, orig_sub = orig_sub}
+    _G._ow_js_say('begin', tostring(#queue))
+    coroutine.schedule(_G._ow_js_tick, 0.5)
+end
+
+function _G._ow_js_finish(kind, text)
+    _G._ow_js = nil
+    _G._ow_js_say(kind, text or '')
+end
+
+function _G._ow_js_tick()
+    local st = _G._ow_js
+    if not st then return end
+    st.n = st.n + 1
+    local p = windower.ffxi.get_player()
+    local info = windower.ffxi.get_info()
+    if not (p and info and info.logged_in) then
+        return _G._ow_js_finish('error', 'The game logged out.')
+    end
+    local main = (p.main_job or ''):upper()
+    local sub = (p.sub_job or ''):upper()
+    local want = st.queue[st.i]
+    local function go(phase) st.phase = phase; st.n = 0 end
+
+    -- Change the sub, unless it's already right or can't be had; then
+    -- settle. Called once the main job is in place.
+    local function to_sub()
+        if sub ~= want.sub and want.sub ~= main
+                and _G._ow_js_change(p, want.sub, false) then
+            go('sub')
+        else
+            go('settle')
+        end
+    end
+
+    if st.phase == 'next' then
+        if st.cancel then
+            -- Stop here, but end back on the job you started on.
+            st.cancel, st.cancelled = false, true
+            st.queue = {{main = st.orig_main, sub = st.orig_sub}}
+            st.i = 0
+        end
+        if not info.mog_house then
+            return _G._ow_js_finish('error', 'Left the Mog House.')
+        end
+        st.i = st.i + 1
+        want = st.queue[st.i]
+        if not want then
+            return _G._ow_js_finish(st.cancelled and 'cancelled' or 'done')
+        end
+        _G._ow_js_say('job', tostring(st.i), want.main, want.sub)
+        if main == want.main then
+            to_sub()
+        elseif not _G._ow_js_job_id(p, want.main) then
+            _G._ow_js_say('skip', want.main, 'not unlocked')
+            go('next')
+        elseif sub == want.main then
+            -- The new main is the current sub: move the sub out of the way
+            -- first (to the sub it's meant to end on, if that's free).
+            local park = (want.sub ~= main and _G._ow_js_job_id(p, want.sub))
+                and want.sub or _G._ow_js_temp(p, main, want.main)
+            if park and _G._ow_js_change(p, park, false) then
+                go('unblock')
+            else
+                _G._ow_js_say('skip', want.main, 'no job to move the sub to')
+                go('next')
+            end
+        else
+            _G._ow_js_change(p, want.main, true)
+            go('main')
+        end
+    elseif st.phase == 'unblock' then
+        if sub ~= want.main then
+            _G._ow_js_change(p, want.main, true)
+            go('main')
+        elseif st.n >= 20 then
+            _G._ow_js_say('skip', want.main, 'the job change did not happen')
+            go('next')
+        end
+    elseif st.phase == 'main' then
+        if main == want.main then
+            to_sub()
+        elseif st.n >= 20 then
+            _G._ow_js_say('skip', want.main, 'the job change did not happen')
+            go('next')
+        end
+    elseif st.phase == 'sub' then
+        -- A sub that won't take (not unlocked, say) still leaves the main
+        -- job worth saving.
+        if sub == want.sub or st.n >= 20 then go('settle') end
+    elseif st.phase == 'settle' then
+        -- GearSwap loads the job's lua and puts its idle set on; then make
+        -- the stats and the gear snapshot go out fresh.
+        if st.n >= 10 then
+            _ow_stats_last_full = nil
+            _ow_mw_gear_dirty = true
+            _ow_mw_gear_last = 0
+            go('flush')
+        end
+    elseif st.phase == 'flush' then
+        if st.n >= 8 then
+            _G._ow_js_say('snap', main, sub)
+            go('next')
+        end
+    end
+    coroutine.schedule(_G._ow_js_tick, 0.5)
+end
 
 --python -m PyInstaller --onefile omniwatch.py
