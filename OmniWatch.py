@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.16.0 (2026-10-31)"
+OMNIWATCH_BUILD_STAMP = "v1.16.1 (2026-11-02)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.16.0"
+OMNIWATCH_VERSION = "1.16.1"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -2407,6 +2407,60 @@ def _real_mouse_down(event=None):
     if event is not None:
         return any(getattr(event, "buttons", (0, 0, 0)))
     return True
+
+
+_drag_pump_last = None
+
+
+def _drag_motion_pump():
+    """Keep a drag fed when the cursor is somewhere SDL cannot hear it.
+
+    Mouse auto-capture is off (see SDL_MOUSE_AUTO_CAPTURE above), so a
+    drag only hears MOUSEMOTION while the cursor is over a DRAWN part of
+    one of our windows. Over a see-through part of the overlay, or past
+    the window's edge, Windows hands the moves to the game instead. A
+    move-drag never notices -- the cursor rides on the panel it holds --
+    but a corner grip pulled OUTWARD leaves the panel on the first pixel,
+    so the panel could be made smaller and never bigger.
+
+    Once a frame, while a drag is in flight and the cursor is not over
+    anything of ours, this posts the motion from Windows' own reading of
+    the cursor (canvas space, like every other mouse event). If the
+    button has already come up out there, the motion it posts runs into
+    the main loop's let-go check, which ends the drag through the normal
+    release path instead of leaving it following the cursor.
+    """
+    global _drag_pump_last
+    if not _drag_in_flight():
+        _drag_pump_last = None
+        return
+    if sys.platform != "win32" or os.environ.get("SDL_VIDEODRIVER") == "dummy":
+        return
+    try:
+        held = _real_mouse_down()
+        if held:
+            if _hw_window_at_cursor() is not None:
+                # Over a drawn part of our own window: SDL is delivering
+                # the motion itself, and two readings of one cursor
+                # would make the drag jitter between them.
+                _drag_pump_last = None
+                return
+            pos = _mouse_pos()
+            if pos is None or pos == _drag_pump_last:
+                return
+        else:
+            if _drag_pump_last == "released":
+                return
+            pos = _mouse_pos()
+            if pos is None:
+                return
+        _drag_pump_last = tuple(pos) if held else "released"
+        pygame.event.post(pygame.event.Event(
+            pygame.MOUSEMOTION, {"pos": tuple(pos), "rel": (0, 0),
+                                 "buttons": (1 if held else 0, 0, 0),
+                                 "ow_canvas": True}))
+    except Exception:
+        pass
 
 
 def _raise_window(name):
@@ -11816,13 +11870,14 @@ def _mobilelink_start():
 
 
 # ── Phone chat (MobileWatch Chat tab) ─────────────────────────────────────
-# Tell, shout, yell and both linkshells, kept from the moment OmniWatch
+# Tell, shout, say, yell and both linkshells, kept from the moment OmniWatch
 # starts, for the phone to read. Classified with the panel's own
 # _chat_classify_event, so a line lands on the same channel here as it does
 # in the chat panel. Gone when OmniWatch closes, which is the point: chat
 # from a game that isn't running means nothing.
 _MW_CHAT_CHANNELS = {"chat_tell": "tell", "chat_shout": "shout",
-                     "chat_yell": "yell", "chat_ls1": "ls1", "chat_ls2": "ls2"}
+                     "chat_say": "say", "chat_yell": "yell",
+                     "chat_ls1": "ls1", "chat_ls2": "ls2"}
 _mw_chat_lines = _collections.deque(maxlen=1500)
 _mw_chat_seq = 0
 _mw_chat_lock = threading.Lock()
@@ -11937,7 +11992,7 @@ def _mw_chat_since(since):
         return {"boot": _mw_chat_boot, "seq": _mw_chat_seq, "lines": lines}
 
 
-_MW_CHAT_SEND = {"tell": "/t ", "reply": "/r ", "shout": "/sh ",
+_MW_CHAT_SEND = {"tell": "/t ", "reply": "/r ", "shout": "/sh ", "say": "/s ",
                  "yell": "/yell ", "ls1": "/l ", "ls2": "/l2 "}
 _MW_CHAT_MAX = 150
 
@@ -17081,7 +17136,9 @@ def _apply_transparent_background(on, name="main"):
 
         # Build the COLORREF for COL_BG. Windows expects 0x00BBGGRR
         # (note the byte order is reversed from RGB).
-        r, g, b = COL_BG[0], COL_BG[1], COL_BG[2]
+        # globals().get: the layout's window restore runs this before
+        # the palette (COL_BG) is defined further down the file.
+        r, g, b = globals().get("COL_BG", (6, 7, 12))[:3]
         colorkey = (b << 16) | (g << 8) | r
 
         user32 = ctypes.windll.user32
@@ -82801,6 +82858,8 @@ while running:
                 _cmd_addr())
         except Exception:
             pass
+    # A drag whose cursor has wandered over the game still gets its moves.
+    _drag_motion_pump()
     _events_pumped_t = time.time()
     for event in pygame.event.get():
         # Canvas-space from here down. Identity today; the second

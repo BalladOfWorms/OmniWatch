@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.16.1] — 2026-11-02
+
+### Added
+
+- **Say chat on the phone.** MobileWatch's Chat tab now has /say alongside your tells, shouts, yells and linkshells, and you can reply in /say from the phone.
+
+### Fixed
+
+- **Resizing panels larger.** Dragging a panel's corner grip outward makes it bigger, with or without a transparent background.
+
 ## [1.16.0] — 2026-10-31
 
 ### Added
@@ -9,7 +19,7 @@
   - **Show your Statistics panel.** Each job's Statistics panel numbers are kept for the phone, so MobileWatch's stats start from your real totals: base stats, skills, traits, merits and Job Points included.
   - **Sync every job's stats at once.** **Sync jobs** in MobileWatch's Settings has your character change through every job you've leveled, and saves each job's numbers for the phone. It finishes back on the job you started on. Your character has to be in the Mog House, next to the Moogle. No other addon is needed.
   - **Show your inventory.** Every bag with its items and counts, how full each bag is, and your gil.
-  - **Use the auction house, your bazaar and the delivery box.** MobileWatch's Marketplace tab works like OmniWatch's auction house window. **Buy:** search, then queue bids that rise to the most you'll pay. **Sell:** your auction house listings with time left, and your bazaar. List single or stack, take a listing back or collect its gil, and add, reprice or remove bazaar items. **Delivery:** take from your inbox, return from your outbox, and send items or gil. The auction house and delivery box need your character in a town with an auction house; bazaar prices can be set anywhere.
+  - **Use the auction house, your bazaar and the delivery box.** MobileWatch's Marketplace tab works like OmniWatch's auction house window. **Buy:** search, then queue bids that rise to the most you'll pay. Picking an item to buy, list or price shows its recent auction house sales and how many are up. **Sell:** your auction house listings with time left, and your bazaar. List single or stack, take a listing back or collect its gil, and add, reprice or remove bazaar items. **Delivery:** take from your inbox, return from your outbox, and send items or gil. The auction house and delivery box need your character in a town with an auction house; bazaar prices can be set anywhere.
   - **Show and send chat.** Your tells, shouts, yells and both linkshells since OmniWatch started, and you can reply on any of them from the phone.
   - **Send tell alerts.** The phone gets a notification within a second or two of someone sending you a tell.
   - **Send disconnect alerts.** If a character drops out of the game without logging out, because the connection was lost or the game closed or crashed, the phone gets a "<name> disconnected" notification. Logging out or shutting down yourself, or unloading OmniWatch, doesn't set it off.
