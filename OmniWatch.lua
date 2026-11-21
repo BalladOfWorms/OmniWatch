@@ -1,6 +1,6 @@
 _addon.name     = 'OmniWatch'
 _addon.author   = 'BalladOfWorms'
-_addon.version  = '1.16.0'
+_addon.version  = '1.16.3'
 _addon.commands = {'omniwatch', 'ow'}
 
 local res     = require('resources')
@@ -61,7 +61,14 @@ function ow_chat(...)
             '\n===== OmniWatch ' .. tostring(_addon.version or '?')
             .. ' log started %Y-%m-%d %H:%M:%S =====\n'))
     end
-    _ow_log_write(os.date('[%Y-%m-%d %H:%M:%S] ') .. text .. '\n')
+    -- Every character on the PC writes to this one file: tag each line
+    -- with who wrote it.
+    if not _ow_log_who then
+        local okp, p = pcall(function() return windower.ffxi.get_player() end)
+        if okp and p and p.name and p.name ~= '' then _ow_log_who = p.name end
+    end
+    _ow_log_write(os.date('[%Y-%m-%d %H:%M:%S] ')
+        .. (_ow_log_who and ('[' .. _ow_log_who .. '] ') or '') .. text .. '\n')
 end
 
 -- Porter Slips library. Ships with stock Windower (addons/libs/slips.lua),
@@ -504,6 +511,164 @@ if extdata and extdata.decode and not extdata._ow_wrapped then
     extdata._ow_wrapped = true
 end
 
+-- ── Augments Windower's decoder doesn't know ─────────────────────────────
+-- Windower's extdata library only lists retail's system-1 augments, so an
+-- item carrying one it lacks (LandSandBoat's weapon-skill DMG augments,
+-- e.g. Blade: Shun, and a few others) decodes with a "System: 1 ID: n"
+-- placeholder line -- and _ow_aug_sane above then hides the WHOLE list.
+-- These fill the gaps from LandSandBoat's augments.sql, once at load.
+-- Only ids Windower has no entry for are added, so if a Windower update
+-- ever lists them, its own entries win. Display only.
+-- Each entry: { stat text, value added before the multiplier, multiplier
+-- (sign included), shows as a percent }.
+do
+local _OW_EXTRA_AUGMENTS = {
+    [0x81]={{"Accuracy",1,1,false},{"Rng.Acc.",1,1,false}},
+    [0x82]={{"Attack",1,1,false},{"Rng.Atk.",1,1,false}},
+    [0x83]={{"Mag. Acc.",1,1,false},{"Mag.Atk.Bns",1,1,false}},
+    [0x84]={{"Dbl.Atk.",1,1,true},{"Crit.hit rate",1,1,true}},
+    [0xFB]={{"Daken",1,1,false}},
+    [0x11F]={{"Parrying Skill",1,1,false}},
+    [0x15B]={{"Healing Magic Recast Delay",1,-1,true}},
+    [0x15C]={{"Elemental Magic Recast Delay",1,-1,true}},
+    [0x15D]={{"Enfeebling Magic Recast Delay",1,-1,true}},
+    [0x163]={{"Enhancing Magic Recast Delay",1,-1,true}},
+    [0x17C]={{"Physical Damage Limit",1,1,true}},
+    [0x280]={{"Counter",1,2,false}},
+    [0x383]={{"Sword Enhancement spell damage",1,1,true}},
+    [0x439]={{"Final Heaven:DMG:",1,5,true}},
+    [0x43A]={{"Ascetics Fury:DMG:",1,5,true}},
+    [0x43B]={{"Stringing Pummel:DMG:",1,5,true}},
+    [0x43C]={{"Victory Smite:DMG:",1,5,true}},
+    [0x43D]={{"Mercy Stroke:DMG:",1,5,true}},
+    [0x43E]={{"Pyric Kleos:DMG:",1,5,true}},
+    [0x43F]={{"Mandalic Stab:DMG:",1,5,true}},
+    [0x440]={{"Mordant Rime:DMG:",1,5,true}},
+    [0x441]={{"Rudra's Storm:DMG:",1,5,true}},
+    [0x442]={{"Knights of Round:DMG:",1,5,true}},
+    [0x443]={{"Death Blossom:DMG:",1,5,true}},
+    [0x444]={{"Expiacion:DMG:",1,5,true}},
+    [0x445]={{"Chant du Cygne:DMG:",1,5,true}},
+    [0x446]={{"Randgrith:DMG:",1,5,true}},
+    [0x447]={{"Mystic Boon:DMG:",1,5,true}},
+    [0x448]={{"Scourge:DMG:",1,5,true}},
+    [0x449]={{"Torcleaver:DMG:",1,5,true}},
+    [0x44A]={{"Onslaught:DMG:",1,5,true}},
+    [0x44B]={{"Primal Rend:DMG:",1,5,true}},
+    [0x44C]={{"Cloudsplitter:DMG:",1,5,true}},
+    [0x44D]={{"Metatron Torment:DMG:",1,5,true}},
+    [0x44E]={{"King's Justice:DMG:",1,5,true}},
+    [0x44F]={{"Ukko's Fury:DMG:",1,5,true}},
+    [0x450]={{"Catastrophe:DMG:",1,5,true}},
+    [0x451]={{"Insurgency:DMG:",1,5,true}},
+    [0x452]={{"Quietus:DMG:",1,5,true}},
+    [0x453]={{"Geirskogul:DMG:",1,5,true}},
+    [0x454]={{"Drakesbane:DMG:",1,5,true}},
+    [0x455]={{"Camlann's Torment:DMG:",1,5,true}},
+    [0x456]={{"Blade: Metsu:DMG:",1,5,true}},
+    [0x457]={{"Blade: Kamu:DMG:",1,5,true}},
+    [0x458]={{"Blade: Hi:DMG:",1,5,true}},
+    [0x459]={{"Tachi: Kaiten:DMG:",1,5,true}},
+    [0x45A]={{"Tachi: Rana:DMG:",1,5,true}},
+    [0x45B]={{"Tachi: Fudo:DMG:",1,5,true}},
+    [0x45C]={{"Gate of Tartarus:DMG:",1,5,true}},
+    [0x45D]={{"Omniscience:DMG:",1,5,true}},
+    [0x45E]={{"Vidohunir:DMG:",1,5,true}},
+    [0x45F]={{"Garland of Bliss:DMG:",1,5,true}},
+    [0x460]={{"Namas Arrow:DMG:",1,5,true}},
+    [0x461]={{"Jishnu's Radiance:DMG:",1,5,true}},
+    [0x462]={{"Trueflight:DMG:",1,5,true}},
+    [0x463]={{"Coronach:DMG:",1,5,true}},
+    [0x464]={{"Leaden Salute:DMG:",1,5,true}},
+    [0x465]={{"Wildfire:DMG:",1,5,true}},
+    [0x466]={{"Dimidiation:DMG:",1,5,true}},
+    [0x468]={{"Shijin Spiral:DMG:",1,5,true}},
+    [0x469]={{"Exenterator:DMG:",1,5,true}},
+    [0x46A]={{"Requiescat:DMG:",1,5,true}},
+    [0x46B]={{"Upheaval:DMG:",1,5,true}},
+    [0x46C]={{"Entropy:DMG:",1,5,true}},
+    [0x46D]={{"Stardiver:DMG:",1,5,true}},
+    [0x46E]={{"Blade: Shun:DMG:",1,5,true}},
+    [0x46F]={{"Tachi: Shoha:DMG:",1,5,true}},
+    [0x470]={{"Realmrazer:DMG:",1,5,true}},
+    [0x471]={{"Shattersoul:DMG:",1,5,true}},
+    [0x472]={{"Resolution:DMG:",1,5,true}},
+    [0x473]={{"Ruinator:DMG:",1,5,true}},
+    [0x474]={{"Last Stand:DMG:",1,5,true}},
+    [0x639]={{"Final Heaven:DMG:",1,5,true}},
+    [0x63A]={{"Ascetics Fury:DMG:",1,5,true}},
+    [0x63B]={{"Stringing Pummel:DMG:",1,5,true}},
+    [0x63C]={{"Victory Smite:DMG:",1,5,true}},
+    [0x63D]={{"Mercy Stroke:DMG:",1,5,true}},
+    [0x63E]={{"Pyric Kleos:DMG:",1,5,true}},
+    [0x63F]={{"Mandalic Stab:DMG:",1,5,true}},
+    [0x640]={{"Mordant Rime:DMG:",1,5,true}},
+    [0x641]={{"Rudra's Storm:DMG:",1,5,true}},
+    [0x642]={{"Knights of Round:DMG:",1,5,true}},
+    [0x643]={{"Death Blossom:DMG:",1,5,true}},
+    [0x644]={{"Expiacion:DMG:",1,5,true}},
+    [0x645]={{"Chant du Cygne:DMG:",1,5,true}},
+    [0x646]={{"Randgrith:DMG:",1,5,true}},
+    [0x647]={{"Mystic Boon:DMG:",1,5,true}},
+    [0x648]={{"Scourge:DMG:",1,5,true}},
+    [0x649]={{"Torcleaver:DMG:",1,5,true}},
+    [0x64A]={{"Onslaught:DMG:",1,5,true}},
+    [0x64B]={{"Primal Rend:DMG:",1,5,true}},
+    [0x64C]={{"Cloudsplitter:DMG:",1,5,true}},
+    [0x64D]={{"Metatron Torment:DMG:",1,5,true}},
+    [0x64E]={{"King's Justice:DMG:",1,5,true}},
+    [0x64F]={{"Ukko's Fury:DMG:",1,5,true}},
+    [0x650]={{"Catastrophe:DMG:",1,5,true}},
+    [0x651]={{"Insurgency:DMG:",1,5,true}},
+    [0x652]={{"Quietus:DMG:",1,5,true}},
+    [0x653]={{"Geirskogul:DMG:",1,5,true}},
+    [0x654]={{"Drakesbane:DMG:",1,5,true}},
+    [0x655]={{"Camlann's Torment:DMG:",1,5,true}},
+    [0x656]={{"Blade: Metsu:DMG:",1,5,true}},
+    [0x657]={{"Blade: Kamu:DMG:",1,5,true}},
+    [0x658]={{"Blade: Hi:DMG:",1,5,true}},
+    [0x659]={{"Tachi: Kaiten:DMG:",1,5,true}},
+    [0x65A]={{"Tachi: Rana:DMG:",1,5,true}},
+    [0x65B]={{"Tachi: Fudo:DMG:",1,5,true}},
+    [0x65C]={{"Gate of Tartarus:DMG:",1,5,true}},
+    [0x65D]={{"Omniscience:DMG:",1,5,true}},
+    [0x65E]={{"Vidohunir:DMG:",1,5,true}},
+    [0x65F]={{"Garland of Bliss:DMG:",1,5,true}},
+    [0x660]={{"Namas Arrow:DMG:",1,5,true}},
+    [0x661]={{"Jishnu's Radiance:DMG:",1,5,true}},
+    [0x662]={{"Trueflight:DMG:",1,5,true}},
+    [0x663]={{"Coronach:DMG:",1,5,true}},
+    [0x664]={{"Leaden Salute:DMG:",1,5,true}},
+    [0x665]={{"Wildfire:DMG:",1,5,true}},
+    [0x666]={{"Dimidiation:DMG:",1,5,true}},
+    [0x668]={{"Shijin Spiral:DMG:",1,5,true}},
+    [0x669]={{"Exenterator:DMG:",1,5,true}},
+    [0x66A]={{"Requiescat:DMG:",1,5,true}},
+    [0x66B]={{"Upheaval:DMG:",1,5,true}},
+    [0x66C]={{"Entropy:DMG:",1,5,true}},
+    [0x66D]={{"Stardiver:DMG:",1,5,true}},
+    [0x66E]={{"Blade: Shun:DMG:",1,5,true}},
+    [0x66F]={{"Tachi: Shoha:DMG:",1,5,true}},
+    [0x670]={{"Realmrazer:DMG:",1,5,true}},
+    [0x671]={{"Shattersoul:DMG:",1,5,true}},
+    [0x672]={{"Resolution:DMG:",1,5,true}},
+    [0x673]={{"Ruinator:DMG:",1,5,true}},
+    [0x674]={{"Last Stand:DMG:",1,5,true}},
+}
+    local av = augment_values      -- global table defined by Windower's extdata.lua
+    if type(av) == 'table' and type(av[1]) == 'table' then
+        for id, stats in pairs(_OW_EXTRA_AUGMENTS) do
+            if av[1][id] == nil then
+                local row = {}
+                for i, s in ipairs(stats) do
+                    row[i] = {stat = s[1], offset = s[2], multiplier = s[3], percent = s[4] or nil}
+                end
+                av[1][id] = row
+            end
+        end
+    end
+end
+
 -- ── GearInfo resource tables (optional) ────────────────────────────────────
 -- These come from Sebyg666's GearInfo addon (BSD 2-Clause). They enumerate
 -- gear-side stats that FFXI's description text doesn't cover:
@@ -638,8 +803,54 @@ _ow_chatdebug_on = false
 -- and clear (sending REMOVE) when the mob takes real HP damage. Global
 -- for the 200-local-limit reason.
 _ow_mob_absorb_buffs = {}
+-- Each character keeps its own config file, user_config_<name>.lua, so
+-- several characters running OmniWatch on one PC each have their own
+-- Song+ / Phantom Roll+ / Geomancy+ / Unity rank. A character's file
+-- starts as a copy of the shared user_config.lua the first time it is
+-- needed. Before login (no name yet) the shared file is used.
 function ow_user_config_path()
-    return ow_user_config_dir() .. '/user_config.lua'
+    local dir = ow_user_config_dir()
+    local shared = dir .. '/user_config.lua'
+    local p = windower.ffxi.get_player()
+    local nm = p and p.name and p.name:lower()
+    if not nm or nm == '' then return shared end
+    local own = dir .. '/user_config_' .. nm .. '.lua'
+    local f = io.open(own, 'rb')
+    if f then f:close(); return own end
+    local src = io.open(shared, 'rb')
+    if src then
+        local bytes = src:read('*a')
+        src:close()
+        if type(ow_ensure_user_config_dir) == 'function' then
+            pcall(ow_ensure_user_config_dir)
+        end
+        local dst = io.open(own, 'wb')
+        if dst then
+            dst:write(bytes or '')
+            dst:close()
+            ow_chat(207, '[OW] config: user_config_' .. nm
+                .. '.lua created from user_config.lua')
+        end
+    end
+    return own
+end
+
+-- Load the config file belonging to the character now logged in, if it
+-- isn't the one already loaded (the addon can load at the title screen,
+-- before the character is known). Global: the main chunk is at Lua
+-- 5.1's 200-local ceiling.
+function ow_reload_user_config_for_char()
+    local path = ow_user_config_path()
+    if path == _ow_cfg_loaded_path then return end
+    local chunk = loadfile(path)
+    if not chunk then return end
+    local ok, data = pcall(chunk)
+    if ok and type(data) == 'table' then
+        ow_user_config = data
+        _ow_cfg_loaded_path = path
+        if ow_normalize_user_config then pcall(ow_normalize_user_config) end
+        ow_chat(207, '[OW] config: loaded ' .. path)
+    end
 end
 
 -- Ensure the AppData/OmniWatch directory exists. Best-effort: io can't
@@ -1484,6 +1695,7 @@ do
             local ok, data = pcall(chunk)
             if ok and type(data) == 'table' then
                 ow_user_config = data
+                _ow_cfg_loaded_path = cfg_path
             else
                 ow_chat(123,
                     '[OmniWatch] user_config.lua exists but didn\'t '
@@ -1943,7 +2155,7 @@ local PW_USER_CONFIG_SCHEMA = {}
 -- user's commented experiments). Instead we ensure required sections
 -- exist with a default shape, so downstream code can read e.g.
 -- ow_user_config.bards.self.carol without nil-checking every level.
-do
+function ow_normalize_user_config()
     if type(ow_user_config) ~= 'table' then
         ow_user_config = {}
     end
@@ -1993,6 +2205,7 @@ do
         ow_user_config.setup_complete = false
     end
 end
+ow_normalize_user_config()
 
 -- Write the current ow_user_config back to data/user_config.lua, with
 -- a friendly comment header. Returns ok, err. Uses raw io.open since
@@ -2158,6 +2371,8 @@ function ow_save_user_config()
         f:write(string.format('        %s = {\n', key))
         f:write(string.format('            phantom_roll = %d,\n',
             tonumber(t and t.phantom_roll) or 0))
+        -- read off the gear worn at a real roll (auto setup leaves it be)
+        if t and t.measured then f:write('            measured = true,\n') end
         f:write('        },\n')
     end
     local cors = (ow_user_config and ow_user_config.corsairs) or {}
@@ -2188,6 +2403,7 @@ function ow_save_user_config()
             f:write(string.format('            %-9s = %d,\n',
                 fk, tonumber(t and t[fk]) or 0))
         end
+        if t and t.measured then f:write('            measured  = true,\n') end
         f:write('        },\n')
     end
     local geos = (ow_user_config and ow_user_config.geomancers) or {}
@@ -2365,8 +2581,26 @@ function ow_resolve_peers(ports)
     end
 end
 
+-- Each character also publishes its port under its own name, so the overlay can send a
+-- command to the character it is showing rather than to whichever one loaded last (the
+-- shared file above holds only one port, and every boxed character overwrites it).
+OW_CMD_PORT_NUM = nil
+OW_CMD_PORT_NAMED_AT = 0
+
+function ow_write_named_cmd_port()
+    local p = windower.ffxi.get_player()
+    if not (OW_CMD_PORT_NUM and p and p.name and p.name ~= '') then return end
+    local path = ow_user_config_dir() .. '/ow_ports_lua_' .. p.name .. '.txt'
+    local f = io.open(path, 'w')
+    if not f then return end
+    f:write('cmd ' .. tostring(OW_CMD_PORT_NUM) .. '\n')
+    f:close()
+end
+
 function ow_write_lua_cmd_port(port)
     -- Publish our inbound command port so the overlay can find it.
+    OW_CMD_PORT_NUM = port
+    ow_write_named_cmd_port()
     local path = ow_ports_lua_path()
     local tmp = path .. '.tmp'
     local f = io.open(tmp, 'w')
@@ -2393,6 +2627,11 @@ function ow_poll_port_discovery(now)
     -- catching a later overlay restart.
     now = now or os.clock()
     OW_LOAD_CLOCK = OW_LOAD_CLOCK or now
+    -- keep this character's named port file fresh (the overlay ignores stale ones)
+    if now - OW_CMD_PORT_NAMED_AT >= 15 or now < OW_CMD_PORT_NAMED_AT then
+        OW_CMD_PORT_NAMED_AT = now
+        pcall(ow_write_named_cmd_port)
+    end
     if now < OW_NEXT_PORT_POLL then return end
     -- Ramp is purely time-based: 10 Hz for the first 10 s after load, then
     -- 1 Hz. A stale file that gets read at t=0 must NOT end the ramp early
@@ -13854,6 +14093,9 @@ local PW_COMMANDS_HELP = {
                               .. 'escaped as \\xNN.'},
     {'debug',                 'Toggle diagnostic chat output (action packets, '
                               .. 'Bolter\'s rolls, gearswap state echoes).'},
+    {'xprof',                 'List the song / roll / bubble profiles this '
+                              .. 'character has sent to and received from your '
+                              .. 'other characters, in omniwatch.log.'},
     {'setup',                 'Open the config overlay (Song+ / Phantom Roll+ / Geomancy+).'},
     {'setup skip',            'Mark setup complete without opening the overlay.'},
     {'config',                'List current bard / cor config in chat.'},
@@ -14121,6 +14363,11 @@ ow_safe_register('addon command', function(command, ...)
         ow_chat(207,
             string.format('[OW szdbg] %d entities listed (run near '
                           .. 'a PC / NPC / mob)', n))
+    elseif command == 'xprof' then
+        if _ow_xp_report then _ow_xp_report() end
+        if windower and windower.add_to_chat then
+            windower.add_to_chat(207, '[OW] xprof report written to omniwatch.log')
+        end
     elseif command == 'buffdebug' then
         _ow_buff_debug = not _ow_buff_debug
         _ow_last_buff_dbg = nil   -- force a fresh dump on next 0x063
@@ -14648,6 +14895,51 @@ ow_safe_register('addon command', function(command, ...)
         end
         emit(('augstats: %d rank item(s) audited. Lines ending in {} '
               .. 'are parser gaps.'):format(audited))
+    elseif command == 'augwhy' then
+        -- Diagnostic: for every equipped piece, log each stage of the augment
+        -- chain (raw bytes, native resolver, Windower decode, final result)
+        -- to omniwatch.log, to find where standard augments get lost.
+        local function hex(s)
+            if type(s) ~= 'string' then return tostring(s) end
+            return (s:gsub('.', function(c) return string.format('%02X', c:byte()) end))
+        end
+        local function list(t)
+            if type(t) ~= 'table' then return tostring(t) end
+            local o = {}
+            for i, v in ipairs(t) do o[#o + 1] = i .. '=' .. tostring(v) end
+            return '{' .. table.concat(o, ', ') .. '}'
+        end
+        local equip = windower.ffxi.get_items('equipment') or {}
+        local n = 0
+        for _, sn in ipairs({'main', 'sub', 'range', 'ammo', 'head', 'neck', 'left_ear', 'right_ear',
+                             'body', 'hands', 'left_ring', 'right_ring', 'back', 'waist', 'legs', 'feet'}) do
+            local bag, idx = equip[sn .. '_bag'], equip[sn]
+            if bag and idx and idx > 0 then
+                local it = windower.ffxi.get_items(bag, idx)
+                if it and it.id and it.id > 0 then
+                    n = n + 1
+                    local name = res.items[it.id] and res.items[it.id].en or '?'
+                    ow_chat(207, ('[augwhy] %s: %s (id %d, bag %d slot %d)'):format(sn, name, it.id, bag, idx))
+                    ow_chat(207, '[augwhy]   extdata ' .. hex(it.extdata) .. ' len=' .. tostring(it.extdata and #it.extdata))
+                    ow_chat(207, '[augwhy]   item.augments ' .. list(it.augments))
+                    if _ow_native_item_augments then
+                        local ok, r = pcall(_ow_native_item_augments, it.id, it.extdata)
+                        ow_chat(207, '[augwhy]   native ok=' .. tostring(ok) .. ' -> ' .. list(r))
+                    end
+                    if extdata then
+                        local ok, e = pcall(extdata.decode, {id = it.id, extdata = it.extdata})
+                        ow_chat(207, '[augwhy]   decode ok=' .. tostring(ok) .. ' type=' .. tostring(ok and e and e.type)
+                            .. ' sys=' .. tostring(ok and e and e.augment_system)
+                            .. ' augs=' .. (ok and e and list(e.augments) or tostring(e)))
+                    else
+                        ow_chat(207, '[augwhy]   extdata library not loaded')
+                    end
+                    local ok, f = pcall(ow_get_item_augments, bag, idx)
+                    ow_chat(207, '[augwhy]   final ok=' .. tostring(ok) .. ' -> ' .. list(f))
+                end
+            end
+        end
+        windower.add_to_chat(207, ('[OW] augwhy: logged %d equipped item(s) to omniwatch.log'):format(n))
     elseif command == 'augprobe' then
         -- Probe windower.ffxi.get_item_augments (new native function,
         -- per FFXIAH thread 58991, 2026-06): signature and coverage are
@@ -16708,6 +17000,7 @@ local function _ow_refresh_bard_settings()
             etude     = fam_value('etude'),
             carol     = fam_value('carol'),
             mazurka   = fam_value('mazurka'),
+            scherzo   = fam_value('scherzo'),
         },
         merits = {
             -- GearInfo's default schema only covers minne/minuet/madrigal,
@@ -16788,6 +17081,7 @@ local function _ow_refresh_bard_settings()
                             -- known per-family Mazurka+ gear), but
                             -- Buff_Processing reads it; default to 0.
                             mazurka   = 0,
+                            scherzo   = tonumber(ally_cfg.scherzo)   or 0,
                         },
                         -- We don't carry merits/JP for ally bards. If
                         -- they have a Job Bonus enabled, that's already
@@ -16803,6 +17097,9 @@ local function _ow_refresh_bard_settings()
             end
         end
     end
+    -- Profiles sent by this player's other characters (OWXP) win over
+    -- hand-typed ally entries.
+    if _ow_xp_apply then pcall(_ow_xp_apply) end
 end
 
 -- ── settings.Cors auto-populate for self ───────────────────────────────
@@ -16888,6 +17185,10 @@ _ow_refresh_geo_settings = function()
         handbell = tonumber(cfg.handbell) or 0,
         all      = tonumber(cfg.all)      or 0,
     }
+    -- GearInfo's Buff_Processing reads ONE Geomancy+ number per GEO
+    -- from settings.Geos[name] (x Geo_Spells['Geomancy x']).
+    settings.Geos = settings.Geos or {}
+    settings.Geos[me] = _ow_xp_geo_value(cfg)
     if _ow_buff_debug then
         local g = settings.Geo[me]
         ow_chat(207, string.format(
@@ -16895,6 +17196,987 @@ _ow_refresh_geo_settings = function()
             me, g.indi, g.geo, g.bolster, g.handbell, g.all))
     end
 end
+
+-- ── GearInfo key fix: Indi-/Geo-Fury ──────────────────────────────────
+-- Geo_Spells.lua gives Indi-Fury and Geo-Fury the effect key
+-- 'Attack_perc', but GearInfo's calculate_total_haste only adds up
+-- 'Attack perc' (and get_player_att reads only that), so a Fury bubble
+-- never reached Attack. Renamed once, in memory, after GearInfo loads.
+function _ow_fix_gi_keys()
+    if _ow_gi_keys_fixed or type(Geo_Spells) ~= 'table' then return end
+    local n = 0
+    for _, sp in pairs(Geo_Spells) do
+        if type(sp) == 'table' and type(sp.effect) == 'table' then
+            for i, k in pairs(sp.effect) do
+                if k == 'Attack_perc' then sp.effect[i] = 'Attack perc'; n = n + 1 end
+            end
+        end
+    end
+    _ow_gi_keys_fixed = true
+    ow_chat(207, string.format('[OW] GearInfo: %d Fury effect key(s) set to "Attack perc"', n))
+end
+
+-- ── Per-buff log ───────────────────────────────────────────────────────
+-- Whenever the buffs GearInfo counts change, log each one that adds to
+-- a stat (with who cast it) and the totals the panel's attack/accuracy
+-- are built from. One line per change, so a wrong panel number can be
+-- traced to the buff behind it.
+_OW_BB_KEYS = {'Attack', 'Attack perc', 'Accuracy', 'Ranged Accuracy',
+    'STR', 'DEX', 'ma_haste', 'ja_haste', 'Store TP', 'Double Attack',
+    'Critical hit rate', 'Magic Atk. Bonus', 'Magic Accuracy', 'DEF',
+    'Evasion', 'Regen', 'Refresh', 'Regain'}
+function _ow_buff_breakdown()
+    local bd = _ExtraData and _ExtraData.player and _ExtraData.player.buff_details
+    if type(bd) ~= 'table' then return end
+    local parts = {}
+    for _, b in pairs(bd) do
+        if type(b) == 'table' then
+            local st = {}
+            for _, k in ipairs(_OW_BB_KEYS) do
+                local v = tonumber(b[k])
+                if v and v ~= 0 then st[#st + 1] = k .. '=' .. v end
+            end
+            if #st > 0 then
+                parts[#parts + 1] = string.format('%s(%s) %s',
+                    tostring(b.full_name or b.name or b.id),
+                    tostring(b.Caster or '?'), table.concat(st, ' '))
+            end
+        end
+    end
+    table.sort(parts)
+    local bi = Buffs_inform or {}
+    local tot = string.format('Attack=%s Attack perc=%s (%.1f%%) Accuracy=%s STR=%s',
+        tostring(bi.Attack), tostring(bi['Attack perc']),
+        (tonumber(bi['Attack perc']) or 0) / 10.24,
+        tostring(bi.Accuracy), tostring(bi.STR))
+    local sig = table.concat(parts, ';') .. '|' .. tot
+    if sig == _ow_bb_last then return end
+    _ow_bb_last = sig
+    ow_chat(207, '[OW] buffs counted: ' .. (#parts > 0 and table.concat(parts, '; ') or 'none'))
+    ow_chat(207, '[OW] buff totals: ' .. tot)
+end
+
+-- ── Automatic setup ────────────────────────────────────────────────────
+-- Fills in what //ow setup asks for -- Song+ (all songs and each family),
+-- Phantom Roll+ and Geomancy+ -- from the gear the character owns, with
+-- no input. Runs once after login and again after a job change, then
+-- saves it to the character's own config file if anything changed.
+--
+-- Every item in the bags gear can be worn from (inventory + wardrobes)
+-- that the current main job can wear at its level is read: the printed
+-- description plus its augments (the same chain the tooltip uses, so
+-- path, rank and JSE neck augments count). The best piece per slot is
+-- kept, two for ears and rings. For each song family the best per-slot
+-- (All songs + family) total is found, so a family piece that sits in a
+-- slot an All-songs piece would use is weighed against it, not added on.
+-- Globals only: the main chunk is at Lua 5.1's 200-local ceiling.
+
+_OW_AUTO_FAMILIES = {'minuet', 'march', 'madrigal', 'paeon', 'ballad',
+    'minne', 'mambo', 'prelude', 'carol', 'etude', 'scherzo'}
+
+-- Clauses after which a line's stats only apply under a condition (or to
+-- someone else): everything from the clause to the end of the line is
+-- dropped.
+_OW_AUTO_COND = {'latent effect', 'dynamis (d)', 'dynamis', 'set:',
+    'unity ranking', 'pet:', 'avatar:', 'wyvern:', 'luopan:', 'automaton:',
+    'sortie:', 'odyssey:', 'assault:', 'campaign:', 'besieged:',
+    'salvage:', 'abyssea:', 'reives:', 'escha:', 'daytime', 'nighttime',
+    'weather', 'aftermath'}
+
+-- Song+, Phantom Roll+ and Geomancy+ in one item's text lines.
+function _ow_auto_item_stats(lines)
+    local st = {all = 0, pr = 0, gm = 0}
+    for _, f in ipairs(_OW_AUTO_FAMILIES) do st[f] = 0 end
+    for _, raw in ipairs(lines) do
+        local t = ' ' .. tostring(raw):lower() .. ' '
+        local cut = nil
+        for _, c in ipairs(_OW_AUTO_COND) do
+            local i = t:find(c, 1, true)
+            if i and (not cut or i < cut) then cut = i end
+        end
+        if cut then t = t:sub(1, cut - 1) end
+        for n in t:gmatch('all songs%s?%+(%d+)') do
+            st.all = st.all + tonumber(n)
+        end
+        for _, f in ipairs(_OW_AUTO_FAMILIES) do
+            for n in t:gmatch('[%s"/]' .. f .. '"?%s?%+(%d+)') do
+                st[f] = st[f] + tonumber(n)
+            end
+        end
+        for n in t:gmatch('phantom roll"?%s?%+(%d+)') do
+            st.pr = st.pr + tonumber(n)
+        end
+        for n in t:gmatch('geomancy"?%s?%+(%d+)') do
+            st.gm = st.gm + tonumber(n)
+        end
+    end
+    return st
+end
+
+-- Every text line of one item: its printed description plus its augments
+-- (path, rank and JSE neck augments resolved the way the tooltip does).
+function _ow_auto_item_lines(bid, idx, item_id)
+    local lines = {}
+    local d = res.item_descriptions and res.item_descriptions[item_id]
+    d = d and (d.en or d.english)
+    if d then
+        for ln in (tostring(d) .. '\n'):gmatch('([^\n]*)\n') do
+            lines[#lines + 1] = ln
+        end
+    end
+    local augs = ow_get_item_augments and ow_get_item_augments(bid, idx)
+    if type(augs) == 'table' then
+        for _, a in ipairs(augs) do
+            local s = tostring(a):gsub('^[^%w%+%-"]+', '')
+            for _, l2 in ipairs(_ow_mw_resolve_aug
+                    and _ow_mw_resolve_aug(item_id, s) or {s}) do
+                lines[#lines + 1] = l2
+            end
+        end
+    end
+    if ow_unity_augments and type(ow_unity_augments[item_id]) == 'table' then
+        for _, l3 in ipairs(ow_unity_augments[item_id]) do
+            lines[#lines + 1] = tostring(l3)
+        end
+    end
+    return lines
+end
+
+-- Slot class an item is weighed in, and how many of that class fit.
+function _ow_auto_slot_class(slots)
+    local has = function(s)
+        if type(slots) == 'table' then return slots[s] ~= nil end
+        if type(slots) == 'number' then
+            return math.floor(slots / (2 ^ s)) % 2 == 1
+        end
+        return false
+    end
+    if has(0) then return 'main', 1 end
+    if has(1) then return 'sub', 1 end
+    if has(2) then return 'range', 1 end
+    if has(3) then return 'ammo', 1 end
+    if has(11) or has(12) then return 'ear', 2 end
+    if has(13) or has(14) then return 'ring', 2 end
+    local names = {[4] = 'head', [5] = 'body', [6] = 'hands', [7] = 'legs',
+                   [8] = 'feet', [9] = 'neck', [10] = 'waist', [15] = 'back'}
+    for s, nm in pairs(names) do
+        if has(s) then return nm, 1 end
+    end
+    return nil
+end
+
+function _ow_auto_job_ok(meta, job_id, job_lv)
+    local jobs = meta.jobs
+    local ok
+    if type(jobs) == 'table' then ok = jobs[job_id] ~= nil
+    elseif type(jobs) == 'number' then
+        ok = math.floor(jobs / (2 ^ job_id)) % 2 == 1
+    else ok = false end
+    if not ok then return false end
+    return (tonumber(meta.level) or 0) <= (tonumber(job_lv) or 99)
+end
+
+-- Read every wearable item. Returns the totals plus the pieces that made
+-- them (for the log), or nil when the bags aren't loaded yet.
+function _ow_auto_scan(p)
+    if not (res and res.items and res.item_descriptions) then return nil end
+    local all = windower.ffxi.get_items()
+    if not (all and all.inventory and tonumber(all.inventory.max)
+            and all.inventory.max > 0) then
+        return nil
+    end
+    local bag_ids = {}
+    if res.bags then
+        for id, b in pairs(res.bags) do
+            if b.equippable then bag_ids[#bag_ids + 1] = id end
+        end
+    end
+    if #bag_ids == 0 then bag_ids = {0, 8, 10, 11, 12, 13, 14, 15, 16} end
+    local job_id = tonumber(p.main_job_id) or 0
+    local job_lv = tonumber(p.main_job_level) or 99
+    local cands = {}          -- class -> list of {name, st}
+    local cap = {}            -- class -> how many fit
+    local seen = 0
+    for _, bid in ipairs(bag_ids) do
+        local bag = windower.ffxi.get_items(bid)
+        if type(bag) == 'table' and bag.enabled ~= false then
+            for idx, it in pairs(bag) do
+                if type(idx) == 'number' and type(it) == 'table'
+                        and it.id and it.id > 0 and it.id ~= 65535 then
+                    local meta = res.items[it.id]
+                    if meta and meta.slots then
+                        seen = seen + 1
+                        local cls, n = _ow_auto_slot_class(meta.slots)
+                        if cls and _ow_auto_job_ok(meta, job_id, job_lv) then
+                            local st = _ow_auto_item_stats(
+                                _ow_auto_item_lines(bid, idx, it.id))
+                            local any = st.all + st.pr + st.gm
+                            for _, f in ipairs(_OW_AUTO_FAMILIES) do any = any + st[f] end
+                            if any > 0 then
+                                cands[cls] = cands[cls] or {}
+                                cap[cls] = n
+                                table.insert(cands[cls],
+                                    {name = meta.en or ('id ' .. it.id), st = st})
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if seen == 0 then return nil end      -- bags not filled in yet
+    -- Best total of score() over every slot class, and the pieces used.
+    local function best(score)
+        local total, used = 0, {}
+        for cls, list in pairs(cands) do
+            table.sort(list, function(a, b) return score(a.st) > score(b.st) end)
+            for i = 1, (cap[cls] or 1) do
+                local c = list[i]
+                if c and score(c.st) > 0 then
+                    total = total + score(c.st)
+                    used[#used + 1] = c.name .. ' (+' .. score(c.st) .. ')'
+                end
+            end
+        end
+        table.sort(used)
+        return total, used
+    end
+    local out = {fam = {}, used = {}}
+    out.all, out.used.all = best(function(s) return s.all end)
+    for _, f in ipairs(_OW_AUTO_FAMILIES) do
+        local t, u = best(function(s) return s.all + s[f] end)
+        out.fam[f] = math.max(0, t - out.all)
+        out.used[f] = u
+    end
+    -- Phantom Roll+ does not stack: only the single highest piece counts.
+    out.pr, out.used.pr = 0, {}
+    for _, list in pairs(cands) do
+        for _, c in ipairs(list) do
+            if c.st.pr > out.pr then
+                out.pr, out.used.pr = c.st.pr, {c.name .. ' (+' .. c.st.pr .. ')'}
+            end
+        end
+    end
+    out.gm, out.used.gm = best(function(s) return s.gm end)
+    out.seen = seen
+    return out
+end
+
+-- Write the scan into this character's config; save and log if it moved.
+function _ow_auto_setup(p)
+    -- Right after load or login the job level reads 0 and the bags are
+    -- still filling: wait for a level, and for two reads a second apart
+    -- to see the same number of items.
+    if (tonumber(p and p.main_job_level) or 0) < 1 then return false end
+    local r = _ow_auto_scan(p)
+    if not r then return false end
+    if r.seen ~= _ow_xp.auto_last_seen then
+        _ow_xp.auto_last_seen = r.seen
+        return false
+    end
+    if type(ow_user_config) ~= 'table' then return false end
+    if ow_normalize_user_config then pcall(ow_normalize_user_config) end
+    local cfg = ow_user_config
+    local changed = {}
+    local function put(tbl, key, v, label)
+        if (tonumber(tbl[key]) or 0) ~= v then
+            changed[#changed + 1] = string.format('%s %s->%d', label,
+                tostring(tbl[key] or 0), v)
+            tbl[key] = v
+        end
+    end
+    local b = cfg.bards.self
+    put(b, 'all_songs', r.all, 'all_songs')
+    for _, f in ipairs(_OW_AUTO_FAMILIES) do put(b, f, r.fam[f], f) end
+    -- Phantom Roll+ / Geomancy+ once read off the gear actually worn at
+    -- a real roll / bubble (see _ow_measure_own_action) stay as measured.
+    if not cfg.corsairs.self.measured then
+        put(cfg.corsairs.self, 'phantom_roll', r.pr, 'phantom_roll')
+    end
+    local g = cfg.geomancers.self
+    if not g.measured then
+        -- Geomancy+ raises Indi and Geo spells alike: the generic bucket.
+        put(g, 'all', r.gm, 'geomancy')
+        put(g, 'indi', 0, 'geo.indi')
+        put(g, 'geo', 0, 'geo.geo')
+    end
+    if not cfg.setup_complete then
+        cfg.setup_complete = true
+        changed[#changed + 1] = 'setup_complete'
+    end
+    local job = string.format('%s%s', tostring(p.main_job or '?'),
+                              tostring(p.main_job_level or ''))
+    if #changed > 0 then
+        local ok = ow_save_user_config and ow_save_user_config()
+        ow_chat(207, string.format('[OW] auto setup (%s, %d items read): %s%s',
+            job, r.seen, table.concat(changed, ', '),
+            ok and '' or ' (config save FAILED)'))
+    else
+        ow_chat(207, string.format('[OW] auto setup (%s, %d items read): unchanged',
+            job, r.seen))
+    end
+    -- What each number was made of, so a wrong one can be traced.
+    local function show(label, v, used)
+        if v and v > 0 then
+            ow_chat(207, string.format('[OW]   %s=%d from %s', label, v,
+                table.concat(used or {}, ', ')))
+        end
+    end
+    show('all_songs', r.all, r.used.all)
+    for _, f in ipairs(_OW_AUTO_FAMILIES) do
+        if r.fam[f] > 0 then
+            show(string.format('%s+%d (all songs + %s', f, r.fam[f], f)
+                 .. ')', r.all + r.fam[f], r.used[f])
+        end
+    end
+    show('phantom_roll', r.pr, r.used.pr)
+    show('geomancy', r.gm, r.used.gm)
+    return true
+end
+
+-- ── Phantom Roll+ / Geomancy+ off the gear actually worn ──────────────
+-- Auto setup can only see what a character owns. A COR's rolls and a
+-- GEO's bubbles use the gear worn at that moment, so when this character
+-- rolls or casts a bubble, the equipped set (as the server confirmed it
+-- for that action) is read and that number is kept from then on: saved to
+-- this character's config and sent to the others straight away.
+-- Phantom Roll+ does not stack (highest piece); Geomancy+ does.
+_OW_EQ_SLOTS = {'main', 'sub', 'range', 'ammo', 'head', 'neck', 'left_ear',
+    'right_ear', 'body', 'hands', 'left_ring', 'right_ring', 'back',
+    'waist', 'legs', 'feet'}
+function _ow_measure_equipped(kind)
+    local eq = windower.ffxi.get_items('equipment')
+    if type(eq) ~= 'table' then return nil end
+    local val, used = 0, {}
+    for _, sn in ipairs(_OW_EQ_SLOTS) do
+        local bag, idx = eq[sn .. '_bag'], eq[sn]
+        if idx and idx ~= 0 and bag then
+            local it = windower.ffxi.get_items(bag, idx)
+            if it and it.id and it.id > 0 then
+                local st = _ow_auto_item_stats(_ow_auto_item_lines(bag, idx, it.id))
+                local v = st[kind] or 0
+                local nm = res.items[it.id] and res.items[it.id].en or ('id ' .. it.id)
+                if v > 0 then
+                    if kind == 'pr' then
+                        if v > val then val, used = v, {nm .. ' (+' .. v .. ')'} end
+                    else
+                        val = val + v
+                        used[#used + 1] = nm .. ' (+' .. v .. ')'
+                    end
+                end
+            end
+        end
+    end
+    return val, used
+end
+
+function _ow_measure_own_action(act)
+    local p = windower.ffxi.get_player()
+    if not (p and act and act.actor_id == p.id) then return end
+    if type(ow_user_config) ~= 'table' then return end
+    local kind, label, what
+    if act.category == 6 then
+        local ja = res.job_abilities and res.job_abilities[act.param]
+        -- The initial roll only: Phantom Roll+ worn then also carries
+        -- through every Double-Up, whatever is worn at the Double-Up. A
+        -- Double-Up arrives with the ROLL's id, so it is told apart by its
+        -- message: 420 / 422 = a new roll; 424 / 425 / 426 = Double-Up.
+        local a1 = act.targets and act.targets[1] and act.targets[1].actions
+                   and act.targets[1].actions[1]
+        local msg = a1 and a1.message
+        if ja and ja.type == 'CorsairRoll' and (msg == 420 or msg == 422) then
+            kind, label, what = 'pr', 'phantom_roll', ja.en
+        end
+    elseif act.category == 4 then
+        local sp = res.spells and res.spells[act.param]
+        local n = sp and sp.en or ''
+        if n:find('^Indi%-') or n:find('^Geo%-') then
+            kind, label, what = 'gm', 'geomancy', n
+        end
+    end
+    if not kind then return end
+    local v, used = _ow_measure_equipped(kind)
+    if not v then return end
+    if ow_normalize_user_config then pcall(ow_normalize_user_config) end
+    local sec = kind == 'pr' and ow_user_config.corsairs.self
+                              or ow_user_config.geomancers.self
+    local cur = kind == 'pr' and (tonumber(sec.phantom_roll) or 0)
+                              or _ow_xp_geo_value(sec)
+    if cur == v and sec.measured then return end
+    if kind == 'pr' then
+        sec.phantom_roll = v
+        if settings then
+            settings.Cors = settings.Cors or {}
+            settings.Cors[p.name:lower()] = v
+        end
+    else
+        sec.all, sec.indi, sec.geo = v, 0, 0
+    end
+    sec.measured = true
+    local ok = ow_save_user_config and ow_save_user_config()
+    ow_chat(207, string.format('[OW] %s at %s: %d -> %d, worn: %s%s', label, what,
+        cur, v, #used > 0 and table.concat(used, ', ') or 'nothing that adds it',
+        ok and '' or ' (config save FAILED)'))
+    -- Everyone else needs it before the next roll / bubble lands.
+    _ow_xp.sent_sig = nil
+    _ow_xp.next_t = 0
+end
+
+-- ── Entrusted Indi bubbles ─────────────────────────────────────────────
+-- GearInfo's Action_Processing files an Indi spell under the CASTER's
+-- party entry even when Entrust puts it on someone else. The entrusted
+-- bubble was then counted as the GEO's own (with the GEO's Geomancy+,
+-- centred on the GEO) and replaced the GEO's real Indi in the tracking.
+-- Around GearInfo's action handler: remember each GEO's Indi before, and
+-- after an entrusted cast move the new one onto its target (where
+-- GearInfo's own rule gives an entrusted bubble no Geomancy+) and put
+-- the GEO's own back.
+function _ow_entrust_pre(act)
+    _ow_entrust_snap = nil
+    if not (act and act.category == 4 and type(member_table) == 'table') then return end
+    local sp = res.spells and res.spells[act.param]
+    if not (sp and (sp.en or ''):find('^Indi%-')) then return end
+    local t1 = act.targets and act.targets[1]
+    if not t1 or t1.id == act.actor_id then return end
+    for _, m in pairs(member_table) do
+        if type(m) == 'table' and m.id == act.actor_id then
+            _ow_entrust_snap = {actor = act.actor_id, target = t1.id,
+                                spell = sp.id, indi = m.indi}
+            return
+        end
+    end
+end
+
+function _ow_entrust_post(act)
+    local s = _ow_entrust_snap
+    _ow_entrust_snap = nil
+    if not s or type(member_table) ~= 'table' then return end
+    local geo, tgt
+    for _, m in pairs(member_table) do
+        if type(m) == 'table' then
+            if m.id == s.actor then geo = m end
+            if m.id == s.target then tgt = m end
+        end
+    end
+    if not geo then return end
+    local moved = geo.indi
+    if not (type(moved) == 'table' and moved.id == s.spell) then return end
+    geo.indi = s.indi or {}
+    if tgt then
+        tgt.indi = {id = moved.id, caster = moved.caster, boost = 1}
+    end
+    ow_chat(207, string.format('[OW] entrust: %s -> %s (counted on %s, no Geomancy+)',
+        tostring(moved.caster), tostring(tgt and tgt.name or s.target),
+        tostring(tgt and tgt.name or '?')))
+end
+
+-- ── Marcato on another bard ────────────────────────────────────────────
+-- GearInfo's 0x076 handler sets a party member's Marcato flag whenever
+-- their buff list shows Marcato but never clears it when it is gone (it
+-- does clear Soul Voice). Marcato wears a moment after the song it
+-- boosted lands, so a 0x076 sent in that gap set the flag again and the
+-- NEXT song took it (Valor Minuet IV counted at 1.5x after Marcato went
+-- on Advancing March). Cleared here when that member's list no longer
+-- has it -- the same way your own Marcato is cleared when you lose it.
+function _ow_marcato_clear(data)
+    if type(member_table) ~= 'table' or type(data) ~= 'string' then return end
+    for k = 0, 4 do
+        local base = k * 48 + 5
+        if #data < base + 47 then break end
+        local id = data:unpack('I', base)
+        if id == 0 then break end
+        local has = false
+        for i = 1, 32 do
+            local lo = data:byte(base + 16 + i - 1)
+            local hi = math.floor(data:byte(base + 8 + math.floor((i - 1) / 4))
+                                  / 4 ^ ((i - 1) % 4)) % 4
+            if lo + 256 * hi == 231 then has = true; break end
+        end
+        if not has then
+            for _, m in pairs(member_table) do
+                if type(m) == 'table' and m.id == id and m.Marcato then
+                    m.Marcato = false
+                end
+            end
+        end
+    end
+end
+
+-- ── Keep who-cast-it across a re-timed buff ───────────────────────────
+-- GearInfo's 0x063 handler keeps a buff's caster and value only while the
+-- buff's timer is unchanged. When the timer changes (Double-Up re-rolling
+-- a roll, a song or spell re-applied) it re-attaches them only if the
+-- caster's "last spell" still names it -- already used up by then -- so
+-- the buff came back bare and stopped counting (Chaos Roll after a
+-- Double-Up at 12:11:19). Around that handler: note what each buff
+-- carried before, and give a buff that comes back with no caster the
+-- details of the same buff it replaced.
+_OW_BD_FIELDS = {'full_name', 'Caster', 'effect', 'value', 'SV', 'Marcato'}
+function _ow_bd_snapshot()
+    local bd = _ExtraData and _ExtraData.player and _ExtraData.player.buff_details
+    if type(bd) ~= 'table' then return nil end
+    local out = {}
+    for _, b in pairs(bd) do
+        if type(b) == 'table' and b.id and b.Caster then
+            local c = {id = b.id}
+            for _, k in ipairs(_OW_BD_FIELDS) do c[k] = b[k] end
+            out[#out + 1] = c
+        end
+    end
+    return out
+end
+
+function _ow_bd_carry(snap)
+    local bd = _ExtraData and _ExtraData.player and _ExtraData.player.buff_details
+    if type(bd) ~= 'table' or #snap == 0 then return end
+    -- old entries still present with their caster are not free to give
+    local used = {}
+    for _, b in pairs(bd) do
+        if type(b) == 'table' and b.Caster then
+            for i, c in ipairs(snap) do
+                if not used[i] and c.id == b.id and c.Caster == b.Caster
+                        and c.full_name == b.full_name then
+                    used[i] = true
+                    break
+                end
+            end
+        end
+    end
+    for _, b in pairs(bd) do
+        if type(b) == 'table' and b.id and not b.Caster then
+            for i, c in ipairs(snap) do
+                if not used[i] and c.id == b.id then
+                    used[i] = true
+                    for _, k in ipairs(_OW_BD_FIELDS) do b[k] = c[k] end
+                    b.reported = nil
+                    ow_chat(207, string.format('[OW] buff kept: %s from %s (re-timed)',
+                        tostring(c.full_name), tostring(c.Caster)))
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- ── Cross-character profiles (OWXP) ────────────────────────────────────
+-- Every character running OmniWatch tells the others, over Windower IPC,
+-- the numbers its songs, rolls and bubbles are computed from: a BRD's
+-- settings.Bards entry (Song+ from its //ow setup, live merits and job
+-- points, the Gjallarhorn flag from its own cast-time reading), a COR's
+-- Phantom Roll+ and a GEO's Geomancy+. Whichever character's panel is
+-- shown then computes an alt's song, roll or bubble on it exactly as it
+-- does for its own.
+--
+-- Wire format (one line, '|' separated):
+--   OWXP|1|P|<Name>|<MAIN>/<SUB>|k=v|k=v...   profile
+--   OWXP|1|R|<Name>                           "send me yours" (on load)
+--   OWXP|1|B|<Name>                           unloading / logging out
+--   OWXP|1|M|<Name>|<song id>=<potency %>     a march it just sang
+--   OWXP|1|C|<Name>|<roll name>=<potency>     a roll it just landed
+-- Profile keys: gj, eab, sb_<family>, m_<family>, j_<family> (BRD),
+-- pr (COR Phantom Roll+), gm (GEO Geomancy+).
+--
+-- Received profiles live in memory only (never written to a config
+-- file). A character re-sends whenever its own profile changes (checked
+-- once a second), so job changes, setup saves and an instrument swap on
+-- a cast all reach the others without being hooked one by one.
+-- Globals only: the main chunk is at Lua 5.1's 200-local ceiling.
+_ow_xp = _ow_xp or { auto_wait = os.clock() + 8, got = {}, sent_sig = nil, next_t = 0,
+                     req_sent = false, bset = {}, cset = {}, gset = {} }
+
+-- One Geomancy+ number from a geomancers.<who> config entry. The wizard
+-- has separate indi / geo fields but GearInfo applies one value to both,
+-- so a piece entered under both (Idris, say) is counted once: the larger
+-- of the two, plus the generic 'all' bucket.
+function _ow_xp_geo_value(cfg)
+    if type(cfg) ~= 'table' then return 0 end
+    local indi = tonumber(cfg.indi) or 0
+    local geo  = tonumber(cfg.geo)  or 0
+    return (tonumber(cfg.all) or 0) + math.max(indi, geo)
+end
+
+function _ow_xp_me()
+    local p = windower.ffxi.get_player()
+    return p and p.name and p.name:lower() or nil
+end
+
+-- This character's own profile: lowercase name, display name, jobs, body.
+function _ow_xp_own()
+    local p = windower.ffxi.get_player()
+    if not (p and p.name) then return nil end
+    local me = p.name:lower()
+    local mj, sj = tostring(p.main_job or ''), tostring(p.sub_job or '')
+    local function has(j) return mj == j or sj == j end
+    local f = {}
+    if has('BRD') then
+        pcall(_ow_refresh_bard_settings)
+        local b = settings and settings.Bards and settings.Bards[me]
+        if type(b) == 'table' then
+            f[#f+1] = 'gj=' .. (b.gjallarhorn and 1 or 0)
+            f[#f+1] = 'eab=' .. (tonumber(b.emperean_armor_bonus) or 0)
+            for k, v in pairs(b.song_bonus or {}) do
+                f[#f+1] = 'sb_' .. k .. '=' .. (tonumber(v) or 0)
+            end
+            for k, v in pairs(b.merits or {}) do
+                f[#f+1] = 'm_' .. k .. '=' .. (tonumber(v) or 0)
+            end
+            for k, v in pairs(b.jp or {}) do
+                f[#f+1] = 'j_' .. k .. '=' .. (tonumber(v) or 0)
+            end
+        end
+    end
+    local cfg = ow_user_config or {}
+    if has('COR') then
+        local c = cfg.corsairs and cfg.corsairs.self
+        f[#f+1] = 'pr=' .. (tonumber(c and c.phantom_roll) or 0)
+    end
+    if has('GEO') then
+        f[#f+1] = 'gm=' .. _ow_xp_geo_value(cfg.geomancers and cfg.geomancers.self)
+    end
+    table.sort(f)
+    return me, p.name, mj .. '/' .. sj, table.concat(f, '|')
+end
+
+function _ow_xp_send(kind, name, rest)
+    local msg = 'OWXP|1|' .. kind .. '|' .. name
+    if rest and rest ~= '' then msg = msg .. '|' .. rest end
+    pcall(windower.send_ipc_message, msg)
+end
+
+-- Put every received profile into GearInfo's tables. Runs after the
+-- config refreshers, so a received profile wins over a hand-typed ally
+-- entry; this character's own entries are never touched.
+function _ow_xp_apply()
+    if not settings then return end
+    settings.Bards = settings.Bards or {}
+    settings.Cors  = settings.Cors  or {}
+    settings.Geos  = settings.Geos  or {}
+    local me = _ow_xp_me()
+    for n, pr in pairs(_ow_xp.got) do
+        if n ~= me then
+            if pr.brd then
+                local b = pr.brd
+                local sb = {}
+                for _, k in ipairs({'all_songs', 'paeon', 'ballad', 'minne',
+                        'minuet', 'madrigal', 'prelude', 'mambo', 'march',
+                        'etude', 'carol', 'mazurka', 'scherzo'}) do
+                    sb[k] = 0
+                end
+                for k, v in pairs(b.sb) do sb[k] = v end
+                local m, j = {}, {}
+                for k, v in pairs(b.m) do m[k] = v end
+                for k, v in pairs(b.j) do j[k] = v end
+                settings.Bards[n] = {
+                    gjallarhorn = b.gj, emperean_armor_bonus = b.eab,
+                    song_bonus = sb, merits = m, jp = j,
+                }
+                _ow_xp.bset[n] = true
+            elseif _ow_xp.bset[n] then
+                -- No longer a BRD: let the config refresh put back any
+                -- hand-typed entry on its next pass.
+                settings.Bards[n] = nil
+                _ow_xp.bset[n] = nil
+            end
+            if pr.cor then
+                settings.Cors[n] = pr.cor
+                _ow_xp.cset[n] = true
+            elseif _ow_xp.cset[n] then
+                settings.Cors[n] = nil
+                _ow_xp.cset[n] = nil
+            end
+            if pr.geo then
+                settings.Geos[n] = pr.geo
+                _ow_xp.gset[n] = true
+            elseif _ow_xp.gset[n] then
+                settings.Geos[n] = nil
+                _ow_xp.gset[n] = nil
+            end
+        end
+    end
+end
+
+-- ── Marches: the singer's own number ───────────────────────────────────
+-- March haste is the one song value OmniWatch works out itself rather
+-- than through GearInfo, and its singer-side reading (Song+ from the gear
+-- worn at the cast, Marcato / Soul Voice) only exists on the singer's
+-- client. So the singer sends the potency it computed for its own cast
+-- and the others use that number as-is, exactly as if they had sung it.
+-- Sent at cast start and finish; like the singer's own record, the
+-- higher of the two stands.
+function _ow_xp_send_march(song_id, potency)
+    local p = windower.ffxi.get_player()
+    if not (p and p.name) then return end
+    _ow_xp_send('M', p.name, string.format('%d=%.6f', song_id, potency))
+end
+
+function _ow_xp_march_override(actor_id, song_id)
+    local m = windower.ffxi.get_mob_by_id(actor_id or 0)
+    local n = m and m.name and m.name:lower()
+    local e = n and _ow_xp.march and _ow_xp.march[n .. ':' .. song_id]
+    if e and os.clock() - e.t < 15 then return e.v end
+    return nil
+end
+
+function _ow_xp_receive_march(name, rest)
+    local sid, val = (rest or ''):match('^(%d+)=([%d%.]+)')
+    sid, val = tonumber(sid), tonumber(val)
+    if not (sid and val) then return end
+    _ow_xp.march = _ow_xp.march or {}
+    local key = name:lower() .. ':' .. sid
+    local e = _ow_xp.march[key]
+    if e and os.clock() - e.t < 15 then
+        if val > e.v then e.v = val end
+    else
+        e = {v = val, t = os.clock()}
+        _ow_xp.march[key] = e
+    end
+    -- The song may already have landed here and been recorded with this
+    -- client's own estimate: replace it with the singer's number.
+    local patched = false
+    local list = _ow_buff_sources and _ow_buff_sources[PW_MARCH_BUFF_ID]
+    if type(list) == 'table' then
+        for _, s in ipairs(list) do
+            if s.src_kind == 'song' and s.src_id == sid and not s.actor_was_self then
+                s.potency = e.v
+                patched = true
+            end
+        end
+    end
+    if patched then pcall(_ow_save_buff_state) end
+    local sp = res and res.spells and res.spells[sid]
+    ow_chat(207, string.format('[OW] xprof: %s %s potency %.2f%% (singer\'s own reading)%s',
+        name, sp and sp.en or ('song ' .. sid), e.v, patched and ', applied' or ''))
+end
+
+-- ── Rolls: the roller's own number ─────────────────────────────────────
+-- A roll's potency is worked out once, when it lands, from the roller's
+-- Phantom Roll+. Only the roller's client can read what it wore, and its
+-- reading reaches the others a moment after they have already worked the
+-- roll out. So, as with marches, the roller sends the potency its own
+-- GearInfo computed for that roll (roll, Phantom Roll+ worn, Crooked
+-- Cards, job bonus as it saw them) and the others use that number.
+function _ow_roll_after(act)
+    if not (act and act.category == 6 and type(member_table) == 'table') then return end
+    local p = windower.ffxi.get_player()
+    if not p then return end
+    if act.actor_id == p.id then
+        local me = nil
+        for _, m in pairs(member_table) do
+            if type(m) == 'table' and m.id == p.id then me = m; break end
+        end
+        if not (me and type(me.value) == 'table' and me.Last_Spell
+                and me.Last_Spell ~= '') then return end
+        local vals = {}
+        for i, v in ipairs(me.value) do
+            if type(v) ~= 'number' then return end
+            vals[i] = string.format('%.4f', v)
+        end
+        if #vals == 0 then return end
+        _ow_xp_send('C', p.name, me.Last_Spell .. '=' .. table.concat(vals, ','))
+    else
+        -- Someone else's roll just landed here: if its roller already sent
+        -- its own number, use it.
+        local m = windower.ffxi.get_mob_by_id(act.actor_id or 0)
+        if m and m.name then _ow_roll_apply(m.name:lower()) end
+    end
+end
+
+function _ow_roll_apply(n)
+    local e = _ow_xp.roll and _ow_xp.roll[n]
+    if not (e and os.clock() - e.t < 15) then return false end
+    local hit = false
+    for _, m in pairs(member_table or {}) do
+        if type(m) == 'table' and m.name and m.name:lower() == n
+                and m.Last_Spell == e.roll then
+            m.value = e.v
+            hit = true
+        end
+    end
+    local bd = _ExtraData and _ExtraData.player and _ExtraData.player.buff_details
+    if type(bd) == 'table' then
+        for _, b in pairs(bd) do
+            if type(b) == 'table' and (b.full_name == e.roll or b.name == e.roll)
+                    and (b.Caster == nil or tostring(b.Caster):lower() == n) then
+                b.value = e.v
+                hit = true
+            end
+        end
+    end
+    return hit
+end
+
+function _ow_xp_receive_roll(name, rest)
+    local roll, vs = (rest or ''):match('^([^=]+)=(.+)$')
+    if not roll then return end
+    local v = {}
+    for x in vs:gmatch('[^,]+') do v[#v + 1] = tonumber(x) end
+    if #v == 0 then return end
+    _ow_xp.roll = _ow_xp.roll or {}
+    local n = name:lower()
+    _ow_xp.roll[n] = {roll = roll, v = v, t = os.clock()}
+    local hit = _ow_roll_apply(n)
+    ow_chat(207, string.format('[OW] xprof: %s %s potency %s (roller\'s own reading)%s',
+        name, roll, vs, hit and ', applied' or ''))
+end
+
+function _ow_xp_receive(msg)
+    if type(msg) ~= 'string' or msg:sub(1, 7) ~= 'OWXP|1|' then return end
+    local kind, name, rest = msg:match('^OWXP|1|(%a)|([^|]+)|?(.*)$')
+    if not kind then return end
+    local n = name:lower()
+    if n == _ow_xp_me() then return end
+    if kind == 'R' then
+        _ow_xp.sent_sig = nil          -- answer on the next tick
+        return
+    end
+    if kind == 'B' then
+        if _ow_xp.got[n] then
+            _ow_xp.got[n] = {name = name, gone = true}
+            pcall(_ow_xp_apply)
+            _ow_xp.got[n] = nil
+            ow_chat(207, '[OW] xprof: ' .. name .. ' unloaded, profile dropped')
+        end
+        return
+    end
+    if kind == 'M' then
+        _ow_xp_receive_march(name, rest)
+        return
+    end
+    if kind == 'C' then
+        _ow_xp_receive_roll(name, rest)
+        return
+    end
+    if kind ~= 'P' then return end
+    local jobs, body = rest:match('^([^|]*)|?(.*)$')
+    local pr = {name = name, jobs = jobs or '', raw = rest, t = os.time()}
+    local brd = {sb = {}, m = {}, j = {}, gj = false, eab = 0}
+    local any_brd = false
+    for k, v in (body or ''):gmatch('([%w_]+)=([%-%d%.]+)') do
+        local num = tonumber(v) or 0
+        if k == 'gj' then brd.gj = (num ~= 0); any_brd = true
+        elseif k == 'eab' then brd.eab = num; any_brd = true
+        elseif k:sub(1, 3) == 'sb_' then brd.sb[k:sub(4)] = num; any_brd = true
+        elseif k:sub(1, 2) == 'm_' then brd.m[k:sub(3)] = num; any_brd = true
+        elseif k:sub(1, 2) == 'j_' then brd.j[k:sub(3)] = num; any_brd = true
+        elseif k == 'pr' then pr.cor = num
+        elseif k == 'gm' then pr.geo = num
+        end
+    end
+    if any_brd then pr.brd = brd end
+    local old = _ow_xp.got[n]
+    _ow_xp.got[n] = pr
+    pcall(_ow_xp_apply)
+    if not old or old.raw ~= pr.raw then
+        local parts = {}
+        if pr.brd then
+            parts[#parts+1] = string.format('BRD all_songs=%d gjall=%s',
+                pr.brd.sb.all_songs or 0, tostring(pr.brd.gj))
+        end
+        if pr.cor then parts[#parts+1] = 'COR phantom_roll=' .. pr.cor end
+        if pr.geo then parts[#parts+1] = 'GEO geomancy=' .. pr.geo end
+        ow_chat(207, string.format('[OW] xprof: got %s (%s) %s', name,
+            pr.jobs, #parts > 0 and table.concat(parts, ', ')
+                                 or 'no song/roll/bubble job'))
+        if _ow_buff_debug then
+            ow_chat(207, '[OW] xprof raw ' .. name .. ': ' .. tostring(rest))
+        end
+    end
+end
+
+-- //ow xprof — what this character has sent and received.
+function _ow_xp_report()
+    local me, nm, jobs, body = _ow_xp_own()
+    ow_chat(207, string.format('[OW] xprof sent: %s (%s) %s',
+        tostring(nm), tostring(jobs), body ~= '' and tostring(body) or '-'))
+    local n = 0
+    for k, pr in pairs(_ow_xp.got) do
+        n = n + 1
+        ow_chat(207, string.format('[OW] xprof got:  %s (%s) %s  [%ds ago]',
+            pr.name, pr.jobs or '?', pr.raw or '', os.time() - (pr.t or 0)))
+        if settings then
+            local b = settings.Bards and settings.Bards[k]
+            ow_chat(207, string.format(
+                '[OW]   applied: Bards=%s Cors=%s Geos=%s',
+                b and ('all_songs=' .. tostring(b.song_bonus and b.song_bonus.all_songs))
+                  or 'nil',
+                tostring(settings.Cors and settings.Cors[k]),
+                tostring(settings.Geos and settings.Geos[k])))
+        end
+    end
+    if n == 0 then
+        ow_chat(207, '[OW] xprof got: nothing yet (no other character '
+            .. 'running OmniWatch has answered)')
+    end
+end
+
+ow_safe_register('ipc message', function(msg) _ow_xp_receive(msg) end)
+
+ow_safe_register('prerender', function()
+    local now = os.clock()
+    if now < (_ow_xp.next_t or 0) then return end
+    _ow_xp.next_t = now + 1
+    local info = windower.ffxi.get_info()
+    if not (info and info.logged_in) then return end
+    local me, nm, jobs, body = _ow_xp_own()
+    if not me then return end
+    -- The addon may have loaded at the title screen, before the
+    -- character was known: switch to this character's own config file.
+    if _ow_xp.cfg_for ~= me then
+        _ow_xp.cfg_for = me
+        if ow_reload_user_config_for_char then
+            pcall(ow_reload_user_config_for_char)
+        end
+    end
+    -- Fill in this character's setup from its own gear: once after
+    -- login (bags take a few seconds to fill) and after a job change.
+    do
+        local p = windower.ffxi.get_player()
+        local key = p and (me .. '/' .. tostring(p.main_job) .. '/'
+                           .. tostring(p.main_job_level))
+        if key and key ~= _ow_xp.auto_key and now >= (_ow_xp.auto_wait or 0) then
+            local okA, done = pcall(_ow_auto_setup, p)
+            if okA and done then
+                _ow_xp.auto_key = key
+                me, nm, jobs, body = _ow_xp_own()
+            elseif not okA then
+                _ow_xp.auto_key = key       -- don't retry a crash every second
+                ow_chat(207, '[OW] auto setup error: ' .. tostring(done))
+            end
+        end
+    end
+    if not _ow_xp.req_sent then
+        _ow_xp.req_sent = true
+        _ow_xp_send('R', nm)
+    end
+    local sig = jobs .. '|' .. body
+    if sig ~= _ow_xp.sent_sig then
+        _ow_xp.sent_sig = sig
+        _ow_xp_send('P', nm, sig)
+        ow_chat(207, string.format('[OW] xprof: sent %s (%s) %s [%d bytes]',
+            nm, jobs, body ~= '' and body or 'no song/roll/bubble job',
+            #sig + #nm + 10))
+    end
+end)
+
+ow_safe_register('login', function()
+    _ow_xp.sent_sig, _ow_xp.req_sent, _ow_xp.cfg_for = nil, false, nil
+    _ow_xp.auto_key, _ow_xp.auto_wait = nil, os.clock() + 10
+end)
+
+ow_safe_register('job change', function()
+    _ow_xp.auto_key, _ow_xp.auto_wait = nil, os.clock() + 3
+end)
+
+ow_safe_register('zone change', function()
+    _ow_xp.sent_sig = nil
+end)
+
+function _ow_xp_bye()
+    local p = windower.ffxi.get_player()
+    if p and p.name then _ow_xp_send('B', p.name) end
+end
+ow_safe_register('logout', function() _ow_xp_bye(); _ow_xp.sent_sig = nil end)
+ow_safe_register('unload', _ow_xp_bye)
 
 -- Mirrors the bard/cor refreshers for Unity Rank. GearInfo's
 -- Gear_Processing.lua reads `settings.player.rank` to scale Unity
@@ -18317,6 +19599,9 @@ local function handle_incoming_action(act)
                 _ow_bolters_value = 0
             elseif roll_value >= 1 and roll_value <= 11 then
                 _ow_bolters_value = roll_value
+                -- Who rolled it: their Phantom Roll+ is what scales it.
+                local rm = windower.ffxi.get_mob_by_id(act.actor_id or 0)
+                _ow_bolters_roller = rm and rm.name and rm.name:lower() or nil
             end
             if _ow_cast_debug then
                 ow_chat(207, string.format(
@@ -19024,6 +20309,19 @@ local function handle_incoming_action(act)
                             '[OW] %s: gear March+%d (cap %d), potency %.2f%%',
                             song_name, sp, entry.cap, potency))
                     end
+                    -- A march sung by another of your characters: use the
+                    -- potency that character's own OmniWatch worked out for
+                    -- its cast (its gear at the cast, Marcato / Soul Voice),
+                    -- exactly as it would if it were you. Sung by you: tell
+                    -- the others what you worked out.
+                    local from_xp = false
+                    if potency and act.actor_id == my_id and _ow_xp_send_march then
+                        pcall(_ow_xp_send_march, song_id, potency)
+                    elseif potency and _ow_xp_march_override then
+                        local okv, ov = pcall(_ow_xp_march_override,
+                                              act.actor_id, song_id)
+                        if okv and ov then potency, from_xp = ov, true end
+                    end
                     if buff_id and potency then
                         _ow_buff_sources[buff_id] = _ow_buff_sources[buff_id] or {}
                         local found = false
@@ -19039,7 +20337,7 @@ local function handle_incoming_action(act)
                                 -- value. The reverse (cat=4 then later
                                 -- cat=8 from a duplicate event) won't
                                 -- demote the good value.
-                                if (tonumber(s.potency) or 0) <= potency then
+                                if (tonumber(s.potency) or 0) <= potency or from_xp then
                                     s.src_name = song_name
                                     s.potency  = potency
                                     s.actor_was_self = (act.actor_id == my_id)
@@ -19421,8 +20719,14 @@ ow_safe_register('incoming chunk', function(id, data)
                 -- gearinfo/_loader.lua; this covers the one direct add_to_chat.)
                 local _saved_atc = windower.add_to_chat
                 windower.add_to_chat = function() end
+                if _ow_entrust_pre then pcall(_ow_entrust_pre, parsed) end
+                -- Before GearInfo works out this character's own roll /
+                -- bubble: read the Phantom Roll+ / Geomancy+ worn for it.
+                if _ow_measure_own_action then pcall(_ow_measure_own_action, parsed) end
                 local ok_gi, err_gi = pcall(_gi.captured_action_handler, parsed)
                 windower.add_to_chat = _saved_atc
+                if _ow_entrust_post then pcall(_ow_entrust_post, parsed) end
+                if _ow_roll_after then pcall(_ow_roll_after, parsed) end
                 if not ok_gi and _ow_buff_debug then
                     ow_chat(123, string.format(
                         '[OW] _gi action handler error: %s',
@@ -19575,7 +20879,10 @@ ow_safe_register('incoming chunk', function(id, data)
     -- unexpected packet shape on a Windower update); a thrown error
     -- here must NOT crash OmniWatch's other packet processing.
     if _gi and _gi.parse and _gi.parse.i and _gi.parse.i[id] then
+        local bd_snap = id == 0x063 and _ow_bd_snapshot and _ow_bd_snapshot() or nil
         local ok_gi, err_gi = pcall(_gi.parse.i[id], data)
+        if bd_snap and _ow_bd_carry then pcall(_ow_bd_carry, bd_snap) end
+        if id == 0x076 and _ow_marcato_clear then pcall(_ow_marcato_clear, data) end
         if not ok_gi and _ow_cast_debug then
             ow_chat(123, string.format(
                 '[OW] _gi.parse.i[0x%03X] error: %s', id, tostring(err_gi)))
@@ -23193,6 +24500,17 @@ local function ow_compute_speed(gear_speed_pct, stats_dict)
         -- value should remain 0 unless the user knows their roller's
         -- gear matches their config (rare and can be left at 0).
         local pr_plus = ow_cfg_phantom_roll_plus(stats_dict)
+        -- Rolled by another of your characters: use that COR's own
+        -- Phantom Roll+ (sent over OWXP, in settings.Cors).
+        do
+            local me_p = windower.ffxi.get_player()
+            local me_l = me_p and me_p.name and me_p.name:lower()
+            local r = _ow_bolters_roller
+            if r and r ~= me_l and settings and settings.Cors
+                    and tonumber(settings.Cors[r]) then
+                pr_plus = tonumber(settings.Cors[r])
+            end
+        end
         if pr_plus > 0 then
             frac = frac + (0.2 * pr_plus)
         end
@@ -24278,8 +25596,10 @@ function ow_compute_stats()
         -- Refresh member_table too — picks up party changes (members
         -- joining/leaving) without needing a /reload.
         if _G.update_party then pcall(_G.update_party) end
+        if _ow_fix_gi_keys then pcall(_ow_fix_gi_keys) end
         local ok_refresh, refresh_ret, refresh_msg = pcall(_gi.refresh_all,
             equip_overrides, nil, nil)
+        if ok_refresh and _ow_buff_breakdown then pcall(_ow_buff_breakdown) end
         -- Song-chain diagnostic: dumps settings.Bards[me] / Buffs_inform /
         -- _ExtraData.player.buff_details with Caster fields. Useful for
         -- debugging bard song detection issues. Gated behind _ow_buff_debug
@@ -27777,6 +29097,17 @@ ow_safe_register('prerender', function()
                 local mob_idx = (member.mob and member.mob.index) or 0
                 local pid = m_id
 
+                -- PARTY LEADER. get_party() names each party's leader by
+                -- entity id (party1_leader for yours, party2/3_leader for
+                -- the two alliance parties), so a member leads when their
+                -- id is the one named for their own group. Solo there is
+                -- no leader and nothing matches.
+                local lead_id = ({ [0] = party.party1_leader,
+                                   [1] = party.party2_leader,
+                                   [2] = party.party3_leader })[group_id]
+                local lead = (lead_id and lead_id ~= 0
+                              and m_id ~= 0 and lead_id == m_id) and 1 or 0
+
                 -- Pet: each party member's mob exposes .pet_index → the
                 -- mob array slot of their pet (0 = no pet). Resolve it
                 -- to fetch live name + hpp + tp. Pet TP isn't always
@@ -27814,7 +29145,10 @@ ow_safe_register('prerender', function()
                     -- APPENDED at the end so an older overlay reading
                     -- this wire just ignores the extra field.
                     tostring(mpp)         .. ',' ..
-                    tostring(mstat)       .. ';'
+                    tostring(mstat)       .. ',' ..
+                    -- Party leader flag, appended last for the same
+                    -- reason: an older overlay ignores it.
+                    tostring(lead)        .. ';'
             end
 
             -- Main party: p0..p5 (group 0).

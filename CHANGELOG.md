@@ -1,14 +1,42 @@
 # Changelog
 
+## [1.16.3] — 2026-11-15
+
+### Added
+
+- **30 hotbar pages.** The bars now cycle through 30 pages instead of 12, so there is room for every character you play alongside your own job pages. Your existing pages and the pad stay where they are; pages 13 to 30 start empty.
+- **Copy buttons from another profile.** The hotbar editor has a **COPY FROM** button beside **DONE EDITING** that opens a window showing the hotbar of any saved profile, or of any character's current setup, without switching to it. Step through the character, the profile and the page (the pad included, or roll the mouse wheel over the window to flip pages), and click cells to pick them. Drag a cell onto any hotbar cell, on the bars or the pad, and it is placed there and saved; if it is one of several picked, the rest come with it and keep their spacing. **COPY SELECTED** and **COPY PAGE** put them on the clipboard instead, ready for Ctrl+V or a page's **PASTE**. Blank cells are never carried over, and the profile you copy from is left as it was. Hover a cell to see its command.
+- **Make the pad any size.** **Settings ▸ HotBar ▸ Configure** has **Pad width** and **Pad height**, each from 1 to 10, in place of the six fixed shapes. Buttons keep their cells when you change either one: making the pad smaller hides the cells at the edge with their buttons still in them, and making it bigger shows them again. Your pad opens at the size it is now.
+- **The party leader is marked.** The leader of your party has a gold ring around their job square, and so does the leader of each alliance party.
+- **Reorder the party rows.** In Position mode each party row has up and down arrows at its top right. They swap who is shown in that row with the row above or below, and every row keeps its place and size; only who sits in it changes. Anyone who joins later goes to the bottom, and a trust you dismiss and call again comes back to the row you gave it. Restarting OmniWatch puts the rows back in the game's order.
+- **Each party name shows its place in the game's party list**, P0 for you through P5, so you can still tell who is where in the game after reordering the rows.
+
+### Changed
+
+- **Pasting a whole hotbar page brings its name too.** **PASTE** on a page now gives it the copied page's name as well as its buttons, whether the page came from your own bars or from **COPY FROM**.
+- **The pad has a name, and is easier to move and resize.** A title strip along the top of the pad shows its name; click the name to rename it, the same way you rename a bar's page. The rest of the strip is somewhere to take hold of the pad. Dragging the resize corner grows the pad as readily as it shrinks it, and with panels unlocked a press on that corner resizes the pad rather than firing the button beneath it.
+
+### Fixed
+
+- **The party panel stays current when you play several characters at once**, even through a busy fight — buffs, HP and MP keep updating as they change.
+- **Party rows sent to the other window stay there.** Middle-clicking a party row to send it to the other window no longer has it jump back to where it was.
+- **A stacked party list has one resize grip**, at the bottom of the list, instead of one on every row.
+- **Dragging works from the first press.** Holding a hotbar button and moving the mouse starts the drag straight away, without having to click somewhere in OmniWatch first. The same holds for anything else you drag in OmniWatch, such as panels and windows.
+
+## [1.16.2] — 2026-11-03
+
+### Added
+
+- **Auto-Reply: AFK.** A new **Auto-Reply: AFK** hotbar action answers every tell you get, so someone who tries again later knows you're still away. The reply is "Auto-Reply: " followed by your message, which you set under **Settings ▸ Chat Panel ▸ CONFIGURE ▸ Auto-reply message** (AFK unless you change it). In MobileWatch, hold the **Tell** tab to switch it on or off. The hotbar and the phone work the same switch, and the slot is lit (and the phone's tab reads **Tell (AFK)**) while it's on. It never answers another auto-reply, and it starts off each time OmniWatch starts.
+- **Inventory actions on the phone.** Holding an item in MobileWatch's inventory offers the same actions as OmniWatch's inventory panel: drop it (from your main inventory), add it to Treasury's auto-drop list, or move it to another bag.
+- **Party chat and emotes on the phone.** MobileWatch's Chat tab has a Party tab you can reply on, and emotes now show in the Say tab.
+- **Porter slips and key items on the phone.** MobileWatch's inventory now lists what's stored on each of your porter slips, and your permanent and temporary key items, under your bags.
+
 ## [1.16.1] — 2026-11-02
 
 ### Added
 
 - **Say chat on the phone.** MobileWatch's Chat tab now has /say alongside your tells, shouts, yells and linkshells, and you can reply in /say from the phone.
-
-### Fixed
-
-- **Resizing panels larger.** Dragging a panel's corner grip outward makes it bigger, with or without a transparent background.
 
 ## [1.16.0] — 2026-10-31
 

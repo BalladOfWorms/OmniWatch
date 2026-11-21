@@ -17,11 +17,11 @@ import urllib.parse
 # omniwatch_build_stamp.txt file written next to the exe. Bump this
 # string on every significant code change.
 # ──────────────────────────────────────────────────────────────────────
-OMNIWATCH_BUILD_STAMP = "v1.16.1 (2026-11-02)"
+OMNIWATCH_BUILD_STAMP = "v1.16.3 (2026-11-15)"
 # Machine-comparable version (no 'v', no suffix) used by the update check
 # to compare against the latest GitHub release tag. Keep in sync with the
 # build stamp above and CHANGELOG.md on every release.
-OMNIWATCH_VERSION = "1.16.1"
+OMNIWATCH_VERSION = "1.16.3"
 # GitHub repo the update check queries (Releases API). Update if renamed.
 OMNIWATCH_GITHUB_OWNER = "BalladOfWorms"
 OMNIWATCH_GITHUB_REPO  = "OmniWatch"
@@ -1826,6 +1826,7 @@ _DRAG_STATE_GLOBALS = (
     "_gsd_resize", "_pupatt_win_drag", "_brdset_win_drag", "_syn_drag_off",
     "_craft_drag_off", "_pool_drag_off", "_alert_drag_off", "_fisher_drag_off",
     "_tag_drag", "_ahhist_drag_off", "_magesets_win_drag", "_camzoom_drag",
+    "_hb_src_move", "_hb_src_drag",
 )
 
 
@@ -1971,6 +1972,11 @@ def _hw_sampler_loop():
 _wm_hooked = {}          # hwnd -> (window name, new proc, old proc)
 _wm_presses = _collections.deque(maxlen=32)  # [t, name, (x, y), up_xy|None]
 _wm_logged = 0
+# How long a held press may go undelivered before it is taken as dropped
+# and posted while still held. SDL hands a press over within a frame, so
+# this is several frames' grace -- and short enough that a drag started
+# from it still feels immediate.
+_WM_HOLD_GRACE = 0.10
 
 
 def _wm_install_hooks():
@@ -2037,53 +2043,118 @@ def _wm_install_hooks():
 
 def _wm_click_watch():
     """Post any press Windows gave one of our windows that SDL did not
-    deliver at that spot. Judged a frame late, so SDL has had its chance."""
-    global _wm_logged
+    deliver at that spot. Judged a frame late, so SDL has had its chance.
+
+    A press that is still HELD is posted as soon as SDL has plainly
+    dropped it (_WM_HOLD_GRACE), not when it is let go. Waiting for the
+    release turned every dropped press into a click after the fact, so a
+    drag that began with one -- moving a hotbar button, say -- never
+    started: the button only went down once it was already back up, and
+    a drag only worked after some earlier click had put SDL right. The
+    release is then posted when it comes, unless SDL delivered one.
+    """
     _wm_install_hooks()
     now = time.time()
+
+    def _sdl_had(t, cpos):
+        for _i, (_t, _sp) in enumerate(_sdl_down_seen):
+            if _t >= t - 0.03 and abs(_sp[0] - cpos[0]) <= 40 \
+                    and abs(_sp[1] - cpos[1]) <= 40:
+                del _sdl_down_seen[_i]
+                return True
+        return False
+
+    def _post(kind, pos):
+        pygame.event.post(pygame.event.Event(
+            kind, {"pos": pos, "button": 1, "ow_canvas": True}))
+
+    def _log(name, cpos, what):
+        global _wm_logged
+        if _wm_logged < 30:
+            _wm_logged += 1
+            print("[OmniWatch] %s mouse: the %s window was clicked at %s "
+                  "but SDL did not pass the press on -- %s"
+                  % (time.strftime("%H:%M:%S"), name, cpos, what))
+
+    # 1. Presses still held past the grace period: settle them now.
+    #    Entry: [t, name, (x, y), up_xy|None, t_up|None, <state>], where
+    #    state is "sdl" (SDL delivered it) or "posted" (we did).
+    for ent in list(_wm_presses):
+        if len(ent) > 5 or ent[3] is not None:
+            continue
+        t, name, xy = ent[0], ent[1], ent[2]
+        if now - t < _WM_HOLD_GRACE:
+            continue
+        if name == "desk" and not _desk_enabled():
+            ent.append("sdl")
+            continue
+        ox, oy = _viewport_origin(name)
+        cpos = (xy[0] + ox, xy[1] + oy)
+        if _sdl_had(t, cpos):
+            ent.append("sdl")
+            continue
+        globals()["_MOUSE_WINDOW"] = name
+        try:
+            _post(pygame.MOUSEBUTTONDOWN, cpos)
+            _sdl_down_times.append(time.time())
+        except Exception:
+            pass
+        ent.append("posted")
+        _log(name, cpos, "delivered the press while it is held")
+
+    # 2. Finished presses (released, or held for 3 s).
+    #
     # Judge a press only once its release has come in and been handled
     # too: SDL sometimes drops the press but delivers the release, and
     # the release is then turned back into the whole click -- deciding
-    # before then would deliver that click twice. A press with no
-    # release for 3 s (button held, or the release went elsewhere) is
-    # judged anyway.
+    # before then would deliver that click twice.
     while _wm_presses and (
             (_wm_presses[0][4] is not None and now - _wm_presses[0][4] > 0.03)
             or now - _wm_presses[0][0] > 3.0):
-        t, name, xy, up, _t_up = _wm_presses.popleft()
+        ent = _wm_presses[0]
+        state = ent[5] if len(ent) > 5 else None
+        t, name, xy, up, _t_up = ent[:5]
+        if state == "posted" and up is None:
+            # Still held, and the press is already out. Keep it until
+            # the release comes in -- or, if the release went somewhere
+            # we never hear about, until the button is plainly up.
+            if _real_mouse_down():
+                break
+            _wm_presses.popleft()
+            if _btn_seen_down.get(1):
+                _post(pygame.MOUSEBUTTONUP, _mouse_pos())
+            continue
+        _wm_presses.popleft()
         if name == "desk" and not _desk_enabled():
             continue
         ox, oy = _viewport_origin(name)
         cpos = (xy[0] + ox, xy[1] + oy)
         rpos = (up[0] + ox, up[1] + oy) if up else cpos
-        hit = None
-        for _i, (_t, _sp) in enumerate(_sdl_down_seen):
-            if _t >= t - 0.03 and abs(_sp[0] - cpos[0]) <= 40 \
-                    and abs(_sp[1] - cpos[1]) <= 40:
-                hit = _i
-                break
-        if hit is not None:
-            del _sdl_down_seen[hit]
+        if state == "sdl":
+            continue
+        if state == "posted":
+            # Our press is out; let it go unless SDL already did (its
+            # own release clears _btn_seen_down, and so does any other
+            # release that ended the gesture).
+            if _btn_seen_down.get(1):
+                try:
+                    _post(pygame.MOUSEBUTTONUP, rpos)
+                except Exception:
+                    pass
+            continue
+        if _sdl_had(t, cpos):
             continue
         globals()["_MOUSE_WINDOW"] = name
         try:
-            pygame.event.post(pygame.event.Event(
-                pygame.MOUSEBUTTONDOWN,
-                {"pos": cpos, "button": 1, "ow_canvas": True}))
-            pygame.event.post(pygame.event.Event(
-                pygame.MOUSEBUTTONUP,
-                {"pos": rpos, "button": 1, "ow_canvas": True}))
+            _post(pygame.MOUSEBUTTONDOWN, cpos)
+            _post(pygame.MOUSEBUTTONUP, rpos)
             # This press is answered; the older watchers must not post
             # it a second time.
             _sdl_down_seen.append((time.time(), cpos))
             _sdl_down_times.append(time.time())
         except Exception:
             pass
-        if _wm_logged < 30:
-            _wm_logged += 1
-            print("[OmniWatch] %s mouse: the %s window was clicked at %s "
-                  "but SDL did not pass the press on -- delivered it"
-                  % (time.strftime("%H:%M:%S"), name, cpos))
+        _log(name, cpos, "delivered it")
 
 
 def _hw_click_watch():
@@ -2409,60 +2480,6 @@ def _real_mouse_down(event=None):
     return True
 
 
-_drag_pump_last = None
-
-
-def _drag_motion_pump():
-    """Keep a drag fed when the cursor is somewhere SDL cannot hear it.
-
-    Mouse auto-capture is off (see SDL_MOUSE_AUTO_CAPTURE above), so a
-    drag only hears MOUSEMOTION while the cursor is over a DRAWN part of
-    one of our windows. Over a see-through part of the overlay, or past
-    the window's edge, Windows hands the moves to the game instead. A
-    move-drag never notices -- the cursor rides on the panel it holds --
-    but a corner grip pulled OUTWARD leaves the panel on the first pixel,
-    so the panel could be made smaller and never bigger.
-
-    Once a frame, while a drag is in flight and the cursor is not over
-    anything of ours, this posts the motion from Windows' own reading of
-    the cursor (canvas space, like every other mouse event). If the
-    button has already come up out there, the motion it posts runs into
-    the main loop's let-go check, which ends the drag through the normal
-    release path instead of leaving it following the cursor.
-    """
-    global _drag_pump_last
-    if not _drag_in_flight():
-        _drag_pump_last = None
-        return
-    if sys.platform != "win32" or os.environ.get("SDL_VIDEODRIVER") == "dummy":
-        return
-    try:
-        held = _real_mouse_down()
-        if held:
-            if _hw_window_at_cursor() is not None:
-                # Over a drawn part of our own window: SDL is delivering
-                # the motion itself, and two readings of one cursor
-                # would make the drag jitter between them.
-                _drag_pump_last = None
-                return
-            pos = _mouse_pos()
-            if pos is None or pos == _drag_pump_last:
-                return
-        else:
-            if _drag_pump_last == "released":
-                return
-            pos = _mouse_pos()
-            if pos is None:
-                return
-        _drag_pump_last = tuple(pos) if held else "released"
-        pygame.event.post(pygame.event.Event(
-            pygame.MOUSEMOTION, {"pos": tuple(pos), "rel": (0, 0),
-                                 "buttons": (1 if held else 0, 0, 0),
-                                 "ow_canvas": True}))
-    except Exception:
-        pass
-
-
 def _raise_window(name):
     """Bring one of our windows to the front WITHOUT activating it.
 
@@ -2563,6 +2580,11 @@ def _commit_panel_anchor(key, pos, pw, ph):
         globals()[named[key]] = a
     else:
         panel_anchors[key] = a
+        # A party row is read back from its slot key every frame, which
+        # would put it straight back where it was.
+        _sk = _party_slot_key(key)
+        if _sk:
+            panel_anchors[_sk] = a
 
 
 def _drag_toggle_window():
@@ -2907,7 +2929,49 @@ def _publish_py_ports():
 # the file's contents change so a //lua reload (which re-rolls lua's
 # ephemeral port) is picked up automatically.
 _cmd_port_cache = {"port": None, "raw": None}
+_named_port_cache = {}      # character -> (mtime, port)
+
+def _named_cmd_port(name):
+    """The command port the given character's lua published under its own name
+    (ow_ports_lua_<Name>.txt), or None if it hasn't, or the file is stale (that
+    character isn't running OmniWatch right now: the lua rewrites it every 15 s)."""
+    if not name:
+        return None
+    path = os.path.join(_ports_dir(), f"ow_ports_lua_{name}.txt")
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    if time.time() - mtime > 60:
+        return None
+    cached = _named_port_cache.get(name)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    port = None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f.read().splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == "cmd":
+                    port = int(parts[1])
+    except (OSError, ValueError):
+        return None
+    if port and (not cached or cached[1] != port):
+        print(f"[OmniWatch] lua command port for {name} -> {port}")
+    _named_port_cache[name] = (mtime, port)
+    return port
+
+
 def _get_cmd_port():
+    # Commands go to the character the overlay is showing. With several boxed
+    # characters each running the lua, the shared ow_ports_lua.txt only holds
+    # whichever loaded last, so use that character's own port file when it has one.
+    try:
+        named = _named_cmd_port(_mb_lock_target())
+    except Exception:          # very early in startup, before the multibox state exists
+        named = None
+    if named:
+        return named
     # Every outbound command to the lua goes to whatever this returns, and
     # UDP reports nothing when it lands on a dead port. So the one line that
     # matters -- did we ever actually discover the addon's port, or are we
@@ -9065,8 +9129,11 @@ def _hotbar_clip_load():
         if isinstance(page, dict) and isinstance(page.get("buttons"), list):
             _hotbar_page_clipboard = {
                 "name": str(page.get("name", "") or ""),
+                "page_name": str(page.get("page_name",
+                                          page.get("name", "")) or ""),
                 "buttons": [_normalize_button_entry(b)
                             for b in page["buttons"]],
+                "stride": page.get("stride"),
             }
         multi = data.get("multi")
         if isinstance(multi, dict) and multi:
@@ -9115,6 +9182,22 @@ _hotbar_tooltip = None   # (label, command, kind) of the hovered hotbar
 hotbar_editor_pos = None
 _hb_editor_rect = None      # the form's frame, for the tooltip guard
 _hb_editor_drag = None      # (dx, dy) while the title strip is held
+# "Copy from" browser: a window beside the hotbar editor showing the hotbar
+# pages of ANY saved profile, of any character, so buttons can be lifted
+# out of one setup and into this one without switching to it. Opened from
+# the editor's COPY FROM button; it only exists while the editor is open.
+_hb_src_open  = False
+_hb_src_char  = None     # whose profiles are shown; None = viewed char
+_hb_src_prof  = None     # "" = that character's current setup; None = pick
+_hb_src_page  = 0
+_hb_src_sel   = set()    # picked slots on the shown page
+_hb_src_pos   = None     # [x, y], set on first draw, then by dragging
+_hb_src_rect  = None     # frame as drawn this frame (tooltip/click guard)
+_hb_src_rects = []       # [(rect, action)] click targets
+_hb_src_move  = None     # (dx, dy) while its title strip is held
+_hb_src_drag  = None     # {"slot", "start", "active"} while a cell is held
+_hb_src_cache = {}       # path -> (mtime, pages)
+_hb_src_prof_cache = {}  # char -> (time, [profile names])
                          # button — stashed by draw_buttons_panel, drawn
                          # at end-of-frame so it sits above everything
 HOTBAR_DRAG_THRESHOLD_PX = 6
@@ -9229,6 +9312,8 @@ _LATER_PANEL_RECT_GLOBALS = (
     # cells were still answering the hover test, so their tooltips drew
     # through the form.
     "_hb_editor_rect",
+    # The editor's "copy from" browser, which draws above the editor.
+    "_hb_src_rect",
     # Windows and popovers that draw after the hotbar and keep their frame
     # in a plain global. Anything added to the draw order after
     # draw_buttons_panel belongs here (or in one of the two lists below),
@@ -9851,6 +9936,65 @@ party_panel_rects = []
 # every frame by the party draw - assigned with a slice so the draw code
 # needs no `global` declaration.
 party_name_click_rects = []
+
+# THE ORDER YOU WANT THE PARTY ROWS IN, by name. Set from the up/down
+# arrows on each row in setup mode. Deliberately NOT saved: a restart
+# puts the rows back in the game's order. The rows
+# themselves never move: a slot's position and size stay where they
+# are, and only who is drawn in which slot changes. Anyone not listed
+# (someone who just joined) goes after the people who are.
+party_row_order = []
+
+# Setup-mode reorder arrows: (rect, member name, -1 up / +1 down).
+# Rebuilt every frame by the party draw.
+party_order_arrow_rects = []
+
+
+def _party_apply_order(members):
+    """`members` sorted into the order picked with the setup arrows.
+
+    Listed names come first in their listed order; anyone else keeps
+    their place relative to each other, after them. Never drops or
+    duplicates a member."""
+    if not party_row_order or not members or len(members) < 2:
+        return list(members or [])
+    rank = {}
+    for _i, _n in enumerate(party_row_order):
+        rank.setdefault(_n, _i)
+    big = len(party_row_order)
+    order = sorted(range(len(members)),
+                   key=lambda i: rank.get(members[i].get("name"), big + i))
+    return [members[i] for i in order]
+
+
+def _party_move_row(name, delta):
+    """Swap `name` with the row above (-1) or below (+1).
+
+    Rewrites party_row_order from the rows on screen, so what you see is
+    what is remembered. Names that are not in the party right now keep
+    their remembered place at the end, so a trust you dismiss and call
+    again comes back where you put it."""
+    names = [m.get("name") for m in party_data]
+    if name not in names:
+        return False
+    i = names.index(name)
+    j = i + int(delta)
+    if j < 0 or j >= len(names):
+        return False
+    names[i], names[j] = names[j], names[i]
+    rest = [n for n in party_row_order if n and n not in names]
+    party_row_order[:] = (names + rest)[:30]
+    party_data[:] = _party_apply_order(party_data)
+    return True
+
+
+def _party_slot_key(name):
+    """The slot anchor key (`p0`..`p5`) for the party row `name` is
+    drawn in, or None when they are not in the party."""
+    for _i, _m in enumerate(party_data or []):
+        if _m.get("name") == name:
+            return "p%d" % _i
+    return None
 
 # Tray hidden-cell chip click regions:
 # Each entry: {"key": cell_key, "rect": (x,y,w,h)}. Click un-hides.
@@ -11124,6 +11268,64 @@ def _mw_stats_note(name, main, sub, stats, force=False):
         return False
 
 
+# ── Inventory actions for the phone ──────────────────────────────────────
+# Holding an item in MobileWatch's inventory offers the inventory panel's
+# own right-click actions: drop (main inventory), auto-drop (Treasury's
+# drop list) and move to another bag. The phone names bags by id.
+#   POST /mw/v1/inventory {"action": "drop"|"autodrop"|"move", "id",
+#                          "bag", "to"}
+_MW_BAG_KEYS = {0: "inventory", 1: "safe", 2: "storage", 4: "locker",
+                5: "satchel", 6: "sack", 7: "case", 8: "wardrobe",
+                9: "safe2", 10: "wardrobe2", 11: "wardrobe3",
+                12: "wardrobe4", 13: "wardrobe5", 14: "wardrobe6",
+                15: "wardrobe7", 16: "wardrobe8"}
+
+
+def _mw_inventory_extras():
+    """Porter slips and key items for the phone's inventory: what the
+    inventory panel shows, for the character it's showing."""
+    def kis(bag):
+        out = []
+        for it in inventory_state.get(bag, []) or []:
+            nm = str(it.get("name") or "").strip()
+            if nm:
+                out.append(nm)
+        return out
+    slips = []
+    for sid, sl in sorted(inventory_slip_state.items(),
+                          key=lambda kv: str(kv[1].get("name") or "")):
+        slips.append({"id": sid, "name": sl.get("name") or ("Slip %s" % sid),
+                      "items": [{"id": i.get("id", 0), "name": i.get("name", "")}
+                                for i in sl.get("items") or []]})
+    return {"character": _mb_lock_target() or player_self_name or "",
+            "slips": slips, "key_items": kis("key_items"),
+            "key_items_temp": kis("key_items_temp")}
+
+
+def _mw_inventory_act(body):
+    try:
+        act, iid = body.get("action"), int(body.get("id"))
+        if iid <= 0:
+            return "bad_request"
+        if act == "drop":
+            if int(body.get("bag", 0)) != 0:
+                return "not_inventory"
+            _inv_send_drop(iid)
+        elif act == "autodrop":
+            _inv_send_autodrop(iid)
+        elif act == "move":
+            frm = _MW_BAG_KEYS.get(int(body.get("bag")))
+            to = _MW_BAG_KEYS.get(int(body.get("to")))
+            if not frm or not to or frm == to:
+                return "bad_request"
+            _inv_send_move(iid, frm, to)
+        else:
+            return "bad_request"
+    except (TypeError, ValueError):
+        return "bad_request"
+    return None
+
+
 # ── Marketplace for the phone ────────────────────────────────────────────
 # What the phone's Marketplace tab shows and does: your auction house sale
 # slots and your bazaar, listing on either, and taking things back. It is
@@ -11562,11 +11764,17 @@ def _mw_trust_sync(phone_names):
 #                                 plus the chat blacklist; with wait=N it
 #                                 holds up to N s for a new line first
 #   POST /mw/v1/chat/send      {"ch", "to", "text"} -> says it in game
+#   POST /mw/v1/chat/afk       {"on": bool} -> Auto-Reply: AFK on or off
+#                                 (the chat GET carries "afk" too)
 #   POST /mw/v1/blocked        {"add": [...], "remove": [...]} -> the chat
 #                                 panel's blacklist, shared with the phone
 #   POST /mw/v1/quests         {"ticks": {section: [names]}} -> merges the
 #                                 phone's quest ticks into the checklist and
 #                                 returns the checklist's, by section
+#   GET /mw/v1/inventory       porter slips and key items (permanent, temporary)
+#   POST /mw/v1/inventory      {"action": "drop"|"autodrop"|"move", "id",
+#                                 "bag", "to"} -> the inventory panel's
+#                                 item actions
 #   GET/POST /mw/v1/market     your AH sale slots and bazaar, and listing,
 #                                 cancelling and pricing them (see
 #                                 _mw_market_state)
@@ -11746,9 +11954,15 @@ def _mobilelink_make_handler():
                                                timeout=wait)
                 out = _mw_chat_since(since)
                 out["blocked"] = sorted(_chat_blacklist or ())
+                out["afk"] = bool(setting("afk_reply"))
                 return self._json(200, out)
             if path == "/mw/v1/jobsync":
                 return self._json(200, _mw_js_status())
+            if path == "/mw/v1/inventory":
+                val, err = _mw_on_main(_mw_inventory_extras)
+                if err or val is None:
+                    return self._json(503, {"error": err or "busy"})
+                return self._json(200, val)
             if path == "/mw/v1/market":
                 val, err = _mw_on_main(_mw_market_state)
                 if err or val is None:
@@ -11774,9 +11988,10 @@ def _mobilelink_make_handler():
 
         def do_POST(self):
             path = urllib.parse.urlsplit(self.path).path.rstrip("/")
-            if path not in ("/mw/v1/chat/send", "/mw/v1/blocked", "/mw/v1/quests",
+            if path not in ("/mw/v1/chat/send", "/mw/v1/chat/afk",
+                            "/mw/v1/blocked", "/mw/v1/quests",
                             "/mw/v1/checklist", "/mw/v1/jobsync",
-                            "/mw/v1/market"):
+                            "/mw/v1/market", "/mw/v1/inventory"):
                 return self._json(404, {"error": "not_found"})
             if not _mobilelink_code_ok(self.headers.get("X-OmniWatch-Code")):
                 time.sleep(0.5)
@@ -11789,6 +12004,21 @@ def _mobilelink_make_handler():
                 body = json.loads(self.rfile.read(n).decode("utf-8"))
             except Exception:
                 return self._json(400, {"error": "bad_request"})
+            if path == "/mw/v1/chat/afk":
+                on = body.get("on") if isinstance(body, dict) else None
+                if not isinstance(on, bool):
+                    return self._json(400, {"error": "bad_request"})
+                if on != bool(setting("afk_reply")):
+                    _val, err = _mw_on_main(_hb_toggle_afk)
+                    if err:
+                        return self._json(503, {"error": err})
+                return self._json(200, {"afk": bool(setting("afk_reply"))})
+            if path == "/mw/v1/inventory":
+                err = (_mw_inventory_act(body) if isinstance(body, dict)
+                       else "bad_request")
+                if err:
+                    return self._json(400, {"error": err})
+                return self._json(200, {"ok": True})
             if path == "/mw/v1/market":
                 if not isinstance(body, dict):
                     return self._json(400, {"error": "bad_request"})
@@ -11870,13 +12100,15 @@ def _mobilelink_start():
 
 
 # ── Phone chat (MobileWatch Chat tab) ─────────────────────────────────────
-# Tell, shout, say, yell and both linkshells, kept from the moment OmniWatch
+# Tell, shout, say (with emotes), party, yell and both linkshells, kept from the moment OmniWatch
 # starts, for the phone to read. Classified with the panel's own
 # _chat_classify_event, so a line lands on the same channel here as it does
 # in the chat panel. Gone when OmniWatch closes, which is the point: chat
 # from a game that isn't running means nothing.
+# Emotes ride along with /say: they're what people nearby see you do.
 _MW_CHAT_CHANNELS = {"chat_tell": "tell", "chat_shout": "shout",
-                     "chat_say": "say", "chat_yell": "yell",
+                     "chat_say": "say", "chat_emote": "say",
+                     "chat_party": "party", "chat_yell": "yell",
                      "chat_ls1": "ls1", "chat_ls2": "ls2"}
 _mw_chat_lines = _collections.deque(maxlen=1500)
 _mw_chat_seq = 0
@@ -11906,6 +12138,7 @@ def _mw_chat_capture(ev):
             m = _MW_TELL_IN_R.match(text)
             if m:
                 line["from"] = m.group(1)
+                _afk_on_tell(m.group(1), text[m.end():])
             else:
                 m = _MW_TELL_OUT_R.match(text)
                 if m:
@@ -11986,6 +12219,58 @@ def _dc_alert(name):
         _mw_chat_cond.notify_all()
 
 
+# ── Auto-Reply: AFK ───────────────────────────────────────────────────────
+# One switch (setting afk_reply), flipped from a hotbar slot or from the
+# phone's Tell tab. While it's on, every tell that comes in is answered in
+# game with "Auto-Reply: <message>", so someone who tries again later learns
+# you are still away. The message is afk_reply_text, set in the Chat Panel
+# Configure box (blank: "AFK"); the "Auto-Reply: " in front is always sent. Two guards keep it from talking to another auto-reply
+# forever: a tell that is itself an auto-reply gets none back, and one
+# sender gets at most one reply in _AFK_MIN_GAP_S.
+_AFK_PREFIX = "Auto-Reply: "
+_AFK_DEFAULT = "AFK"
+_AFK_MIN_GAP_S = 5.0
+_AFK_SKIP_R = re.compile(r"^\W*(auto[\s-]?reply|auto[\s-]?response|\(?afk\)?\s*[:\-])",
+                         re.IGNORECASE)
+_afk_last = {}              # lowercase name -> time of our last reply
+_AFK_OWN_PREFIX_R = re.compile(r"^\s*auto[\s-]?reply\s*[:\-]?\s*", re.IGNORECASE)
+
+
+def _afk_text():
+    """The whole reply: "Auto-Reply: " and your message, made safe for the
+    chat line. Typing "Auto-Reply:" into the message yourself doesn't
+    double it."""
+    msg = _AFK_OWN_PREFIX_R.sub("", str(setting("afk_reply_text") or ""))
+    msg = _mw_chat_clean(msg)[:_MW_CHAT_MAX - len(_AFK_PREFIX)]
+    return _AFK_PREFIX + (msg or _AFK_DEFAULT)
+
+
+def _afk_on_tell(sender, body):
+    """An incoming tell from sender, while the phone feed is reading chat."""
+    try:
+        if not setting("afk_reply") or not sender:
+            return
+        if _AFK_SKIP_R.match(body or ""):
+            return
+        key, now = sender.lower(), time.time()
+        if now - _afk_last.get(key, 0.0) < _AFK_MIN_GAP_S:
+            return
+        _afk_last[key] = now
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.sendto(("input /t %s %s" % (sender, _afk_text())).encode("utf-8"),
+                 _cmd_addr())
+        s.close()
+    except Exception as e:
+        print(f"[OmniWatch] auto-reply failed: {e!r}")
+
+
+def _hb_toggle_afk():
+    """Auto-Reply on or off -- the hotbar slot and the phone flip the same
+    setting, so each shows what the other did."""
+    set_setting("afk_reply", not bool(setting("afk_reply")))
+    _afk_last.clear()
+
+
 def _mw_chat_since(since):
     with _mw_chat_lock:
         lines = [l for l in _mw_chat_lines if l["seq"] > since]
@@ -11993,6 +12278,7 @@ def _mw_chat_since(since):
 
 
 _MW_CHAT_SEND = {"tell": "/t ", "reply": "/r ", "shout": "/sh ", "say": "/s ",
+                 "party": "/p ",
                  "yell": "/yell ", "ls1": "/l ", "ls2": "/l2 "}
 _MW_CHAT_MAX = 150
 
@@ -13324,18 +13610,24 @@ def _hotbar_parse_color(s):
 def _empty_page(name="Page"):
     return {"name": name, "buttons": [_empty_button() for _ in range(HOTBAR_SLOTS_PER_PAGE)]}
 
-# Total number of hotbar pages. Pages beyond what a user has configured
-# show as empty slots until they're populated. Set conservatively; can
-# be increased later without breaking existing configs.
-HOTBAR_PAGE_COUNT = 12
+# Total number of hotbar pages the bars cycle through. Pages beyond what a
+# user has configured show as empty slots until they're populated.
+#
+# 30, up from 12, so a multiboxer can keep every character's job pages to
+# hand. The pad page sits ONE PAST the last user page, so changing this
+# moves it -- which is why the buttons file records the count it was
+# written with ("user_pages") and _hotbar_arrange_pages reads the pad from
+# that position. A file with no marker came from a 12-page build.
+HOTBAR_PAGE_COUNT = 30
+_HOTBAR_LEGACY_USER_PAGES = 12
 
 # ── The pad ────────────────────────────────────────────────────────
 # A single compact hotbar, separate from the 1-3 long bars. It exists to be
 # the thing that never moves: page-jump buttons into the bars, plus the
 # built-in actions that should always be reachable.
 #
-# It is modelled as a RESERVED PAGE (index 12, one past the 12 the user can
-# cycle) shown by a RESERVED PANEL INDEX. That buys the slot editor, the
+# It is modelled as a RESERVED PAGE (index HOTBAR_PAGE_COUNT, one past the
+# pages the user can cycle) shown by a RESERVED PANEL INDEX. That buys the slot editor, the
 # icon picker, every button kind, copy/paste and drag-swap for nothing --
 # the pad genuinely is a page on a panel, it just isn't one you can reach
 # with the < > arrows. `_n_user_pages()` is what keeps it private: every
@@ -13345,15 +13637,22 @@ HOTBAR_PAD_PANEL = 90    # well clear of 0..9 (hotbar_visible_count maxes at 10)
 HOTBAR_PAD_COLS  = 6     # fallback only -- see _pad_shape()
 HOTBAR_PAD_ROWS  = 4     # fallback only -- see _pad_shape()
 HOTBAR_PAD_NAME  = "Pad"
+# The pad's resize corner. Same size as every other panel's; what makes it
+# usable is that it beats the cell beneath it whenever the panels are
+# unlocked (_pad_grip_hit), and that the resize starts from the PAD'S own
+# scale -- see the hit-test.
+HOTBAR_PAD_GRIP  = RESIZE_GRIP
 
-# The pad stores its buttons in an ordinary page, so cols * rows must stay
-# at or under HOTBAR_SLOTS_PER_PAGE. The 40-slot shapes are why that
-# ceiling is 40 rather than the 30 the bars themselves need.
-#
-# Switching shape RE-FLOWS the buttons: a slot's identity is its position
-# in the row (idx = row * cols + col), so the same page laid out at a
-# different width puts different buttons in different cells. That is
-# existing behaviour for 6x4 <-> 4x6 and applies to the new shapes too.
+
+def _pad_strip_h(s):
+    """Height of the pad's title strip at effective scale `s` -- the same
+    as a bar's header, so its name is drawn at the same size."""
+    return max(14, int(BTN_HDR_H * s))
+
+# The shapes the pad could be set to before its width and height became
+# free settings. Only read now to work out what size an older settings
+# file had the pad, and how its buttons were laid out (packed at that
+# shape's width) -- see _pad_shape and _pad_page_to_stride.
 HOTBAR_PAD_SHAPES = {
     "6x4": (6, 4),      # wide: sits under a bar without adding much height
     "4x6": (4, 6),      # tall: sits beside the bars in a column
@@ -13364,31 +13663,166 @@ HOTBAR_PAD_SHAPES = {
 }
 
 
+# The pad's size is free: any width and height up to HOTBAR_PAD_MAX, set
+# in Configure HotBar as "Pad width" / "Pad height".
+#
+# Its buttons are stored on a FIXED STRIDE of HOTBAR_PAD_MAX per row
+# (slot = row * 10 + col) rather than packed at the current width. Packed,
+# every change of width re-flowed the buttons into different cells; on a
+# fixed stride, widening reveals more of each row and narrowing hides the
+# end of it, and nothing moves. The bars keep their own rule (packed at
+# _btn_cols()) -- _stride_for_page is the one place that says which.
+HOTBAR_PAD_MAX    = 10
+HOTBAR_PAD_STRIDE = HOTBAR_PAD_MAX
+HOTBAR_PAD_SLOTS  = HOTBAR_PAD_STRIDE * HOTBAR_PAD_MAX
+
+
+def _pad_old_shape():
+    """(cols, rows) of the pre-1.16.3 shape setting, or the fallback."""
+    return HOTBAR_PAD_SHAPES.get(str(settings.get("hotbar_pad_shape") or ""),
+                                 (HOTBAR_PAD_COLS, HOTBAR_PAD_ROWS))
+
+
 def _pad_shape():
-    """(cols, rows) for the pad, from the user's shape setting."""
+    """(cols, rows) for the pad, from Pad width / Pad height.
+
+    A settings file from before those existed has only the old shape
+    choice; its width and height are taken from that, once, so the pad
+    comes up the size it was.
+    """
     try:
-        return HOTBAR_PAD_SHAPES[str(setting("hotbar_pad_shape"))]
+        if ("hotbar_pad_cols" not in settings
+                or "hotbar_pad_rows" not in settings):
+            _oc, _or = _pad_old_shape()
+            settings.setdefault("hotbar_pad_cols", _oc)
+            settings.setdefault("hotbar_pad_rows", _or)
+        c = int(settings.get("hotbar_pad_cols"))
+        r = int(settings.get("hotbar_pad_rows"))
     except Exception:
-        return (HOTBAR_PAD_COLS, HOTBAR_PAD_ROWS)
+        c, r = HOTBAR_PAD_COLS, HOTBAR_PAD_ROWS
+    return (max(1, min(HOTBAR_PAD_MAX, c)),
+            max(1, min(HOTBAR_PAD_MAX, r)))
+
+
+def _hotbar_restride(buttons, src_stride, dst_stride):
+    """Re-lay a page's button list from one row stride to another, so a
+    bar page pasted onto the pad (or the pad onto a bar) keeps each row a
+    row. Same stride, or an unknown source stride (a page copied before
+    strides were recorded), comes back unchanged. A button whose column
+    has no place on the new stride goes into the first empty slot after
+    the rest rather than being dropped."""
+    try:
+        ss, ds = int(src_stride), int(dst_stride)
+    except (TypeError, ValueError):
+        return buttons
+    if ss <= 0 or ds <= 0 or ss == ds:
+        return buttons
+
+    def _blank(b):
+        return not (isinstance(b, dict) and (b.get("kind", "none") != "none"
+                                             or b.get("label")
+                                             or b.get("icon")))
+    out, spill = {}, []
+    for i, b in enumerate(buttons):
+        if _blank(b):
+            continue
+        r, c = divmod(i, ss)
+        if c < ds:
+            out[r * ds + c] = b
+        else:
+            spill.append(b)
+    n = max([len(buttons)] + [k + 1 for k in out])
+    res = [_empty_button() for _ in range(n)]
+    for k, b in out.items():
+        res[k] = b
+    for b in spill:
+        for j in range(len(res)):
+            if _blank(res[j]):
+                res[j] = b
+                break
+        else:
+            res.append(b)
+    return res
+
+
+def _stride_for_page(page_idx):
+    """Slots per stored row: the pad's fixed stride, or a bar's width."""
+    return HOTBAR_PAD_STRIDE if page_idx == HOTBAR_PAD_PAGE else _btn_cols()
+
+
+def _slot_visible(page_idx, slot):
+    """Is this slot index one of the cells the page currently shows?"""
+    st = _stride_for_page(page_idx)
+    r, c = divmod(int(slot), st)
+    return (0 <= r < _rows_for_page(page_idx)
+            and 0 <= c < _cols_for_page(page_idx))
+
+
+def _pad_page_to_stride(pg, old_cols):
+    """Lay a pad page stored the old way (packed at its shape's width)
+    out on the fixed stride, each button in the cell it was shown in.
+    Returns True if the page changed."""
+    if not isinstance(pg, dict) or pg.get("stride") == HOTBAR_PAD_STRIDE:
+        return False
+    old = pg.get("buttons") or []
+    oc = max(1, int(old_cols))
+    new = [_empty_button() for _ in range(HOTBAR_PAD_SLOTS)]
+    spill = []
+    for i, b in enumerate(old):
+        r, c = divmod(i, oc)
+        if r < HOTBAR_PAD_MAX and c < HOTBAR_PAD_MAX:
+            new[r * HOTBAR_PAD_STRIDE + c] = b
+        elif isinstance(b, dict) and (b.get("kind", "none") != "none"
+                                      or b.get("label") or b.get("icon")):
+            spill.append(b)
+    # Anything that has no cell on the new grid goes into the first free
+    # ones rather than being lost.
+    for b in spill:
+        for j in range(HOTBAR_PAD_SLOTS):
+            if new[j].get("kind") == "none" and not new[j].get("label") \
+                    and not new[j].get("icon"):
+                new[j] = b
+                break
+    pg["buttons"] = new
+    pg["stride"] = HOTBAR_PAD_STRIDE
+    return True
 
 
 def _n_user_pages():
     """How many pages the bars can cycle through -- the pad page excluded."""
     return max(1, min(HOTBAR_PAGE_COUNT, len(hotbar_pages)))
-HOTBAR_SLOTS_PER_PAGE = 40   # the CEILING, not the live page size — see
-                             # _hotbar_page_slots(). The bars themselves
-                             # need 30 (15 cols x 2 rows); the pad's 8x5
-                             # and 5x8 shapes need 40, and every page is
-                             # allocated to the same ceiling. Raising it is
-                             # non-destructive: a page simply carries spare
-                             # buttons that nothing draws.
+HOTBAR_SLOTS_PER_PAGE = 40   # the CEILING for a bar page, not the live
+                             # page size. The bars need 30 (15 cols x 2
+                             # rows); 40 is what the pad used to need and
+                             # every page is still padded to it. The pad
+                             # page itself is padded to HOTBAR_PAD_SLOTS.
+                             # Raising it is non-destructive: a page
+                             # simply carries spare buttons nothing draws.
                              # Kept as a constant because it's the width
                              # every page is padded to on disk, so the
                              # stored shape doesn't churn every time the
                              # user drags the cells-per-row setting.
 
 
-HOTBAR_PAD_PAGE = HOTBAR_PAGE_COUNT   # the reserved 13th page
+HOTBAR_PAD_PAGE = HOTBAR_PAGE_COUNT   # the reserved page after the last user page
+
+
+def _pad_grip_hit(mx, my):
+    """True when (mx, my) is on the pad's resize corner.
+
+    Asked by the button-press path so that, with the panels unlocked, a
+    press there resizes the pad instead of firing the button the corner
+    sits on. Locked panels never get here -- they don't resize at all.
+    """
+    try:
+        _p = buttons_panel_positions.get(HOTBAR_PAD_PANEL)
+        if not _p or not setting("show_hotbar_pad"):
+            return False
+        _w, _h = buttons_panel_size(hotbar_pad_scale, HOTBAR_PAD_PANEL)
+        return (_p[0] + _w - HOTBAR_PAD_GRIP <= mx < _p[0] + _w
+                and _p[1] + _h - HOTBAR_PAD_GRIP <= my < _p[1] + _h)
+    except Exception:
+        return False
 
 
 def _btn_cols():
@@ -13430,11 +13864,24 @@ def _hotbar_ensure_slots():
     in the list, they're simply not drawn, and they come back intact when
     the panel is widened again.
     """
-    for pg in hotbar_pages:
+    # The pad, once per load: from the old packed layout onto the fixed
+    # stride. Done here, at draw time, rather than in load_buttons_config,
+    # because it needs the OLD shape setting and the buttons file is read
+    # before the settings file at startup.
+    if 0 <= HOTBAR_PAD_PAGE < len(hotbar_pages):
+        try:
+            if _pad_page_to_stride(hotbar_pages[HOTBAR_PAD_PAGE],
+                                   _pad_old_shape()[0]):
+                save_buttons_config()
+        except Exception as e:
+            print(f"[OmniWatch] pad layout update failed: {e!r}")
+    for _i, pg in enumerate(hotbar_pages):
         btns = pg.get("buttons")
         if not isinstance(btns, list):
             pg["buttons"] = btns = []
-        while len(btns) < HOTBAR_SLOTS_PER_PAGE:
+        _cap = (HOTBAR_PAD_SLOTS if _i == HOTBAR_PAD_PAGE
+                else HOTBAR_SLOTS_PER_PAGE)
+        while len(btns) < _cap:
             btns.append(_empty_button())
 
 # Active page state. Initialized in load_buttons_config() once pages have
@@ -13443,6 +13890,84 @@ def _hotbar_ensure_slots():
 # propagate back to hotbar_pages[hotbar_current_page]["buttons"]).
 hotbar_pages        = []   # list of {name, buttons[HOTBAR_SLOTS_PER_PAGE]}
 hotbar_current_page = 0    # 0..HOTBAR_PAGE_COUNT-1
+
+def _hotbar_arrange_pages(pages, saved_user_n=None):
+    """Lay a file's pages out as HOTBAR_PAGE_COUNT user pages + the pad.
+
+    `saved_user_n` is how many user pages the file was WRITTEN with -- its
+    "user_pages" marker, absent (None) in every file from before the page
+    count could change, all of which had 12. The pad is the page straight
+    after those, so reading it from a fixed index would hand a 12-page
+    file's pad to user page 13 and leave the real pad empty.
+
+    Pure: returns a new list, touches no globals, so the profile browser
+    can run another profile's file through it.
+    """
+    try:
+        n = int(saved_user_n)
+    except (TypeError, ValueError):
+        n = _HOTBAR_LEGACY_USER_PAGES
+    if n < 1:
+        n = _HOTBAR_LEGACY_USER_PAGES
+    pages = list(pages or [])
+    user = pages[:n]
+    pad = pages[n] if len(pages) > n else None
+    # A file from a build with MORE pages than this one keeps its first
+    # HOTBAR_PAGE_COUNT; nothing past that has anywhere to go.
+    user = user[:HOTBAR_PAGE_COUNT]
+    while len(user) < HOTBAR_PAGE_COUNT:
+        user.append(_empty_page(f"Page {len(user) + 1}"))
+    if pad is None:
+        pad = _empty_page(HOTBAR_PAD_NAME)
+        pad["stride"] = HOTBAR_PAD_STRIDE
+    while len(pad["buttons"]) < HOTBAR_PAD_SLOTS and \
+            pad.get("stride") == HOTBAR_PAD_STRIDE:
+        pad["buttons"].append(_empty_button())
+    # The pad's name is shown in its title strip and can be renamed. A
+    # blank or placeholder name ("Page", "Page 13" from an older build)
+    # reads as "Pad".
+    _pn = str(pad.get("name", "") or "").strip()
+    if not _pn or re.fullmatch(r"Page( \d+)?", _pn):
+        pad["name"] = HOTBAR_PAD_NAME
+    return user + [pad]
+
+
+def _hotbar_pages_from_raw(raw):
+    """A parsed buttons file -> the full arranged page list.
+
+    Handles the paged format and the legacy single-page one. Every button
+    goes through _normalize_button_entry and every page is padded to the
+    slot ceiling -- NO slicing: truncating to the visible width would
+    delete buttons the moment the panel was narrowed.
+    """
+    pages = []
+    saved_user_n = None
+    if isinstance(raw, dict) and isinstance(raw.get("pages"), list):
+        saved_user_n = raw.get("user_pages")
+        for p in raw["pages"]:
+            if not isinstance(p, dict):
+                continue
+            entries = p.get("buttons", [])
+            if not isinstance(entries, list):
+                entries = []
+            normalized = [_normalize_button_entry(e) for e in entries]
+            while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
+                normalized.append(_empty_button())
+            _pd = {"name": str(p.get("name", "") or "Page"),
+                   "buttons": normalized}
+            # The pad's layout marker (see _pad_page_to_stride).
+            if p.get("stride"):
+                _pd["stride"] = p.get("stride")
+            pages.append(_pd)
+    elif isinstance(raw, dict) and isinstance(raw.get("buttons"), list):
+        # Legacy single-page format: page 1 carries the buttons.
+        normalized = [_normalize_button_entry(e)
+                      for e in raw.get("buttons", [])]
+        while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
+            normalized.append(_empty_button())
+        pages.append({"name": "Page 1", "buttons": normalized})
+    return _hotbar_arrange_pages(pages, saved_user_n)
+
 
 def load_buttons_config():
     """Load (or write the default) buttons config. Returns the active
@@ -13472,47 +13997,11 @@ def load_buttons_config():
               f"Using defaults.")
         raw = _BUTTONS_DEFAULT
 
-    pages = []
-    if isinstance(raw, dict) and isinstance(raw.get("pages"), list):
-        # New paged format. Each entry is {name, buttons:[N]};
-        # shorter lists (e.g. the old 20-slot format) pad with empties.
-        for p in raw["pages"]:
-            if not isinstance(p, dict):
-                continue
-            entries = p.get("buttons", [])
-            if not isinstance(entries, list):
-                entries = []
-            # NO slicing here. Truncating to the page size would delete
-            # buttons the moment the user narrowed the panel, and they'd
-            # be gone for good on the next save. Keep everything, pad up
-            # to the ceiling.
-            normalized = [_normalize_button_entry(e) for e in entries]
-            while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
-                normalized.append(_empty_button())
-            pages.append({
-                "name": str(p.get("name", "") or "Page"),
-                "buttons": normalized,
-            })
-    elif isinstance(raw, dict) and isinstance(raw.get("buttons"), list):
-        # Legacy single-page format. Migrate: page 1 carries the existing
-        # buttons; pages 2..N are empty.
-        entries = raw.get("buttons", [])
-        normalized = [_normalize_button_entry(e) for e in entries]
-        while len(normalized) < HOTBAR_SLOTS_PER_PAGE:
-            normalized.append(_empty_button())
-        pages.append({"name": "Page 1", "buttons": normalized})
+    if (isinstance(raw, dict) and not isinstance(raw.get("pages"), list)
+            and isinstance(raw.get("buttons"), list)):
         print("[OmniWatch] Migrated legacy single-page buttons config "
               "to paged format")
-
-    # Pad up to HOTBAR_PAGE_COUNT + 1: the 12 the user cycles, plus the
-    # reserved pad page on the end.
-    while len(pages) < HOTBAR_PAGE_COUNT + 1:
-        pages.append(_empty_page(f"Page {len(pages) + 1}"))
-    # Truncate if user somehow has more (shouldn't happen normally).
-    pages = pages[:HOTBAR_PAGE_COUNT + 1]
-    # The pad page's name is not user-editable -- it is never displayed,
-    # and a config written by an older build will have called it "Page 13".
-    pages[HOTBAR_PAD_PAGE]["name"] = HOTBAR_PAD_NAME
+    pages = _hotbar_pages_from_raw(raw)
 
     hotbar_pages = pages
     if hotbar_current_page < 0 or hotbar_current_page >= len(hotbar_pages):
@@ -13548,10 +14037,12 @@ def save_buttons_config():
     try:
         envelope = {
             "_README": [
-                "OmniWatch hotbar config (paged, 14x2 = 28 buttons per page).",
+                "OmniWatch hotbar config (paged).",
                 "",
                 "Top-level shape:",
-                "  pages: list of {name, buttons[20]} dicts",
+                "  user_pages: how many pages the bars cycle through",
+                "  pages: list of {name, buttons[]} dicts -- the user",
+                "         pages first, then one more: the pad",
                 "",
                 "Each button entry:",
                 "  label   : text shown on the button (short, 1-3 words)",
@@ -13563,6 +14054,10 @@ def save_buttons_config():
                 "Settings -> HotBar -> Edit hotbar). You can also hand-edit",
                 "this file; reload via //ow buttons reload.",
             ],
+            # Where the pad is: it is the page after this many. Read
+            # back by _hotbar_arrange_pages, so the page count can change
+            # again without the pad landing on a user page.
+            "user_pages": HOTBAR_PAGE_COUNT,
             "pages": hotbar_pages,
         }
         _backup_before_write(BUTTONS_FILE)
@@ -13678,6 +14173,7 @@ HOTBAR_ACTIONS = [
     ("fish",       "Fishing (start/stop)", "_hb_toggle_fishing"),
     ("craft",      "Crafting (start/stop)", "_hb_toggle_crafting"),
     ("synergy",    "Synergy panel",      "_hb_toggle_synergy"),
+    ("afkreply",   "Auto-Reply: AFK",    "_hb_toggle_afk"),
 ]
 HOTBAR_ACTION_KEYS   = [a[0] for a in HOTBAR_ACTIONS]
 HOTBAR_ACTION_LABELS = {a[0]: a[1] for a in HOTBAR_ACTIONS}
@@ -13762,6 +14258,8 @@ def _hb_action_is_on(key):
                     and not craft_state.get("paused"))
         if key == "synergy":
             return bool(craftsyn_open and craftsyn_tab == "synergy")
+        if key == "afkreply":
+            return bool(setting("afk_reply"))
     except Exception:
         return False
     return False
@@ -13848,6 +14346,8 @@ def draw_hotbar_action_note(surface):
 # Gold, so the hint reads as an affordance rather than as data — every
 # other colour on the party row means something (HP band, TP, claim).
 COL_TARGET_HINT = (255, 205, 70)
+# The ring round the party leader's job plate.
+COL_PARTY_LEADER = (255, 200, 60)
 
 
 def draw_party_target_hint(surface):
@@ -13960,7 +14460,9 @@ def _hotbar_jump_page(spec):
         print(f"[OmniWatch] page button: hotbar {p_txt} doesn't exist")
         return
     page_idx = None
-    for i, pg in enumerate(hotbar_pages):
+    # User pages only: the pad never pages, so a button naming it would
+    # only ever be refused as out of range.
+    for i, pg in enumerate(hotbar_pages[:_n_user_pages()]):
         if str(pg.get("name", "")).strip().lower() == pg_txt.lower():
             page_idx = i
             break
@@ -15379,6 +15881,19 @@ SETTINGS_SCHEMA = [
                    "from smd111's GearSwap SkillUp.",
     },
     {
+        "key":     "afk_reply",
+        "label":   "(internal) Auto-Reply: AFK",
+        "kind":    "bool",
+        "default": False,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "Answer incoming tells with \"Auto-Reply: <message>\".",
+    },
+    {"key": "afk_reply_text", "label": "Auto-reply message", "kind": "text",
+     "default": "AFK", "placeholder": "AFK",
+     "section": "_Hidden", "applies": "python",
+     "help": "What Auto-Reply says after \"Auto-Reply: \"."},
+    {
         "key":     "autora_enabled",
         "label":   "(internal) AutoRA on/off",
         "kind":    "bool",
@@ -15520,6 +16035,36 @@ SETTINGS_SCHEMA = [
                    "they never vanish while this says they are on.",
     },
     {
+        "key":     "hotbar_pad_cols",
+        "label":   "(internal) hotbar pad width",
+        "kind":    "int",
+        "default": 6,
+        "min":     1,
+        "max":     10,
+        "step":    1,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "How many cells wide the pad is, 1 to 10. Narrowing "
+                   "hides the end of each row and widening shows it "
+                   "again -- buttons keep their cells either way.",
+    },
+    {
+        "key":     "hotbar_pad_rows",
+        "label":   "(internal) hotbar pad height",
+        "kind":    "int",
+        "default": 4,
+        "min":     1,
+        "max":     10,
+        "step":    1,
+        "section": "_Hidden",
+        "applies": "python",
+        "help":    "How many cells tall the pad is, 1 to 10. Rows you "
+                   "take away keep their buttons for when you add them "
+                   "back.",
+    },
+    {
+        # Superseded by Pad width / Pad height. Kept so an older settings
+        # file can say what size the pad was (see _pad_shape).
         "key":     "hotbar_pad_shape",
         "label":   "(internal) hotbar pad shape",
         "kind":    "enum",
@@ -17136,9 +17681,7 @@ def _apply_transparent_background(on, name="main"):
 
         # Build the COLORREF for COL_BG. Windows expects 0x00BBGGRR
         # (note the byte order is reversed from RGB).
-        # globals().get: the layout's window restore runs this before
-        # the palette (COL_BG) is defined further down the file.
-        r, g, b = globals().get("COL_BG", (6, 7, 12))[:3]
+        r, g, b = COL_BG[0], COL_BG[1], COL_BG[2]
         colorkey = (b << 16) | (g << 8) | r
 
         user32 = ctypes.windll.user32
@@ -32367,6 +32910,8 @@ settings = load_settings()
 # force it off on load so it can't start firing ranged attacks on login.
 # The Developer toggle re-arms it live (sending SETTING|autora_enabled).
 settings["autora_enabled"] = False
+# Auto-Reply starts off each launch: you're at the PC when you start it.
+settings["afk_reply"] = False
 # Fisher control toggle starts off each launch (it just drives the fisher
 # addon; the box re-fires fisher start when you flip it on).
 settings["fisher_enabled"] = False
@@ -33242,7 +33787,8 @@ def draw_ally_panel(surface, x, y, member, scale=1.0,
     _plate = d["job_plate"]
     draw_job_plate(surface, x + d["plate_x_off"],
                    y + (rh - _plate) // 2, _plate,
-                   _pj_main, d["f_label"], sub_job=_pj_sub)
+                   _pj_main, d["f_label"], sub_job=_pj_sub,
+                   leader=bool(member.get("leader")))
 
     bx = x + d["bars_x_off"]
     name_surf = d["f_name"].render(member.get("name", "?"), True, COL_NAME)
@@ -33802,8 +34348,11 @@ def draw_accent_stripe(surface, x, y, h, color, w=2):
                      (x + 1, y + 3, w, h - 6))
 
 
-def draw_resize_grip(surface, x, y):
+def draw_resize_grip(surface, x, y, g=None):
     """Draw a small diagonal-stripe resize handle at (x, y) bottom-right corner.
+
+    `g` overrides the size; the pad passes its larger HOTBAR_PAD_GRIP so
+    what is drawn matches what the hit-test answers to.
 
     Suppressed outside of setup mode: the grip is a UI affordance for
     resizing panels, but resizing is gated to setup_mode. Showing the
@@ -33812,11 +34361,12 @@ def draw_resize_grip(surface, x, y):
     """
     if not setup_mode:
         return
-    g = RESIZE_GRIP
+    g = int(g or RESIZE_GRIP)
     pygame.draw.rect(surface, COL_SLOT_BG,  (x - g, y - g, g, g))
     pygame.draw.rect(surface, COL_SLOT_BDR, (x - g, y - g, g, g), 1)
-    # Two diagonal hash lines for visual affordance.
-    for off in (3, 7):
+    # Diagonal hash lines for visual affordance -- more of them on a
+    # bigger grip.
+    for off in range(3, max(8, g - 3), 4):
         pygame.draw.line(surface, COL_SLOT_TEXT,
                          (x - off,     y - 1),
                          (x - 1,       y - off))
@@ -61905,8 +62455,13 @@ _SUBDIALOG_CONFIGS = {
             ("show_chat_composer", "Show input bar",  "bool"),
             ("global_typing",      "Type anywhere",   "bool"),
             ("chat_autoclear_unread", "Auto-clear unread lines", "bool"),
+            ("afk_reply_text",     "Auto-reply message", "text"),
         ],
         "helpers": {
+            "afk_reply_text":
+                "While Auto-Reply: AFK is on (hotbar or MobileWatch), "
+                "every tell is answered with \"Auto-Reply: \" and this. "
+                "Blank sends AFK.",
             "chat_autoclear_unread":
                 "For tabs with Auto-clear set (right-click a tab). On: "
                 "old lines go on time even if you never opened the tab, "
@@ -62018,7 +62573,8 @@ _SUBDIALOG_CONFIGS = {
             ("hotbar_visible_count", "Hotbars shown",   "int"),
             ("hotbar_cols",          "Cells per row",   "int"),
             ("show_hotbar_pad",      "Show pad",        "bool"),
-            ("hotbar_pad_shape",     "Pad shape",       "enum"),
+            ("hotbar_pad_cols",      "Pad width",       "int"),
+            ("hotbar_pad_rows",      "Pad height",      "int"),
             ("hotbar_pad_gs",        "GearSwap on pad", "bool"),
             ("edit_hotbar",          "Edit hotbar",     "action"),
         ],
@@ -68738,8 +69294,11 @@ BTN_HDR_H   = 18      # header row above the button grid (page name + arrows)
 def buttons_panel_size(scale=1.0, panel_idx=0):
     """Total panel size at `scale`. Returns (w, h).
 
-    The pad has NO header: it never pages, so a page name and
-    < > arrows would spend a quarter of its height saying nothing. Cell
+    The pad has no page header: it never pages, so a page name and
+    < > arrows would spend a quarter of its height saying nothing. It has
+    a slim title strip in that place instead (_pad_strip_h): its name,
+    which is clickable to rename like a bar's, and empty strip around it
+    to take hold of. Cell
     dimensions are deliberately the same as the bars' -- draw_buttons_panel
     computes them independently, and the two must not drift.
     """
@@ -68749,7 +69308,7 @@ def buttons_panel_size(scale=1.0, panel_idx=0):
     gap    = max(2, int(BTN_GAP * s))
     pad    = max(3, int(BTN_PAD * s))
     _is_pad = (panel_idx == HOTBAR_PAD_PANEL)
-    hdr_h  = 0 if _is_pad else max(14, int(BTN_HDR_H * s))
+    hdr_h  = _pad_strip_h(s) if _is_pad else max(14, int(BTN_HDR_H * s))
     # Via the page helpers rather than the constants: one source of truth
     # for the pad's shape, the lesson from the pad rendering a bar's grid.
     _cols  = _cols_for_page(HOTBAR_PAD_PAGE) if _is_pad else _btn_cols()
@@ -68786,7 +69345,7 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     pad    = max(3, int(BTN_PAD * s))
     icon_sz= max(14, int(BTN_ICON_SZ * s))
     _is_pad = (panel_idx == HOTBAR_PAD_PANEL)
-    hdr_h  = 0 if _is_pad else max(14, int(BTN_HDR_H * s))
+    hdr_h  = _pad_strip_h(s) if _is_pad else max(14, int(BTN_HDR_H * s))
     pw, ph = buttons_panel_size(scale, panel_idx)
 
     # Resolve which content page this panel is currently showing. Panel 0
@@ -68861,6 +69420,25 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
     title_font = get_font("Consolas", label_font.get_height() - 2,
                           bold=True)
 
+    if _is_pad:
+        # The title strip: the pad's own name, renamed the way a bar's page
+        # name is (click it). Only the text is the click target -- the rest
+        # of the strip stays empty, so there is always somewhere to take
+        # hold of the pad that isn't a button.
+        _pname = ((page_dict and page_dict.get("name")) or HOTBAR_PAD_NAME)
+        _room = pw - pad * 2
+        _ns = title_font.render(_pname, True, (228, 228, 238))
+        if _ns.get_width() > _room:
+            _cut = _pname
+            while _cut and title_font.size(_cut + "\u2026")[0] > _room:
+                _cut = _cut[:-1]
+            _ns = title_font.render((_cut + "\u2026") if _cut
+                                    else _pname[:1], True, (228, 228, 238))
+        _ny = y + pad + (hdr_h - _ns.get_height()) // 2
+        surface.blit(_ns, (x + pad, _ny))
+        local_rects.append((pygame.Rect(x + pad, y + pad,
+                                        max(30, _ns.get_width() + 4), hdr_h),
+                            ("__page_name__", panel_idx)))
     if not _is_pad:
         # ── Header row: page name (left) + page arrows + page indicator (right) ──
         # The page name is editable via the hotbar editor (treated as a 21st
@@ -68940,9 +69518,10 @@ def draw_buttons_panel(surface, x, y, scale=1.0, locked=False,
                                 nav_y + (hdr_h - ind_surf.get_height()) // 2))
 
     _ncols = _cols_for_page(eff_page_idx)
+    _stride = _stride_for_page(eff_page_idx)
     for row in range(_rows_for_page(eff_page_idx)):
         for col in range(_ncols):
-            idx = row * _ncols + col
+            idx = row * _stride + col
             entry = page_buttons[idx] if idx < len(page_buttons) else None
             bx = x + pad + col * (cell_w + gap)
             by = y + pad + hdr_h + gap + row * (cell_h + gap)
@@ -69470,9 +70049,6 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
             title_text = (f"Hotbar editor — {len(_hotbar_multi_clipboard)} "
                           f"cell(s) on the clipboard · ctrl-click a "
                           f"destination, then Ctrl+V")
-    t_surf = title_font.render(title_text, True, (220, 200, 150))
-    surface.blit(t_surf, (form_rect.x + pad, form_rect.y + pad))
-
     done_w, done_h = 90, 18
     done_rect = pygame.Rect(form_rect.right - done_w - pad,
                             form_rect.y + pad,
@@ -69483,11 +70059,33 @@ def draw_hotbar_editor(surface, hotbar_x, hotbar_y, hotbar_w, hotbar_h):
                  (done_rect.x + (done_w - done_surf.get_width()) // 2,
                   done_rect.y + (done_h - done_surf.get_height()) // 2))
     hotbar_editor_rects.append((done_rect, {"kind": "done"}))
-    # The title strip drags the form. Registered AFTER the Done button so
-    # that button still wins its own press, and stopping short of it so
-    # the two can never overlap.
+    # COPY FROM opens the profile browser beside the editor. Lit while it
+    # is open, so the same button reads as its close.
+    src_w = 84
+    src_rect = pygame.Rect(done_rect.x - src_w - 6, done_rect.y,
+                           src_w, done_h)
+    _src_on = bool(_hb_src_open)
+    pygame.draw.rect(surface, (130, 190, 220) if _src_on else (100, 140, 175),
+                     src_rect, border_radius=8)
+    _ss = btn_font.render("COPY FROM", True, (25, 35, 50))
+    surface.blit(_ss, (src_rect.x + (src_w - _ss.get_width()) // 2,
+                       src_rect.y + (done_h - _ss.get_height()) // 2))
+    hotbar_editor_rects.append((src_rect, {"kind": "src_toggle"}))
+    # The title is cut to the room left of the buttons rather than being
+    # drawn underneath them.
+    _t_room = src_rect.x - form_rect.x - pad - 6
+    t_surf = title_font.render(title_text, True, (220, 200, 150))
+    if t_surf.get_width() > _t_room > 0:
+        _cut = title_text
+        while _cut and title_font.size(_cut + "\u2026")[0] > _t_room:
+            _cut = _cut[:-1]
+        t_surf = title_font.render(_cut + "\u2026", True, (220, 200, 150))
+    surface.blit(t_surf, (form_rect.x + pad, form_rect.y + pad))
+    # The title strip drags the form. Registered AFTER the buttons so
+    # they still win their own presses, and stopping short of them so
+    # they can never overlap.
     _grip = pygame.Rect(form_rect.x, form_rect.y,
-                        max(0, done_rect.x - form_rect.x - 4), 20)
+                        max(0, src_rect.x - form_rect.x - 4), 20)
     if _grip.w > 0:
         hotbar_editor_rects.append((_grip, {"kind": "move"}))
 
@@ -69959,9 +70557,13 @@ def dispatch_hotbar_editor_click(mx, my):
         if kind == "move":
             _hb_editor_drag = (mx - rect.x, my - rect.y)
             return True
+        if kind == "src_toggle":
+            _hb_src_toggle()
+            return True
         if kind == "done":
             # Exit edit mode entirely. Doesn't auto-save the draft —
             # user has to hit Save first if they want to persist.
+            globals()["_hb_src_open"] = False
             hotbar_edit_mode = False
             hotbar_edit_slot = -1
             hotbar_edit_draft = None
@@ -69992,6 +70594,10 @@ def dispatch_hotbar_editor_click(mx, my):
                     # the button dicts, so editing the source afterwards
                     # would silently change what pastes.
                     "buttons": [dict(b) for b in _src.get("buttons", [])],
+                    # How many slots each stored row holds, so a paste
+                    # onto a page laid out differently (a bar onto the
+                    # pad, or the other way) keeps rows as rows.
+                    "stride": _stride_for_page(_pg),
                 }
                 _hotbar_clip_save()
                 print(f"[OmniWatch] copied page {_pg + 1} "
@@ -70003,12 +70609,28 @@ def dispatch_hotbar_editor_click(mx, my):
                            and 0 <= hotbar_edit_page < len(hotbar_pages))
                        else hotbar_current_page)
                 if 0 <= _pg < len(hotbar_pages):
-                    # Buttons only — the destination keeps its own name,
-                    # which is the whole point of pasting into a page you
-                    # already named for a job.
-                    hotbar_pages[_pg]["buttons"] = [
-                        dict(b) for b in
-                        _hotbar_page_clipboard.get("buttons", [])]
+                    # The page's name comes with it -- a pasted page is
+                    # that page, here. "page_name" is the plain name; the
+                    # copy-from window's "name" also says where it came
+                    # from, for the PASTE button's "from:" line.
+                    _cn = str(_hotbar_page_clipboard.get(
+                        "page_name", _hotbar_page_clipboard.get("name", ""))
+                        or "")
+                    if _cn.strip():
+                        hotbar_pages[_pg]["name"] = _cn
+                        # The open name box would otherwise put the old
+                        # name back on the next Save.
+                        if (hotbar_edit_slot == "__page_name__"
+                                and hotbar_edit_draft is not None):
+                            hotbar_edit_draft["label"] = _cn
+                            _lf = _hotbar_editor_field("label")
+                            _lf.anchor = None
+                            _lf.cursor = len(_cn)
+                    hotbar_pages[_pg]["buttons"] = _hotbar_restride(
+                        [dict(b) for b in
+                         _hotbar_page_clipboard.get("buttons", [])],
+                        _hotbar_page_clipboard.get("stride"),
+                        _stride_for_page(_pg))
                     _hotbar_ensure_slots()
                     save_buttons_config()
                     print(f"[OmniWatch] pasted "
@@ -70149,7 +70771,9 @@ def dispatch_hotbar_editor_click(mx, my):
                     new_name = (hotbar_edit_draft.get("label", "")
                                 or "").rstrip()
                     if not new_name.strip():
-                        new_name = f"Page {_pg + 1}"
+                        new_name = (HOTBAR_PAD_NAME
+                                    if _pg == HOTBAR_PAD_PAGE
+                                    else f"Page {_pg + 1}")
                     if hotbar_pages:
                         hotbar_pages[_pg]["name"] = new_name
                     save_buttons_config()
@@ -70240,6 +70864,664 @@ def dispatch_hotbar_editor_click(mx, my):
                       f"{hotbar_edit_slot + 1} deleted (emptied)")
         return True
     return False
+
+
+# ── "Copy from" profile browser ─────────────────────────────────────────
+# Shows the hotbar pages of any saved profile, of any character, beside
+# the editor. Read-only: nothing here writes to the profile it is showing.
+# Buttons leave it two ways --
+#   * drag a cell onto any hotbar cell (bars or pad) and it is written
+#     there and saved; if the cell is one of several picked, the picked
+#     cells all come along, keeping their spacing from the one dragged.
+#   * COPY SELECTED / COPY PAGE put them on the ordinary hotbar
+#     clipboards, so the existing Ctrl+V and page PASTE take it from there.
+# Blank cells are never carried, so dropping a picked row can't erase the
+# buttons between the ones you meant.
+_HB_SRC_W_MIN = 520
+
+
+def _hb_src_note(text):
+    """Toast at the cursor + a log line."""
+    try:
+        _mx, _my = _mouse_pos()
+        globals()["_hb_action_note"] = {
+            "text": text, "until": time.time() + 3.0, "x": _mx, "y": _my}
+    except Exception:
+        pass
+    print(f"[OmniWatch] hotbar copy-from: {text}")
+
+
+def _hb_src_chars():
+    """Characters with a config folder, the viewed one first if missing."""
+    chars = list_known_characters()
+    if active_view_char and active_view_char not in chars:
+        chars.insert(0, active_view_char)
+    return chars
+
+
+def _hb_src_char_now():
+    return _hb_src_char or active_view_char or ""
+
+
+def _hb_src_buttons_path(char, prof):
+    """The buttons file behind (character, profile). "" = current setup."""
+    cd = _chardir(char)
+    if not prof:
+        return os.path.join(cd, "omniwatch_buttons.json")
+    return os.path.join(cd, f"omniwatch_buttons_{_profile_safe(prof)}.json")
+
+
+def _hb_src_profiles(char):
+    """["", <profiles that carry a hotbar>...] for a character.
+
+    Only profiles WITH a buttons part are listed -- one saved before the
+    hotbar joined the profile parts has nothing to show. Cached for two
+    seconds because the window asks every frame.
+    """
+    now = time.time()
+    hit = _hb_src_prof_cache.get(char)
+    if hit and now - hit[0] < 2.0:
+        return hit[1]
+    out = [""]
+    pat = re.compile(r"^omniwatch_buttons_([A-Za-z0-9 _.-]+)\.json$")
+    try:
+        for entry in sorted(os.listdir(_chardir(char)), key=str.lower):
+            m = pat.match(entry)
+            if m and m.group(1).lower() not in _PROFILE_RESERVED:
+                out.append(m.group(1))
+    except Exception as e:
+        print(f"[OmniWatch] copy-from profile list: {e!r}")
+    _hb_src_prof_cache[char] = (now, out)
+    return out
+
+
+def _hb_src_pages(char, prof):
+    """The arranged page list for (character, profile), or [] if none.
+
+    The viewed character's current setup is read from memory -- it is
+    what is on screen, and the file can only ever lag it. Everything else
+    is read from disk through the same _hotbar_pages_from_raw the live
+    load uses, cached against the file's mtime.
+    """
+    if char == (active_view_char or "") and not prof:
+        _hotbar_ensure_slots()
+        return hotbar_pages
+    path = _hb_src_buttons_path(char, prof)
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return []
+    hit = _hb_src_cache.get(path)
+    if hit and hit[0] == mt:
+        return hit[1]
+    try:
+        with open(path, encoding="utf-8") as f:
+            pages = _hotbar_pages_from_raw(json.load(f))
+        if len(pages) > HOTBAR_PAD_PAGE:
+            _pad_page_to_stride(pages[HOTBAR_PAD_PAGE], _pad_old_shape()[0])
+    except Exception as e:
+        print(f"[OmniWatch] copy-from: could not read {path}: {e!r}")
+        pages = []
+    _hb_src_cache[path] = (mt, pages)
+    return pages
+
+
+def _hb_src_shape(page_idx):
+    """(cols, rows) a source page is laid out at -- the same as the page
+    at that index would be here, which is what keeps a slot's place."""
+    if page_idx == HOTBAR_PAD_PAGE:
+        return _pad_shape()
+    return _btn_cols(), BTN_ROWS
+
+
+def _hb_src_blank(entry):
+    """A cell with nothing worth carrying."""
+    if not isinstance(entry, dict):
+        return True
+    return (entry.get("kind", "none") == "none"
+            and not (entry.get("label") or "").strip()
+            and not entry.get("icon"))
+
+
+def _hb_src_reset_sel():
+    globals()["_hb_src_sel"] = set()
+
+
+def _hb_src_toggle():
+    """Open or close the browser. On first open it shows the viewed
+    character, on the first saved profile that isn't the one in use."""
+    if _hb_src_open:
+        globals()["_hb_src_open"] = False
+        return
+    globals()["_hb_src_open"] = True
+    chars = _hb_src_chars()
+    if not _hb_src_char or _hb_src_char not in chars:
+        globals()["_hb_src_char"] = active_view_char or (chars[0] if chars
+                                                         else "")
+    profs = _hb_src_profiles(_hb_src_char_now())
+    if _hb_src_prof is None or _hb_src_prof not in profs:
+        _pick = ""
+        for _p in profs:
+            if _p and not (_hb_src_char_now() == active_view_char
+                           and _p == active_profile_name):
+                _pick = _p
+                break
+        globals()["_hb_src_prof"] = _pick
+        globals()["_hb_src_page"] = 0
+    _hb_src_reset_sel()
+
+
+def _hb_src_step(what, delta):
+    """Cycle the character, profile or page shown."""
+    if what == "char":
+        chars = _hb_src_chars()
+        if not chars:
+            return
+        cur = _hb_src_char_now()
+        i = chars.index(cur) if cur in chars else 0
+        globals()["_hb_src_char"] = chars[(i + delta) % len(chars)]
+        profs = _hb_src_profiles(_hb_src_char_now())
+        globals()["_hb_src_prof"] = profs[1] if len(profs) > 1 else ""
+        globals()["_hb_src_page"] = 0
+    elif what == "prof":
+        profs = _hb_src_profiles(_hb_src_char_now())
+        cur = _hb_src_prof if _hb_src_prof in profs else ""
+        globals()["_hb_src_prof"] = profs[(profs.index(cur) + delta)
+                                          % len(profs)]
+        globals()["_hb_src_page"] = 0
+    elif what == "page":
+        n = len(_hb_src_pages(_hb_src_char_now(), _hb_src_prof or "")) or 1
+        globals()["_hb_src_page"] = (_hb_src_page + delta) % n
+    _hb_src_reset_sel()
+
+
+def _hb_src_place(dst_page, dst_slot, src_buttons, src_slots, anchor_slot,
+                  src_stride):
+    """Write source cells into hotbar_pages[dst_page], laid out around
+    dst_slot the way they sat around anchor_slot. Returns the slots
+    written.
+
+    Placed by (row, column), not by flat index, so a block keeps its
+    shape between a bar and the pad, whose rows are different widths.
+    Anything that would fall off the destination grid is dropped rather
+    than wrapped onto another row, the same rule Ctrl+V follows. Blank
+    source cells are skipped. The source is snapshotted first, so a drop
+    onto the very page being shown can't read cells it has already
+    overwritten.
+    """
+    if not (0 <= dst_page < len(hotbar_pages)):
+        return []
+    snap = {i: dict(src_buttons[i]) for i in src_slots
+            if 0 <= i < len(src_buttons)
+            and not _hb_src_blank(src_buttons[i])}
+    if not snap:
+        return []
+    dcols = _cols_for_page(dst_page)
+    drows = _rows_for_page(dst_page)
+    dstride = _stride_for_page(dst_page)
+    dr0, dc0 = divmod(int(dst_slot), dstride)
+    ar, ac = divmod(int(anchor_slot), max(1, src_stride))
+    btns = hotbar_pages[dst_page]["buttons"]
+    written = []
+    for i in sorted(snap):
+        sr, sc = divmod(i, max(1, src_stride))
+        r, c = dr0 + (sr - ar), dc0 + (sc - ac)
+        if not (0 <= r < drows and 0 <= c < dcols):
+            continue
+        j = r * dstride + c
+        while len(btns) <= j:
+            btns.append(_empty_button())
+        btns[j] = _normalize_button_entry(snap[i])
+        written.append(j)
+    return written
+
+
+def _hb_src_drop_target(mx, my):
+    """(page, slot, rect) of the hotbar cell under the cursor, or None."""
+    _all = []
+    if buttons_panel_visible:
+        _all.extend(buttons_rects)
+    for _pi, _r in (buttons_panel_rects or {}).items():
+        if _pi == HOTBAR_PAD_PANEL or buttons_panel_visible:
+            _all.extend(_r)
+    for rect, payload in _all:
+        if not rect.collidepoint(mx, my):
+            continue
+        if isinstance(payload, tuple):
+            kind, panel = payload
+        else:
+            kind, panel = payload, 0
+        if isinstance(kind, int):
+            return _hotbar_panel_page(panel), kind, rect
+    return None
+
+
+def _hb_src_drop(slot, mx, my):
+    """Finish a drag out of the browser at (mx, my)."""
+    global hotbar_edit_draft
+    if _hb_src_rect is not None and _hb_src_rect.collidepoint(mx, my):
+        return   # let go over the browser itself: nothing happens
+    tgt = _hb_src_drop_target(mx, my)
+    if tgt is None:
+        _hb_src_note("drop it on a hotbar cell")
+        return
+    dst_page, dst_slot, _r = tgt
+    pages = _hb_src_pages(_hb_src_char_now(), _hb_src_prof or "")
+    if not (0 <= _hb_src_page < len(pages)):
+        return
+    src = pages[_hb_src_page].get("buttons", [])
+    slots = (set(_hb_src_sel) if (slot in _hb_src_sel
+                                  and len(_hb_src_sel) > 1) else {slot})
+    written = _hb_src_place(dst_page, dst_slot, src, slots, slot,
+                            _stride_for_page(_hb_src_page))
+    if not written:
+        _hb_src_note("nothing landed on the bar")
+        return
+    save_buttons_config()
+    # The open slot editor holds a draft of its slot; if that slot was
+    # just written, show what is there now, or a later SAVE would put
+    # the old button straight back.
+    _ed_pg = (hotbar_edit_page if hotbar_edit_page is not None
+              else hotbar_current_page)
+    if (isinstance(hotbar_edit_slot, int) and _ed_pg == dst_page
+            and hotbar_edit_slot in written):
+        hotbar_edit_draft = dict(hotbar_pages[dst_page]["buttons"]
+                                 [hotbar_edit_slot])
+    _where = ("the pad" if dst_page == HOTBAR_PAD_PAGE
+              else f"page {dst_page + 1}")
+    _skip = len(slots) - len(written)
+    _hb_src_note(f"{len(written)} button(s) placed on {_where}"
+                 + (f", {_skip} left out" if _skip > 0 else ""))
+
+
+def _hb_src_copy(which):
+    """COPY SELECTED / COPY PAGE onto the ordinary hotbar clipboards."""
+    global _hotbar_multi_clipboard, _hotbar_clip_origin
+    global _hotbar_page_clipboard
+    char, prof = _hb_src_char_now(), (_hb_src_prof or "")
+    pages = _hb_src_pages(char, prof)
+    if not (0 <= _hb_src_page < len(pages)):
+        return
+    pg = pages[_hb_src_page]
+    btns = pg.get("buttons", [])
+    if which == "page":
+        _hotbar_page_clipboard = {
+            "name": (f"{char} · {prof or 'current'} · "
+                     f"{pg.get('name', '')}"),
+            "page_name": pg.get("name", ""),
+            "buttons": [dict(b) for b in btns],
+            "stride": _stride_for_page(_hb_src_page),
+        }
+        _hotbar_clip_save()
+        _hb_src_note("page copied -- click a page name, then PASTE")
+        return
+    picked = {i: _normalize_button_entry(dict(btns[i]))
+              for i in sorted(_hb_src_sel)
+              if 0 <= i < len(btns) and not _hb_src_blank(btns[i])}
+    if not picked:
+        _hb_src_note("pick some cells first")
+        return
+    _hotbar_multi_clipboard = picked
+    _hotbar_clip_origin = min(picked)
+    _hotbar_clip_save()
+    _hb_src_note(f"{len(picked)} cell(s) copied -- Ctrl+V over a bar")
+
+
+def _hb_src_handle_event(event):
+    """The browser's whole gesture: presses, its own drags, the wheel.
+    Asked near the top of the event chain because it draws above the
+    editor and every panel."""
+    global _hb_src_move, _hb_src_drag, _hb_src_pos
+    if not (_hb_src_open and hotbar_edit_mode):
+        _hb_src_move = None
+        _hb_src_drag = None
+        return False
+    et = event.type
+    if et == pygame.MOUSEMOTION:
+        if _hb_src_move is not None:
+            _hb_src_pos = [event.pos[0] - _hb_src_move[0],
+                           event.pos[1] - _hb_src_move[1]]
+            return True
+        if _hb_src_drag is not None:
+            if not _hb_src_drag["active"]:
+                _sx, _sy = _hb_src_drag["start"]
+                if (abs(event.pos[0] - _sx) + abs(event.pos[1] - _sy)
+                        >= HOTBAR_DRAG_THRESHOLD_PX):
+                    _hb_src_drag["active"] = True
+            return True
+        return False
+    if et == pygame.MOUSEWHEEL:
+        if _hb_src_rect is not None and _hb_src_rect.collidepoint(
+                _mouse_pos()):
+            if event.y:
+                _hb_src_step("page", -1 if event.y > 0 else 1)
+            return True
+        return False
+    if et == pygame.MOUSEBUTTONDOWN:
+        mx, my = event.pos
+        if _hb_src_rect is None or not _hb_src_rect.collidepoint(mx, my):
+            return False
+        if event.button != 1:
+            return True
+        for rect, act in _hb_src_rects:
+            if not rect.collidepoint(mx, my):
+                continue
+            k = act["kind"]
+            if k == "close":
+                globals()["_hb_src_open"] = False
+            elif k == "move":
+                _hb_src_move = (mx - _hb_src_rect.x, my - _hb_src_rect.y)
+            elif k == "step":
+                _hb_src_step(act["what"], act["delta"])
+            elif k == "cell":
+                _hb_src_drag = {"slot": act["slot"], "start": (mx, my),
+                                "active": False}
+            elif k == "sel_all":
+                globals()["_hb_src_sel"] = set(act["slots"])
+            elif k == "sel_none":
+                _hb_src_reset_sel()
+            elif k == "copy_sel":
+                _hb_src_copy("sel")
+            elif k == "copy_page":
+                _hb_src_copy("page")
+            break
+        return True
+    if et == pygame.MOUSEBUTTONUP and event.button == 1:
+        if _hb_src_move is not None:
+            _hb_src_move = None
+            return True
+        if _hb_src_drag is not None:
+            d, _hb_src_drag = _hb_src_drag, None
+            if d["active"]:
+                _hb_src_drop(d["slot"], event.pos[0], event.pos[1])
+            else:
+                # A click, not a drag: pick or unpick the cell.
+                _sel = set(_hb_src_sel)
+                _sel ^= {d["slot"]}
+                globals()["_hb_src_sel"] = _sel
+            return True
+        # A release inside the window that belongs to nobody else.
+        if (_hb_src_rect is not None
+                and _hb_src_rect.collidepoint(event.pos)
+                and hotbar_drag is None and dragging_key is None):
+            return True
+        return False
+    if et == pygame.MOUSEBUTTONUP:
+        return (_hb_src_rect is not None
+                and _hb_src_rect.collidepoint(event.pos)
+                and dragging_key is None)
+    return False
+
+
+def draw_hb_src_browser(surface):
+    """Draw the browser, and the ghost of a cell being dragged out of it."""
+    global _hb_src_rect, _hb_src_rects, _hb_src_pos
+    _hb_src_rect = None
+    _hb_src_rects = []
+    if not (_hb_src_open and hotbar_edit_mode):
+        return
+    char = _hb_src_char_now()
+    profs = _hb_src_profiles(char) if char else [""]
+    if _hb_src_prof not in profs:
+        globals()["_hb_src_prof"] = ""
+        _hb_src_reset_sel()
+    prof = _hb_src_prof or ""
+    pages = _hb_src_pages(char, prof)
+    npg = len(pages)
+    page_i = (_hb_src_page % npg) if npg else 0
+    if npg and page_i != _hb_src_page:
+        globals()["_hb_src_page"] = page_i
+    cols, rows = _hb_src_shape(page_i)
+    page = pages[page_i] if npg else None
+    btns = (page or {}).get("buttons", [])
+
+    title_font = get_font("Consolas", 13, bold=True)
+    small = get_font("Consolas", 11)
+    bfont = get_font("Consolas", 11, bold=True)
+    label_font = font_moon
+    pad, row_h, cw, ch, gap = 8, 20, BTN_W, BTN_H, BTN_GAP
+    grid_w = cols * cw + (cols - 1) * gap
+    grid_h = rows * ch + (rows - 1) * gap
+    w = max(_HB_SRC_W_MIN, grid_w + pad * 2)
+    hint = ("Click cells to pick them. Drag one onto any hotbar cell to "
+            "place it, and the picked cells come with it.")
+    hint_lines = []
+    for _word in hint.split(" "):
+        if hint_lines and small.size(hint_lines[-1] + " " + _word)[0] \
+                <= w - pad * 2:
+            hint_lines[-1] += " " + _word
+        else:
+            hint_lines.append(_word)
+    lh = small.get_linesize()
+    h = (pad + row_h + 4 + row_h + 4 + row_h + 8 + grid_h + 8
+         + row_h + 6 + lh * len(hint_lines) + pad)
+
+    # Where it goes the first time: under the editor form, or above the
+    # bars when that would run off the bottom. After that, where it was
+    # dragged.
+    if _hb_src_pos is None:
+        _form = _hb_editor_rect
+        _anc = globals().get("_hotbar_editor_anchor")
+        if _form is not None:
+            _x, _y = _form.x, _form.bottom + 8
+        elif _anc is not None:
+            _x, _y = _anc[0], _anc[1] + _anc[3] + 8
+        else:
+            _x, _y = 40, 40
+        if _clamp_win_y(_y, h, _x) < _y and _anc is not None \
+                and _anc[1] - h - 8 >= 0:
+            _y = _anc[1] - h - 8
+        _hb_src_pos = [_x, _y]
+    x = _clamp_win_x(_hb_src_pos[0], w)
+    y = _clamp_win_y(_hb_src_pos[1], h, x)
+    rect = pygame.Rect(x, y, w, h)
+    _hb_src_rect = rect
+    mx, my = _mouse_pos()
+
+    pygame.draw.rect(surface, (28, 28, 36), rect, border_radius=4)
+    pygame.draw.rect(surface, (140, 140, 160), rect, 1, border_radius=4)
+    draw_accent_stripe(surface, x, y, h, ACCENT_BUTTONS)
+
+    # Title strip: drags the window; X closes it.
+    cy = y + pad
+    _ts = title_font.render("Copy buttons from another profile", True,
+                            (220, 200, 150))
+    surface.blit(_ts, (x + pad, cy + (row_h - _ts.get_height()) // 2))
+    close_r = pygame.Rect(rect.right - pad - 18, cy + 1, 18, 18)
+    _hov = close_r.collidepoint(mx, my)
+    pygame.draw.rect(surface, (150, 70, 70) if _hov else (90, 50, 55),
+                     close_r, border_radius=3)
+    _xs = bfont.render("X", True, (240, 225, 225))
+    surface.blit(_xs, (close_r.x + (18 - _xs.get_width()) // 2,
+                       close_r.y + (18 - _xs.get_height()) // 2))
+    _hb_src_rects.append((close_r, {"kind": "close"}))
+    _hb_src_rects.append((pygame.Rect(x, y, close_r.x - x - 4,
+                                      pad + row_h),
+                          {"kind": "move"}))
+    cy += row_h + 4
+
+    def _cycler(cx, cy_, label, value, what, total_w):
+        """label  [<] value [>] in total_w pixels -- returns the x after."""
+        _ls = small.render(label, True, (170, 170, 190))
+        surface.blit(_ls, (cx, cy_ + (row_h - _ls.get_height()) // 2))
+        cx += _ls.get_width() + 6
+        val_w = max(40, total_w - _ls.get_width() - 6 - 38 - 12)
+        for _txt, _d in (("<", -1), (None, 0), (">", 1)):
+            if _txt is None:
+                _v = value
+                while _v and small.size(_v)[0] > val_w - 6:
+                    _v = _v[:-1]
+                if _v != value:
+                    _v = _v[:-1] + "…"
+                _vr = pygame.Rect(cx, cy_, val_w, row_h)
+                pygame.draw.rect(surface, (36, 36, 46), _vr,
+                                 border_radius=2)
+                _vs = small.render(_v, True, (230, 230, 240))
+                surface.blit(_vs, (_vr.x + (val_w - _vs.get_width()) // 2,
+                                   cy_ + (row_h - _vs.get_height()) // 2))
+                cx += val_w + 2
+                continue
+            _r = pygame.Rect(cx, cy_ + 2, 16, row_h - 4)
+            _on = _r.collidepoint(mx, my)
+            pygame.draw.rect(surface, (78, 78, 98) if _on else (58, 58, 74),
+                             _r, border_radius=2)
+            _as = small.render(_txt, True, (225, 225, 235))
+            surface.blit(_as, (_r.x + (16 - _as.get_width()) // 2,
+                               _r.y + (_r.h - _as.get_height()) // 2))
+            _hb_src_rects.append((_r, {"kind": "step", "what": what,
+                                       "delta": _d}))
+            cx += 18
+        return cx
+
+    # Row: character and profile.
+    _half = (w - pad * 2) // 2
+    _cycler(x + pad, cy, "Char", char or "?", "char", _half)
+    _cycler(x + pad + _half, cy, "Profile",
+            prof if prof else "(current setup)", "prof", _half)
+    cy += row_h + 4
+
+    # Row: page, plus pick-all / pick-none.
+    if npg:
+        if page_i == HOTBAR_PAD_PAGE:
+            _pv = f"pad \u00b7 {(page or {}).get('name', '') or 'Pad'}"
+        else:
+            _pv = (f"{page_i + 1}/{HOTBAR_PAGE_COUNT} · "
+                   f"{(page or {}).get('name', '')}".rstrip(" ·"))
+    else:
+        _pv = "(no hotbar saved)"
+    _cycler(x + pad, cy, "Page", _pv, "page", 310)
+    _sstride = _stride_for_page(page_i)
+    _full = [r_ * _sstride + c_ for r_ in range(rows) for c_ in range(cols)
+             if r_ * _sstride + c_ < len(btns)
+             and not _hb_src_blank(btns[r_ * _sstride + c_])]
+    _bx = rect.right - pad
+    for _lbl, _act in (("NONE", {"kind": "sel_none"}),
+                       ("ALL", {"kind": "sel_all", "slots": _full})):
+        _bw = bfont.size(_lbl)[0] + 16
+        _bx -= _bw
+        _br = pygame.Rect(_bx, cy + 1, _bw, row_h - 2)
+        pygame.draw.rect(surface, (70, 74, 92), _br, border_radius=7)
+        _bs = bfont.render(_lbl, True, (220, 220, 235))
+        surface.blit(_bs, (_br.x + (_bw - _bs.get_width()) // 2,
+                           _br.y + (_br.h - _bs.get_height()) // 2))
+        _hb_src_rects.append((_br, _act))
+        _bx -= 6
+    cy += row_h + 8
+
+    # The grid, laid out exactly as that page would be here.
+    gx = x + (w - grid_w) // 2
+    icon_sz = BTN_ICON_SZ
+    _hover_entry = None
+    if not npg:
+        _ns = small.render("This profile has no hotbar saved.", True,
+                           (150, 150, 165))
+        surface.blit(_ns, (gx, cy + (grid_h - _ns.get_height()) // 2))
+    for r in range(rows if npg else 0):
+        for c in range(cols):
+            i = r * _sstride + c
+            e = btns[i] if i < len(btns) else None
+            cr = pygame.Rect(gx + c * (cw + gap), cy + r * (ch + gap),
+                             cw, ch)
+            blank = _hb_src_blank(e)
+            picked = i in _hb_src_sel
+            hov = (not blank and cr.collidepoint(mx, my)
+                   and _hb_src_drag is None)
+            if blank:
+                pygame.draw.rect(surface, (30, 30, 38), cr, border_radius=3)
+                pygame.draw.rect(surface, (52, 52, 62), cr, 1,
+                                 border_radius=3)
+                continue
+            bg = (66, 70, 90) if hov else (44, 44, 54)
+            _cc = _hotbar_parse_color(e.get("color"))
+            text_col = (220, 220, 230)
+            if _cc:
+                _a = HOTBAR_COLOR_ALPHA
+                bg = tuple(int(a * _a + b * (1.0 - _a))
+                           for a, b in zip(_cc, (44, 44, 54)))
+                if (0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]) > 130:
+                    text_col = (28, 30, 38)
+            pygame.draw.rect(surface, bg, cr, border_radius=3)
+            pygame.draw.rect(surface, (255, 205, 70) if picked
+                             else ((225, 230, 245) if hov
+                                   else (100, 100, 115)),
+                             cr, 2 if picked else 1, border_radius=3)
+            label = e.get("label") or ""
+            icon = e.get("icon") or ""
+            isurf = get_ui_icon_scaled(icon, icon_sz) if icon else None
+            if isurf and label:
+                surface.blit(isurf, (cr.x + 4, cr.y + (ch - icon_sz) // 2))
+                _l = _hb_render_label(label_font, label, text_col,
+                                      cw - icon_sz - 10)
+                surface.blit(_l, (cr.x + icon_sz + 8,
+                                  cr.y + (ch - _l.get_height()) // 2))
+            elif isurf:
+                surface.blit(isurf, (cr.x + (cw - icon_sz) // 2,
+                                     cr.y + (ch - icon_sz) // 2))
+            elif label:
+                _l = _hb_render_label(label_font, label, text_col, cw - 6)
+                surface.blit(_l, (cr.x + (cw - _l.get_width()) // 2,
+                                  cr.y + (ch - _l.get_height()) // 2))
+            _hb_src_rects.append((cr, {"kind": "cell", "slot": i}))
+            if hov:
+                _hover_entry = e
+    cy += grid_h + 8
+
+    # Row: copy buttons.
+    _bx = x + pad
+    _n_sel = len([i for i in _hb_src_sel if i in _full])
+    for _lbl, _act, _on in (
+            (f"COPY SELECTED ({_n_sel})", {"kind": "copy_sel"}, _n_sel > 0),
+            ("COPY PAGE", {"kind": "copy_page"}, bool(npg))):
+        _bw = bfont.size(_lbl)[0] + 18
+        _br = pygame.Rect(_bx, cy, _bw, row_h)
+        pygame.draw.rect(surface, (110, 130, 170) if _on else (55, 60, 72),
+                         _br, border_radius=8)
+        _bs = bfont.render(_lbl, True, (30, 30, 50) if _on
+                           else (120, 125, 140))
+        surface.blit(_bs, (_br.x + (_bw - _bs.get_width()) // 2,
+                           _br.y + (row_h - _bs.get_height()) // 2))
+        _hb_src_rects.append((_br, _act))
+        _bx += _bw + 8
+    cy += row_h + 6
+    for _ln in hint_lines:
+        surface.blit(small.render(_ln, True, (140, 140, 158)), (x + pad, cy))
+        cy += lh
+
+    # Hover tooltip, through the hotbar's own (drawn at end of frame).
+    if _hover_entry is not None:
+        globals()["_hotbar_tooltip"] = (_hover_entry.get("label") or "",
+                                        _hover_entry.get("command") or "",
+                                        _hover_entry.get("kind") or "")
+
+    # The drag: outline the cell it would land on, ghost at the cursor.
+    if _hb_src_drag is not None and _hb_src_drag.get("active"):
+        globals()["_hotbar_tooltip"] = None
+        d_slot = _hb_src_drag["slot"]
+        tgt = None if rect.collidepoint(mx, my) else \
+            _hb_src_drop_target(mx, my)
+        if tgt is not None:
+            pygame.draw.rect(surface, (120, 225, 140), tgt[2].inflate(4, 4),
+                             2, border_radius=4)
+        e = btns[d_slot] if d_slot < len(btns) else {}
+        n = (len(_hb_src_sel) if (d_slot in _hb_src_sel
+                                  and len(_hb_src_sel) > 1) else 1)
+        gr = pygame.Rect(mx - cw // 2, my - ch // 2, cw, ch)
+        ghost = pygame.Surface((cw, ch), pygame.SRCALPHA)
+        pygame.draw.rect(ghost, (66, 70, 90, 210), (0, 0, cw, ch),
+                         border_radius=3)
+        pygame.draw.rect(ghost, (255, 205, 70, 255), (0, 0, cw, ch), 2,
+                         border_radius=3)
+        _l = _hb_render_label(label_font, (e or {}).get("label") or "",
+                              (235, 235, 240), cw - 6)
+        ghost.blit(_l, ((cw - _l.get_width()) // 2,
+                        (ch - _l.get_height()) // 2))
+        surface.blit(ghost, gr.topleft)
+        if n > 1:
+            _cs = bfont.render(f"+{n - 1}", True, (30, 30, 40))
+            _cb = pygame.Rect(gr.right - _cs.get_width() - 6, gr.y - 8,
+                              _cs.get_width() + 8, 14)
+            pygame.draw.rect(surface, (255, 205, 70), _cb, border_radius=6)
+            surface.blit(_cs, (_cb.x + 4, _cb.y))
 
 
 def _hotbar_edit_buttons():
@@ -71809,8 +73091,11 @@ def party_job_abbrev(member):
 
 
 def draw_job_plate(surface, x, y, size, job, font, selected=False,
-                   sub_job=""):
-    """The job's square at the left of a party row."""
+                   sub_job="", leader=False):
+    """The job's square at the left of a party row.
+
+    `leader` puts a gold ring just OUTSIDE the square, so it shows
+    alongside the selection edge rather than replacing it."""
     icon = get_job_icon_scaled(job, size)
     rect = pygame.Rect(int(x), int(y), int(size), int(size))
     if icon is not None:
@@ -71840,6 +73125,9 @@ def draw_job_plate(surface, x, y, size, job, font, selected=False,
         (job or "").upper(), JOB_ROLE_DEFAULT)
     pygame.draw.rect(surface, edge, rect, 2 if selected else 1,
                      border_radius=4)
+    if leader:
+        pygame.draw.rect(surface, COL_PARTY_LEADER, rect.inflate(4, 4), 2,
+                         border_radius=6)
     return rect
 
 
@@ -77046,13 +78334,27 @@ while running:
 
     # ── Receive UDP data ─────────────────────────────────────────────────────
     try:
-        data, _ = sock.recvfrom(8192)
-        raw      = data.decode()
-
-        # Multibox: drop party packets from a non-locked character so the
-        # display doesn't jitter between two logged-in characters.
-        _mb_ok, raw = _mb_gate(raw)
-        if not _mb_ok:
+        # Drain EVERY queued party packet and keep the newest one from
+        # the character being shown, the same as the equipment channel
+        # below. Each logged-in character's addon sends its party 10
+        # times a second, so six characters fill this socket at about
+        # 60 packets a second -- exactly the most a 60 fps loop could
+        # read at one per frame. Any slow frame left a queue that never
+        # drained, and the panel showed the party as it was however long
+        # ago the queue stretched back, until the queue emptied again.
+        raw = None
+        while True:
+            try:
+                data, _ = sock.recvfrom(8192)
+            except (BlockingIOError, InterruptedError):
+                break
+            # Multibox: drop party packets from a non-locked character
+            # so the display doesn't jitter between two logged-in
+            # characters.
+            _mb_ok, _payload = _mb_gate(data.decode())
+            if _mb_ok:
+                raw = _payload
+        if raw is None:
             raise _MBSkip
 
         party_data = []
@@ -77104,6 +78406,9 @@ while running:
             mpp_raw = parts[16] if len(parts) > 16 else ""
             # Field 18 (0-based 17): status byte. -1 = older lua.
             st_raw = parts[17] if len(parts) > 17 else ""
+            # Field 19 (0-based 18): 1 when this member leads their
+            # party. Missing on an older lua, which reads as "no".
+            lead_raw = parts[18] if len(parts) > 18 else ""
             midx = parts[10] if len(parts) > 10 else "0"
             # 12th field (optional): entity ID of this party member.
             # Used to match against a mob's claim_id.
@@ -77151,6 +78456,7 @@ while running:
                 "pet_name":  pet_name,
                 "mpp":       _as_int(mpp_raw, -1),
                 "status":    _as_int(st_raw, -1),
+                "leader":    _as_int(lead_raw, 0) == 1,
                 "pet_hpp":   _as_int(pet_hpp),
                 "pet_tp":    _as_int(pet_tp),
             }
@@ -77160,6 +78466,10 @@ while running:
             elif g == 2:
                 ally2_data.append(entry)
             else:
+                # Where the game lists this member (P0 = the character
+                # sending, then P1..P5), kept so a reordered row can
+                # still say so.
+                entry["game_slot"] = len(party_data)
                 party_data.append(entry)
     except _MBSkip:
         pass   # packet from a non-locked character; ignore quietly
@@ -80350,6 +81660,8 @@ while running:
                 "group_id":  0,
                 "pet_name":  pet_n,
                 "pet_hpp":   pet_h,
+                "leader":    slot_idx == 0,
+                "game_slot": slot_idx,
             })
 
         # Mock alliance party 1: 6 members with rotating jobs, no buffs.
@@ -80596,9 +81908,14 @@ while running:
     # may never come back). The slot key is "p1".."p5" (party member 0
     # is always you, so we use your name; 1-5 are slot-based).
     def _anchor_key(slot_idx, nm):
-        if slot_idx == 0:
-            return nm  # local player keeps name-based key
+        # EVERY slot by its slot key, slot 0 included. Slot 0 used the
+        # occupant's name, which only held while you were always in it;
+        # with rows reorderable, someone else can stand there, and the
+        # name sync below would then write their old slot over it.
         return "p%d" % slot_idx
+
+    # Put the rows in the order picked with the setup arrows.
+    party_data[:] = _party_apply_order(party_data)
     default_y = layout_top() + 12
 
     # ── Stacked list ────────────────────────────────────────────────
@@ -80713,16 +82030,15 @@ while running:
         # Migrate: if there's no anchor under the slot key but there IS
         # one under the member's name, move it. Lets old layouts keep
         # working when you re-load with someone in the same slot.
-        if akey not in panel_anchors and nm in panel_anchors and slot_idx != 0:
+        if akey not in panel_anchors and nm in panel_anchors:
             panel_anchors[akey] = panel_anchors[nm]
         if akey not in panel_anchors:
             # New slot — default: stacked from top-left.
             panel_anchors[akey] = ["tl", PANEL_X, default_y]
         # Always keep panel_anchors[nm] in sync with the slot anchor so
         # the rest of the code (which still keys by name) reads the right
-        # position. Skip for slot 0 since name == akey.
-        if slot_idx != 0:
-            panel_anchors[nm] = panel_anchors[akey]
+        # position.
+        panel_anchors[nm] = panel_anchors[akey]
         if nm not in panel_order:
             panel_order.append(nm)
 
@@ -80914,8 +82230,15 @@ while running:
     # so no `global` is needed inside this draw path.
     party_name_click_rects[:] = []
     party_panel_rects[:] = []
+    party_order_arrow_rects[:] = []
     for name in _party_draw_order:
         m      = members_by_name[name]
+        # This row's SLOT. The loop runs in draw order, not slot order,
+        # and slot_idx was otherwise whatever the position loop above
+        # left behind, so a stacked list rounded and gripped the wrong
+        # rows.
+        slot_idx = next((i for i, mm in enumerate(party_data)
+                         if mm.get("name") == name), 0)
         px, py = panel_positions[name]
         scale  = _party_scale_get(name)
         escale = _eff(scale)   # effective scale for raw positioning offsets
@@ -81072,6 +82395,22 @@ while running:
                                            COL_ALERT_CURE[:3]))
             name_surf = d["f_name"].render(m["name"], True, _sel_c)
 
+        # The game's party position in front of the name ("P0 Wormfood"),
+        # so a row moved with the setup arrows still says where that
+        # member stands in the game's own list.
+        _gslot = m.get("game_slot")
+        if isinstance(_gslot, int) and _gslot >= 0:
+            _tag = d["f_label"].render(f"P{_gslot} ", True, COL_LABEL_DIM)
+            _nh = max(_tag.get_height(), name_surf.get_height())
+            _cs = pygame.Surface((_tag.get_width() + name_surf.get_width(),
+                                  _nh), pygame.SRCALPHA)
+            _cs.blit(_tag, (0, _nh - _tag.get_height()
+                            - max(0, (name_surf.get_height()
+                                      - _tag.get_height()) // 4)))
+            _cs.blit(name_surf, (_tag.get_width(),
+                                 _nh - name_surf.get_height()))
+            name_surf = _cs
+
         # Build "WAR75 / DNC37" (or just "WAR75" if no sub).
         mj, mjl = m.get("main_job", ""), m.get("main_lvl", 0)
         sj, sjl = m.get("sub_job",  ""), m.get("sub_lvl",  0)
@@ -81121,7 +82460,7 @@ while running:
                        py + (rh - _plate) // 2, _plate,
                        _pj_main, d["f_label"],
                        selected=bool(name and name == _party_selected_name()),
-                       sub_job=_pj_sub)
+                       sub_job=_pj_sub, leader=bool(m.get("leader")))
 
         # Name on its own line ABOVE the bars, which is what lets the
         # bars run the full width of the row.
@@ -81467,6 +82806,37 @@ while running:
         # anyway.
         if not _party_stack or slot_idx == len(party_data) - 1:
             draw_resize_grip(screen, px + pw, py + rh)
+
+        # Setup mode: up/down arrows at the top right of the row, to
+        # swap who is drawn here with the row above or below. Nothing
+        # moves or resizes; only the occupants trade places.
+        if setup_mode and len(party_data) > 1:
+            _ri = next((i for i, mm in enumerate(party_data)
+                        if mm.get("name") == name), -1)
+            _aw = max(12, int(14 * escale))
+            _ah = max(10, int(11 * escale))
+            _ax = px + pw - 2 * _aw - int(6 * escale)
+            _ay = py + int(3 * escale)
+            for _k, _dl in enumerate((-1, 1)):
+                if _ri < 0 or not (0 <= _ri + _dl < len(party_data)):
+                    continue
+                _arr = pygame.Rect(_ax + _k * (_aw + 2), _ay, _aw, _ah)
+                _hov = _arr.collidepoint(_mouse_pos())
+                pygame.draw.rect(screen, (70, 80, 100) if _hov
+                                 else (40, 46, 60), _arr, border_radius=3)
+                pygame.draw.rect(screen, COL_DIVIDER, _arr, 1,
+                                 border_radius=3)
+                _cx, _cy = _arr.centerx, _arr.centery
+                _tw, _th = max(3, _aw // 3), max(2, _ah // 4)
+                _col = COL_PARTY_LEADER if _hov else (220, 225, 235)
+                if _dl < 0:
+                    _pts = [(_cx, _cy - _th), (_cx - _tw, _cy + _th),
+                            (_cx + _tw, _cy + _th)]
+                else:
+                    _pts = [(_cx, _cy + _th), (_cx - _tw, _cy - _th),
+                            (_cx + _tw, _cy - _th)]
+                pygame.draw.polygon(screen, _col, _pts)
+                party_order_arrow_rects.append((_arr, name, _dl))
 
     # ── Alliance party 1 + 2 panels ─────────────────────────────────────────
     # Each alliance member gets a slot-keyed anchor (a1_0..a1_5, a2_0..a2_5).
@@ -82098,7 +83468,8 @@ while running:
         draw_buttons_panel(screen, _pp[0], _pp[1],
                            hotbar_pad_scale, panels_locked,
                            panel_idx=HOTBAR_PAD_PANEL)
-        draw_resize_grip(screen, _pp[0] + _pad_w, _pp[1] + _pad_h)
+        draw_resize_grip(screen, _pp[0] + _pad_w, _pp[1] + _pad_h,
+                         HOTBAR_PAD_GRIP)
     else:
         buttons_panel_positions.pop(HOTBAR_PAD_PANEL, None)
         buttons_panel_rects.pop(HOTBAR_PAD_PANEL, None)
@@ -82414,6 +83785,12 @@ while running:
     if _anchor is not None:
         draw_hotbar_editor(screen, _anchor[0], _anchor[1],
                            _anchor[2], _anchor[3])
+    # The "copy from" browser sits above the editor it belongs to.
+    try:
+        draw_hb_src_browser(screen)
+    except Exception as _hbs_e:
+        globals()["_hb_src_rect"] = None
+        print(f"[OmniWatch] copy-from browser draw failed: {_hbs_e!r}")
 
     # Drag overlay (source slot dim + ghost button at cursor +
     # drop-target highlight) — also above the modals so the carried
@@ -82858,8 +84235,6 @@ while running:
                 _cmd_addr())
         except Exception:
             pass
-    # A drag whose cursor has wandered over the game still gets its moves.
-    _drag_motion_pump()
     _events_pumped_t = time.time()
     for event in pygame.event.get():
         # Canvas-space from here down. Identity today; the second
@@ -82901,6 +84276,11 @@ while running:
         # MOUSEBUTTONUP for other drags, so the drag never ended and the
         # panel followed the cursor for the rest of the session.
         if _tag_handle_event(event):
+            continue
+
+        # The hotbar editor's "copy from" browser draws above the editor
+        # and the panels, and owns its own drags from press to release.
+        if _hb_src_handle_event(event):
             continue
 
         # Zoom pill mid-drag: its motion and release are its own, whatever
@@ -83619,8 +84999,6 @@ while running:
                                    else hotbar_current_page)
                     if 0 <= _pg < len(hotbar_pages):
                         _bs = hotbar_pages[_pg].setdefault("buttons", [])
-                        _cap = max(1, _cols_for_page(_pg)
-                                   * _rows_for_page(_pg))
                         _n = 0
                         for _sl, _entry in sorted(
                                 _hotbar_multi_clipboard.items()):
@@ -83628,7 +85006,7 @@ while running:
                             # Anything that would land off the end of the
                             # bar is dropped rather than silently wrapping
                             # onto the row above.
-                            if not (0 <= _tgt < _cap):
+                            if not _slot_visible(_pg, _tgt):
                                 continue
                             while len(_bs) <= _tgt:
                                 _bs.append(_empty_button())
@@ -84681,7 +86059,8 @@ while running:
                             # one to another page.
                             if pygame.key.get_mods() & pygame.KMOD_SHIFT:
                                 _cols = max(1, _cols_for_page(_msp))
-                                _row0 = (payload_kind // _cols) * _cols
+                                _strd = max(1, _stride_for_page(_msp))
+                                _row0 = (payload_kind // _strd) * _strd
                                 _line = [(_msp, _s) for _s
                                          in range(_row0, _row0 + _cols)]
                                 # Toggle as a unit: if the whole line is
@@ -84766,7 +86145,9 @@ while running:
             # button presses — lock prevents accidental panel movement,
             # not deliberate button clicks.
             if (buttons_panel_visible and not setup_mode
-                    and not hotbar_edit_mode):
+                    and not hotbar_edit_mode
+                    and not (not panels_locked
+                             and _pad_grip_hit(mx, my))):
                 button_hit = False
                 # Iterate primary + multi-mode panels' rects in one pass.
                 _all_rects = list(buttons_rects)
@@ -85128,6 +86509,16 @@ while running:
             if header_shown() and header_rect().collidepoint(mx, my) and not setup_mode:
                 continue
 
+            # Party row reorder arrows (setup mode). Checked before the
+            # panel hit test, or the press would start a drag instead.
+            if setup_mode and event.button == 1 and party_order_arrow_rects:
+                _arw = next(((nm_, dl_) for r_, nm_, dl_
+                             in party_order_arrow_rects
+                             if r_.collidepoint(mx, my)), None)
+                if _arw is not None:
+                    _party_move_row(*_arw)
+                    continue
+
             hit = None
 
             # Hit-testing iterates panels in REVERSE render order so the
@@ -85205,16 +86596,25 @@ while running:
                     else:
                         _btw, _bth = buttons_panel_size(buttons_scale)
                     pxp, pyp = _ppos
-                    if (pxp + _btw - RESIZE_GRIP) <= mx < (pxp + _btw) and \
-                       (pyp + _bth - RESIZE_GRIP) <= my < (pyp + _bth):
+                    _g = (HOTBAR_PAD_GRIP if _pi == HOTBAR_PAD_PANEL
+                          else RESIZE_GRIP)
+                    # The scale the drag starts from must be THIS panel's.
+                    # The pad has its own, and handing it the bars' meant
+                    # the first pixel of a resize snapped the pad to the
+                    # bars' size; from there it shrank readily but needed
+                    # the mouse dragged far past the corner to grow.
+                    _sc = (hotbar_pad_scale if _pi == HOTBAR_PAD_PANEL
+                           else buttons_scale)
+                    if (pxp + _btw - _g) <= mx < (pxp + _btw) and \
+                       (pyp + _bth - _g) <= my < (pyp + _bth):
                         hit = ("buttons", f"__buttons_{_pi}__",
                                pxp, pyp, "resize",
-                               _btw, _bth, buttons_scale)
+                               _btw, _bth, _sc)
                         break
                     elif pxp <= mx < pxp + _btw and pyp <= my < pyp + _bth:
                         hit = ("buttons", f"__buttons_{_pi}__",
                                pxp, pyp, "move",
-                               _btw, _bth, buttons_scale)
+                               _btw, _bth, _sc)
                         break
 
             # 5. DPS panel.
@@ -86191,17 +87591,11 @@ while running:
                             new_anchor = anchor_for_pos(
                                 pos[0], pos[1], pw, rh, WIDTH, HEIGHT)
                             panel_anchors[dragging_key] = new_anchor
-                            # Also write the slot-keyed anchor so it persists
-                            # across parties (slot 0 = self, 1-5 = others).
-                            try:
-                                slot_idx = next(
-                                    (i for i, mm in enumerate(party_data)
-                                     if mm.get("name") == dragging_key),
-                                    None)
-                                if slot_idx is not None and slot_idx > 0:
-                                    panel_anchors["p%d" % slot_idx] = new_anchor
-                            except Exception:
-                                pass
+                            # The SLOT anchor is the one that is read back
+                            # each frame, so it has to get the new spot too.
+                            _sk = _party_slot_key(dragging_key)
+                            if _sk:
+                                panel_anchors[_sk] = new_anchor
                 save_layout()
             dragging_key = None
             drag_mode    = None
@@ -86866,7 +88260,11 @@ while running:
                     if _pi is not None and _pi in buttons_panel_positions:
                         bxp, byp       = buttons_panel_positions[_pi]
                         start_w, _     = drag_start_size
-                        target_w       = max(60, mx - bxp)
+                        # Measured from where the corner was GRABBED, so
+                        # taking hold a few pixels inside the edge doesn't
+                        # shrink the panel before the mouse has moved.
+                        target_w       = max(60, start_w
+                                             + (mx - bxp - drag_offset[0]))
                         new_scale  = _resize_scale(drag_start_scale, start_w, target_w)
                         new_scale      = max(MIN_SCALE, min(MAX_SCALE, new_scale))
                         if _pi == HOTBAR_PAD_PANEL:
